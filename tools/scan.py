@@ -7,6 +7,8 @@ camera itself beside them:
   python3 -I tools/scan.py --video <video> --pose <pose.json> --out <scanned.pose.json>
       [--mask x0,y0,x1,y1 ...] [--person <id>] [--no-person-mask]
       [--report <scan.json>] [--plot <camera.png> [--mark a-b ...]]
+  python3 -I tools/scan.py --camera-file <camera.json> --pose <pose.json> --out <scanned.pose.json>
+      [--person <id>] [--plot <camera.png> [--mark a-b ...]]
 
 The input is a `rig-pose-sequence/1` or `rig-c-pose-frames/0` with one frame per
 video frame (a different count is refused). It is left unchanged.
@@ -52,6 +54,14 @@ The choices this tool makes, and why (fixed before any bar was measured):
   given a camera: the tool refuses, naming each such frame, and writes no
   sequence (`--report` and `--plot` still show the chained guess there, marked
   by its inlier count). No value is invented.
+
+`--camera-file <json>` skips tracking: the camera comes from a hand-written
+`rig-pose-camera/1` file, { "spec", "keys": [ { "frame", "s", "tx", "ty" } ],
+"note"? }, frames strictly increasing; linear between keys, held before the
+first and after the last; the joints are normalised exactly as above, and
+`inliers` is 0 on every frame (no feature was fitted). The output's
+`cameraSource` says which: "tracked" or "hand-labelled, N keys". A malformed
+file is refused by name (CAMERA_FILE).
 
 `--no-person-mask` drops the person's mask (the planted failure of the card's
 synthetic bar); `--report` writes per-frame diagnostics; `--plot` draws s, tx,
@@ -289,7 +299,80 @@ def r(v, d):
     return 0.0 if v == 0 else v
 
 
-def write(doc, person, cams, path, source):
+CAMERA_SPEC = 'rig-pose-camera/1'
+
+
+def is_num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def read_camera_file(path, n):
+    """A hand-written camera: per frame (s, tx, ty) from the keys, linear between them, held outside."""
+    try:
+        doc = json.load(open(path))
+    except (OSError, ValueError) as e:
+        raise Refusal(f'CAMERA_FILE: --camera-file {path} does not read as JSON: {e}')
+    bad = []
+    if not isinstance(doc, dict):
+        raise Refusal(f'CAMERA_FILE: {path} is {type(doc).__name__}; a {CAMERA_SPEC} file is an object {{ spec, keys, note? }}')
+    for k in doc:
+        if k not in ('spec', 'keys', 'note'):
+            bad.append(f'{path} has a key this reader does not know: "{k}"; the keys it reads are spec, keys, note')
+    if doc.get('spec') != CAMERA_SPEC:
+        bad.append(f'{path} "spec" is {json.dumps(doc.get("spec"))}; it must be "{CAMERA_SPEC}"')
+    if 'note' in doc and not isinstance(doc['note'], str):
+        bad.append(f'{path} "note" is {json.dumps(doc["note"])}; it must be a string')
+    keys = doc.get('keys')
+    good = []
+    if not isinstance(keys, list) or len(keys) == 0:
+        bad.append(f'{path} "keys" is {json.dumps(keys)}; it must be a non-empty array of {{ frame, s, tx, ty }}')
+        keys = []
+    last = None
+    for i, k in enumerate(keys):
+        kw = f'{path} keys[{i}]'
+        if not isinstance(k, dict):
+            bad.append(f'{kw} is {json.dumps(k)}; a key is {{ frame, s, tx, ty }}')
+            continue
+        ok = True
+        for name in k:
+            if name not in ('frame', 's', 'tx', 'ty'):
+                bad.append(f'{kw} has a key this reader does not know: "{name}"; a key carries frame, s, tx, ty')
+                ok = False
+        for name in ('frame', 's', 'tx', 'ty'):
+            if name not in k:
+                bad.append(f'{kw} has no "{name}"; a key carries frame, s, tx, ty')
+                ok = False
+        f = k.get('frame')
+        if 'frame' in k:
+            if not (isinstance(f, int) and not isinstance(f, bool) and 0 <= f < n):
+                bad.append(f'{kw} "frame" is {json.dumps(f)}; it must be an integer frame of the pose, 0 … {n - 1}')
+                ok = False
+            elif last is not None and f <= last:
+                bad.append(f'{kw} "frame" is {f}, not after keys[{i - 1}]\'s {last}; frames must strictly increase')
+                ok = False
+            if isinstance(f, int) and not isinstance(f, bool):
+                last = f if last is None else max(last, f)
+        if 's' in k and not (is_num(k['s']) and k['s'] > 0):
+            bad.append(f'{kw} "s" is {json.dumps(k["s"])}; the scale must be a finite number > 0')
+            ok = False
+        for name in ('tx', 'ty'):
+            if name in k and not is_num(k[name]):
+                bad.append(f'{kw} "{name}" is {json.dumps(k[name])}; it must be a finite number of picture px')
+                ok = False
+        if ok:
+            good.append((k['frame'], float(k['s']), float(k['tx']), float(k['ty'])))
+    if bad:
+        raise Refusal('\n'.join(f'CAMERA_FILE: {b}' for b in bad))
+    fr = np.array([g[0] for g in good], np.float64)
+    out = []
+    for i in range(n):
+        # np.interp is linear between keys and holds the end values outside them.
+        v = [float(np.interp(i, fr, np.array([g[c] for g in good]))) for c in (1, 2, 3)]
+        out.append((v[0], v[1], v[2], 0, {'frame': i, 'hand': True}))
+    return out, len(good), doc.get('note')
+
+
+def write(doc, person, cams, path, source, camera_source):
     frames = []
     for f, (s, tx, ty, _n, _d) in zip(doc['frames'], cams):
         people = []
@@ -307,7 +390,7 @@ def write(doc, person, cams, path, source):
                 joints[name] = o
             people.append({'id': q['id'], 'joints': joints})
         frames.append({'t': f['t'], 'people': people})
-    out = {'spec': POSE_SPEC, 'space': SPACE, 'width': doc['width'], 'height': doc['height'], 'source': source,
+    out = {'spec': POSE_SPEC, 'space': SPACE, 'width': doc['width'], 'height': doc['height'], 'source': source, 'cameraSource': camera_source,
            'camera': [{'s': r(s, 6), 'tx': r(tx, 3), 'ty': r(ty, 3), 'inliers': int(n)} for s, tx, ty, n, _ in cams], 'frames': frames}
     with open(path, 'w') as fh:
         fh.write(json.dumps(out, indent=2, ensure_ascii=False) + '\n')
@@ -368,7 +451,8 @@ def span(s):
 
 def main(argv):
     ap = argparse.ArgumentParser(description='Read the camera off the background (rig-c/pose#63).')
-    ap.add_argument('--video', required=True)
+    ap.add_argument('--video', help='the video to track (or --camera-file)')
+    ap.add_argument('--camera-file', help=f'a hand-written camera ({CAMERA_SPEC}) instead of tracking')
     ap.add_argument('--pose', required=True)
     ap.add_argument('--out', required=True)
     ap.add_argument('--person')
@@ -384,13 +468,31 @@ def main(argv):
     ap.add_argument('--plot')
     ap.add_argument('--mark', type=span, action='append', default=[], help='a-b: a frame span shaded on --plot')
     opts = ap.parse_args(argv)
+    if (opts.video is None) == (opts.camera_file is None):
+        print('FAIL  SCAN_ARGS: give --video (track the camera) or --camera-file (a hand-written one), exactly one', file=sys.stderr)
+        return 2
     try:
         doc, person = read_pose(opts.pose, opts.person)
-        frames_joints = [joints_of(f, person) for f in doc['frames']]
-        cams, low = scan(opts.video, frames_joints, opts.mask, opts)
+        if opts.camera_file is not None:
+            cams, nkeys, note = read_camera_file(opts.camera_file, len(doc['frames']))
+        else:
+            frames_joints = [joints_of(f, person) for f in doc['frames']]
+            cams, low = scan(opts.video, frames_joints, opts.mask, opts)
     except Refusal as e:
-        print(f'FAIL  {e}', file=sys.stderr)
+        for line in str(e).split('\n'):
+            print(f'FAIL  {line}', file=sys.stderr)
         return 1
+    if opts.camera_file is not None:
+        camera_source = f'hand-labelled, {nkeys} keys'
+        source = (f"{doc['source']} | camera {camera_source} from {os.path.basename(opts.camera_file)} (sha256 {sha(opts.camera_file)[:16]})"
+                  f"{f' ({note})' if note else ''}, applied by tools/scan.py (rig-c/pose#63) to {os.path.basename(opts.pose)} (sha256 {sha(opts.pose)[:16]}), "
+                  f"{len(cams)} frames; linear between keys, held outside them; joints normalised p' = (p - t) / s; inliers 0 (no features were fitted)")
+        write(doc, person, cams, opts.out, source, camera_source)
+        ss = [c[0] for c in cams]
+        print(f'scan: {len(cams)} frames from {nkeys} hand keys; s {min(ss):.4f} … {max(ss):.4f}; wrote {opts.out}')
+        if opts.plot:
+            plot(cams, opts.plot, opts.mark, f'{os.path.basename(opts.camera_file)}: hand-labelled camera, {nkeys} keys (s, tx, ty; inliers 0); shaded: {", ".join(f"{a}-{b}" for a, b in opts.mark) or "none"}')
+        return 0
     setting = (f'dilate {opts.dilate}, border {opts.border}px, masks {json.dumps(opts.mask)}, fb {opts.fb_px}px, ransac {opts.ransac_px}px x {opts.ransac_iters}, '
                f'min-inliers {opts.min_inliers}{", NO PERSON MASK" if opts.no_person_mask else ""}')
     source = (f"{doc['source']} | camera read by tools/scan.py (rig-c/pose#63) on {os.path.basename(opts.video)} (sha256 {sha(opts.video)[:16]}) "
@@ -411,7 +513,7 @@ def main(argv):
         for f, n, c in low:
             print(f'FAIL  SCAN_INLIERS: frame {f}: the frame-0 fit kept {n} of {c} candidate features, under --min-inliers {opts.min_inliers}; no camera is read for it, so nothing is written', file=sys.stderr)
         return 1
-    write(doc, person, cams, opts.out, source)
+    write(doc, person, cams, opts.out, source, 'tracked')
     return 0
 
 

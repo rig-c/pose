@@ -58,13 +58,15 @@ export interface PoseSequence {
   width: number;
   height: number;
   source: string;
+  /** Optional, only with `camera`: where it came from — "tracked", or "hand-labelled, N keys" (#63). */
+  cameraSource?: string;
   /** Optional: one per frame, when a scan read the camera (#63). */
   camera?: CameraFrame[];
   frames: PoseFrame[];
 }
 
 const TOP_KEYS = ['spec', 'space', 'width', 'height', 'source', 'frames'];
-const OPTIONAL_KEYS = ['camera'];
+const OPTIONAL_KEYS = ['cameraSource', 'camera'];
 const CAMERA_KEYS = ['s', 'tx', 'ty', 'inliers'];
 
 /**
@@ -145,8 +147,13 @@ export function readPoseSequence(text: string, where: string): PoseSequence {
     }
   }
   const camera = 'camera' in doc ? readCamera(p, where, doc.camera, Array.isArray(doc.frames) ? doc.frames.length : null) : undefined;
+  if ('cameraSource' in doc) {
+    if (typeof doc.cameraSource !== 'string' || doc.cameraSource.trim() === '') p.add('POSE_CAMERA_SOURCE', `${where} "cameraSource" is ${typeName(doc.cameraSource)}; it must be a non-empty string saying where the camera came from ("tracked", "hand-labelled, N keys")`);
+    else if (!('camera' in doc)) p.add('POSE_CAMERA_SOURCE', `${where} has "cameraSource" ${JSON.stringify(doc.cameraSource)} and no "camera"; it states where a camera came from, so it needs one`);
+  }
   p.throwIfAny();
-  return { spec: POSE_SPEC, space: POSE_SPACE, width: doc.width as number, height: doc.height as number, source: doc.source as string, ...(camera !== undefined ? { camera } : {}), frames };
+  const cameraSource = typeof doc.cameraSource === 'string' ? doc.cameraSource : undefined;
+  return { spec: POSE_SPEC, space: POSE_SPACE, width: doc.width as number, height: doc.height as number, source: doc.source as string, ...(cameraSource !== undefined ? { cameraSource } : {}), ...(camera !== undefined ? { camera } : {}), frames };
 }
 
 /** `camera`: one `{ s > 0, tx, ty, inliers ≥ 0 }` per frame, as many as `frames`. */
@@ -369,5 +376,5 @@ export function writePoseSequence(seq: PoseSequence): string {
     })),
   }));
   const camera = seq.camera?.map((c) => ({ s: round(c.s, 6), tx: round(c.tx, 3), ty: round(c.ty, 3), inliers: c.inliers }));
-  return `${JSON.stringify({ spec: seq.spec, space: seq.space, width: seq.width, height: seq.height, source: seq.source, ...(camera !== undefined ? { camera } : {}), frames }, null, 2)}\n`;
+  return `${JSON.stringify({ spec: seq.spec, space: seq.space, width: seq.width, height: seq.height, source: seq.source, ...(seq.cameraSource !== undefined ? { cameraSource: seq.cameraSource } : {}), ...(camera !== undefined ? { camera } : {}), frames }, null, 2)}\n`;
 }

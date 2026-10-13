@@ -106,7 +106,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     const r = retarget(rest, map, frames, times, a, slots);
     say(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, smooth ${a.smooth}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)${a.legScale !== undefined && a.legScale !== 'off' ? `, leg-scale ${a.legScale[0]}–${a.legScale[1]}` : ''}${a.plantFeet === true ? ', plant-feet' : ''}${a.stance !== undefined && a.stance !== 'off' ? `, stance ${a.stance}` : ''}${a.carryIdle === true ? ', carry-idle' : ''}${a.merge !== undefined ? `, merge ${a.merge}` : ''}${a.reduce !== undefined ? `, reduce ${a.reduce}°${a.reduceHip !== undefined ? ` (hip ${a.reduceHip} units)` : ''}` : ''}`);
     say(`  RIGC   rig-c ${rigc.version} (${rigc.entry}) gates and poses this run`);
-    if (seq.camera !== undefined) say(`  CAMERA ${cameraLine(seq.camera, times)}`);
+    if (seq.camera !== undefined) say(`  CAMERA ${cameraLine(seq.camera, times, seq.cameraSource)}`);
     else if (a.plantFeet === true) say('  CAMERA none in the sequence: --plant-feet reads the picture as a fixed camera, so a zoom or a pan in the video moves the floor with it and the floor may step with the picture (tools/scan.py reads the camera, rig-c/pose#63)');
     if (r.scale !== null) say(`  SCALE  ${r.scale.factor.toFixed(5)} rig units per picture px (rig ${r.scale.rig.toFixed(2)} / pose median ${r.scale.pose.toFixed(2)})`);
     for (const h of r.holds) say(`  HOLD   ${holdLine(h, r.times)}`);
@@ -393,10 +393,11 @@ function windowLines(map: JointMap, switches: ReadonlyArray<{ set: string; frame
 }
 
 /**
- * The CAMERA line (#63): the scale's range over the sequence, and the three
+ * The CAMERA line (#63): where the camera came from (the sequence's
+ * `cameraSource`, or "(source not stated)"), the scale's range over the sequence, and the three
  * frame-to-frame changes of s largest in size (ties to the earlier frame).
  */
-export function cameraLine(camera: readonly CameraFrame[], times: readonly number[]): string {
+export function cameraLine(camera: readonly CameraFrame[], times: readonly number[], source: string | undefined): string {
   const ss = camera.map((c) => c.s);
   const lo = ss.reduce((m, x, i) => (x < ss[m]! ? i : m), 0);
   const hi = ss.reduce((m, x, i) => (x > ss[m]! ? i : m), 0);
@@ -404,7 +405,7 @@ export function cameraLine(camera: readonly CameraFrame[], times: readonly numbe
   const fastest = [...steps].sort((x, y) => Math.abs(y.d) - Math.abs(x.d) || x.to - y.to).slice(0, 3);
   const sign = (d: number) => `${d < 0 ? '−' : '+'}${Math.abs(d).toFixed(4)}`;
   const inl = camera.reduce((m, c) => Math.min(m, c.inliers), Infinity);
-  return `the sequence carries the picture's camera against frame 0's; its joints are normalised by it (p′ = (p − t) / s): s ${ss[lo]!.toFixed(4)} (frame ${lo}) … ${ss[hi]!.toFixed(4)} (frame ${hi}) over ${camera.length} frames; s changes fastest at ${fastest.map((x) => `frame ${x.to - 1}→${x.to} (t=${times[x.to]!.toFixed(3)}s) ${sign(x.d)}`).join(', ') || 'no frame (one frame only)'}; fewest background inliers ${inl}`;
+  return `${source ?? '(source not stated)'}: the sequence carries the picture's camera against frame 0's; its joints are normalised by it (p′ = (p − t) / s): s ${ss[lo]!.toFixed(4)} (frame ${lo}) … ${ss[hi]!.toFixed(4)} (frame ${hi}) over ${camera.length} frames; s changes fastest at ${fastest.map((x) => `frame ${x.to - 1}→${x.to} (t=${times[x.to]!.toFixed(3)}s) ${sign(x.d)}`).join(', ') || 'no frame (one frame only)'}${source?.startsWith('hand-labelled') === true ? '' : `; fewest background inliers ${inl}`}`;
 }
 
 /** Each leg's first bone (its root, the thigh) and last bone (whose tip is the ankle), when the map has both. */

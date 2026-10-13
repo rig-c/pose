@@ -21,7 +21,15 @@ picture's centre c, so its t is c (1 - s)):
   frames 20-29  s 0.95, plus a 20 px pan right (step at frame 20)
   frames 30-39  s 1.00, plus a 20 px pan up (zoom back in and pan, both at 30)
 
-Exit 0 when the moving and still cases pass; the planted outcome is reported.
+The hand-written camera (`--camera-file`, rig-pose-camera/1):
+- hand keys equal to the moving case's truth (at frames 0, 9, 10, 19, 20, 29,
+  30, 39, so linear interpolation is the truth on every frame) reproduce the
+  tracker's normalisation within the same 0.5 % and 2 px, camera and joints;
+  the outputs' cameraSource are "tracked" and "hand-labelled, 8 keys";
+- a malformed file (wrong spec, frames not increasing, s <= 0, a missing ty, an
+  unknown key) is refused by name, every fault in one run, and nothing written.
+
+Exit 0 when the moving, still, hand and malformed cases pass; the planted outcome is reported.
 Deterministic: seeded RNGs, no clock.
 """
 import json
@@ -125,6 +133,55 @@ def run(dir_, name, video, pose, truth, extra):
     }
 
 
+def scan_hand(dir_, name, pose, keys, extra_top=None):
+    cam = os.path.join(dir_, f'{name}.camera.json')
+    doc = {'spec': 'rig-pose-camera/1', 'keys': keys, 'note': 'selftest'}
+    doc.update(extra_top or {})
+    json.dump(doc, open(cam, 'w'))
+    out = os.path.join(dir_, f'{name}.out.json')
+    p = subprocess.run([sys.executable, '-I', os.path.join(HERE, 'scan.py'), '--camera-file', cam, '--pose', pose, '--out', out], capture_output=True, text=True)
+    return p, out
+
+
+def hand_vs_tracked(dir_, pose, truth):
+    stops = [0, 9, 10, 19, 20, 29, 30, 39]
+    keys = [{'frame': i, 's': truth[i][0], 'tx': truth[i][1][0], 'ty': truth[i][1][1]} for i in stops]
+    p, out = scan_hand(dir_, 'hand', pose, keys)
+    if p.returncode != 0:
+        return {'case': 'hand', 'exit': p.returncode, 'stderr': p.stderr.strip().split('\n')[:3], 'pass': False}
+    hand = json.load(open(out))
+    tracked = json.load(open(os.path.join(dir_, 'moving.out.json')))
+    es = max(abs(h['s'] / t['s'] - 1) for h, t in zip(hand['camera'], tracked['camera']))
+    et = max(math.hypot(h['tx'] - t['tx'], h['ty'] - t['ty']) for h, t in zip(hand['camera'], tracked['camera']))
+    ej = 0.0
+    for fh, ft in zip(hand['frames'], tracked['frames']):
+        for n, j in fh['people'][0]['joints'].items():
+            k = ft['people'][0]['joints'][n]
+            ej = max(ej, math.hypot(j['at'][0] - k['at'][0], j['at'][1] - k['at'][1]))
+    src = (hand.get('cameraSource'), tracked.get('cameraSource'))
+    return {'case': 'hand', 'exit': 0, 'cameraSource': src, 'worst_s_rel_vs_tracked': es, 'worst_t_px_vs_tracked': et, 'worst_joint_px_vs_tracked': ej,
+            'pass': es <= S_TOL and et <= T_TOL and ej <= T_TOL and src == ('hand-labelled, 8 keys', 'tracked')}
+
+
+MALFORMED_WANT = [
+    '"spec" is "rig-pose-camera/0"; it must be "rig-pose-camera/1"',
+    'keys[1] "frame" is 3, not after keys[0]\'s 5; frames must strictly increase',
+    'keys[2] "s" is 0; the scale must be a finite number > 0',
+    'keys[3] has no "ty"; a key carries frame, s, tx, ty',
+    'keys[4] has a key this reader does not know: "rot"; a key carries frame, s, tx, ty',
+]
+
+
+def malformed(dir_, pose):
+    keys = [{'frame': 5, 's': 1, 'tx': 0, 'ty': 0}, {'frame': 3, 's': 1, 'tx': 0, 'ty': 0}, {'frame': 8, 's': 0, 'tx': 0, 'ty': 0},
+            {'frame': 9, 's': 1, 'tx': 0}, {'frame': 10, 's': 1, 'tx': 0, 'ty': 0, 'rot': 0}]
+    p, out = scan_hand(dir_, 'malformed', pose, keys, {'spec': 'rig-pose-camera/0'})
+    fails = [line for line in p.stderr.strip().split('\n') if line.startswith('FAIL  CAMERA_FILE: ')]
+    named = all(any(w in f for f in fails) for w in MALFORMED_WANT)
+    return {'case': 'malformed', 'exit': p.returncode, 'fails': len(fails), 'all named': named, 'written': os.path.exists(out),
+            'pass': p.returncode == 1 and named and len(fails) == len(MALFORMED_WANT) and not os.path.exists(out)}
+
+
 def main(argv):
     keep = argv[argv.index('--keep') + 1] if '--keep' in argv else None
     d = keep or tempfile.mkdtemp(prefix='scan-selftest-')
@@ -135,13 +192,19 @@ def main(argv):
             video, pose, truth = render(d, name, cam)
             rows.append(run(d, name, video, pose, truth, []))
             rows.append(run(d, f'{name}-planted', video, pose, truth, ['--no-person-mask']))
+            if name == 'moving':
+                hand = hand_vs_tracked(d, pose, truth)
+                bad = malformed(d, pose)
         for r in rows:
             print(json.dumps(r))
-        ok = all(r['pass'] for r in rows if not r['case'].endswith('planted'))
+        print(json.dumps(hand))
+        print(json.dumps(bad))
+        ok = all(r['pass'] for r in rows if not r['case'].endswith('planted')) and hand['pass'] and bad['pass']
         print(f"selftest: moving {'PASS' if rows[0]['pass'] else 'FAIL'}, still {'PASS' if rows[2]['pass'] else 'FAIL'} "
               f"(bars: |s'/s - 1| <= {S_TOL}, |t' - t| <= {T_TOL} px on every frame); planted, no person mask: "
               f"moving {'within' if rows[1]['pass'] else 'OUTSIDE'} the bars (worst s {rows[1]['worst_s_rel']:.4f}, t {rows[1]['worst_t_px']:.2f} px, inliers min {rows[1]['inliers_min']}), "
-              f"still {'within' if rows[3]['pass'] else 'OUTSIDE'} the bars (worst s {rows[3]['worst_s_rel']:.4f}, t {rows[3]['worst_t_px']:.2f} px, inliers min {rows[3]['inliers_min']})")
+              f"still {'within' if rows[3]['pass'] else 'OUTSIDE'} the bars (worst s {rows[3]['worst_s_rel']:.4f}, t {rows[3]['worst_t_px']:.2f} px, inliers min {rows[3]['inliers_min']}); "
+              f"hand keys = truth {'PASS' if hand['pass'] else 'FAIL'}; malformed camera file refused {'PASS' if bad['pass'] else 'FAIL'}")
         return 0 if ok else 1
     finally:
         if keep is None:

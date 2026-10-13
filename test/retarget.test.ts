@@ -886,7 +886,7 @@ describe('readers', () => {
     expect(r.status).toBe(1);
     const f = fails(r);
     const p = c.pose;
-    expect(f).toContain(`FAIL  POSE_KEYS: ${p} has a key this reader does not know: "lens"; the keys it reads are spec, space, width, height, source, frames, camera`);
+    expect(f).toContain(`FAIL  POSE_KEYS: ${p} has a key this reader does not know: "lens"; the keys it reads are spec, space, width, height, source, frames, cameraSource, camera`);
     expect(f).toContain(`FAIL  POSE_SPACE: ${p} "space" is {"units":"picture-px","origin":"top-left","y":"up"}; for "rig-pose-sequence/1" it must be exactly {"units":"picture-px","origin":"top-left","y":"down"}`);
     expect(f).toContain(`FAIL  POSE_TIME: ${p} frames[5] "t" is 0.5s, not after frame 4's 0.5s; times must strictly increase`);
     expect(f.some((l) => l.startsWith(`FAIL  POSE_JOINT_NAME: ${p} frames[2] people[0] names joint "r_toe", which body-18 does not have; the joints are nose, neck,`))).toBe(true);
@@ -3015,7 +3015,7 @@ describe('#63: the camera a scan read, carried by the sequence', () => {
     expect(r.stderr).toBe('');
     expect(r.status).toBe(0);
     expect(linesOf(r, 'CAMERA')).toEqual([
-      'CAMERA the sequence carries the picture\'s camera against frame 0\'s; its joints are normalised by it (p′ = (p − t) / s): s 0.9080 (frame 14) … 1.0100 (frame 5) over 16 frames; s changes fastest at frame 5→6 (t=0.750s) −0.0480, frame 10→11 (t=1.375s) −0.0380, frame 13→14 (t=1.750s) −0.0280; fewest background inliers 40',
+      'CAMERA (source not stated): the sequence carries the picture\'s camera against frame 0\'s; its joints are normalised by it (p′ = (p − t) / s): s 0.9080 (frame 14) … 1.0100 (frame 5) over 16 frames; s changes fastest at frame 5→6 (t=0.750s) −0.0480, frame 10→11 (t=1.375s) −0.0380, frame 13→14 (t=1.750s) −0.0280; fewest background inliers 40',
     ]);
   }, SLOW);
 
@@ -3075,6 +3075,35 @@ describe('#63: the camera a scan read, carried by the sequence', () => {
     expect(Object.keys(JSON.parse(bare) as object)).toEqual(['spec', 'space', 'width', 'height', 'source', 'frames']);
   });
 
+  test('cameraSource: the CAMERA line names it, the writer keeps it, and a malformed one is refused by name', () => {
+    const tail = ': the sequence carries the picture\'s camera against frame 0\'s; its joints are normalised by it (p′ = (p − t) / s): s 0.9080 (frame 14) … 1.0100 (frame 5) over 16 frames; s changes fastest at frame 5→6 (t=0.750s) −0.0480, frame 10→11 (t=1.375s) −0.0380, frame 13→14 (t=1.750s) −0.0280; fewest background inliers 40';
+    for (const source of ['tracked', 'hand-labelled, 6 keys']) {
+      const c = setup({ pose: { ...withCamera(camera(BASE.n)), cameraSource: source } });
+      const r = retarget(c);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      // A hand-labelled camera fitted nothing, so the line states no inlier count.
+      expect(linesOf(r, 'CAMERA')).toEqual([`CAMERA ${source}${source === 'tracked' ? tail : tail.replace('; fewest background inliers 40', '')}`]);
+      const seq = readPoseSequence(readFileSync(c.pose, 'utf8'), c.pose);
+      expect(seq.cameraSource).toBe(source);
+      const written = writePoseSequence(seq);
+      expect(Object.keys(JSON.parse(written) as object)).toEqual(['spec', 'space', 'width', 'height', 'source', 'cameraSource', 'camera', 'frames']);
+      expect(readPoseSequence(written, 'mem').cameraSource).toBe(source);
+    }
+    // Planted: a source with no camera; a source that is not a string; an empty one.
+    const lone = setup({ pose: { ...poseDoc(BASE), cameraSource: 'tracked' } });
+    const rl = retarget(lone);
+    expect(rl.status).toBe(1);
+    expect(fails(rl)).toEqual([`FAIL  POSE_CAMERA_SOURCE: ${lone.pose} has "cameraSource" "tracked" and no "camera"; it states where a camera came from, so it needs one`]);
+    for (const [bad, shown] of [[3, 'number 3'], ['', 'the string ""']] as const) {
+      const c = setup({ pose: { ...withCamera(camera(BASE.n)), cameraSource: bad } });
+      const r = retarget(c);
+      expect(r.status).toBe(1);
+      expect(fails(r)).toEqual([`FAIL  POSE_CAMERA_SOURCE: ${c.pose} "cameraSource" is ${shown}; it must be a non-empty string saying where the camera came from ("tracked", "hand-labelled, N keys")`]);
+      expect(existsSync(c.out)).toBe(false);
+    }
+  }, SLOW);
+
   /** Standing still, both legs straight down: --plant-feet has a floor to hold. */
   const STAND: Motion = { ...BASE, n: 24, dt: 1 / 24, rt: () => -95, rs: () => -97, lt: () => -95, ls: () => -97, hip: () => [0, 0] };
   test('--plant-feet without a camera says the floor may step with the picture; with one, or without --plant-feet, it does not', () => {
@@ -3090,6 +3119,6 @@ describe('#63: the camera a scan read, carried by the sequence', () => {
     const rc = retarget(carried, ['--plant-feet']);
     expect(rc.status).toBe(0);
     expect(linesOf(rc, 'CAMERA')).toHaveLength(1);
-    expect(linesOf(rc, 'CAMERA')[0]).toStartWith('CAMERA the sequence carries the picture\'s camera');
+    expect(linesOf(rc, 'CAMERA')[0]).toStartWith('CAMERA (source not stated): the sequence carries the picture\'s camera');
   }, SLOW);
 });
