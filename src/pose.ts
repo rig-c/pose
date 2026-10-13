@@ -39,16 +39,35 @@ export interface PoseFrame {
   t: number;
   people: Person[];
 }
+/**
+ * The picture's camera on one frame against frame 0's (rig-c/pose#63), as
+ * `tools/scan.py` reads it off the background: a point p₀ of frame 0's picture
+ * appears at `s · p₀ + (tx, ty)` on this frame. The joints of a sequence that
+ * carries a camera are already normalised by it, `p′ = (p − t) / s`. `inliers`
+ * is the number of background features the fit kept.
+ */
+export interface CameraFrame {
+  s: number;
+  tx: number;
+  ty: number;
+  inliers: number;
+}
 export interface PoseSequence {
   spec: typeof POSE_SPEC;
   space: typeof POSE_SPACE;
   width: number;
   height: number;
   source: string;
+  /** Optional, only with `camera`: where it came from — "tracked", or "hand-labelled, N keys" (#63). */
+  cameraSource?: string;
+  /** Optional: one per frame, when a scan read the camera (#63). */
+  camera?: CameraFrame[];
   frames: PoseFrame[];
 }
 
 const TOP_KEYS = ['spec', 'space', 'width', 'height', 'source', 'frames'];
+const OPTIONAL_KEYS = ['cameraSource', 'camera'];
+const CAMERA_KEYS = ['s', 'tx', 'ty', 'inliers'];
 
 /**
  * The older name the same file went by: `rig-c-pose-frames/0`, written by the
@@ -70,7 +89,7 @@ export function readPoseSequence(text: string, where: string): PoseSequence {
     throw new Error('unreachable');
   }
   const frames0 = doc.spec === POSE_SPEC_FRAMES0;
-  refuseUnknownKeys(p, 'POSE_KEYS', where, doc, frames0 ? [...TOP_KEYS, 'fps'] : TOP_KEYS);
+  refuseUnknownKeys(p, 'POSE_KEYS', where, doc, frames0 ? [...TOP_KEYS, ...OPTIONAL_KEYS, 'fps'] : [...TOP_KEYS, ...OPTIONAL_KEYS]);
   for (const k of TOP_KEYS) if (!(k in doc)) p.add('POSE_KEYS', `${where} has no "${k}"; a ${POSE_SPEC} document carries ${TOP_KEYS.join(', ')}`);
   if ('spec' in doc && doc.spec !== POSE_SPEC && !frames0) p.add('POSE_SPEC', `${where} "spec" is ${typeName(doc.spec)}; this reader reads "${POSE_SPEC}" (and the older name "${POSE_SPEC_FRAMES0}")`);
   const space = frames0 ? FRAMES0_SPACE : POSE_SPACE;
@@ -127,8 +146,52 @@ export function readPoseSequence(text: string, where: string): PoseSequence {
       });
     }
   }
+  const camera = 'camera' in doc ? readCamera(p, where, doc.camera, Array.isArray(doc.frames) ? doc.frames.length : null) : undefined;
+  if ('cameraSource' in doc) {
+    if (typeof doc.cameraSource !== 'string' || doc.cameraSource.trim() === '') p.add('POSE_CAMERA_SOURCE', `${where} "cameraSource" is ${typeName(doc.cameraSource)}; it must be a non-empty string saying where the camera came from ("tracked", "hand-labelled, N keys")`);
+    else if (!('camera' in doc)) p.add('POSE_CAMERA_SOURCE', `${where} has "cameraSource" ${JSON.stringify(doc.cameraSource)} and no "camera"; it states where a camera came from, so it needs one`);
+  }
   p.throwIfAny();
-  return { spec: POSE_SPEC, space: POSE_SPACE, width: doc.width as number, height: doc.height as number, source: doc.source as string, frames };
+  const cameraSource = typeof doc.cameraSource === 'string' ? doc.cameraSource : undefined;
+  return { spec: POSE_SPEC, space: POSE_SPACE, width: doc.width as number, height: doc.height as number, source: doc.source as string, ...(cameraSource !== undefined ? { cameraSource } : {}), ...(camera !== undefined ? { camera } : {}), frames };
+}
+
+/** `camera`: one `{ s > 0, tx, ty, inliers ≥ 0 }` per frame, as many as `frames`. */
+function readCamera(p: Problems, where: string, camera: unknown, frames: number | null): CameraFrame[] {
+  const out: CameraFrame[] = [];
+  if (!Array.isArray(camera)) {
+    p.add('POSE_CAMERA', `${where} "camera" is ${typeName(camera)}; it must be an array with one { s, tx, ty, inliers } per frame`);
+    return out;
+  }
+  if (frames !== null && camera.length !== frames) p.add('POSE_CAMERA', `${where} "camera" has ${camera.length} entr${camera.length === 1 ? 'y' : 'ies'} and "frames" ${frames}; it must have one per frame`);
+  camera.forEach((c: unknown, i: number) => {
+    const cw = `${where} camera[${i}]`;
+    if (!isObject(c)) {
+      p.add('POSE_CAMERA', `${cw} is ${typeName(c)}; a camera entry is { s, tx, ty, inliers }`);
+      return;
+    }
+    refuseUnknownKeys(p, 'POSE_CAMERA', cw, c, CAMERA_KEYS);
+    let ok = true;
+    for (const k of CAMERA_KEYS) if (!(k in c)) {
+      p.add('POSE_CAMERA', `${cw} has no "${k}"; a camera entry carries ${CAMERA_KEYS.join(', ')}`);
+      ok = false;
+    }
+    const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+    if ('s' in c && !(finite(c.s) && c.s > 0)) {
+      p.add('POSE_CAMERA', `${cw} "s" is ${typeName(c.s)}; the scale must be a finite number > 0`);
+      ok = false;
+    }
+    for (const k of ['tx', 'ty'] as const) if (k in c && !finite(c[k])) {
+      p.add('POSE_CAMERA', `${cw} "${k}" is ${typeName(c[k])}; it must be a finite number of picture px`);
+      ok = false;
+    }
+    if ('inliers' in c && !(Number.isInteger(c.inliers) && (c.inliers as number) >= 0)) {
+      p.add('POSE_CAMERA', `${cw} "inliers" is ${typeName(c.inliers)}; it must be an integer ≥ 0`);
+      ok = false;
+    }
+    if (ok) out.push({ s: c.s as number, tx: c.tx as number, ty: c.ty as number, inliers: c.inliers as number });
+  });
+  return out;
 }
 
 function readJoints(p: Problems, pw: string, joints: unknown): Partial<Record<Body18, Joint>> {
@@ -312,5 +375,6 @@ export function writePoseSequence(seq: PoseSequence): string {
       ),
     })),
   }));
-  return `${JSON.stringify({ spec: seq.spec, space: seq.space, width: seq.width, height: seq.height, source: seq.source, frames }, null, 2)}\n`;
+  const camera = seq.camera?.map((c) => ({ s: round(c.s, 6), tx: round(c.tx, 3), ty: round(c.ty, 3), inliers: c.inliers }));
+  return `${JSON.stringify({ spec: seq.spec, space: seq.space, width: seq.width, height: seq.height, source: seq.source, ...(seq.cameraSource !== undefined ? { cameraSource: seq.cameraSource } : {}), ...(camera !== undefined ? { camera } : {}), frames }, null, 2)}\n`;
 }
