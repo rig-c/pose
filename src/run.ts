@@ -17,7 +17,7 @@ import { artRangeLine, chainsMoving, switchLine, uncoveredFolds } from './switch
 import { landed, measureFeet, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
 import { legsOf } from './legs.ts';
 import { reduceKeys, type ReduceBone, type Reduced } from './reduce.ts';
-import type { LegScale } from './legs.ts';
+import type { LegScale, Stance } from './legs.ts';
 
 export interface RetargetArgs extends RetargetOptions {
   rig: string;
@@ -104,7 +104,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     resolveMap(map, rest, a.map, slots);
 
     const r = retarget(rest, map, frames, times, a, slots);
-    say(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, smooth ${a.smooth}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)${a.legScale !== undefined && a.legScale !== 'off' ? `, leg-scale ${a.legScale[0]}–${a.legScale[1]}` : ''}${a.plantFeet === true ? ', plant-feet' : ''}${a.carryIdle === true ? ', carry-idle' : ''}${a.merge !== undefined ? `, merge ${a.merge}` : ''}${a.reduce !== undefined ? `, reduce ${a.reduce}°${a.reduceHip !== undefined ? ` (hip ${a.reduceHip} units)` : ''}` : ''}`);
+    say(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, smooth ${a.smooth}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)${a.legScale !== undefined && a.legScale !== 'off' ? `, leg-scale ${a.legScale[0]}–${a.legScale[1]}` : ''}${a.plantFeet === true ? ', plant-feet' : ''}${a.stance !== undefined && a.stance !== 'off' ? `, stance ${a.stance}` : ''}${a.carryIdle === true ? ', carry-idle' : ''}${a.merge !== undefined ? `, merge ${a.merge}` : ''}${a.reduce !== undefined ? `, reduce ${a.reduce}°${a.reduceHip !== undefined ? ` (hip ${a.reduceHip} units)` : ''}` : ''}`);
     say(`  RIGC   rig-c ${rigc.version} (${rigc.entry}) gates and poses this run`);
     if (r.scale !== null) say(`  SCALE  ${r.scale.factor.toFixed(5)} rig units per picture px (rig ${r.scale.rig.toFixed(2)} / pose median ${r.scale.pose.toFixed(2)})`);
     for (const h of r.holds) say(`  HOLD   ${holdLine(h, r.times)}`);
@@ -133,6 +133,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       say(`  FEET   jumps (both ankles and mid_hip > 0.05 leg lengths above their rolling floor, ≥ 2 frames): ${f.jumps.map(span).join(', ') || 'none'}`);
       say(`  FEET   steps (the supporting ankle > 0.03 leg lengths a frame; re-planted after 2 frames < 0.01): ${f.steps.map((x) => `${x.side} ${span(x.frames)} → ${x.to === null ? 'the pose\'s travel' : `${x.to} supports`}, ${x.replant === null ? 'never re-planted' : `re-planted at ${x.replant}`}`).join('; ') || 'none'}`);
     }
+    if (r.stance !== null) for (const l of stanceLines(r.stance, r.times)) say(`  STANCE ${l}`);
 
     // --reduce (#32): the dense keys thinned top-down, before anything reads the tracks.
     const reduced = a.reduce === undefined ? null : reduceTracks(r, map, rest, a.reduce, a.reduceHip);
@@ -263,7 +264,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         animation: a.name,
         frames: seq.frames.length,
         duration: r.animation.duration,
-        options: { minScore: a.minScore, smooth: a.smooth, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', reduceHip: a.reduceHip ?? 'off' },
+        options: { minScore: a.minScore, smooth: a.smooth, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', reduceHip: a.reduceHip ?? 'off' },
         scale: r.scale,
         holds: r.holds,
         short: r.short,
@@ -281,6 +282,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         artRange: r.artRange,
         legScale: r.legScale.map(({ scale: _scale, ...rest }) => rest),
         pivot: r.pivot,
+        stance: r.stance === null ? null : { tolerance: r.stance.tolerance, bounds: r.stance.bounds, runs: r.stance.runs, over: r.stance.over },
         feet: r.feet === null ? null : { planted: r.planted, legLength: r.feet.legLength, supports: r.feet.supports, jumps: r.feet.jumps, steps: r.feet.steps, changes: r.feet.changes, reading: feetReading },
         shear,
         idleDropped: idle === null ? null : idle.dropped,
@@ -393,6 +395,20 @@ function legBonesOf(map: JointMap): { r: { root: string; ankle: string }; l: { r
   const l = legsOf(map, 'reading the feet');
   if ('problems' in l) return null;
   return { r: { root: l.legs.r.chain.bones[0]!, ankle: l.legs.r.ankleBone }, l: { root: l.legs.l.chain.bones[0]!, ankle: l.legs.l.ankleBone } };
+}
+
+/**
+ * The STANCE lines (#60): one per run of planted-both or lifted frames, with
+ * the tolerance and the stretch keyed; one per run a stretch was capped.
+ */
+export function stanceLines(st: Stance, times: readonly number[]): string[] {
+  const span = (x: [number, number]) => (x[0] === x[1] ? `frame ${x[0]} (t=${times[x[0]]!.toFixed(3)}s)` : `frames ${x[0]}–${x[1]} (t=${times[x[0]]!.toFixed(3)}–${times[x[1]]!.toFixed(3)}s)`);
+  const tol = `the tolerance ${st.tolerance} leg lengths`;
+  const out = st.runs.map((r) => (r.state === 'both'
+    ? `planted both: free foot ${r.side} ${span(r.frames)} — its ankle up to ${r.maxHeight.toFixed(4)} leg lengths above the supporting one in the picture, within ${tol}; its leg stretched by k ${r.k!.min === r.k!.max ? r.k!.max.toFixed(4) : `${r.k!.min.toFixed(4)} … ${r.k!.max.toFixed(4)}`} (largest ${r.k!.max.toFixed(4)})`
+    : `lifted: free foot ${r.side} ${span(r.frames)} — its ankle up to ${r.maxHeight.toFixed(4)} leg lengths above the supporting one in the picture, over ${tol}; the pose's height kept`));
+  for (const o of st.over) out.push(`past the bounds: free foot ${o.side} ${span(o.frames)} — ${o.needed === null ? 'its ankle is not below its leg\'s root, so no stretch reaches the floor' : `the floor needed k ${o.needed.toFixed(4)}, past [${st.bounds[0]}, ${st.bounds[1]}]; held at the bound`}, the foot left up to ${o.left.toFixed(2)} units from the floor`);
+  return out;
 }
 
 /** A LEG-SCALE line: the segment, its straight length, its ratio's spread, and the frames clamped. */

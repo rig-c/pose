@@ -69,8 +69,8 @@ import type { Joint } from './pose.ts';
 import { Problems, Refusal } from './problems.ts';
 import type { ArtRange, SlotTrack, Switch, SwitchOptions } from './switch.ts';
 import { clampArt, coveredChains, measureArt, overflow, RANGE_SLACK, runsOf, selectSwitches } from './switch.ts';
-import type { Feet, LegScale, PathPose, Posing, Side } from './legs.ts';
-import { isLegSegment, legScaleOf, legsOf, pathFrom, plantHip, posePath, rootOf, SIDES, supportsOf, tipOf } from './legs.ts';
+import type { Feet, LegScale, PathPose, Posing, Side, Stance } from './legs.ts';
+import { isLegSegment, legScaleOf, legsOf, pathFrom, plantHip, posePath, rootOf, SIDES, stanceOf, supportsOf, tipOf } from './legs.ts';
 
 const DEG = 180 / Math.PI;
 
@@ -91,6 +91,8 @@ export interface RetargetOptions extends SwitchOptions {
   legScale?: [number, number] | 'off';
   /** The hip derived from the supporting foot (`legs.ts`); false (the default) moves it by the pose's travel. */
   plantFeet?: boolean;
+  /** With plantFeet: a free ankle within this many leg lengths of the floor plants both feet, its leg stretched to reach it (`legs.ts` stanceOf, #60); 'off' (the default) plants one. */
+  stance?: number | 'off';
 }
 
 export interface Hold {
@@ -267,6 +269,8 @@ export interface Retarget {
   feet: Feet | null;
   /** Whether the hip was derived from the supporting foot. */
   planted: boolean;
+  /** With --stance: the frames planted both and lifted, and the free leg's stretch (#60). */
+  stance: Stance | null;
   /** Each ankle's world position on every frame, as the keys put it, when legs are scaled or feet planted. */
   ankles: { bones: Record<Side, string>; at: Record<Side, Pt[]> } | null;
   /** The translated bone's origin against its thigh roots' midpoint, at setup. */
@@ -638,6 +642,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   const plantOn = opts.plantFeet === true;
   const legScale: LegScale[] = [];
   const scales = new Map<string, number[]>();
+  let stance: Stance | null = null;
   let feet: Feet | null = null;
   let legs: ReturnType<typeof legsOf> | null = null;
   let legPath: string[] | null = null;
@@ -692,6 +697,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     }
     if (legScale.length === 0 && !p.any) p.add('LEGS_MAP', '--leg-scale scales the leg segments (two of one side\'s hip, knee and ankle), and the map aims none');
   }
+  if (opts.stance !== undefined && opts.stance !== 'off' && !plantOn) p.add('STANCE', `--stance ${opts.stance} plants the free foot beside the supporting one that --plant-feet holds, and --plant-feet is not given`);
   p.throwIfAny();
   /** Every bone on the legs' path posed on frame i, by the targets as they stand. */
   const poseLegs = (i: number): PathPose => {
@@ -714,6 +720,31 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     const tb = rest.get(t!.bone)!;
     const hip = plantHip(feet!, (i, s) => offsets[i]![s], (i) => poseTravel[i]!, [tb.worldX, tb.worldY]);
     for (let i = 0; i < n; i++) travel[i] = [hip[i]![0] - tb.worldX, hip[i]![1] - tb.worldY];
+    // --stance (#60): with the hip placed, a free ankle within the tolerance of the floor has its leg
+    // stretched (every bone of its chain's scalex, about the chain's root) until it reaches it.
+    if (opts.stance !== undefined && opts.stance !== 'off') {
+      const L = (legs as { legs: Record<Side, { chain: Chain; ankleBone: string }> }).legs;
+      const world = (i: number, v: Pt): Pt => [hip[i]![0] + v[0], hip[i]![1] + v[1]];
+      const ankleSeries = { r: series.get('r_ankle')!, l: series.get('l_ankle')! };
+      stance = stanceOf(feet!, ankleSeries, opts.stance, (i) => {
+        const lp = poseLegs(i);
+        return {
+          root: { r: world(i, lp.origin.get(L.r.chain.bones[0]!)!), l: world(i, lp.origin.get(L.l.chain.bones[0]!)!) },
+          ankle: { r: world(i, tipOf(rest, lp, L.r.ankleBone)), l: world(i, tipOf(rest, lp, L.l.ankleBone)) },
+        };
+      });
+      for (const side of SIDES) {
+        if (!stance.stretch.some((x) => x?.side === side)) continue;
+        for (const b of L[side].chain.bones) {
+          const own = scales.get(b);
+          const s = own === undefined ? new Array<number>(n).fill(1) : [...own];
+          stance.stretch.forEach((x, i) => {
+            if (x?.side === side) s[i] = s[i]! * x.k;
+          });
+          scales.set(b, s);
+        }
+      }
+    }
   }
   if (t !== null && scale !== null) {
     const bone = rest.get(t.bone)!;
@@ -884,7 +915,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     animation: { duration: keyTimes[n - 1]!, tracks },
     times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale,
     switches: sw.switches, shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
-    legScale, scales, feet, planted: plantOn, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs),
+    legScale, scales, feet, planted: plantOn, stance, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs),
   };
 }
 

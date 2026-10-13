@@ -2516,6 +2516,127 @@ describe('#47: --leg-scale and --plant-feet', () => {
     // Control: the same map reads, without the flag.
     expect(retarget(c).status).toBe(0);
   }, SLOW);
+
+  describe('#60: --stance plants both feet when the free ankle is within the tolerance of the floor', () => {
+    /** The picture leg, hip → ankle at full length, px: FEET's leg length when most frames are unlifted. */
+    const PIC = Math.hypot(V[0], V[1]);
+    /** The left ankle (free: the right is lower) lifted by `legs` of FEET's leg length on frames 8–15; under half the frames, so the median leg length stays PIC. */
+    const lifted = (legs: number) => legsPose(() => 1, (i, s) => (s === 'l' && i >= 8 && i <= 15 ? legs * PIC : 0));
+    const FLAGS = ['--leg-scale', '0.8,1.05', '--plant-feet'];
+    /** The foot's tolerance in the landing check: 0.01 units plus 1e-4 of the 150-unit leg. */
+    const PLANT_TOL = 0.01 + 1e-4 * LEG;
+    const LIFT = [8, 9, 10, 11, 12, 13, 14, 15];
+
+    /** The lift test: on the lifted frames, the left ankle is where the run without --stance puts it (the pose's height kept), and above the right. */
+    function liftKept(cliPath: string): { status: number; stance: string[]; worst: number; above: number } {
+      const c = setup({ pose: lifted(0.15) });
+      const plain = retarget(c, FLAGS);
+      expect(plain.status).toBe(0);
+      const before = posedLegs(c.build);
+      const r = retarget(c, [...FLAGS, '--stance', '0.07'], cliPath);
+      const after = posedLegs(c.build);
+      let worst = 0;
+      let above = Infinity;
+      for (const i of LIFT) {
+        worst = Math.max(worst, Math.hypot(after.ankle.l[i]![0] - before.ankle.l[i]![0], after.ankle.l[i]![1] - before.ankle.l[i]![1]));
+        above = Math.min(above, after.ankle.l[i]![1] - after.ankle.r[i]![1]);
+      }
+      return { status: r.status, stance: linesOf(r, 'STANCE'), worst, above };
+    }
+
+    test('a lift of 0.15 leg lengths stays a lift: the foot keeps the pose\'s height, and STANCE lists it', () => {
+      const k = liftKept(CLI);
+      expect(k.status).toBe(0);
+      expect(k.stance).toHaveLength(3);
+      expect(k.stance[0]).toStartWith('STANCE planted both: free foot l frames 0–7 (t=0.000–0.292s)');
+      expect(k.stance[1]).toStartWith('STANCE lifted: free foot l frames 8–15 (t=0.333–0.625s) — its ankle up to 0.1500 leg lengths above the supporting one in the picture, over the tolerance 0.07 leg lengths; the pose\'s height kept');
+      expect(k.stance[2]).toStartWith('STANCE planted both: free foot l frames 16–23');
+      expect(k.worst).toBeLessThan(1e-3);
+      // The lift shows on the rig (the shin scaled 0.8 at its clamp: 0.2 of its 70 units, along a near-vertical shin).
+      expect(k.above).toBeGreaterThan(10);
+    }, SLOW);
+
+    test('0.03 leg lengths is planted both: the posed foot lands on the floor within the plant tolerance, and the stretch is held by the landing check', () => {
+      const c = setup({ pose: lifted(0.03) });
+      const plain = retarget(c, FLAGS);
+      expect(plain.status).toBe(0);
+      const before = posedLegs(c.build);
+      const gap = Math.max(...LIFT.map((i) => before.ankle.l[i]![1] - before.ankle.r[i]![1]));
+      // Control: without --stance the free foot floats.
+      expect(gap).toBeGreaterThan(1);
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, [...FLAGS, '--stance', '0.07', '--report', report]);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      const st = linesOf(r, 'STANCE');
+      expect(st).toHaveLength(1);
+      expect(st[0]).toStartWith('STANCE planted both: free foot l frames 0–23 (t=0.000–0.958s) — its ankle up to 0.0300 leg lengths above the supporting one in the picture, within the tolerance 0.07 leg lengths; its leg stretched by k ');
+      const kmax = Number(/\(largest ([0-9.]+)\)/.exec(st[0]!)![1]);
+      expect(kmax).toBeGreaterThan(1);
+      expect(kmax).toBeLessThan(1.08);
+      // Every scale, both ankles and the hip land, by the package's own check; the stretched scales are the targets.
+      expect(linesOf(r, 'LAND').filter((l) => l.includes(' scale — '))).toHaveLength(4);
+      const after = posedLegs(c.build);
+      for (const i of LIFT) expect(Math.abs(after.ankle.l[i]![1] - after.ankle.r[i]![1])).toBeLessThan(PLANT_TOL);
+      // The supporting foot does not move for it.
+      for (let i = 0; i < N; i++) expect(Math.hypot(after.ankle.r[i]![0] - before.ankle.r[i]![0], after.ankle.r[i]![1] - before.ankle.r[i]![1])).toBeLessThan(1e-3);
+      // Independently: the left thigh's world length is its leg scale times k on a lifted frame.
+      expect(after.len.leg_l0![10]! / before.len.leg_l0![10]!).toBeGreaterThan(1.01);
+      const rep = JSON.parse(readFileSync(report, 'utf8')) as { options: { stance: unknown }; stance: { tolerance: number; bounds: number[]; runs: Array<{ state: string; side: string; frames: number[] }>; over: unknown[] } };
+      expect(rep.options.stance).toBe(0.07);
+      expect(rep.stance.tolerance).toBe(0.07);
+      expect(rep.stance.bounds).toEqual([0.92, 1.08]);
+      expect(rep.stance.runs.map((x) => [x.state, x.side, x.frames])).toEqual([['both', 'l', [0, 23]]]);
+      expect(rep.stance.over).toEqual([]);
+    }, SLOW);
+
+    test('a difference that needs k > 1.08 is reported past the bounds, held at the bound, and not forced', () => {
+      const c = setup({ pose: lifted(0.15) });
+      const r = retarget(c, [...FLAGS, '--stance', '0.2']);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      const st = linesOf(r, 'STANCE');
+      expect(st[0]).toContain('(largest 1.0800)');
+      const over = st.filter((l) => l.startsWith('STANCE past the bounds: free foot l frames 8–15'));
+      expect(over).toHaveLength(1);
+      expect(over[0]).toMatch(/the floor needed k 1\.(0[89]|[1-9])\d*, past \[0\.92, 1\.08\]; held at the bound, the foot left up to [1-9][0-9.]* units from the floor/);
+      const after = posedLegs(c.build);
+      for (const i of LIFT) expect(after.ankle.l[i]![1] - after.ankle.r[i]![1]).toBeGreaterThan(PLANT_TOL);
+    }, SLOW);
+
+    test('--stance without --plant-feet is refused by name; anything but off or (0, 1) is exit 2', () => {
+      const c = setup();
+      const r = retarget(c, ['--stance', '0.07']);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain('--stance is "0.07" without --plant-feet');
+      for (const v of ['0', '1', '-0.1', 'a']) {
+        const b = retarget(c, ['--plant-feet', '--stance', v]);
+        expect(b.status).toBe(2);
+        expect(b.stderr).toContain(`--stance is "${v}"; it must be off, or leg lengths in (0, 1)`);
+      }
+    }, SLOW);
+
+    test('mutant: without the tolerance check every free leg is stretched, and the lift test is red', () => {
+      mkdirSync(MUTANTS, { recursive: true });
+      const d = mkdtempSync(join(MUTANTS, 'm-'));
+      try {
+        cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+        cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+        cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+        const path = join(d, 'src', 'legs.ts');
+        const from = 'if (height > tolerance) {';
+        const before = readFileSync(path, 'utf8');
+        expect(before.split(from)).toHaveLength(2);
+        writeFileSync(path, before.replace(from, 'if (height > Infinity) {'));
+        const k = liftKept(join(d, 'cli.ts'));
+        const red = k.worst >= 1e-3 || !k.stance.some((l) => l.startsWith('STANCE lifted: free foot l frames 8–15'));
+        console.log(`  mutant "no tolerance check": exit ${k.status}, lifted foot moved ${k.worst.toFixed(3)} units; STANCE ${k.stance.join(' | ').slice(0, 160)}`);
+        expect(red).toBe(true);
+      } finally {
+        rmSync(d, { recursive: true, force: true });
+      }
+    }, SLOW);
+  });
 });
 
 // ===========================================================================
