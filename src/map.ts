@@ -15,9 +15,12 @@
  *
  * `aim` says which direction of the rig's bone the segment is, one entry per
  * bone: `"x"` (the default) is the bone's own x axis — right for a chain link
- * @rig-c/parts turned along its limb — and a bone name is the direction from
- * this bone's origin to that descendant's origin — right for a trunk bone,
- * whose own axis @rig-c/parts leaves at world 0°.
+ * @rig-c/parts turned along its limb; a bone name is the direction from this
+ * bone's origin to that descendant's origin — right for a trunk bone, whose
+ * own axis @rig-c/parts leaves at world 0°; and `"a>b"` is the direction from
+ * point a to point b, each the bone itself or a descendant (`name:tip` is the
+ * end of a bone's x axis) — right for a head, whose eye line
+ * (`"eye_r>eye_l"` against the joints `r_eye`, `l_eye`) turns with it.
  *
  * `translate` moves one bone by the travel of one point, scaled by the ratio of
  * a length measured on the rig (between two bones' origins; `name:tip` is the
@@ -96,7 +99,7 @@ export function readMap(text: string, where: string): JointMap {
       let aim = bones === null ? [] : bones.map(() => 'x');
       if ('aim' in c) {
         const a = strings(c.aim);
-        if (a === null || bones === null || a.length !== bones.length) p.add('MAP_CHAIN_AIM', `${label} "aim" is ${typeName(c.aim)}; it must be one entry per bone ("x" or a descendant bone's name)`);
+        if (a === null || bones === null || a.length !== bones.length) p.add('MAP_CHAIN_AIM', `${label} "aim" is ${typeName(c.aim)}; it must be one entry per bone ("x", a descendant bone's name, or "a>b")`);
         else aim = a;
       }
       let bend: Bend = 'rest';
@@ -143,6 +146,42 @@ export function descends(rest: Rest, bone: string, ancestor: string): boolean {
   return false;
 }
 
+/** The two points a non-`x` aim runs between: `"a>b"`, or the bone's origin to a descendant's. */
+export function aimEnds(bone: string, aim: string): [string, string] {
+  const i = aim.indexOf('>');
+  return i < 0 ? [bone, aim] : [aim.slice(0, i), aim.slice(i + 1)];
+}
+
+/** What an aim reads off a bone: its world x axis column and origin. */
+export interface AimBone {
+  a: number;
+  c: number;
+  worldX: number;
+  worldY: number;
+}
+
+/**
+ * A mapped bone's aim, Spine world degrees, on any pose of the rig: the setup
+ * pose (the rest angle) or a posed frame (where it landed). `lengths` are the
+ * model's bone lengths, for `name:tip`.
+ */
+export function aimAngle(bones: ReadonlyMap<string, AimBone>, lengths: ReadonlyMap<string, number>, bone: string, aim: string): number {
+  const DEG = 180 / Math.PI;
+  if (aim === 'x') {
+    const b = bones.get(bone)!;
+    return Math.atan2(b.c, b.a) * DEG;
+  }
+  const at = (spec: string): [number, number] => {
+    const tip = spec.endsWith(':tip');
+    const name = tip ? spec.slice(0, -4) : spec;
+    const b = bones.get(name)!;
+    const l = tip ? lengths.get(name) ?? 0 : 0;
+    return [b.worldX + b.a * l, b.worldY + b.c * l];
+  };
+  const [f, t] = aimEnds(bone, aim).map(at) as [[number, number], [number, number]];
+  return Math.atan2(t[1] - f[1], t[0] - f[0]) * DEG;
+}
+
 /** A rig point: a bone's origin, or `name:tip`, the end of its x axis. */
 export function rigPoint(rest: Rest, spec: string): [number, number] | null {
   const tip = spec.endsWith(':tip');
@@ -170,17 +209,28 @@ export function resolveMap(map: JointMap, rest: Rest, where: string): void {
         p.add('MAP_CHAIN_ORDER', `chain "${c.name}" — bone "${b}" does not descend from "${c.bones[k - 1]}"; its parent is "${rest.get(b)!.parent}"`);
       }
       const aim = c.aim[k]!;
-      if (aim !== 'x') {
-        if (!rest.has(aim)) p.add('MAP_AIM_EXISTS', `chain "${c.name}" — bone "${b}" aims at "${aim}", which is not in the rig`);
-        else if (!descends(rest, aim, b)) p.add('MAP_AIM_DESCENDS', `chain "${c.name}" — bone "${b}" aims at "${aim}", which does not descend from it; turning "${b}" would not turn that direction`);
-        else {
-          const o = rest.get(b)!;
-          const a = rest.get(aim)!;
-          if (Math.hypot(a.worldX - o.worldX, a.worldY - o.worldY) < 1e-6) p.add('MAP_AIM_LENGTH', `chain "${c.name}" — bone "${b}" aims at "${aim}", whose origin is at its own; the direction is undefined`);
-        }
-      } else if (rest.has(b)) {
+      if (aim === 'x') {
         const o = rest.get(b)!;
         if (Math.hypot(o.a, o.c) < 1e-9) p.add('MAP_AIM_LENGTH', `chain "${c.name}" — bone "${b}" has a collapsed x axis at setup (scale 0); aim it at a descendant`);
+        return;
+      }
+      const [from, to] = aimEnds(b, aim);
+      const verb = aim.includes('>') ? 'aims through' : 'aims at';
+      let ok = true;
+      for (const end of [from, to]) {
+        const name = end.endsWith(':tip') ? end.slice(0, -4) : end;
+        if (!rest.has(name)) {
+          p.add('MAP_AIM_EXISTS', `chain "${c.name}" — bone "${b}" ${verb} "${end}", which is not in the rig`);
+          ok = false;
+        } else if (name !== b && !descends(rest, name, b)) {
+          p.add('MAP_AIM_DESCENDS', `chain "${c.name}" — bone "${b}" ${verb} "${name}", which does not descend from it; turning "${b}" would not turn that direction`);
+          ok = false;
+        }
+      }
+      if (ok) {
+        const pf = rigPoint(rest, from)!;
+        const pt = rigPoint(rest, to)!;
+        if (Math.hypot(pt[0] - pf[0], pt[1] - pf[1]) < 1e-6) p.add('MAP_AIM_LENGTH', `chain "${c.name}" — bone "${b}" aims from "${from}" to "${to}", which are at the same point; the direction is undefined`);
       }
     });
   }

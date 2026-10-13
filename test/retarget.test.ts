@@ -892,3 +892,61 @@ describe('the command line', () => {
     expect(r.status).toBe(0);
   }, SLOW);
 });
+
+// --- a two-point aim: the head by its eye line -------------------------------
+
+describe('an aim between two points ("eye_r>eye_l") turns the head by its eye line', () => {
+  const headBones = (b: BoneSpec[]): BoneSpec[] => [
+    ...b,
+    { name: 'head', parent: 'neck', x: 0, y: 20 },
+    { name: 'eye_r', parent: 'head', x: -6, y: 10 },
+    { name: 'eye_l', parent: 'head', x: 6, y: 10 },
+  ];
+  const tilt = (i: number): number => 25 * Math.sin(i * 0.6) + (i === 0 ? 30 : 0);
+  /** The eyes tilted by tilt(i), Spine degrees, about their midpoint. */
+  const eyes = (i: number, j: JointsDoc): void => {
+    const r = j.r_eye!.at as Pt;
+    const l = j.l_eye!.at as Pt;
+    const mid: Pt = [(r[0] + l[0]) / 2, (r[1] + l[1]) / 2];
+    const d = dir(tilt(i), 6);
+    j.r_eye = { state: 'observed', at: [mid[0] - d[0], mid[1] - d[1]], score: 0.9 };
+    j.l_eye = { state: 'observed', at: [mid[0] + d[0], mid[1] + d[1]], score: 0.9 };
+  };
+  const mapWith = (aim: string): Record<string, unknown> => ({
+    ...baseMap(),
+    chains: [...baseChains(), { name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: [aim] }],
+  });
+
+  test('the eye line lands on the pose\'s, read back by rig-c\'s poser', () => {
+    const c = setup({ rig: { bones: headBones }, map: mapWith('eye_r>eye_l'), pose: poseDoc(BASE, eyes) });
+    const r = retarget(c);
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'LAND').some((l) => l.startsWith('LAND   bone "head" aim'))).toBe(true);
+    const doc = loadBuild(c.build);
+    const poses = poseRawAnimation(doc, 'dance', Array.from({ length: BASE.n - 1 }, () => BASE.dt));
+    const off: string[] = [];
+    poses.forEach((p, i) => {
+      const b = byName(p.bones);
+      const er = b.get('eye_r')!;
+      const el = b.get('eye_l')!;
+      const got = Math.atan2(el.worldY - er.worldY, el.worldX - er.worldX) * DEG;
+      if (Math.abs(wrap(got - tilt(i))) > ANGLE_TOL) off.push(`frame ${i}: eye line ${got.toFixed(4)}° want ${tilt(i).toFixed(4)}°`);
+    });
+    expect(off).toEqual([]);
+  }, SLOW);
+
+  test('an end that does not turn with the bone is refused by name', () => {
+    const c = setup({ rig: { bones: headBones }, map: mapWith('eye_r>neck'), pose: poseDoc(BASE, eyes) });
+    const r = retarget(c);
+    expect(r.status).toBe(1);
+    expect(fails(r).some((l) => l.includes('MAP_AIM_DESCENDS') && l.includes('"neck"') && l.includes('bone "head"'))).toBe(true);
+    expect(existsSync(c.out)).toBe(false);
+  }, SLOW);
+
+  test('two ends at one point are refused: the direction is undefined', () => {
+    const c = setup({ rig: { bones: headBones }, map: mapWith('eye_r>eye_r'), pose: poseDoc(BASE, eyes) });
+    const r = retarget(c);
+    expect(r.status).toBe(1);
+    expect(fails(r).some((l) => l.includes('MAP_AIM_LENGTH') && l.includes('"eye_r"'))).toBe(true);
+  }, SLOW);
+});
