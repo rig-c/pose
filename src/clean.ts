@@ -7,7 +7,7 @@
  * Four steps, in this order, each on one person's joints:
  *
  * 1. **Spikes.** A joint more than `SPIKE_TRUNKS` (0.2) trunk lengths from its
- *    `SPIKE_WINDOW`-frame (5) median takes the median. The trunk is neck →
+ *    `SPIKE_WINDOW`-frame (5) vector median (below) takes that median. The trunk is neck →
  *    mid_hip (the hips' midpoint), the median of its picture length over the
  *    frames where all three have a position. Every replacement is listed by
  *    frame and joint. Without `loop`, a frame whose window a clip end cuts
@@ -25,9 +25,16 @@
  *    constant, so the lowest ankle over the cycle (the largest y of either
  *    ankle on any frame) is at its height before smoothing.
  *
- * What a median is here: per coordinate (x and y apart), over the frames of the
- * window on which the joint has a position — its own frame included, any state.
- * An even count takes the mean of the middle two. The windows are centred; with
+ * What a median is here (rig-c/pose#71): a vector median, over the frames of
+ * the window on which the joint has a position — its own frame included, any
+ * state. It is the sample, one of those 2D positions, whose summed Euclidean
+ * distance to the other samples is smallest; a tie goes to the earliest frame
+ * of the window in time (with `loop`, a window that wraps at frame 0 starts on
+ * the cycle's last frames). A replaced joint so always takes a position some
+ * frame actually had. A median per coordinate (x and y apart, #67) could make a
+ * point no frame had: beside fast motion it landed 23.6 px from every sample of
+ * a held pose's window, and took the held pose's first frame for a spike. The
+ * spike test reads this same vector median. The windows are centred; with
  * `loop` they wrap (the sequence is one cycle, its last frame followed by its
  * first), without it they are cut at the ends. The medians read the step's
  * input, never a value the same step already replaced.
@@ -149,11 +156,26 @@ function median1(xs: number[]): number {
   return s.length % 2 === 1 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
 }
 
-/** The per-coordinate median of a joint's positions over the window around i; null when it has none there. */
+/**
+ * The vector median of a joint's positions over the window around i (#71): the
+ * sample whose summed Euclidean distance to the window's other samples is
+ * smallest, a tie going to the earliest frame of the window in time (only a
+ * strictly smaller sum displaces an earlier sample). Always one of the window's
+ * own positions, returned as a copy; null when the joint has none there.
+ */
 export function medianAt(xs: Series, i: number, size: number, loop: boolean): Pt | null {
   const pts = windowAt(i, xs.length, size, loop).map((j) => xs[j]).filter((p): p is Pt => p !== null && p !== undefined);
-  if (pts.length === 0) return null;
-  return [median1(pts.map((p) => p[0])), median1(pts.map((p) => p[1]))];
+  let best: Pt | null = null;
+  let bestSum = Infinity;
+  for (const p of pts) {
+    let sum = 0;
+    for (const q of pts) sum += Math.hypot(p[0] - q[0], p[1] - q[1]);
+    if (sum < bestSum) {
+      bestSum = sum;
+      best = p;
+    }
+  }
+  return best === null ? null : [best[0], best[1]];
 }
 
 /** Whether the spike step tests frame i: under loop always; without it, only where no clip end cuts the window. */
@@ -164,7 +186,9 @@ export function testedAt(i: number, n: number, loop: boolean, size = SPIKE_WINDO
 
 /**
  * Spikes on one joint: every frame where it lies more than `limit` px from its
- * `size`-frame median (read from `xs`, not from a replaced value). Returns the
+ * `size`-frame vector median, `medianAt` (read from `xs`, not from a replaced
+ * value). The test is #67's, distance to the median over the limit; since #71
+ * the median it measures against is the vector median, not one per coordinate. Returns the
  * frames, each with its median and distance; `xs` is not changed.
  */
 export function spikesOf(xs: Series, limit: number, loop: boolean, size = SPIKE_WINDOW): Array<{ frame: number; at: Pt; off: number }> {

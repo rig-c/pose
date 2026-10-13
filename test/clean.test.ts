@@ -3,8 +3,11 @@
  * answers: planted spikes that must all be found while every clean joint stays
  * bit-identical, a sequence with none that reports 0, a periodic signal whose
  * amplitude --loop keeps beside the control without it, and mutants without
- * the 5-frame median that must make the spike test red. Each refusal has its
- * planted input beside a control.
+ * the 5-frame median that must make the spike test red. The median is a vector
+ * median (#71): a held pose beside fast motion keeps its observed position,
+ * where a median per coordinate made a point no frame had, and a mutant going
+ * back to it makes that test red. Each refusal has its planted input beside a
+ * control.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
@@ -12,7 +15,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BODY18 } from '../src/joints.ts';
-import { clean, cleanLine, jitterOf, LEGS, savitzkyGolay, type Series } from '../src/clean.ts';
+import { clean, cleanLine, jitterOf, LEGS, medianAt, savitzkyGolay, type Series } from '../src/clean.ts';
 import { readPoseSequence, writePoseSequence, type PoseSequence } from '../src/pose.ts';
 
 const ROOT = join(import.meta.dir, '..');
@@ -191,7 +194,9 @@ describe('the edge: a frame whose 5-frame window a clip end cuts is not tested, 
       const r = cli(['clean', '--pose', input, '--out', out, '--legs', '1', '--rest', '1'], join(d, 'cli.ts'));
       expect(r.status).toBe(0);
       const found = (JSON.parse(readFileSync(out, 'utf8')) as { cleaned: { spikes: { found: Array<{ frame: number; joint: string }> } } }).cleaned.spikes.found;
-      expect(found).toEqual([{ frame: 0, joint: 'r_wrist' }, { frame: 15, joint: 'r_wrist' }]);
+      // Since #71 frame 14 as well: its cut window (12–15) has an even count, the two middle samples tie, and the tie
+      // goes to the earlier, frame 13, 25 px back. (Frame 1's cut window, 0–3, ties on frames 1 and 2: itself.)
+      expect(found).toEqual([{ frame: 0, joint: 'r_wrist' }, { frame: 14, joint: 'r_wrist' }, { frame: 15, joint: 'r_wrist' }]);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
@@ -258,6 +263,109 @@ describe('mutants without the 5-frame median make the spike test red', () => {
 
 // ===========================================================================
 
+/** The median per coordinate (x and y apart, an even count the mean of the middle two): what #67 used, kept here to show its flaw. */
+function perCoordinate(pts: readonly Pt[]): Pt {
+  const m1 = (v: number[]): number => {
+    const s = [...v].sort((a, b) => a - b);
+    const m = s.length >> 1;
+    return s.length % 2 === 1 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
+  };
+  return [m1(pts.map((p) => p[0])), m1(pts.map((p) => p[1]))];
+}
+
+describe('the median is a vector median (#71): a sample the window observed, ties to the earliest frame', () => {
+  /**
+   * The right wrist's path, px from (500, 500): down a line 40 px a frame to
+   * (30, 40), one frame at (60, 0), a pose held on frames 7–8 at (0, 0), then
+   * away through (30, −40) and down a line again. Frame 7's window (5–9) holds
+   * the pose twice beside three fast samples, all to its right.
+   */
+  const HELD = (i: number): Pt => (i <= 5 ? [30, 40 + 40 * (5 - i)] : i === 6 ? [60, 0] : i <= 8 ? [0, 0] : i === 9 ? [30, -40] : [0, -80 - 40 * (i - 10)]);
+  const heldDoc = (): Record<string, unknown> => seqDoc(16, SMOOTH, (i, j) => {
+    j.r_wrist!.at = [500 + HELD(i)[0], 500 + HELD(i)[1]];
+  });
+  /** clean (windows of 1) through the command line at `cliPath`: the spikes found and the wrist's written positions. */
+  const heldRun = (cliPath: string): { found: Array<{ frame: number; joint: string }>; wrist: Pt[] } => {
+    const dir = tempDir();
+    const input = join(dir, 'pose.json');
+    const out = join(dir, 'out.json');
+    writeFileSync(input, JSON.stringify(heldDoc()));
+    const r = cli(['clean', '--pose', input, '--out', out, '--legs', '1', '--rest', '1'], cliPath);
+    if (r.status !== 0) throw new Error(`clean exited ${r.status}: ${r.stderr}`);
+    const s = readPoseSequence(readFileSync(out, 'utf8'), out);
+    return { found: s.cleaned!.spikes.found as Array<{ frame: number; joint: string }>, wrist: Array.from({ length: 16 }, (_, i) => atOf(s, i, 'r_wrist')!) };
+  };
+  /** The held-pose check: the held frames are no spike and keep the position they were observed at. */
+  const heldKept = (run: ReturnType<typeof heldRun>): boolean =>
+    !run.found.some((f) => f.joint === 'r_wrist' && (f.frame === 7 || f.frame === 8)) && [7, 8].every((i) => run.wrist[i]![0] === 500 && run.wrist[i]![1] === 500);
+
+  test('a held pose beside fast motion: the vector median is the observed held position; the per-coordinate point is no sample, 30 px from all', () => {
+    const xs: Series = Array.from({ length: 16 }, (_, i) => HELD(i));
+    const window = [5, 6, 7, 8, 9].map((f) => xs[f]!);
+    const vm = medianAt(xs, 7, 5, false)!;
+    expect(vm).toEqual([0, 0]);
+    expect(window.some((p) => p[0] === vm[0] && p[1] === vm[1])).toBe(true);
+    // The per-coordinate median of the same window: x from the fast samples, y from another — a point no frame had,
+    // past the 20 px limit from every sample, the held frame included (the flaw #67 found).
+    const pc = perCoordinate(window);
+    expect(pc).toEqual([30, 0]);
+    expect(window.some((p) => p[0] === pc[0] && p[1] === pc[1])).toBe(false);
+    expect(Math.min(...window.map((p) => Math.hypot(p[0] - pc[0], p[1] - pc[1])))).toBe(30);
+    // Every median clean takes is one of its window's samples, on every frame of the path.
+    for (let i = 0; i < 16; i++) {
+      const m = medianAt(xs, i, 5, false)!;
+      const lo = Math.max(0, i - 2);
+      expect(xs.slice(lo, i + 3).some((p) => p![0] === m[0] && p![1] === m[1])).toBe(true);
+    }
+    // Through the command line: the held frames are no spike and are written as observed. The one spike is frame 6,
+    // the arrival 60 px right of the hold, which takes frame 5's observed (30, 40).
+    const run = heldRun(CLI);
+    expect(heldKept(run)).toBe(true);
+    expect(run.found.filter((f) => f.joint === 'r_wrist')).toEqual([{ frame: 6, joint: 'r_wrist' }]);
+    expect(run.wrist[6]).toEqual([530, 540]);
+  });
+
+  test('mutant: the median back to per coordinate fails the held-pose test (the held frame taken for a spike)', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'clean.ts');
+      const from = '  return best === null ? null : [best[0], best[1]];';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, '  return pts.length === 0 ? null : [median1(pts.map((p) => p[0])), median1(pts.map((p) => p[1]))];'));
+      const run = heldRun(join(d, 'cli.ts'));
+      console.log(`  mutant "per-coordinate median": r_wrist spikes at ${run.found.filter((f) => f.joint === 'r_wrist').map((f) => f.frame).join(', ') || 'none'}`);
+      if (heldKept(run)) throw new Error('mutant "per-coordinate median" survived: the held pose was kept');
+      expect(run.found).toContainEqual({ frame: 7, joint: 'r_wrist' });
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  test('determinism: a tie goes to the earliest frame of the window, in time (wrapping with loop)', () => {
+    const A: Pt = [0, 0];
+    const B: Pt = [10, 0];
+    // Two samples: equal sums. The earlier frame wins, whichever value it holds.
+    expect(medianAt([A, B, null, null, null], 2, 5, false)).toEqual(A);
+    expect(medianAt([B, A, null, null, null], 2, 5, false)).toEqual(B);
+    // Four corners of a square: four equal sums; frame 0's corner.
+    expect(medianAt([[0, 10], [10, 10], [10, 0], [0, 0], null], 2, 5, false)).toEqual([0, 10]);
+    // With loop, frame 0's window is frames 4, 5, 0, 1, 2: frame 5 comes before frame 1 in it.
+    expect(medianAt([null, A, null, null, null, B], 0, 5, true)).toEqual(B);
+    // Control: without loop the window is cut to frames 0–2, and only frame 1 has a position.
+    expect(medianAt([null, A, null, null, null, B], 0, 5, false)).toEqual(A);
+    // A copy, never the input's own array.
+    const xs: Series = [A, B, null];
+    expect(medianAt(xs, 1, 3, false)).not.toBe(A);
+  });
+});
+
+// ===========================================================================
+
 describe('occlusion: a joint not observed, or scored under 0.3, takes its 3-frame median', () => {
   test('an occluded joint and a low-score one move to the median; a missing one stays missing; states and scores are kept', () => {
     const doc = seqDoc(12, SMOOTH, (i, j) => {
@@ -270,10 +378,14 @@ describe('occlusion: a joint not observed, or scored under 0.3, takes its 3-fram
     const c = clean(input, { loop: false, legs: 1, rest: 1 }, undefined, 'mem');
     expect(c.record.spikes.found).toEqual([]);
     expect(c.occluded.map((o) => `${o.frame} ${o.joint} ${o.why}`)).toEqual(['5 r_elbow occluded', '7 l_knee score 0.200 < 0.3']);
-    const med = (a: number, b: number, x: number) => [a, b, x].sort((p, q) => p - q)[1]!;
+    // The vector median (#71): of the three, the sample with the smallest summed distance to the other two.
+    const sum = (p: Pt, ps: Pt[]) => ps.reduce((s, q) => s + Math.hypot(p[0] - q[0], p[1] - q[1]), 0);
     for (const [i, name] of [[5, 'r_elbow'], [7, 'l_knee']] as const) {
       const xs = [i - 1, i, i + 1].map((f) => atOf(input, f, name)!);
-      expect(atOf(c.seq, i, name)).toEqual([med(xs[0]![0], xs[1]![0], xs[2]![0]), med(xs[0]![1], xs[1]![1], xs[2]![1])]);
+      const want = xs.reduce((b, p) => (sum(p, xs) < sum(b, xs) ? p : b));
+      expect(atOf(c.seq, i, name)).toEqual(want);
+      // It is a neighbour's observed position, not the occluded one's own.
+      expect(want).not.toEqual(xs[1]);
     }
     const j5 = (c.seq.frames[5]!.people[0]!.joints as Record<string, JointDoc>).r_elbow!;
     expect([j5.state, j5.score]).toEqual(['occluded', 0.5]);

@@ -813,7 +813,9 @@ describe('the short hold (#22): a segment under --short of its median picture le
   }, SLOW);
 
   // Since #67 a 4-frame shrink, still under END-ON's 0.15 s: clean's 5-frame median takes a 2-frame collapse out as a
-  // spike, and on this fixture (the arm moving ~12 px a frame) the last frame of a 3-frame run as well.
+  // spike, and on this fixture (the arm moving ~12 px a frame) the last frame of a 3-frame run as well. #71 tried the
+  // 2-frame shrink again under the vector median: frames 7 and 8 are still spikes (32.1 and 44.4 px over 20), and a
+  // 3-frame run still loses frame 9 (21.6 px) — a run of 2 in a 5-frame window is the minority whatever the median.
   test('a 4-frame shrink (0.133 s, a blur): SHORT, but not END-ON', () => {
     const c = setup({ pose: shrunk(7, 4) });
     const r = retarget(c, ['--short', '0.35']);
@@ -866,8 +868,9 @@ describe('the short hold (#22): a segment under --short of its median picture le
   });
 
   test('POSE_SHORT_MEDIAN: a segment of zero length on most frames has no median to measure against', () => {
-    // Since #67 frames 0–9: the collapsed wrist rides the elbow 12 px a frame, so on the run's last frame the
-    // per-coordinate 5-frame median mixes in the far side of the step and clean takes it as a spike; 9 of 16 stay zero.
+    // Since #67 frames 0–9: the collapsed wrist rides the elbow 12 px a frame, so on the run's last frame the 5-frame
+    // median is too far back and clean takes it as a spike; 9 of 16 stay zero. Under #71's vector median too: at frame 8
+    // of a 0–8 run the window's sample nearest the rest is frame 6, 23.7 px back (over 20), so 0–9 stays.
     const pose = poseDoc(STEADY, (i, j) => {
       if (i <= 9) j.l_wrist = { ...j.l_elbow! };
     });
