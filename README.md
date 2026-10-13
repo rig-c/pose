@@ -10,13 +10,17 @@ Part of the rig-c toolchain: [core](https://github.com/rig-c/core) compiles and 
 
 ## Try it
 
-[`examples/wave`](examples/wave) runs with nothing else: a bones-only stick rig (no art), a 3-second wave made from joint angles (`make-pose.ts` writes it), and the map that joins them.
+[`examples/wave`](https://github.com/rig-c/pose/tree/main/examples/wave) is in the repository, not the npm package: clone the repository, or copy its four files. It runs with nothing else: a bones-only stick rig (no art), a 3-second wave made from joint angles (`make-pose.ts` writes it), and the map that joins them.
 
 ```sh
 rig-pose retarget --rig examples/wave/rig --map examples/wave/map.json --pose examples/wave/pose.json --out wave.motion.json --build wave-build
 ```
 
 It prints the gate's verdict and where every mapped bone landed, then writes `wave.motion.json` and the gated build. `rigc preview --candidate wave-build` plays it in the Spine Web Player. A rig with no art shows only its bones.
+
+## What the rig needs
+
+The map names **chains**: each limb as bones that descend from one another, parent to child. That means a thigh with its shin below it, and an upper arm with its forearm below it, and likewise for the trunk and the head. A rig whose arm is one bone, or that has no leg bones, cannot take a pose: the map is refused by name (`MAP_*`). [@rig-c/parts](https://github.com/rig-c/parts) builds such a rig from a painting's keypoints with `propose --keypoints`. A rig drawn by hand needs the same chains.
 
 ## What it does
 
@@ -58,7 +62,17 @@ and what the run cannot decide for you it lists:
 - `REDUCE` — with `--reduce` ([below](#few-keys---reduce)): per bone, its keys before and after and its largest error, with the frame; then the total.
 - `TURN` — a line across the body (hips, shoulders, eyes) shorter in the picture than 0.5 of its median length, or reversed, for at least 0.15 s: the body or the head turned. A reading of the pose, made whether or not the map uses the line; it changes no key. The demand for a turned-body drawing, as `END-ON` is for a foreshortened limb.
 
-`--report <file>` writes all of it as JSON (`rig-pose-report/1`): `options` (every figure the run used, `switchTolerance`, `switchMin`, `switchAt`, `legScale` and `plantFeet` included), `scale`, `holds`, `short`, `endOn`, `bends`, `flips`, `gate`, `landings`, `posture`, `folds`, `legScale`, `pivot`, `feet` (`planted`, `legLength`, `floor`, `supports`, `jumps`, `changes`, and the posed `reading`), `shear`, `idleDropped`, `idleKeptOut` and `merged` ([below](#the-idle-what-the-retarget-drops)), `reduce` (the tolerances and each row of `REDUCE`, [below](#few-keys---reduce)), and the demand lists:
+`--report <file>` writes all of it as JSON (`rig-pose-report/1`): `options` (every figure the run used, `switchTolerance`, `switchMin`, `switchAt`, `legScale` and `plantFeet` included), `scale`, `holds`, `short`, `endOn`, `bends`, `flips`, `gate`, `landings`, `posture`, `folds`, `legScale`, `pivot`, `feet` (`planted`, `legLength`, `floor`, `supports`, `jumps`, `changes`, and the posed `reading`), `shear`, `idleDropped`, `idleKeptOut` and `merged` ([below](#the-idle-what-the-retarget-drops)), `reduce` (the tolerances and each row of `REDUCE`, [below](#few-keys---reduce)), and the demand lists. The fields a run is graded by:
+
+| field | each entry |
+| --- | --- |
+| `holds` | `{ point, from, to, source, why }`: a joint held over frames `from`–`to` at frame `source`'s value |
+| `bends` | `{ chain, joint, frame, t, angle, side, rest }`: a hinge found bent the wrong way (`angle` in degrees, Spine's sense; `side` ±1, the side it may bend) |
+| `endOn` | `{ chain, bone, joints, frames, seconds, minFraction }`: a limb pointing at the camera for ≥ 0.15 s |
+| `landings` | `{ bone, worst, frame, kind, tolerance }`: where rig-c's poser put each bone, against the target. `kind` is `angle` (degrees), `origin` or `foot` (world units), or `scale` (a fraction of the setup length). A run writes only when every `worst` ≤ `tolerance` |
+| `folds` | `{ slot, attachment, times }`: every mesh `rigc render --folds` saw fold, at those seconds; `null` when it did not read |
+
+The demand lists:
 
 - `switches: [{ set, chains, slots, hides, offsets, from, to, frames: [first, last], distance: { max, median }, artTurn: { <bone>: { max, median } }, moved: { on, off } }]` — one per span shown; `from` is the first frame's time, `to` the time the base art comes back (the animation's end when the span runs to it), `distance` in degrees over the frames shown, `artTurn` |wrap(target − drawn)| in degrees per bone the set has a `drawn` angle for. `moved.on` is the boundary the span starts on (null from the first frame), `moved.off` the one the base art or the next set comes back on (null to the end), each `{ frame: [selected, keyed], frames, seconds, window: [first, last], speed: { old, new } }`: signed frames and seconds, the frames it could move to, and the speed in degrees per frame on the old and the new frame. A boundary between two sets is the same entry in both.
 - `uncovered: [{ slot, attachment, chains, times }]` — every entry of `folds` on the times its slot still shows that mesh, with the map's chains that move it (the deepest: the arm, not the trunk it hangs from). `rigc render --folds` reads only what the pose shows, so a mesh swapped out or hidden by a switch is not read on those frames at all; `uncovered` is the fold times less the switched ones.
@@ -194,7 +208,7 @@ Which bones carry which joints. You write it for your rig:
 - A **point** of the rig is a bone's origin (`name`), the end of its x axis (`name:tip`), or the midpoint of two of those (`"a+b"`: `"sleeve_r0+sleeve_l0"` is the shoulders' midpoint). An aim's points must be the bone itself or descend from it.
 - `reach: true`, on a one-bone chain from the translated joint (a trunk from `mid_hip`): the bone is aimed from where its origin is posed — the hip moved and turned — at where the pose puts the segment's end relative to mid_hip, scaled. Without it, a tilted pelvis carries the chest's origin sideways and the trunk, parallel to the pose's, misses the shoulders. Its aim is one point, from the bone's own origin: `{ "name": "trunk", "bones": ["chest"], "joints": ["mid_hip", "mid_shoulder"], "aim": ["sleeve_r0+sleeve_l0"], "reach": true }`. The chain must descend from the translated bone.
 - `bend`: every joint inside a chain is a hinge. `"rest"` (default) takes the side it may bend from the rig's rest pose and refuses a rest that is straight (under 0.5°); `"ccw"`/`"cw"` state it; `"free"` skips the check.
-  ⚠️ **Seen from the front, an elbow's side is not a joint limit.** An elbow flexes toward the camera, and its picture falls on either side of the upper arm depending on how the arm is turned. On a real 13 s front-facing dance (313 frames, RTMPose), the right elbow sat on the "wrong" side of the rig's rest on 165 frames (median 23°), and the left on 200 (median 29°, up to 179° with the hands behind the head). Every one was a real elbow bend. The knees strayed at most 8.8° and 14.7°, which is pose noise around a straight leg. So for front-facing material: arms `"free"`; legs on `"rest"`, with `--bends clamp` straightening the noise.
+  ⚠️ **Seen from the front, an elbow's side is not a joint limit.** An elbow flexes toward the camera, and its picture falls on either side of the upper arm depending on how the arm is turned. On a real 13 s front-facing dance (313 frames, RTMPose), the right elbow sat on the "wrong" side of the rig's rest on 165 frames (median 23°), and the left on 200 (median 29°, up to 179° with the hands behind the head). Every one was a real elbow bend. The knees strayed at most 8.8° and 14.7°, which is pose noise around a straight leg. So for front-facing material, arms go `"free"`. Legs on `"rest"` with `--bends clamp` hold only while the knees stay near straight. On a second dance with knee bends (Toca Toca, rig-c/pose#27), that setting straightened the left knee for most of the dance: `leg_l1` was 48.3° off at p90, against 0.0–0.3° with free legs. Leave legs `"free"` unless the dance keeps its knees straight.
 - `mid_hip` and `mid_shoulder` are the midpoints of the two hips and the two shoulders.
 - `translate.scale` is one length measured on both: two points on the rig, two points in the pose (its median over the frames where both are good). Pick a long segment that does not foreshorten much.
 
@@ -329,7 +343,7 @@ Exit codes: `0` compared, whether it found anything or not, since a finding is n
 
 [Bun](https://bun.sh) ≥ 1.2 on `PATH` — rig-pose, like rig-c, runs its TypeScript sources directly. `rig-c` comes as a dependency. With `@esotericsoftware/spine-core` installed beside it, rig-c's gate runs the spine-core round trip; without it, rig-c's own gate, and the gate's report says which.
 
-## What 0.2 fixes
+## Why alternate drawings (0.2)
 
 A flat painting turned by its bones matches each limb's direction, not its depth. On a real 13 s front-facing dance, retargeted onto a @rig-c/parts rig, five moments were found where it cannot follow. They were found by measuring the pose against the rig and checked against the video:
 
@@ -341,13 +355,15 @@ A flat painting turned by its bones matches each limb's direction, not its depth
 | S4 | 7.7–10.9 | hands crossed in front | which forearm is in front |
 | S5 | 11.1–13.0 | an arm thrust at the camera, then a V sign | foreshortening (0.63) and the shape of the hand; the arm mesh folds |
 
-The answer is a second drawing of the arm for each of those poses, shown in place of the bent mesh while the pose lasts. rig-pose chooses when to show it, keys the switch in the motion, and lists every fold no drawing covers ([#6](https://github.com/rig-c/pose/issues/6), [above](#alternate-drawings-alternates)).
+The answer, since 0.2, is a second drawing of the arm for each of those poses, shown in place of the bent mesh while the pose lasts. rig-pose chooses when to show it, keys the switch in the motion, and lists every fold no drawing covers ([#6](https://github.com/rig-c/pose/issues/6), [above](#alternate-drawings-alternates)).
 
-## What 0.1.0 does not do
+## What it does not do
 
-- **Extract poses from video.** The input is joint positions; how you get them (a pose model, a dataset, a hand) is yours.
-- **Turn the body.** 2D only: a segment pointing at the camera foreshortens, and the rig cannot. The direction is matched; the length is not.
-- **Plant feet** beyond what the pose gives (until `--plant-feet`, [#47](https://github.com/rig-c/pose/issues/47)), **hands and fingers** (no bones for them yet, rig-c/parts#171), mobile.
+- **Extract poses from video.** The input is joint positions. How you get them is up to you: a pose model, a dataset, or by hand.
+- **Turn the body.** It works in 2D only. A segment pointing at the camera foreshortens, and the rig cannot: the direction is matched, the length is not. With `--leg-scale`, leg segments are the exception.
+- **Read a moving camera.** A reference whose camera zooms or pans moves the planted floor with it under `--plant-feet` ([#52](https://github.com/rig-c/pose/issues/52)).
+- **Front and behind, blinks, mouth shapes.** The detector's scores and face points do not carry them ([#33](https://github.com/rig-c/pose/issues/33), [#46](https://github.com/rig-c/pose/issues/46)).
+- **Hands and fingers.** There are no bones for them yet (rig-c/parts#171).
 
 ## Licence
 
