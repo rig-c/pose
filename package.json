@@ -40,10 +40,10 @@
     "access": "public"
   },
   "scripts": {
-    "test": "bun test",
+    "test": "bun test ./test",
     "typecheck": "bunx tsc --noEmit",
     "lint": "bunx eslint .",
-    "prepublishOnly": "bun run typecheck && bun run lint && bun test"
+    "prepublishOnly": "bun run typecheck && bun run lint && bun run test"
   },
   "dependencies": {
     "rig-c": "^2.47.1"

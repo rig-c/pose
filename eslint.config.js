@@ -7,7 +7,9 @@ import tseslint from 'typescript-eslint';
 
 export default [
   {
-    ignores: ['node_modules/**'],
+    // `.claude/` holds agent worktrees nested inside a checkout: other branches'
+    // whole trees, which are not this tree and must not judge it.
+    ignores: ['node_modules/**', '.claude/**'],
   },
   {
     files: ['**/*.ts'],
