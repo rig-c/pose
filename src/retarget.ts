@@ -23,6 +23,12 @@
  * evaluated at the frame, on each joint's positions after its holds. Centred,
  * it moves no motion in time; a cubic keeps a peak a moving average flattens.
  *
+ * The flip guard (rig-c/pose#15) then spreads a segment's turn greater than
+ * `flip` degrees in one frame over the frames around it, linearly and centred on
+ * the jump (`spreadFlips`). It reads the mapped segments' target angles after
+ * holds and smoothing and before the hinge check. A reach's target is aimed
+ * later, from posed positions, and is not guarded.
+ *
  * What this cannot know is held to account afterwards: `verify.ts` poses the
  * gated build with rig-c's poser and measures where each bone landed.
  */
@@ -45,6 +51,8 @@ export interface RetargetOptions {
   bends: 'refuse' | 'clamp';
   /** Degrees past straight a hinge may bend the wrong way before it counts. */
   bendTolerance: number;
+  /** A segment turning more than this many degrees in one frame is spread (`spreadFlips`); 'off' keeps every turn. */
+  flip: number | 'off';
 }
 
 export interface Hold {
@@ -67,6 +75,26 @@ export interface BendEvent {
   /** The side the hinge may bend: +1 counter-clockwise, −1 clockwise. */
   side: 1 | -1;
   rest: number;
+}
+
+/** One spread: a segment's turn over the threshold, and the frames whose angle was replaced. */
+export interface Flip {
+  chain: string;
+  bone: string;
+  /** The segment the bone carries: from joint, to joint. */
+  joints: [string, string];
+  /** The largest input turn in the spread, degrees, signed (Spine's sense, counter-clockwise +). */
+  jump: number;
+  /** Every input turn over the threshold the spread covers: `frame` is k, the turn is from frame k−1 to k. */
+  turns: Array<{ frame: number; jump: number }>;
+  /** First and last frame whose angle was replaced; the frames either side keep the input's. */
+  frames: [number, number];
+  /** The half-width the spread needed (for spreads merged from neighbouring turns, the widest). */
+  h: number;
+  /** The one-frame turn across the spread, degrees, signed. */
+  step: number;
+  /** Which end of the series cut the window short, if one did. */
+  clipped: 'start' | 'end' | 'both' | null;
 }
 
 export interface MotionKey {
@@ -93,6 +121,7 @@ export interface Retarget {
   origin: { bone: string; at: Array<[number, number]> } | null;
   holds: Hold[];
   bends: BendEvent[];
+  flips: Flip[];
   /** The figure scale, rig units per picture pixel, and the lengths it came from. */
   scale: { factor: number; pose: number; rig: number } | null;
 }
@@ -329,6 +358,20 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   }
   p.throwIfAny();
 
+  // The flip guard, on every segment the pose aims directly (not a reach).
+  const flips: Flip[] = [];
+  if (opts.flip !== 'off') {
+    const threshold = opts.flip;
+    for (const c of map.chains) {
+      if (c.reach) continue;
+      c.bones.forEach((b, k) => {
+        for (const s of spreadFlips(targets.get(b)!, threshold)) {
+          flips.push({ chain: c.name, bone: b, joints: [c.joints[k]!, c.joints[k + 1]!], ...s });
+        }
+      });
+    }
+  }
+
   // Hinges: each joint strictly inside a chain (a reach has one bone, so none).
   const bends: BendEvent[] = [];
   for (const c of map.chains) {
@@ -409,7 +452,90 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   }
   if (translateTrack !== null) tracks.push(translateTrack);
 
-  return { animation: { duration: keyTimes[n - 1]!, tracks }, times: keyTimes, targets, origin, holds, bends, scale };
+  return { animation: { duration: keyTimes[n - 1]!, tracks }, times: keyTimes, targets, origin, holds, bends, flips, scale };
+}
+
+type Spread = Omit<Flip, 'chain' | 'bone' | 'joints'>;
+
+/**
+ * The flip guard on one angle series (degrees), in place. A turn greater than
+ * `threshold` from frame k−1 to frame k is spread: for the smallest h ≥ 1, the
+ * angles of frames k−h…k+h−1 are replaced by the straight line from frame
+ * k−h−1 to frame k+h, taken through the unwrapped series (each one-frame turn
+ * the short way round, so the jump keeps its own direction), such that every
+ * one-frame turn in frames k−h…k+h is at or under the threshold. It is centred
+ * on the jump, so the step happens when the input put it, spread over 2h frames,
+ * and both ends are the input's own angles. A window that would cross the first
+ * or the last frame stops there (`clipped`). Windows that overlap — one replaces
+ * a frame the other ends on — merge into one line over both, widened again
+ * while that line still turns faster than the threshold. Returns the spreads.
+ */
+export function spreadFlips(angles: number[], threshold: number): Spread[] {
+  const n = angles.length;
+  if (n < 2) return [];
+  const u: number[] = [angles[0]!];
+  for (let i = 1; i < n; i++) u.push(u[i - 1]! + wrap(angles[i]! - angles[i - 1]!));
+  const fits = (lo: number, hi: number) => Math.abs(u[hi]! - u[lo]!) <= threshold * (hi - lo);
+  interface Win { lo: number; hi: number; h: number; start: boolean; end: boolean; turns: Array<{ frame: number; jump: number }> }
+  const wins: Win[] = [];
+  for (let k = 1; k < n; k++) {
+    const jump = u[k]! - u[k - 1]!;
+    if (Math.abs(jump) <= threshold) continue;
+    let h = 1;
+    let lo = Math.max(0, k - h - 1);
+    let hi = Math.min(n - 1, k + h);
+    while (!fits(lo, hi) && (lo > 0 || hi < n - 1)) {
+      h++;
+      lo = Math.max(0, k - h - 1);
+      hi = Math.min(n - 1, k + h);
+    }
+    wins.push({ lo, hi, h, start: k - h - 1 < 0, end: k + h > n - 1, turns: [{ frame: k, jump }] });
+  }
+  // Merge overlapping windows; a merged line that turns too fast widens by one on each side, then merges again.
+  for (let changed = true; changed;) {
+    changed = false;
+    wins.sort((a, b) => a.lo - b.lo);
+    for (let i = 0; i + 1 < wins.length; i++) {
+      const a = wins[i]!;
+      const b = wins[i + 1]!;
+      if (b.lo >= a.hi) continue;
+      wins.splice(i, 2, { lo: a.lo, hi: Math.max(a.hi, b.hi), h: Math.max(a.h, b.h), start: a.start || b.start, end: a.end || b.end, turns: [...a.turns, ...b.turns].sort((x, y) => x.frame - y.frame) });
+      changed = true;
+      break;
+    }
+    if (changed) continue;
+    for (const w of wins) {
+      if (w.turns.length < 2 || fits(w.lo, w.hi) || (w.lo === 0 && w.hi === n - 1)) continue;
+      if (w.lo === 0) w.start = true;
+      if (w.hi === n - 1) w.end = true;
+      w.lo = Math.max(0, w.lo - 1);
+      w.hi = Math.min(n - 1, w.hi + 1);
+      w.h++;
+      changed = true;
+    }
+  }
+  return wins.map((w) => {
+    const step = (u[w.hi]! - u[w.lo]!) / (w.hi - w.lo);
+    for (let i = w.lo + 1; i < w.hi; i++) angles[i] = wrap(u[w.lo]! + step * (i - w.lo));
+    const top = w.turns.reduce((m, t) => (Math.abs(t.jump) > Math.abs(m.jump) ? t : m));
+    return {
+      jump: top.jump,
+      turns: w.turns,
+      frames: [w.lo + 1, w.hi - 1] as [number, number],
+      h: w.h,
+      step,
+      clipped: w.start && w.end ? 'both' : w.start ? 'start' : w.end ? 'end' : null,
+    };
+  });
+}
+
+export function flipLine(f: Flip, times: readonly number[], threshold: number): string {
+  const sg = (v: number) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}°`;
+  const turns = f.turns.map((t) => `${sg(t.jump)} from frame ${t.frame - 1} to ${t.frame} (t=${times[t.frame - 1]!.toFixed(3)}–${times[t.frame]!.toFixed(3)}s)`).join(', ');
+  const span = f.frames[0] > f.frames[1] ? 'no frame (the pose has none between the two)' : f.frames[0] === f.frames[1] ? `frame ${f.frames[0]}` : `frames ${f.frames[0]}–${f.frames[1]}`;
+  const clip = f.clipped === null ? '' : f.clipped === 'both' ? '; the window was cut short by both ends of the pose' : `; the window was cut short at the ${f.clipped === 'start' ? 'first' : 'last'} frame of the pose`;
+  const still = Math.abs(f.step) > threshold ? ` — still over ${threshold}°: the pose is too short to spread it` : '';
+  return `chain "${f.chain}" bone "${f.bone}" (${f.joints[0]} → ${f.joints[1]}) turned ${turns}, over ${threshold}° in one frame; spread over ${span} (h=${f.h}), ${sg(f.step)} per frame${clip}${still}`;
 }
 
 /** Frames before the first with a direction take its value; none at all is a problem. */

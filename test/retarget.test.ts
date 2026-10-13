@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { poseRawAnimation, poseRawSetup, readModel, type CompiledDocument, type RawBone } from 'rig-c/core';
 import { Plate } from 'rig-c/plate';
-import { savitzkyGolay } from '../src/retarget.ts';
+import { savitzkyGolay, spreadFlips } from '../src/retarget.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const CLI = join(ROOT, 'cli.ts');
@@ -614,6 +614,123 @@ describe('holds', () => {
       'FAIL  POSE_POINT_NEVER_GOOD: point "r_wrist" is good on none of the 16 frames (missing); the map needs it, and there is no value to hold',
     ]);
     expect(existsSync(c.out)).toBe(false);
+  }, SLOW);
+});
+
+// ===========================================================================
+
+describe('the flip guard (#15): a segment that turns more than --flip degrees in one frame is spread', () => {
+  /**
+   * The left arm still (upper arm at −60°) and its forearm stepping 150°
+   * counter-clockwise in one frame, from 140° to −70° (= 290°), at frame `at`.
+   * The elbow's inner angle goes −160° → −10° on its rest side (clockwise)
+   * the whole way, so the hinge check stays out of it.
+   */
+  const stepped = (at: number, to = -70): Motion => ({ ...BASE, lu: () => -60, lf: (i) => (i < at ? 140 : to) });
+  /** The forearm's world angle on each frame of the gated build, by rig-c's poser. */
+  const forearm = (build: string, m: Motion): number[] =>
+    poseRawAnimation(loadBuild(build), 'dance', Array.from({ length: m.n - 1 }, () => m.dt)).map((p) => worldAngle(byName(p.bones), 'sleeve_l1'));
+  const turns = (xs: number[]): number[] => xs.slice(1).map((x, i) => wrap(x - xs[i]!));
+
+  test('a 150° step: one FLIP line, and the rig turns at most 90° a frame, landing on the spread', () => {
+    const m = stepped(8);
+    const c = setup({ pose: poseDoc(m) });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--flip', '90', '--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('flip 90°');
+    expect(linesOf(r, 'FLIP')).toEqual([
+      'FLIP   chain "arm_l" bone "sleeve_l1" (l_elbow → l_wrist) turned +150.0° from frame 7 to 8 (t=0.875–1.000s), over 90° in one frame; spread over frames 7–8 (h=1), +50.0° per frame',
+    ]);
+    // The landing check (against the spread targets) is green for every bone.
+    expect(linesOf(r, 'LAND')).toHaveLength(10);
+    // Read back by rig-c: the spread is 140° → 190° → 240° → 290°, the frames either side are the input's.
+    const spread = (b: string, i: number) => (b === 'sleeve_l1' && (i === 7 || i === 8) ? 140 + 50 * (i - 6) : angleOf(m, b, i));
+    expect(misses(c.build, m, spread)).toEqual([]);
+    const f = forearm(c.build, m);
+    expect(Math.max(...turns(f).map(Math.abs))).toBeLessThanOrEqual(90 + ANGLE_TOL);
+    expect(Math.abs(wrap(f[6]! - 140))).toBeLessThan(ANGLE_TOL);
+    expect(Math.abs(wrap(f[9]! - -70))).toBeLessThan(ANGLE_TOL);
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as { options: { flip: unknown }; flips: unknown[] };
+    expect(rep.options.flip).toBe(90);
+    expect(rep.flips).toEqual([{ chain: 'arm_l', bone: 'sleeve_l1', joints: ['l_elbow', 'l_wrist'], jump: expect.closeTo(150, 6), turns: [{ frame: 8, jump: expect.closeTo(150, 6) }], frames: [7, 8], h: 1, step: expect.closeTo(50, 6), clipped: null }]);
+  }, SLOW);
+
+  test('control: without the guard the same build turns 150° in one frame (what the guard is for)', () => {
+    const m = stepped(8);
+    const c = setup({ pose: poseDoc(m) });
+    const r = retarget(c, ['--flip', 'off']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('flip off');
+    expect(linesOf(r, 'FLIP')).toEqual([]);
+    expect(misses(c.build, m)).toEqual([]);
+    expect(Math.abs(turns(forearm(c.build, m))[7]!)).toBeCloseTo(150, 2);
+  }, SLOW);
+
+  test('control: a 60° step is under the threshold, untouched and unlisted', () => {
+    const m = stepped(8, -160);
+    const c = setup({ pose: poseDoc(m) });
+    const r = retarget(c, ['--flip', '90']);
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'FLIP')).toEqual([]);
+    expect(misses(c.build, m)).toEqual([]);
+  }, SLOW);
+
+  test('a step at frame 1: the window stops at the first frame, which keeps the input\'s angle', () => {
+    const m = stepped(1);
+    const c = setup({ pose: poseDoc(m) });
+    const r = retarget(c, ['--flip', '90']);
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'FLIP')).toEqual([
+      'FLIP   chain "arm_l" bone "sleeve_l1" (l_elbow → l_wrist) turned +150.0° from frame 0 to 1 (t=0.000–0.125s), over 90° in one frame; spread over frame 1 (h=1), +75.0° per frame; the window was cut short at the first frame of the pose',
+    ]);
+    expect(misses(c.build, m, (b, i) => (b === 'sleeve_l1' && i === 1 ? 215 : angleOf(m, b, i)))).toEqual([]);
+  }, SLOW);
+
+  test('--flip takes off or degrees in (0, 180); anything else is exit 2', () => {
+    const c = setup();
+    for (const v of ['0', '180', 'none', '-5']) {
+      const r = retarget(c, ['--flip', v]);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain(`--flip is "${v}"; it must be off, or degrees in (0, 180)`);
+    }
+    expect(existsSync(c.out)).toBe(false);
+  });
+
+  test('spreadFlips: the smallest h, centred; ends kept; a series under the threshold untouched', () => {
+    const a = [0, 0, 0, 0, 0, 170, 170, 170, 170, 170];
+    expect(spreadFlips(a, 90)).toEqual([{ jump: 170, turns: [{ frame: 5, jump: 170 }], frames: [4, 5], h: 1, step: expect.closeTo(170 / 3, 9), clipped: null }]);
+    expect(a.map((x) => Math.round(x * 1000) / 1000)).toEqual([0, 0, 0, 0, 56.667, 113.333, 170, 170, 170, 170]);
+    // A step too big for h = 1 at a tighter threshold widens to h = 2 (5 turns of 34°).
+    const b = [0, 0, 0, 0, 0, 170, 170, 170, 170, 170];
+    expect(spreadFlips(b, 50)[0]).toMatchObject({ frames: [3, 6], h: 2 });
+    expect(Math.max(...turns(b).map(Math.abs))).toBeLessThanOrEqual(50);
+    const still = [10, 40, 70, 100, 130];
+    expect(spreadFlips(still, 90)).toEqual([]);
+    expect(still).toEqual([10, 40, 70, 100, 130]);
+  });
+
+  test('spreadFlips: neighbouring windows merge into one; a window at the last frame says so', () => {
+    // Out by +150° at frame 4 and back by −150° at frame 5: the two windows overlap and become one line.
+    const a = [0, 0, 0, 0, 150, 0, 0, 0];
+    const s = spreadFlips(a, 90);
+    expect(s).toHaveLength(1);
+    expect(s[0]).toMatchObject({ turns: [{ frame: 4 }, { frame: 5 }], frames: [3, 5], h: 1, clipped: null });
+    expect(a.every((x) => Math.abs(x) < 1e-9)).toBe(true);
+    const e = [0, 0, 0, 0, 0, 150];
+    expect(spreadFlips(e, 90)).toEqual([{ jump: 150, turns: [{ frame: 5, jump: 150 }], frames: [4, 4], h: 1, step: 75, clipped: 'end' }]);
+    // A turn the short way round: 170° → −170° is +20°, not a flip.
+    expect(spreadFlips([170, -170, -150], 90)).toEqual([]);
+  });
+
+  test('the guard is off unless --flip is given: a 150° step is keyed as the pose gives it', () => {
+    const m = stepped(8);
+    const c = setup({ pose: poseDoc(m) });
+    const r = retarget(c);
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'FLIP')).toEqual([]);
+    expect(Math.max(...turns(forearm(c.build, m)).map(Math.abs))).toBeGreaterThan(149);
   }, SLOW);
 });
 
