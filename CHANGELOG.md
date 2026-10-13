@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/rig-c/pose/compare/v0.12.0...v0.13.0) (2026-10-13)
+
+
+### Features
+
+* **pose:** the picture's camera, tracked or hand-labelled, carried in the sequence and normalised out ([#63](https://github.com/rig-c/pose/issues/63) phase 1) ([#66](https://github.com/rig-c/pose/issues/66)) ([fa27b7e](https://github.com/rig-c/pose/commit/fa27b7e096672bdf9a7ca4caf6b3520c0b45301f))
+
 ## [0.12.0](https://github.com/rig-c/pose/compare/v0.11.1...v0.12.0) (2026-10-13)
 
 
