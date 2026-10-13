@@ -49,6 +49,10 @@ retarget
   --switch-tolerance <d>  a set of alternate drawings (the map's "alternates") may show on a frame where
                         every segment of its chains is within d degrees of its key skeleton (default: 25)
   --switch-min <s>      a run of one set shorter than s seconds is dropped (default: 0.25)
+  --switch-at first|peak  where a switch is keyed: first (default) keeps the frame the selection gave it;
+                        peak moves each boundary to the frame within ±switch-min/2 where the chains it
+                        changes turn fastest, among those that newly show a set only on frames within
+                        2 × the switch tolerance of its key skeleton (it stays when none qualifies)
   --profile spine|spine-html  rigc's gate profile (default: spine, rigc's own default)
   --build <dir>         keep the gated build (skeleton.json, .atlas, .model.json) here
   --render <dir>        keep rigc's render of the animation (frames, contact.png, folds.json) here
@@ -124,9 +128,11 @@ function shortOf(f: Map<string, string>): number | 'off' {
 }
 
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'profile', 'build', 'render', 'report'], ['coco']);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report'], ['coco']);
   const bends = f.get('bends') ?? 'refuse';
   if (bends !== 'refuse' && bends !== 'clamp') throw new Usage(`--bends is "${bends}"; it must be refuse or clamp`);
+  const switchAt = f.get('switch-at') ?? 'first';
+  if (switchAt !== 'peak' && switchAt !== 'first') throw new Usage(`--switch-at is "${switchAt}"; it must be peak or first`);
   const profile = f.get('profile') ?? 'spine';
   if (profile !== 'spine' && profile !== 'spine-html') throw new Usage(`--profile is "${profile}"; it must be spine or spine-html`);
   const name = f.get('name') ?? 'dance';
@@ -148,6 +154,7 @@ function retargetArgs(argv: string[]): RetargetArgs {
     bendTolerance: num(f, 'bend-tolerance', 0, (n) => n >= 0 && n < 180, 'degrees in [0, 180)'),
     switchTolerance: num(f, 'switch-tolerance', 25, (n) => n >= 0 && n < 180, 'degrees in [0, 180)'),
     switchMin: num(f, 'switch-min', 0.25, (n) => n >= 0, 'seconds ≥ 0'),
+    switchAt,
     profile,
     build: f.get('build'),
     render: f.get('render'),

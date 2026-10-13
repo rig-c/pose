@@ -41,7 +41,8 @@
  *
  * Then the switches (rig-c/pose#6, `switch.ts`): with every target known —
  * reaches included — each alternate set's distance to the pose is read, and the
- * spans each set shows are chosen. Only then the range clamp: outside the spans
+ * spans each set shows are chosen, each boundary keyed at its window's speed
+ * peak (#31). Only then the range clamp: outside the spans
  * of a set depicting its chain, a bone whose rotate key would leave its
  * `range` is clamped at the limit (its target becomes the clamped world angle),
  * in depth order, so a bone below takes the clamped parent into its own key

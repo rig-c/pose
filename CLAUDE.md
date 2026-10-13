@@ -77,7 +77,7 @@ into named failures.
 | `src/joints.ts` | the vocabulary: body-18, the virtual midpoints, COCO-17 and its mapping |
 | `src/map.ts` | `rig-pose-map/1` and its resolution against the rig's bones and, for `alternates`, its slots and attachments; a chain's `range` |
 | `src/retarget.ts` | the pure retarget: holds, Savitzky–Golay smoothing, hip travel, angles, the TURN reading, the short hold and its end-on runs, the flip guard, the hinge check, reaches, the switches, the range clamp, keys |
-| `src/switch.ts` | the pure attachment switches: each set's distance to the pose, the spans it shows, the `attachment` and offset keys, the art turn and its range, the folds no switch covers |
+| `src/switch.ts` | the pure attachment switches: each set's distance to the pose, the spans it shows, where each boundary is keyed (where selected, or with `--switch-at peak` the fastest frame of its window that keeps the set within 2 × tolerance, #31), the `attachment` and offset keys, the art turn and its range, the folds no switch covers |
 | `src/rigc.ts` | everything that touches rig-c's CLI or the disk: the gate (`rigc build`), the folds (`rigc render --folds`); the built rig's slots and what moves an attachment |
 | `src/verify.ts` | where the gated build actually put each bone, posed by rig-c's own poser; the posture reading (hip tilt, sway) |
 | `src/run.ts` | `retarget` end to end, in the order: gate the rig as it is, retarget (switches and range clamp included), gate with the animation in, measure, read folds and which no switch covers, write |

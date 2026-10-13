@@ -31,6 +31,26 @@
  * time lands below it (rig-c docs/AUTHORING.md §4.5), and the pose's times and
  * a renderer's `i / fps` are two grids that disagree by more than that.
  * Halfway, both see it on frame i.
+ *
+ * Where a switch is keyed (rig-c/pose#31): a boundary — a frame where a set
+ * starts showing, or where the base art or the next set comes back — is moved,
+ * after the selection above, to the fastest frame within ±`switchMin`/2 of it,
+ * so the change of drawing lands in motion, not on an arm slowing into the
+ * pose. The speed on a frame is the largest |angular speed|, degrees per frame
+ * (central difference of the target world angles; one-sided on the first and
+ * last frame), over the segments of the chains the boundary changes, the
+ * leaving set's and the arriving set's; read on the same targets as the
+ * distance, before the range clamp and any set's `turn`, which depend on where
+ * the spans are. The window is clipped so every span keeps `switchMin` (a gap
+ * between two spans of one set too, so the bridging holds), no boundary
+ * reaches its neighbour, and a set with `frames` shows only inside them; and
+ * a frame qualifies only if the set the move newly shows is within twice the
+ * tolerance of its key skeleton on every frame it newly shows it on (speed
+ * alone showed art up to 135° from its pose on the dancer). Ties
+ * go to the frame nearest the original, then the earlier. A boundary between
+ * two sets moves once. `switchAt: 'first'` keeps every boundary where the
+ * selection put it; it is the CLI's default, because on HQ's dancer the bounded
+ * peak still raised the sets' ART-RANGE runs from 24 to 31 (#31, round 2).
  */
 import type { AlternateSet, JointMap, Rest, RigSlots } from './map.ts';
 import { descends } from './map.ts';
@@ -43,6 +63,21 @@ export interface SwitchOptions {
   switchTolerance: number;
   /** Seconds: a run of one set shorter than this is dropped. */
   switchMin: number;
+  /** Where a boundary is keyed: 'first' (the CLI's default) keeps the frame the selection gave it; 'peak' moves it to the fastest qualifying frame of its window (#31). */
+  switchAt: 'peak' | 'first';
+}
+
+/** One boundary of a span: where the selection put it, where it is keyed, and how fast the chains it changes move on each. */
+export interface Move {
+  /** The frame the boundary showed on as selected, then as keyed. */
+  frame: [number, number];
+  /** Signed: frames, and the seconds between the two frames' times. */
+  frames: number;
+  seconds: number;
+  /** The frames it could move to, after clipping: first and last. */
+  window: [number, number];
+  /** Degrees per frame on the old and the new frame: the largest |angular speed| over the segments of the chains it changes. */
+  speed: { old: number; new: number };
 }
 
 export interface Switch {
@@ -63,6 +98,8 @@ export interface Switch {
   distance: { max: number; median: number };
   /** Per bone the set has a `drawn` angle for: |wrap(target − drawn)| over the frames shown, degrees. */
   artTurn: Record<string, { max: number; median: number }>;
+  /** The boundary it starts on (null from the first frame) and the one it ends on (null to the end); a boundary between two sets is in both. */
+  moved: { on: Move | null; off: Move | null };
 }
 
 export interface AttachmentKey {
@@ -169,6 +206,89 @@ function competing(sets: readonly AlternateSet[]): AlternateSet[][] {
   return [...groups.values()];
 }
 
+/**
+ * Per frame, the largest |angular speed| over the given bones' target world
+ * angles, degrees per frame: a central difference, one-sided on the first and
+ * the last frame.
+ */
+export function speeds(bones: readonly string[], targets: ReadonlyMap<string, readonly number[]>, n: number): number[] {
+  const out: number[] = [];
+  for (let k = 0; k < n; k++) {
+    const lo = Math.max(0, k - 1);
+    const hi = Math.min(n - 1, k + 1);
+    let v = 0;
+    if (hi > lo) for (const b of bones) v = Math.max(v, Math.abs(wrap(targets.get(b)![hi]! - targets.get(b)![lo]!)) / (hi - lo));
+    out.push(v);
+  }
+  return out;
+}
+
+/** A moved boundary may newly show a set only on frames within this many times the tolerance of its key skeleton (#31). */
+export const MOVE_BOUND = 2;
+
+/**
+ * Move each boundary of one group's segments to the fastest frame of its
+ * window (`switchAt: 'peak'`), in time order, each clipped against its
+ * neighbours as they stand; `vals[s]` is what segment s shows (null: the base
+ * art) and `pos[m]` the frame boundary m shows on, between segments m and m+1.
+ * A candidate frame qualifies only if every frame the move newly shows a set
+ * on is within `MOVE_BOUND` × the tolerance of it; none qualifying, the
+ * boundary stays. Returns one `Move` per boundary.
+ */
+function moveBoundaries(vals: ReadonlyArray<AlternateSet | null>, pos: readonly number[], map: JointMap, targets: ReadonlyMap<string, readonly number[]>, distances: ReadonlyMap<string, readonly number[]>, times: readonly number[], duration: number, opts: SwitchOptions): Move[] {
+  const n = times.length;
+  const at = [...pos];
+  const end = (b: number) => (b < n ? times[b]! : duration);
+  const len = (a: number, b: number) => end(b) - times[a]!;
+  /** What a segment must keep: the minimum span for a set's, and for a gap between two spans of one set (the bridging); never less than it had. */
+  const need = (s: number, had: number): number => {
+    const v = vals[s];
+    const kept = v !== null || (s > 0 && s + 1 < vals.length && vals[s - 1] !== null && vals[s - 1] === vals[s + 1]);
+    return kept ? Math.min(opts.switchMin, had) : 0;
+  };
+  const allowed = (a: AlternateSet | null, k: number) => a === null || a.frames === null || a.frames.some(([f, l]) => k >= f && k <= l);
+  const bonesOf = (a: AlternateSet | null): string[] => (a === null ? [] : a.chains.flatMap((cn) => map.chains.find((c) => c.name === cn)!.bones));
+  const moves: Move[] = [];
+  for (let m = 0; m < at.length; m++) {
+    const b = at[m]!;
+    const prev = m === 0 ? 0 : at[m - 1]!;
+    const next = m + 1 < at.length ? at[m + 1]! : n;
+    const leaving = vals[m] ?? null;
+    const arriving = vals[m + 1] ?? null;
+    const needPrev = need(m, len(prev, b));
+    const needNext = need(m + 1, len(b, next));
+    // The pose's times are read to the microsecond, so a frame exactly half a minimum span away may read a hair past it.
+    const half = opts.switchMin / 2 + 1e-6;
+    // Earlier: frames b' … b−1 show the arriving segment.
+    let lo = b;
+    while (lo - 1 > prev && times[b]! - times[lo - 1]! <= half && len(prev, lo - 1) >= needPrev - 1e-9 && allowed(arriving, lo - 1)) lo--;
+    // Later: frames b … b'−1 show the leaving one.
+    let hi = b;
+    while (hi + 1 < next && times[hi + 1]! - times[b]! <= half && len(hi + 1, next) >= needNext - 1e-9 && allowed(leaving, hi)) hi++;
+    const sp = speeds([...new Set([...bonesOf(leaving), ...bonesOf(arriving)])], targets, n);
+    // A frame qualifies only if the set it newly shows is within twice the tolerance of its key skeleton on every
+    // frame it newly shows it on (round 1 on the dancer: speed alone showed a set up to 135° from its pose).
+    const near = (a: AlternateSet | null, from: number, to: number): boolean => {
+      if (a === null) return true;
+      const d = distances.get(a.name)!;
+      for (let k = from; k < to; k++) if (d[k]! > MOVE_BOUND * opts.switchTolerance) return false;
+      return true;
+    };
+    const qualifies = (k: number) => (k < b ? near(arriving, k, b) : near(leaving, b, k));
+    let best = b;
+    if (opts.switchAt === 'peak') {
+      for (let k = lo; k <= hi; k++) {
+        if (!qualifies(k)) continue;
+        const d = sp[k]! - sp[best]!;
+        if (d > 1e-9 || (Math.abs(d) <= 1e-9 && (Math.abs(k - b) < Math.abs(best - b) || (Math.abs(k - b) === Math.abs(best - b) && k < best)))) best = k;
+      }
+    }
+    at[m] = best;
+    moves.push({ frame: [b, best], frames: best - b, seconds: r6(times[best]! - times[b]!), window: [lo, hi], speed: { old: r3(sp[b]!), new: r3(sp[best]!) } });
+  }
+  return moves;
+}
+
 /** The key time for a change that shows on frame i: half a frame before it, 0 on the first frame. */
 const changeAt = (times: readonly number[], i: number): number => (i === 0 ? 0 : r6((times[i - 1]! + times[i]!) / 2));
 
@@ -220,19 +340,33 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
       }
       i = j + 1;
     }
+    // A run shorter than the minimum span shows the base art.
     for (let i = 0; i < n;) {
       const a = pick[i];
       let j = i;
       while (j + 1 < n && pick[j + 1] === a) j++;
-      if (a !== null && a !== undefined) {
-        const from = times[i]!;
-        const to = j + 1 < n ? times[j + 1]! : duration;
-        if (to - from >= opts.switchMin - 1e-9) {
-          const ds = distances.get(a.name)!.slice(i, j + 1);
-          switches.push({ set: a.name, chains: a.chains, slots: a.slots, hides: a.hides, offsets: a.offsets, from, to, frames: [i, j], distance: { max: r3(Math.max(...ds)), median: r3(median(ds)) }, artTurn: {} });
-        }
-      }
+      const to = j + 1 < n ? times[j + 1]! : duration;
+      if (a !== null && a !== undefined && to - times[i]! < opts.switchMin - 1e-9) for (let k = i; k <= j; k++) pick[k] = null;
       i = j + 1;
+    }
+    // The segments between boundaries, then each boundary moved (#31).
+    const vals: Array<AlternateSet | null> = [pick[0] ?? null];
+    const pos: number[] = [];
+    for (let i = 1; i < n; i++) {
+      if (pick[i] === pick[i - 1]) continue;
+      pos.push(i);
+      vals.push(pick[i] ?? null);
+    }
+    const moves = moveBoundaries(vals, pos, map, targets, distances, times, duration, opts);
+    for (let s = 0; s < vals.length; s++) {
+      const a = vals[s];
+      if (a === null || a === undefined) continue;
+      const i = s === 0 ? 0 : moves[s - 1]!.frame[1];
+      const j = s < pos.length ? moves[s]!.frame[1] - 1 : n - 1;
+      const from = times[i]!;
+      const to = j + 1 < n ? times[j + 1]! : duration;
+      const ds = distances.get(a.name)!.slice(i, j + 1);
+      switches.push({ set: a.name, chains: a.chains, slots: a.slots, hides: a.hides, offsets: a.offsets, from, to, frames: [i, j], distance: { max: r3(Math.max(...ds)), median: r3(median(ds)) }, artTurn: {}, moved: { on: s === 0 ? null : moves[s - 1]!, off: s < pos.length ? moves[s]! : null } });
     }
   }
   const order = (name: string) => map.alternates.findIndex((a) => a.name === name);
@@ -433,7 +567,16 @@ export function switchLine(s: Switch, times: readonly number[]): string {
   if (offs.length > 0) parts.push(`offsets ${offs.map(([b, o]) => `"${b}" (${o[0]}, ${o[1]})`).join(', ')}`);
   const art = Object.entries(s.artTurn);
   if (art.length > 0) parts.push(`art turn ${art.map(([b, a]) => `"${b}" max ${deg(a.max)}, median ${deg(a.median)}`).join('; ')}`);
+  const moves = (['on', 'off'] as const).filter((k) => s.moved[k] !== null).map((k) => `${k} ${moveText(s.moved[k]!)}`);
+  if (moves.length > 0) parts.push(`moved ${moves.join(', ')}`);
   return parts.join('; ');
+}
+
+const spd = (v: number) => `${v.toFixed(1)}°/frame`;
+const win = (w: [number, number]) => (w[0] === w[1] ? `window frame ${w[0]}` : `window frames ${w[0]}–${w[1]}`);
+function moveText(m: Move): string {
+  if (m.frames === 0) return `frame ${m.frame[0]} stays (${spd(m.speed.old)}; ${win(m.window)})`;
+  return `frame ${m.frame[0]} → ${m.frame[1]} (${m.frames > 0 ? '+' : '−'}${Math.abs(m.frames)} frame${Math.abs(m.frames) === 1 ? '' : 's'}, ${m.seconds > 0 ? '+' : '−'}${Math.abs(m.seconds).toFixed(3)}s; ${spd(m.speed.old)} → ${spd(m.speed.new)}; ${win(m.window)})`;
 }
 
 export function artRangeLine(e: ArtRange, times: readonly number[]): string {
