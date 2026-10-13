@@ -14,7 +14,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { poseRawAnimation, poseRawSetup, readModel, type CompiledDocument, type RawBone } from 'rig-c/core';
 import { Plate } from 'rig-c/plate';
-import { holdShort, isAcross, mergeRuns, savitzkyGolay, spreadFlips } from '../src/retarget.ts';
+import { holdShort, isAcross, mergeRuns, spreadFlips } from '../src/retarget.ts';
+import { clean } from '../src/clean.ts';
 import { loopTrack, type RigcTrack } from '../src/idle.ts';
 import { readPoseSequence, writePoseSequence } from '../src/pose.ts';
 
@@ -281,6 +282,37 @@ function poseDoc(m: Motion, edit?: (i: number, joints: JointsDoc) => void): Reco
   return { spec: 'rig-pose-sequence/1', space: { units: 'picture-px', origin: 'top-left', y: 'down' }, width: 400, height: 600, source: 'synthetic, test/retarget.test.ts', frames };
 }
 
+/**
+ * The fixture as `rig-pose clean --legs 1 --rest 1` leaves it (#67): retarget
+ * reads only a cleaned sequence. Windows of 1 smooth nothing, so a fixture's
+ * known angles stay exact; the spike and occlusion steps still run, and the
+ * positions they leave are written unrounded. A document the reader refuses,
+ * or one already cleaned, is returned as it is, so the reader's own refusals
+ * stay the ones a test sees.
+ */
+function cleanedDoc(doc: Record<string, unknown>): Record<string, unknown> {
+  let seq;
+  try {
+    seq = readPoseSequence(JSON.stringify(doc), 'fixture');
+  } catch {
+    return doc;
+  }
+  if (seq.cleaned !== undefined) return doc;
+  const c = clean(seq, { loop: false, legs: 1, rest: 1 }, undefined, 'fixture');
+  type Frame = { people: Array<{ joints: Record<string, Record<string, unknown>> }> };
+  const frames = (doc.frames as Frame[]).map((f, i) => ({
+    ...f,
+    people: f.people.map((q) => ({
+      ...q,
+      joints: Object.fromEntries(Object.entries(q.joints).map(([n, j]) => {
+        const at = (c.seq.frames[i]!.people[0]?.joints as Record<string, { at?: Pt }> | undefined)?.[n]?.at;
+        return [n, at === undefined ? j : { ...j, at }];
+      })),
+    })),
+  }));
+  return { ...doc, cleaned: c.record, frames };
+}
+
 // --- running the CLI -------------------------------------------------------
 
 interface Ran {
@@ -308,7 +340,7 @@ function setup(o: { rig?: RigOpts; map?: Record<string, unknown>; pose?: Record<
   const map = join(dir, 'map.json');
   const pose = join(dir, 'pose.json');
   writeFileSync(map, JSON.stringify(o.map ?? baseMap(), null, 2));
-  writeFileSync(pose, JSON.stringify(o.pose ?? poseDoc(BASE), null, 2));
+  writeFileSync(pose, JSON.stringify(cleanedDoc(o.pose ?? poseDoc(BASE)), null, 2));
   return { dir, rig, map, pose, out: join(dir, 'motion.out.json'), build: join(dir, 'build') };
 }
 function retarget(c: Case, extra: string[] = [], cliPath = CLI): Ran {
@@ -886,7 +918,7 @@ describe('readers', () => {
     expect(r.status).toBe(1);
     const f = fails(r);
     const p = c.pose;
-    expect(f).toContain(`FAIL  POSE_KEYS: ${p} has a key this reader does not know: "lens"; the keys it reads are spec, space, width, height, source, frames, cameraSource, camera`);
+    expect(f).toContain(`FAIL  POSE_KEYS: ${p} has a key this reader does not know: "lens"; the keys it reads are spec, space, width, height, source, frames, cameraSource, camera, cleaned`);
     expect(f).toContain(`FAIL  POSE_SPACE: ${p} "space" is {"units":"picture-px","origin":"top-left","y":"up"}; for "rig-pose-sequence/1" it must be exactly {"units":"picture-px","origin":"top-left","y":"down"}`);
     expect(f).toContain(`FAIL  POSE_TIME: ${p} frames[5] "t" is 0.5s, not after frame 4's 0.5s; times must strictly increase`);
     expect(f.some((l) => l.startsWith(`FAIL  POSE_JOINT_NAME: ${p} frames[2] people[0] names joint "r_toe", which body-18 does not have; the joints are nose, neck,`))).toBe(true);
@@ -1104,16 +1136,25 @@ describe('COCO-17', () => {
     expect(existsSync(join(dir, 'pose.json'))).toBe(false);
   }, SLOW);
 
-  test('retarget --coco lands the known pose; a null frame holds every point', () => {
+  test('retarget --coco is refused, naming clean --coco; clean --coco then retarget lands the known pose, a null frame holding every point', () => {
     const c = setup();
-    writeFileSync(c.pose, JSON.stringify(cocoDoc(BASE, (i, t) => (i === 9 ? null : t))));
-    const r = retarget(c, ['--coco']);
+    const coco = join(c.dir, 'coco.json');
+    writeFileSync(coco, JSON.stringify(cocoDoc(BASE, (i, t) => (i === 9 ? null : t))));
+    const refused = cli(['retarget', '--rig', c.rig, '--map', c.map, '--pose', coco, '--out', c.out, '--coco']);
+    expect(refused.status).toBe(1);
+    expect(fails(refused)).toEqual([`FAIL  POSE_NOT_CLEANED: ${coco} is COCO-17 (--coco), which carries no "cleaned" record; retarget reads a sequence rig-pose clean wrote (spikes, occlusion, smoothing; there is no flag to skip it). Run \`rig-pose clean --coco --pose ${coco} --out ${join(c.dir, 'coco.clean.json')}\` (add --loop for one cycle of a gait) and retarget --pose ${join(c.dir, 'coco.clean.json')}`]);
+    expect(existsSync(c.out)).toBe(false);
+    const cl = cli(['clean', '--coco', '--pose', coco, '--out', c.pose, '--legs', '1', '--rest', '1']);
+    expect(cl.stderr).toBe('');
+    expect(cl.status).toBe(0);
+    expect(linesOf(cl, 'SPIKES')).toEqual(['SPIKES 0 replaced']);
+    const r = retarget(c);
     expect(r.stderr).toBe('');
     expect(r.status).toBe(0);
     const holds = linesOf(r, 'HOLD');
     expect(holds).toContain('HOLD   point "r_wrist" frame 9 (t=1.125s): missing; held frame 8\'s value');
     expect(holds).toContain('HOLD   point "neck" frame 9 (t=1.125s): missing; held frame 8\'s value');
-    // Every frame but the held one is the known pose.
+    // Every frame but the held one is the known pose (the writer's 0.01 px rounding is inside the tolerance).
     const m = misses(c.build, BASE).filter((s) => !/frame 9\b|frames (8 and 9|9 and 10)/.test(s));
     expect(m).toEqual([]);
   }, SLOW);
@@ -1133,25 +1174,29 @@ describe('the command line', () => {
     expect(r.status).toBe(2);
     expect(r.stderr).toContain('--rig is required');
   });
-  test('an even --smooth is exit 2, naming the value', () => {
+  test('--smooth is an alias (#67): it prints so, and --smooth 7 lands byte-identical to --smooth 1', () => {
     const c = setup();
-    const r = retarget(c, ['--smooth', '4']);
-    expect(r.status).toBe(2);
-    expect(r.stderr).toContain('--smooth is "4"; it must be 1 (none) or an odd whole number ≥ 5');
-    expect(existsSync(c.out)).toBe(false);
-  });
-  test('--smooth 3 is exit 2: a cubic through 3 points changes nothing', () => {
-    const c = setup();
-    const r = retarget(c, ['--smooth', '3']);
-    expect(r.status).toBe(2);
-    expect(r.stderr).toContain('--smooth is "3"; a cubic fitted through 3 points passes through all three, so a window of 3 changes nothing — it must be 1 (none) or an odd whole number ≥ 5');
-    expect(existsSync(c.out)).toBe(false);
-  });
-  test('control: an odd --smooth ≥ 5 over a still pose is accepted', () => {
-    const c = setup({ pose: poseDoc({ ...BASE, n: 6, trunk: () => 90, ru: () => 150, rf: () => 170, hip: () => [0, 0] }) });
-    const r = retarget(c, ['--smooth', '5']);
-    expect(r.status).toBe(0);
-    expect(r.stdout).toContain('smooth 5');
+    const r7 = retarget(c, ['--smooth', '7', '--report', join(c.dir, 'r7.json')]);
+    expect(r7.stderr).toBe('');
+    expect(r7.status).toBe(0);
+    const out7 = readFileSync(c.out);
+    const build7 = readFileSync(join(c.build, 'skeleton.model.json'));
+    expect(linesOf(r7, 'SMOOTH')).toEqual(['SMOOTH --smooth is carried by clean; ignored (given 7; this sequence was cleaned with legs 1, rest 1)']);
+    rmSync(c.out);
+    const r1 = retarget(c, ['--smooth', '1', '--report', join(c.dir, 'r1.json')]);
+    expect(r1.status).toBe(0);
+    expect(linesOf(r1, 'SMOOTH')).toEqual(['SMOOTH --smooth is carried by clean; ignored (given 1; this sequence was cleaned with legs 1, rest 1)']);
+    expect(readFileSync(c.out).equals(out7)).toBe(true);
+    expect(readFileSync(join(c.build, 'skeleton.model.json')).equals(build7)).toBe(true);
+    expect(readFileSync(join(c.dir, 'r1.json')).equals(readFileSync(join(c.dir, 'r7.json')))).toBe(true);
+    // Control: without --smooth, no alias line, and the same bytes again.
+    rmSync(c.out);
+    const r0 = retarget(c);
+    expect(r0.status).toBe(0);
+    expect(linesOf(r0, 'SMOOTH')).toEqual([]);
+    expect(readFileSync(c.out).equals(out7)).toBe(true);
+    // The known angles still land under the alias.
+    expect(misses(c.build, BASE)).toEqual([]);
   }, SLOW);
 
   test('ARG_PATH: --out into a directory that does not exist is refused up front; nothing written', () => {
@@ -1257,51 +1302,9 @@ describe('--build keeps a build rigc can draw where it was copied', () => {
   }, SLOW);
 });
 
-// --- smoothing: Savitzky–Golay ------------------------------------------------
-
-describe('smoothing is a centred Savitzky–Golay cubic', () => {
-  /** A deterministic uniform noise in [−1, 1] (a linear congruential generator). */
-  const noise = (seed: number) => {
-    let x = seed >>> 0;
-    return (): number => {
-      x = (Math.imul(x, 1664525) + 1013904223) >>> 0;
-      return (x / 2 ** 32) * 2 - 1;
-    };
-  };
-  const cubic = (u: number): Pt => [0.01 * u ** 3 - 0.3 * u ** 2 + 2 * u + 5, -0.002 * u ** 3 + u];
-
-  test('a cubic passes through unchanged, ends included, at every window', () => {
-    const xs = Array.from({ length: 40 }, (_, u) => cubic(u));
-    for (const w of [1, 5, 7, 9, 11]) {
-      const out = savitzkyGolay(xs, w);
-      const worst = Math.max(...out.map((p, i) => Math.hypot(p[0] - xs[i]![0], p[1] - xs[i]![1])));
-      expect(worst).toBeLessThan(1e-6);
-    }
-  });
-
-  test('noise around a cubic: its variance drops to about the filter\'s gain (0.486 at 5, 0.255 at 9)', () => {
-    const rnd = noise(8);
-    const n = 400;
-    const clean = Array.from({ length: n }, (_, u) => cubic(u / 10));
-    const e: Pt[] = clean.map(() => [rnd(), rnd()]);
-    const noisy = clean.map((p, i): Pt => [p[0] + e[i]![0], p[1] + e[i]![1]]);
-    const variance = (pts: Pt[]) => pts.reduce((s, p) => s + p[0] ** 2 + p[1] ** 2, 0) / pts.length;
-    const before = variance(e);
-    const ratio = (w: number) => variance(savitzkyGolay(noisy, w).map((p, i): Pt => [p[0] - clean[i]![0], p[1] - clean[i]![1]])) / before;
-    expect(ratio(5)).toBeLessThan(0.6);
-    expect(ratio(9)).toBeLessThan(0.35);
-    expect(ratio(9)).toBeLessThan(ratio(5));
-    // Control: window 1 is the input.
-    expect(ratio(1)).toBeCloseTo(1, 12);
-  });
-
-  test('a centred filter keeps a peak in time: a symmetric bump\'s top stays on its frame', () => {
-    const xs = Array.from({ length: 41 }, (_, i): Pt => [Math.exp(-(((i - 20) / 3) ** 2)), 0]);
-    const out = savitzkyGolay(xs, 7);
-    const top = out.reduce((b, p, i) => (p[0] > out[b]![0] ? i : b), 0);
-    expect(top).toBe(20);
-  });
-});
+// --- smoothing: moved to clean (#67) ---------------------------------------------
+// Retarget smooths nothing since #67; the Savitzky–Golay and its tests are in
+// src/clean.ts and test/clean.test.ts.
 
 // --- midpoints: "a+b" -----------------------------------------------------------
 
@@ -1549,7 +1552,7 @@ describe('--build writes the same bytes in any folder, and no path out of it', (
       mkdirSync(dir, { recursive: true });
       writeRig(dir);
       writeFileSync(join(dir, 'map.json'), JSON.stringify(baseMap(), null, 2));
-      writeFileSync(join(dir, 'pose.json'), JSON.stringify(poseDoc(BASE), null, 2));
+      writeFileSync(join(dir, 'pose.json'), JSON.stringify(cleanedDoc(poseDoc(BASE)), null, 2));
       const r = spawnSync(process.execPath, [CLI, 'retarget', '--rig', 'rig', '--map', 'map.json', '--pose', 'pose.json', '--out', 'motion.json', '--build', 'build', '--report', 'report.json'], { cwd: dir, encoding: 'utf8' });
       expect(r.status).toBe(0);
       return dir;
@@ -1604,7 +1607,7 @@ describe('the kept skeleton.json names an images directory that holds the parts'
       const dir = tempDir();
       writeRig(dir);
       writeFileSync(join(dir, 'map.json'), JSON.stringify(baseMap(), null, 2));
-      writeFileSync(join(dir, 'pose.json'), JSON.stringify(poseDoc(BASE), null, 2));
+      writeFileSync(join(dir, 'pose.json'), JSON.stringify(cleanedDoc(poseDoc(BASE)), null, 2));
       const r = spawnSync(process.execPath, [CLI, 'retarget', '--rig', 'rig', '--map', 'map.json', '--pose', 'pose.json', '--out', 'motion.json', '--build', name], { cwd: dir, encoding: 'utf8' });
       expect(r.status).toBe(0);
       const images = imagesOf(join(dir, name));

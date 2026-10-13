@@ -52,6 +52,24 @@ export interface CameraFrame {
   ty: number;
   inliers: number;
 }
+/**
+ * The record `rig-pose clean` writes into the sequence it cleaned (#67), and
+ * the one thing `retarget` requires of a sequence: the step is the record, not
+ * a fixed amount of smoothing (windows of 1 are a cleaned sequence too).
+ */
+export const CLEAN_SPEC = 'rig-pose-clean/1';
+export interface CleanSpike {
+  frame: number;
+  joint: Body18;
+}
+export interface CleanRecord {
+  spec: typeof CLEAN_SPEC;
+  params: { loop: boolean; legs: number; rest: number };
+  /** Every joint the spike step replaced, by frame (index into `frames`) and joint. */
+  spikes: CleanSpike[];
+  /** Mean |second difference| of y, px/f², before and after; null where no joint has three consecutive positions. */
+  jitter: { before: number | null; after: number | null };
+}
 export interface PoseSequence {
   spec: typeof POSE_SPEC;
   space: typeof POSE_SPACE;
@@ -62,11 +80,13 @@ export interface PoseSequence {
   cameraSource?: string;
   /** Optional: one per frame, when a scan read the camera (#63). */
   camera?: CameraFrame[];
+  /** Present once `rig-pose clean` has run on the sequence (#67). */
+  cleaned?: CleanRecord;
   frames: PoseFrame[];
 }
 
 const TOP_KEYS = ['spec', 'space', 'width', 'height', 'source', 'frames'];
-const OPTIONAL_KEYS = ['cameraSource', 'camera'];
+const OPTIONAL_KEYS = ['cameraSource', 'camera', 'cleaned'];
 const CAMERA_KEYS = ['s', 'tx', 'ty', 'inliers'];
 
 /**
@@ -151,9 +171,10 @@ export function readPoseSequence(text: string, where: string): PoseSequence {
     if (typeof doc.cameraSource !== 'string' || doc.cameraSource.trim() === '') p.add('POSE_CAMERA_SOURCE', `${where} "cameraSource" is ${typeName(doc.cameraSource)}; it must be a non-empty string saying where the camera came from ("tracked", "hand-labelled, N keys")`);
     else if (!('camera' in doc)) p.add('POSE_CAMERA_SOURCE', `${where} has "cameraSource" ${JSON.stringify(doc.cameraSource)} and no "camera"; it states where a camera came from, so it needs one`);
   }
+  const cleaned = 'cleaned' in doc ? readCleaned(p, where, doc.cleaned, Array.isArray(doc.frames) ? doc.frames.length : null) : undefined;
   p.throwIfAny();
   const cameraSource = typeof doc.cameraSource === 'string' ? doc.cameraSource : undefined;
-  return { spec: POSE_SPEC, space: POSE_SPACE, width: doc.width as number, height: doc.height as number, source: doc.source as string, ...(cameraSource !== undefined ? { cameraSource } : {}), ...(camera !== undefined ? { camera } : {}), frames };
+  return { spec: POSE_SPEC, space: POSE_SPACE, width: doc.width as number, height: doc.height as number, source: doc.source as string, ...(cameraSource !== undefined ? { cameraSource } : {}), ...(camera !== undefined ? { camera } : {}), ...(cleaned !== undefined ? { cleaned } : {}), frames };
 }
 
 /** `camera`: one `{ s > 0, tx, ty, inliers ≥ 0 }` per frame, as many as `frames`. */
@@ -192,6 +213,63 @@ function readCamera(p: Problems, where: string, camera: unknown, frames: number 
     if (ok) out.push({ s: c.s as number, tx: c.tx as number, ty: c.ty as number, inliers: c.inliers as number });
   });
   return out;
+}
+
+/** `cleaned`: { spec, params: { loop, legs, rest }, spikes: [{ frame, joint }], jitter: { before, after } }. */
+function readCleaned(p: Problems, where: string, c: unknown, frames: number | null): CleanRecord | undefined {
+  const cw = `${where} "cleaned"`;
+  const shape = '{ spec, params: { loop, legs, rest }, spikes: [{ frame, joint }], jitter: { before, after } }';
+  if (!isObject(c)) {
+    p.add('POSE_CLEANED', `${cw} is ${typeName(c)}; it is the record rig-pose clean writes, ${shape}`);
+    return undefined;
+  }
+  const before = p.list.length;
+  refuseUnknownKeys(p, 'POSE_CLEANED', cw, c, ['spec', 'params', 'spikes', 'jitter']);
+  for (const k of ['spec', 'params', 'spikes', 'jitter']) if (!(k in c)) p.add('POSE_CLEANED', `${cw} has no "${k}"; the record is ${shape}`);
+  if ('spec' in c && c.spec !== CLEAN_SPEC) p.add('POSE_CLEANED', `${cw} "spec" is ${typeName(c.spec)}; this reader reads "${CLEAN_SPEC}"`);
+  const window = (v: unknown) => Number.isInteger(v) && (v === 1 || ((v as number) >= 5 && (v as number) % 2 === 1));
+  if ('params' in c) {
+    const q = c.params;
+    if (!isObject(q)) p.add('POSE_CLEANED', `${cw} "params" is ${typeName(q)}; it must be { loop, legs, rest }`);
+    else {
+      refuseUnknownKeys(p, 'POSE_CLEANED', `${cw} "params"`, q, ['loop', 'legs', 'rest']);
+      if (typeof q.loop !== 'boolean') p.add('POSE_CLEANED', `${cw} "params" "loop" is ${typeName(q.loop)}; it must be true or false`);
+      for (const k of ['legs', 'rest'] as const) if (!window(q[k])) p.add('POSE_CLEANED', `${cw} "params" "${k}" is ${typeName(q[k])}; it must be 1 (none) or an odd whole number ≥ 5`);
+    }
+  }
+  if ('spikes' in c) {
+    if (!Array.isArray(c.spikes)) p.add('POSE_CLEANED', `${cw} "spikes" is ${typeName(c.spikes)}; it must be an array of { frame, joint }`);
+    else c.spikes.forEach((s: unknown, i: number) => {
+      const sw = `${cw} spikes[${i}]`;
+      if (!isObject(s)) {
+        p.add('POSE_CLEANED', `${sw} is ${typeName(s)}; a spike is { frame, joint }`);
+        return;
+      }
+      refuseUnknownKeys(p, 'POSE_CLEANED', sw, s, ['frame', 'joint']);
+      if (!(Number.isInteger(s.frame) && (s.frame as number) >= 0 && (frames === null || (s.frame as number) < frames))) p.add('POSE_CLEANED', `${sw} "frame" is ${typeName(s.frame)}; it must be a frame index in [0, ${frames === null ? 'the frame count' : frames - 1}]`);
+      if (typeof s.joint !== 'string' || !isBody18(s.joint)) p.add('POSE_CLEANED', `${sw} "joint" is ${typeName(s.joint)}; it must be a body-18 joint: ${BODY18.join(', ')}`);
+    });
+  }
+  if ('jitter' in c) {
+    const j = c.jitter;
+    if (!isObject(j)) p.add('POSE_CLEANED', `${cw} "jitter" is ${typeName(j)}; it must be { before, after }`);
+    else {
+      refuseUnknownKeys(p, 'POSE_CLEANED', `${cw} "jitter"`, j, ['before', 'after']);
+      for (const k of ['before', 'after'] as const) {
+        const v = j[k];
+        if (!(v === null || (typeof v === 'number' && Number.isFinite(v) && v >= 0))) p.add('POSE_CLEANED', `${cw} "jitter" "${k}" is ${typeName(v)}; it must be px/f² ≥ 0, or null (not measured)`);
+      }
+    }
+  }
+  if (p.list.length > before) return undefined;
+  const q = c.params as { loop: boolean; legs: number; rest: number };
+  const j = c.jitter as { before: number | null; after: number | null };
+  return {
+    spec: CLEAN_SPEC,
+    params: { loop: q.loop, legs: q.legs, rest: q.rest },
+    spikes: (c.spikes as Array<{ frame: number; joint: Body18 }>).map((s) => ({ frame: s.frame, joint: s.joint })),
+    jitter: { before: j.before, after: j.after },
+  };
 }
 
 function readJoints(p: Problems, pw: string, joints: unknown): Partial<Record<Body18, Joint>> {
@@ -376,5 +454,8 @@ export function writePoseSequence(seq: PoseSequence): string {
     })),
   }));
   const camera = seq.camera?.map((c) => ({ s: round(c.s, 6), tx: round(c.tx, 3), ty: round(c.ty, 3), inliers: c.inliers }));
-  return `${JSON.stringify({ spec: seq.spec, space: seq.space, width: seq.width, height: seq.height, source: seq.source, ...(seq.cameraSource !== undefined ? { cameraSource: seq.cameraSource } : {}), ...(camera !== undefined ? { camera } : {}), frames }, null, 2)}\n`;
+  const c = seq.cleaned;
+  const jit = (v: number | null) => (v === null ? null : round(v, 4));
+  const cleaned = c === undefined ? undefined : { spec: c.spec, params: { loop: c.params.loop, legs: c.params.legs, rest: c.params.rest }, spikes: c.spikes.map((s) => ({ frame: s.frame, joint: s.joint })), jitter: { before: jit(c.jitter.before), after: jit(c.jitter.after) } };
+  return `${JSON.stringify({ spec: seq.spec, space: seq.space, width: seq.width, height: seq.height, source: seq.source, ...(seq.cameraSource !== undefined ? { cameraSource: seq.cameraSource } : {}), ...(camera !== undefined ? { camera } : {}), ...(cleaned !== undefined ? { cleaned } : {}), frames }, null, 2)}\n`;
 }
