@@ -8,6 +8,7 @@ import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeF
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { readMap, resolveMap, type JointMap, type Rest } from './map.ts';
+import { cleanLine } from './clean.ts';
 import { convertCoco17, personTrack, readPoseSequence, type CameraFrame } from './pose.ts';
 import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './problems.ts';
 import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, readIdle, targetOf, trackLabel, type IdleReading, type RigcTrack, type Target } from './idle.ts';
@@ -26,6 +27,8 @@ export interface RetargetArgs extends RetargetOptions {
   out: string;
   name: string;
   coco: boolean;
+  /** `--smooth`'s value when given: an alias since #67 — the cleaning carries the smoothing; it prints so and changes nothing. */
+  smoothAlias?: string;
   person?: string;
   baseMotion?: string;
   /** Passed to rigc build as --images: the directory the rig spec's images resolve in, when rig.json's own `images` does not point there (a copied rig). */
@@ -87,6 +90,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
   const map = readMap(readFileSync(a.map, 'utf8'), a.map);
   const poseText = readFileSync(a.pose, 'utf8');
   const seq = a.coco ? convertCoco17(poseText, a.pose) : readPoseSequence(poseText, a.pose);
+  if (seq.cleaned === undefined) refuse([{ code: 'POSE_NOT_CLEANED', text: notCleaned(a.pose, a.coco) }]);
   const frames = personTrack(seq, a.person, a.pose);
   const times = seq.frames.map((f) => f.t);
 
@@ -104,8 +108,10 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     resolveMap(map, rest, a.map, slots);
 
     const r = retarget(rest, map, frames, times, a, slots);
-    say(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, smooth ${a.smooth}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)${a.legScale !== undefined && a.legScale !== 'off' ? `, leg-scale ${a.legScale[0]}–${a.legScale[1]}` : ''}${a.plantFeet === true ? ', plant-feet' : ''}${a.stance !== undefined && a.stance !== 'off' ? `, stance ${a.stance}` : ''}${a.carryIdle === true ? ', carry-idle' : ''}${a.merge !== undefined ? `, merge ${a.merge}` : ''}${a.reduce !== undefined ? `, reduce ${a.reduce}°${a.reduceHip !== undefined ? ` (hip ${a.reduceHip} units)` : ''}` : ''}`);
+    say(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)${a.legScale !== undefined && a.legScale !== 'off' ? `, leg-scale ${a.legScale[0]}–${a.legScale[1]}` : ''}${a.plantFeet === true ? ', plant-feet' : ''}${a.stance !== undefined && a.stance !== 'off' ? `, stance ${a.stance}` : ''}${a.carryIdle === true ? ', carry-idle' : ''}${a.merge !== undefined ? `, merge ${a.merge}` : ''}${a.reduce !== undefined ? `, reduce ${a.reduce}°${a.reduceHip !== undefined ? ` (hip ${a.reduceHip} units)` : ''}` : ''}`);
     say(`  RIGC   rig-c ${rigc.version} (${rigc.entry}) gates and poses this run`);
+    say(`  CLEAN  ${cleanLine(seq.cleaned!)}`);
+    if (a.smoothAlias !== undefined) say(`  SMOOTH --smooth is carried by clean; ignored (given ${a.smoothAlias}; this sequence was cleaned with legs ${seq.cleaned!.params.legs}, rest ${seq.cleaned!.params.rest})`);
     if (seq.camera !== undefined) say(`  CAMERA ${cameraLine(seq.camera, times, seq.cameraSource)}`);
     else if (a.plantFeet === true) say('  CAMERA none in the sequence: --plant-feet reads the picture as a fixed camera, so a zoom or a pan in the video moves the floor with it and the floor may step with the picture (tools/scan.py reads the camera, rig-c/pose#63)');
     if (r.scale !== null) say(`  SCALE  ${r.scale.factor.toFixed(5)} rig units per picture px (rig ${r.scale.rig.toFixed(2)} / pose median ${r.scale.pose.toFixed(2)})`);
@@ -266,7 +272,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         animation: a.name,
         frames: seq.frames.length,
         duration: r.animation.duration,
-        options: { minScore: a.minScore, smooth: a.smooth, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', reduceHip: a.reduceHip ?? 'off' },
+        cleaned: seq.cleaned,
+        options: { minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', reduceHip: a.reduceHip ?? 'off' },
         scale: r.scale,
         holds: r.holds,
         short: r.short,
@@ -435,4 +442,15 @@ function legScaleLine(l: LegScale, times: readonly number[]): string {
   const count = (rs: Array<[number, number]>) => rs.reduce((k, x) => k + x[1] - x[0] + 1, 0);
   const clamp = (rs: Array<[number, number]>, at: number, how: string) => (rs.length === 0 ? `none ${how} ${at}` : `${count(rs)} frame(s) ${how} ${at}, clamped (frames ${rs.map(span).join(', ')})`);
   return `chain "${l.chain}" bone "${l.bone}" (${l.joints[0]} → ${l.joints[1]}): straight length ${l.straight.toFixed(1)}px (95th percentile of ${times.length} frames); picture length ÷ straight ${l.ratio.min.toFixed(3)} … ${l.ratio.max.toFixed(3)} (median ${l.ratio.median.toFixed(3)}); scalex keyed in [${l.limits[0]}, ${l.limits[1]}]: ${clamp(l.low, l.limits[0], 'under')}; ${clamp(l.high, l.limits[1], 'over')}`;
+}
+
+/**
+ * POSE_NOT_CLEANED (#67): retarget reads only a sequence `rig-pose clean` wrote.
+ * The message is the command to run on this file; the output name is a
+ * suggestion beside it (`<name>.clean.json`).
+ */
+export function notCleaned(pose: string, coco: boolean): string {
+  const out = pose.endsWith('.json') ? `${pose.slice(0, -'.json'.length)}.clean.json` : `${pose}.clean.json`;
+  const what = coco ? `${pose} is COCO-17 (--coco), which carries no "cleaned" record` : `${pose} has no "cleaned" record`;
+  return `${what}; retarget reads a sequence rig-pose clean wrote (spikes, occlusion, smoothing; there is no flag to skip it). Run \`rig-pose clean ${coco ? '--coco ' : ''}--pose ${pose} --out ${out}\` (add --loop for one cycle of a gait) and retarget --pose ${out}`;
 }

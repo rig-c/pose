@@ -14,7 +14,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { poseRawAnimation, poseRawSetup, readModel, type CompiledDocument, type RawBone } from 'rig-c/core';
 import { Plate } from 'rig-c/plate';
-import { holdShort, isAcross, mergeRuns, savitzkyGolay, spreadFlips } from '../src/retarget.ts';
+import { holdShort, isAcross, mergeRuns, spreadFlips } from '../src/retarget.ts';
+import { clean } from '../src/clean.ts';
 import { loopTrack, type RigcTrack } from '../src/idle.ts';
 import { readPoseSequence, writePoseSequence } from '../src/pose.ts';
 
@@ -281,6 +282,37 @@ function poseDoc(m: Motion, edit?: (i: number, joints: JointsDoc) => void): Reco
   return { spec: 'rig-pose-sequence/1', space: { units: 'picture-px', origin: 'top-left', y: 'down' }, width: 400, height: 600, source: 'synthetic, test/retarget.test.ts', frames };
 }
 
+/**
+ * The fixture as `rig-pose clean --legs 1 --rest 1` leaves it (#67): retarget
+ * reads only a cleaned sequence. Windows of 1 smooth nothing, so a fixture's
+ * known angles stay exact; the spike and occlusion steps still run, and the
+ * positions they leave are written unrounded. A document the reader refuses,
+ * or one already cleaned, is returned as it is, so the reader's own refusals
+ * stay the ones a test sees.
+ */
+function cleanedDoc(doc: Record<string, unknown>): Record<string, unknown> {
+  let seq;
+  try {
+    seq = readPoseSequence(JSON.stringify(doc), 'fixture');
+  } catch {
+    return doc;
+  }
+  if (seq.cleaned !== undefined) return doc;
+  const c = clean(seq, { loop: false, legs: 1, rest: 1 }, undefined, 'fixture');
+  type Frame = { people: Array<{ joints: Record<string, Record<string, unknown>> }> };
+  const frames = (doc.frames as Frame[]).map((f, i) => ({
+    ...f,
+    people: f.people.map((q) => ({
+      ...q,
+      joints: Object.fromEntries(Object.entries(q.joints).map(([n, j]) => {
+        const at = (c.seq.frames[i]!.people[0]?.joints as Record<string, { at?: Pt }> | undefined)?.[n]?.at;
+        return [n, at === undefined ? j : { ...j, at }];
+      })),
+    })),
+  }));
+  return { ...doc, cleaned: c.record, frames };
+}
+
 // --- running the CLI -------------------------------------------------------
 
 interface Ran {
@@ -308,7 +340,7 @@ function setup(o: { rig?: RigOpts; map?: Record<string, unknown>; pose?: Record<
   const map = join(dir, 'map.json');
   const pose = join(dir, 'pose.json');
   writeFileSync(map, JSON.stringify(o.map ?? baseMap(), null, 2));
-  writeFileSync(pose, JSON.stringify(o.pose ?? poseDoc(BASE), null, 2));
+  writeFileSync(pose, JSON.stringify(cleanedDoc(o.pose ?? poseDoc(BASE)), null, 2));
   return { dir, rig, map, pose, out: join(dir, 'motion.out.json'), build: join(dir, 'build') };
 }
 function retarget(c: Case, extra: string[] = [], cliPath = CLI): Ran {
@@ -780,12 +812,14 @@ describe('the short hold (#22): a segment under --short of its median picture le
     expect(rep.endOn).toEqual([{ chain: 'arm_l', bone: 'sleeve_l1', joints: ['l_elbow', 'l_wrist'], frames: [5, 10], seconds: 0.2, minFraction: expect.closeTo(0.1, 9) }]);
   }, SLOW);
 
-  test('a 2-frame shrink (0.067 s, a blur): SHORT, but not END-ON', () => {
-    const c = setup({ pose: shrunk(7, 2) });
+  // Since #67 a 4-frame shrink, still under END-ON's 0.15 s: clean's 5-frame median takes a 2-frame collapse out as a
+  // spike, and on this fixture (the arm moving ~12 px a frame) the last frame of a 3-frame run as well.
+  test('a 4-frame shrink (0.133 s, a blur): SHORT, but not END-ON', () => {
+    const c = setup({ pose: shrunk(7, 4) });
     const r = retarget(c, ['--short', '0.35']);
     expect(r.status).toBe(0);
     expect(linesOf(r, 'SHORT')).toEqual([
-      'SHORT  chain "arm_l" bone "sleeve_l1" (l_elbow → l_wrist) frames 7–8 (t=0.233–0.267s): picture length down to 0.10 of its median, under 0.35; its direction is not read — interpolated from frame 6\'s angle to frame 9\'s, the short way round',
+      'SHORT  chain "arm_l" bone "sleeve_l1" (l_elbow → l_wrist) frames 7–10 (t=0.233–0.333s): picture length down to 0.10 of its median, under 0.35; its direction is not read — interpolated from frame 6\'s angle to frame 11\'s, the short way round',
     ]);
     expect(linesOf(r, 'END-ON')).toEqual([]);
     expect(misses(c.build, STEADY)).toEqual([]);
@@ -832,8 +866,10 @@ describe('the short hold (#22): a segment under --short of its median picture le
   });
 
   test('POSE_SHORT_MEDIAN: a segment of zero length on most frames has no median to measure against', () => {
+    // Since #67 frames 0–9: the collapsed wrist rides the elbow 12 px a frame, so on the run's last frame the
+    // per-coordinate 5-frame median mixes in the far side of the step and clean takes it as a spike; 9 of 16 stay zero.
     const pose = poseDoc(STEADY, (i, j) => {
-      if (i <= 8) j.l_wrist = { ...j.l_elbow! };
+      if (i <= 9) j.l_wrist = { ...j.l_elbow! };
     });
     const c = setup({ pose });
     const r = retarget(c, ['--short', '0.35']);
@@ -886,7 +922,7 @@ describe('readers', () => {
     expect(r.status).toBe(1);
     const f = fails(r);
     const p = c.pose;
-    expect(f).toContain(`FAIL  POSE_KEYS: ${p} has a key this reader does not know: "lens"; the keys it reads are spec, space, width, height, source, frames, cameraSource, camera`);
+    expect(f).toContain(`FAIL  POSE_KEYS: ${p} has a key this reader does not know: "lens"; the keys it reads are spec, space, width, height, source, frames, cameraSource, camera, cleaned`);
     expect(f).toContain(`FAIL  POSE_SPACE: ${p} "space" is {"units":"picture-px","origin":"top-left","y":"up"}; for "rig-pose-sequence/1" it must be exactly {"units":"picture-px","origin":"top-left","y":"down"}`);
     expect(f).toContain(`FAIL  POSE_TIME: ${p} frames[5] "t" is 0.5s, not after frame 4's 0.5s; times must strictly increase`);
     expect(f.some((l) => l.startsWith(`FAIL  POSE_JOINT_NAME: ${p} frames[2] people[0] names joint "r_toe", which body-18 does not have; the joints are nose, neck,`))).toBe(true);
@@ -1104,16 +1140,25 @@ describe('COCO-17', () => {
     expect(existsSync(join(dir, 'pose.json'))).toBe(false);
   }, SLOW);
 
-  test('retarget --coco lands the known pose; a null frame holds every point', () => {
+  test('retarget --coco is refused, naming clean --coco; clean --coco then retarget lands the known pose, a null frame holding every point', () => {
     const c = setup();
-    writeFileSync(c.pose, JSON.stringify(cocoDoc(BASE, (i, t) => (i === 9 ? null : t))));
-    const r = retarget(c, ['--coco']);
+    const coco = join(c.dir, 'coco.json');
+    writeFileSync(coco, JSON.stringify(cocoDoc(BASE, (i, t) => (i === 9 ? null : t))));
+    const refused = cli(['retarget', '--rig', c.rig, '--map', c.map, '--pose', coco, '--out', c.out, '--coco']);
+    expect(refused.status).toBe(1);
+    expect(fails(refused)).toEqual([`FAIL  POSE_NOT_CLEANED: ${coco} is COCO-17 (--coco), which carries no "cleaned" record; retarget reads a sequence rig-pose clean wrote (spikes, occlusion, smoothing; there is no flag to skip it). Run \`rig-pose clean --coco --pose ${coco} --out ${join(c.dir, 'coco.clean.json')}\` (add --loop for one cycle of a gait) and retarget --pose ${join(c.dir, 'coco.clean.json')}`]);
+    expect(existsSync(c.out)).toBe(false);
+    const cl = cli(['clean', '--coco', '--pose', coco, '--out', c.pose, '--legs', '1', '--rest', '1']);
+    expect(cl.stderr).toBe('');
+    expect(cl.status).toBe(0);
+    expect(linesOf(cl, 'SPIKES')).toEqual(['SPIKES 0 replaced; frames 0, 1, 14, 15 untested (a clip end cuts the 5-frame window)']);
+    const r = retarget(c);
     expect(r.stderr).toBe('');
     expect(r.status).toBe(0);
     const holds = linesOf(r, 'HOLD');
     expect(holds).toContain('HOLD   point "r_wrist" frame 9 (t=1.125s): missing; held frame 8\'s value');
     expect(holds).toContain('HOLD   point "neck" frame 9 (t=1.125s): missing; held frame 8\'s value');
-    // Every frame but the held one is the known pose.
+    // Every frame but the held one is the known pose (the writer's 0.01 px rounding is inside the tolerance).
     const m = misses(c.build, BASE).filter((s) => !/frame 9\b|frames (8 and 9|9 and 10)/.test(s));
     expect(m).toEqual([]);
   }, SLOW);
@@ -1133,25 +1178,51 @@ describe('the command line', () => {
     expect(r.status).toBe(2);
     expect(r.stderr).toContain('--rig is required');
   });
-  test('an even --smooth is exit 2, naming the value', () => {
+  test('POSE_NOT_CLEANED (#67): a sequence clean did not write is refused by name, with the command to run; control: the cleaned one runs and prints CLEAN', () => {
     const c = setup();
-    const r = retarget(c, ['--smooth', '4']);
-    expect(r.status).toBe(2);
-    expect(r.stderr).toContain('--smooth is "4"; it must be 1 (none) or an odd whole number ≥ 5');
+    const raw = join(c.dir, 'scan.json');
+    writeFileSync(raw, JSON.stringify(poseDoc(BASE), null, 2));
+    const r = cli(['retarget', '--rig', c.rig, '--map', c.map, '--pose', raw, '--out', c.out, '--build', c.build]);
+    expect(r.status).toBe(1);
+    const cleanOut = join(c.dir, 'scan.clean.json');
+    expect(fails(r)).toEqual([`FAIL  POSE_NOT_CLEANED: ${raw} has no "cleaned" record; retarget reads a sequence rig-pose clean wrote (spikes, occlusion, smoothing; there is no flag to skip it). Run \`rig-pose clean --pose ${raw} --out ${cleanOut}\` (add --loop for one cycle of a gait) and retarget --pose ${cleanOut}`]);
     expect(existsSync(c.out)).toBe(false);
-  });
-  test('--smooth 3 is exit 2: a cubic through 3 points changes nothing', () => {
+    // Running the named command makes the same file pass.
+    expect(cli(['clean', '--pose', raw, '--out', cleanOut]).status).toBe(0);
+    const ran = cli(['retarget', '--rig', c.rig, '--map', c.map, '--pose', cleanOut, '--out', c.out, '--build', c.build]);
+    expect(ran.stderr).toBe('');
+    expect(ran.status).toBe(0);
+    expect(linesOf(ran, 'CLEAN')).toHaveLength(1);
+    expect(linesOf(ran, 'CLEAN')[0]).toStartWith('CLEAN  rig-pose-clean/1: legs 5, rest 7, no loop; no spike, frames 0, 1, 14, 15 untested (a clip end cuts the 5-frame window); jitter (mean |second difference| of y) ');
+    // The fixture's own record (windows of 1) says so on the line.
+    const r1 = retarget(c);
+    expect(r1.status).toBe(0);
+    expect(linesOf(r1, 'CLEAN')).toEqual([expect.stringContaining('CLEAN  rig-pose-clean/1: legs 1, rest 1 — no smoothing, no loop; no spike')]);
+  }, SLOW);
+
+  test('--smooth is an alias (#67): it prints so, and --smooth 7 lands byte-identical to --smooth 1', () => {
     const c = setup();
-    const r = retarget(c, ['--smooth', '3']);
-    expect(r.status).toBe(2);
-    expect(r.stderr).toContain('--smooth is "3"; a cubic fitted through 3 points passes through all three, so a window of 3 changes nothing — it must be 1 (none) or an odd whole number ≥ 5');
-    expect(existsSync(c.out)).toBe(false);
-  });
-  test('control: an odd --smooth ≥ 5 over a still pose is accepted', () => {
-    const c = setup({ pose: poseDoc({ ...BASE, n: 6, trunk: () => 90, ru: () => 150, rf: () => 170, hip: () => [0, 0] }) });
-    const r = retarget(c, ['--smooth', '5']);
-    expect(r.status).toBe(0);
-    expect(r.stdout).toContain('smooth 5');
+    const r7 = retarget(c, ['--smooth', '7', '--report', join(c.dir, 'r7.json')]);
+    expect(r7.stderr).toBe('');
+    expect(r7.status).toBe(0);
+    const out7 = readFileSync(c.out);
+    const build7 = readFileSync(join(c.build, 'skeleton.model.json'));
+    expect(linesOf(r7, 'SMOOTH')).toEqual(['SMOOTH --smooth is carried by clean; ignored (given 7; this sequence was cleaned with legs 1, rest 1)']);
+    rmSync(c.out);
+    const r1 = retarget(c, ['--smooth', '1', '--report', join(c.dir, 'r1.json')]);
+    expect(r1.status).toBe(0);
+    expect(linesOf(r1, 'SMOOTH')).toEqual(['SMOOTH --smooth is carried by clean; ignored (given 1; this sequence was cleaned with legs 1, rest 1)']);
+    expect(readFileSync(c.out).equals(out7)).toBe(true);
+    expect(readFileSync(join(c.build, 'skeleton.model.json')).equals(build7)).toBe(true);
+    expect(readFileSync(join(c.dir, 'r1.json')).equals(readFileSync(join(c.dir, 'r7.json')))).toBe(true);
+    // Control: without --smooth, no alias line, and the same bytes again.
+    rmSync(c.out);
+    const r0 = retarget(c);
+    expect(r0.status).toBe(0);
+    expect(linesOf(r0, 'SMOOTH')).toEqual([]);
+    expect(readFileSync(c.out).equals(out7)).toBe(true);
+    // The known angles still land under the alias.
+    expect(misses(c.build, BASE)).toEqual([]);
   }, SLOW);
 
   test('ARG_PATH: --out into a directory that does not exist is refused up front; nothing written', () => {
@@ -1257,51 +1328,9 @@ describe('--build keeps a build rigc can draw where it was copied', () => {
   }, SLOW);
 });
 
-// --- smoothing: Savitzky–Golay ------------------------------------------------
-
-describe('smoothing is a centred Savitzky–Golay cubic', () => {
-  /** A deterministic uniform noise in [−1, 1] (a linear congruential generator). */
-  const noise = (seed: number) => {
-    let x = seed >>> 0;
-    return (): number => {
-      x = (Math.imul(x, 1664525) + 1013904223) >>> 0;
-      return (x / 2 ** 32) * 2 - 1;
-    };
-  };
-  const cubic = (u: number): Pt => [0.01 * u ** 3 - 0.3 * u ** 2 + 2 * u + 5, -0.002 * u ** 3 + u];
-
-  test('a cubic passes through unchanged, ends included, at every window', () => {
-    const xs = Array.from({ length: 40 }, (_, u) => cubic(u));
-    for (const w of [1, 5, 7, 9, 11]) {
-      const out = savitzkyGolay(xs, w);
-      const worst = Math.max(...out.map((p, i) => Math.hypot(p[0] - xs[i]![0], p[1] - xs[i]![1])));
-      expect(worst).toBeLessThan(1e-6);
-    }
-  });
-
-  test('noise around a cubic: its variance drops to about the filter\'s gain (0.486 at 5, 0.255 at 9)', () => {
-    const rnd = noise(8);
-    const n = 400;
-    const clean = Array.from({ length: n }, (_, u) => cubic(u / 10));
-    const e: Pt[] = clean.map(() => [rnd(), rnd()]);
-    const noisy = clean.map((p, i): Pt => [p[0] + e[i]![0], p[1] + e[i]![1]]);
-    const variance = (pts: Pt[]) => pts.reduce((s, p) => s + p[0] ** 2 + p[1] ** 2, 0) / pts.length;
-    const before = variance(e);
-    const ratio = (w: number) => variance(savitzkyGolay(noisy, w).map((p, i): Pt => [p[0] - clean[i]![0], p[1] - clean[i]![1]])) / before;
-    expect(ratio(5)).toBeLessThan(0.6);
-    expect(ratio(9)).toBeLessThan(0.35);
-    expect(ratio(9)).toBeLessThan(ratio(5));
-    // Control: window 1 is the input.
-    expect(ratio(1)).toBeCloseTo(1, 12);
-  });
-
-  test('a centred filter keeps a peak in time: a symmetric bump\'s top stays on its frame', () => {
-    const xs = Array.from({ length: 41 }, (_, i): Pt => [Math.exp(-(((i - 20) / 3) ** 2)), 0]);
-    const out = savitzkyGolay(xs, 7);
-    const top = out.reduce((b, p, i) => (p[0] > out[b]![0] ? i : b), 0);
-    expect(top).toBe(20);
-  });
-});
+// --- smoothing: moved to clean (#67) ---------------------------------------------
+// Retarget smooths nothing since #67; the Savitzky–Golay and its tests are in
+// src/clean.ts and test/clean.test.ts.
 
 // --- midpoints: "a+b" -----------------------------------------------------------
 
@@ -1549,7 +1578,7 @@ describe('--build writes the same bytes in any folder, and no path out of it', (
       mkdirSync(dir, { recursive: true });
       writeRig(dir);
       writeFileSync(join(dir, 'map.json'), JSON.stringify(baseMap(), null, 2));
-      writeFileSync(join(dir, 'pose.json'), JSON.stringify(poseDoc(BASE), null, 2));
+      writeFileSync(join(dir, 'pose.json'), JSON.stringify(cleanedDoc(poseDoc(BASE)), null, 2));
       const r = spawnSync(process.execPath, [CLI, 'retarget', '--rig', 'rig', '--map', 'map.json', '--pose', 'pose.json', '--out', 'motion.json', '--build', 'build', '--report', 'report.json'], { cwd: dir, encoding: 'utf8' });
       expect(r.status).toBe(0);
       return dir;
@@ -1604,7 +1633,7 @@ describe('the kept skeleton.json names an images directory that holds the parts'
       const dir = tempDir();
       writeRig(dir);
       writeFileSync(join(dir, 'map.json'), JSON.stringify(baseMap(), null, 2));
-      writeFileSync(join(dir, 'pose.json'), JSON.stringify(poseDoc(BASE), null, 2));
+      writeFileSync(join(dir, 'pose.json'), JSON.stringify(cleanedDoc(poseDoc(BASE)), null, 2));
       const r = spawnSync(process.execPath, [CLI, 'retarget', '--rig', 'rig', '--map', 'map.json', '--pose', 'pose.json', '--out', 'motion.json', '--build', name], { cwd: dir, encoding: 'utf8' });
       expect(r.status).toBe(0);
       const images = imagesOf(join(dir, name));
@@ -1620,7 +1649,12 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
   /** The right arm away from its key skeleton except on frames `on`, where it is exactly it. */
   const KEY_RU = 150;
   const KEY_RF = 170;
-  const armed = (on: (i: number) => boolean): Motion => ({ ...BASE, ru: (i) => (on(i) ? KEY_RU : 30), rf: (i) => (on(i) ? KEY_RF : 50) });
+  /**
+   * Since #67 the trunk stands still here (the hip in place, the chest upright): with BASE's travel the
+   * shoulder moves up to 9 px a frame, and on the first frame of a held pose the per-coordinate 5-frame
+   * median mixes two frames' coordinates far enough (> 0.2 trunk) for clean to take it as a spike.
+   */
+  const armed = (on: (i: number) => boolean): Motion => ({ ...BASE, trunk: () => 90, hip: () => [0, 0], ru: (i) => (on(i) ? KEY_RU : 30), rf: (i) => (on(i) ? KEY_RF : 50) });
   /** A key skeleton of the right arm at another scale and place than the pose's. */
   const keySkeleton = (ru = KEY_RU, rf = KEY_RF): Record<string, Pt> => {
     const sh: Pt = [1000, 1000];
@@ -1712,30 +1746,32 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
     expect(shows(c.build, 'sleeve_r1')).toEqual(each((i) => (i <= 7 ? null : 'seg')));
   }, SLOW);
 
+  // Since #67 every run and gap here is ≥ 3 frames: clean's 5-frame median takes a 1- or 2-frame pose out as a spike,
+  // so the minimum is raised to 0.5 s (4 frames) to keep a run, and a gap, shorter than it.
   test('a run shorter than --switch-min is dropped (the base art shows there); control: under a smaller one it stays', () => {
-    const c = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(armed((i) => i === 5 || (i >= 9 && i <= 10))) });
-    const r = retarget(c);
+    const c = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(armed((i) => (i >= 2 && i <= 4) || (i >= 9 && i <= 12))) });
+    const r = retarget(c, ['--switch-min', '0.5']);
     expect(r.status).toBe(0);
-    // Frame 5 alone is 0.125 s; frames 9–10 are 0.25 s, which is the minimum and stays.
-    expect(linesOf(r, 'SWITCH').map((l) => /frames? [\d–]+/.exec(l)![0])).toEqual(['frames 9–10']);
-    expect(slotTracks(c.out)[0]!.keys).toEqual([{ t: 1.0625, v: 'seg_up' }, { t: 1.3125, v: 'seg' }]);
-    const r2 = retarget(c, ['--switch-min', '0.1']);
+    // Frames 2–4 are 0.375 s; frames 9–12 are 0.5 s, which is the minimum and stays (the gap, 0.5 s, is not bridged).
+    expect(linesOf(r, 'SWITCH').map((l) => /frames? [\d–]+/.exec(l)![0])).toEqual(['frames 9–12']);
+    expect(slotTracks(c.out)[0]!.keys).toEqual([{ t: 1.0625, v: 'seg_up' }, { t: 1.5625, v: 'seg' }]);
+    const r2 = retarget(c, ['--switch-min', '0.25']);
     expect(r2.status).toBe(0);
-    expect(linesOf(r2, 'SWITCH').map((l) => /frames? [\d–]+/.exec(l)![0])).toEqual(['frame 5', 'frames 9–10']);
+    expect(linesOf(r2, 'SWITCH').map((l) => /frames? [\d–]+/.exec(l)![0])).toEqual(['frames 2–4', 'frames 9–12']);
   }, SLOW);
 
-  test('a gap shorter than --switch-min between two runs of one set is bridged (no one-frame flash of the base art); control: a gap as long as it is not', () => {
-    const c = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(armed((i) => (i >= 3 && i <= 6) || (i >= 8 && i <= 11))) });
-    const r = retarget(c);
+  test('a gap shorter than --switch-min between two runs of one set is bridged (no flash of the base art); control: a gap as long as it is not', () => {
+    const c = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(armed((i) => (i >= 2 && i <= 5) || (i >= 9 && i <= 12))) });
+    const r = retarget(c, ['--switch-min', '0.5']);
     expect(r.status).toBe(0);
-    // Frame 7 alone is 0.125 s off the key skeleton: bridged, one span 3–11.
-    expect(linesOf(r, 'SWITCH').map((l) => /frames? [\d–]+/.exec(l)![0])).toEqual(['frames 3–11']);
-    expect(shows(c.build, 'sleeve_r0')).toEqual(each((i) => (i >= 3 && i <= 11 ? 'seg_up' : 'seg')));
-    const c2 = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(armed((i) => (i >= 3 && i <= 6) || (i >= 9 && i <= 12))) });
-    const r2 = retarget(c2);
+    // Frames 6–8 are 0.375 s off the key skeleton: bridged, one span 2–12.
+    expect(linesOf(r, 'SWITCH').map((l) => /frames? [\d–]+/.exec(l)![0])).toEqual(['frames 2–12']);
+    expect(shows(c.build, 'sleeve_r0')).toEqual(each((i) => (i >= 2 && i <= 12 ? 'seg_up' : 'seg')));
+    const c2 = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(armed((i) => (i >= 2 && i <= 5) || (i >= 10 && i <= 13))) });
+    const r2 = retarget(c2, ['--switch-min', '0.5']);
     expect(r2.status).toBe(0);
-    // Frames 7–8 are 0.25 s, the minimum itself: two spans.
-    expect(linesOf(r2, 'SWITCH').map((l) => /frames? [\d–]+/.exec(l)![0])).toEqual(['frames 3–6', 'frames 9–12']);
+    // Frames 6–9 are 0.5 s, the minimum itself: two spans.
+    expect(linesOf(r2, 'SWITCH').map((l) => /frames? [\d–]+/.exec(l)![0])).toEqual(['frames 2–5', 'frames 10–13']);
   }, SLOW);
 
   test('frames (a stopgap): a set shows only inside its window, and there it is chosen over an equal set without one', () => {
@@ -3087,7 +3123,7 @@ describe('#63: the camera a scan read, carried by the sequence', () => {
       const seq = readPoseSequence(readFileSync(c.pose, 'utf8'), c.pose);
       expect(seq.cameraSource).toBe(source);
       const written = writePoseSequence(seq);
-      expect(Object.keys(JSON.parse(written) as object)).toEqual(['spec', 'space', 'width', 'height', 'source', 'cameraSource', 'camera', 'frames']);
+      expect(Object.keys(JSON.parse(written) as object)).toEqual(['spec', 'space', 'width', 'height', 'source', 'cameraSource', 'camera', 'cleaned', 'frames']);
       expect(readPoseSequence(written, 'mem').cameraSource).toBe(source);
     }
     // Planted: a source with no camera; a source that is not a string; an empty one.

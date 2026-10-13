@@ -4,10 +4,16 @@
  * to above the shoulder over the first second, the forearm waves (±35°, 1.5
  * Hz) for the next two, and the hips sway a little side to side.
  *
+ * The sequence then passes through `rig-pose clean` at its defaults (legs 5,
+ * rest 7, no loop), as every sequence must before `retarget` (rig-c/pose#67),
+ * and the cleaned file is what is written.
+ *
  *   bun examples/wave/make-pose.ts
  */
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { clean, cleanLine } from '../../src/clean.ts';
+import { readPoseSequence, writePoseSequence } from '../../src/pose.ts';
 
 const FPS = 24;
 const SECONDS = 3;
@@ -61,5 +67,7 @@ const doc = {
   source: 'examples/wave/make-pose.ts: a 3 s wave made from joint angles, no picture',
   frames,
 };
-writeFileSync(join(import.meta.dir, 'pose.json'), `${JSON.stringify(doc)}\n`);
-process.stdout.write(`wrote ${frames.length} frames\n`);
+const c = clean(readPoseSequence(JSON.stringify(doc), 'make-pose.ts'), { loop: false, legs: 5, rest: 7 }, undefined, 'make-pose.ts');
+// The writer's key order and rounding, on one line.
+writeFileSync(join(import.meta.dir, 'pose.json'), `${JSON.stringify(JSON.parse(writePoseSequence(c.seq)))}\n`);
+process.stdout.write(`wrote ${frames.length} frames, cleaned: ${cleanLine(c.record)}\n`);

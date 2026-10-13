@@ -4,7 +4,7 @@
  *
  * The metric, per frame and per set: the largest |wrap(pose − key)| over every
  * segment of the set's chains, where "pose" is the segment's angle exactly as
- * the retarget asked the bone for it (after holds, smoothing, the short hold,
+ * the retarget asked the bone for it (after holds, the short hold,
  * the flip guard and the hinge check; before any range clamp) and "key" is the
  * same segment's angle in the set's key skeleton, both by `pictureAngle`. Per
  * frame the candidate is the set with the smallest distance within the

@@ -8,7 +8,8 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import pkg from './package.json' with { type: 'json' };
-import { convertCoco17, writePoseSequence } from './src/pose.ts';
+import { clean, cleanLine, untestedText, LEGS, OCCLUSION_SCORE, OCCLUSION_WINDOW, SPIKE_TRUNKS, SPIKE_WINDOW, windowProblem } from './src/clean.ts';
+import { convertCoco17, readPoseSequence, writePoseSequence } from './src/pose.ts';
 import { parseWindows } from './src/compare.ts';
 import { lineOf, Refusal } from './src/problems.ts';
 import { runCompare, type CompareArgs } from './src/runcompare.ts';
@@ -17,29 +18,52 @@ import { runRetarget, type RetargetArgs } from './src/run.ts';
 const HELP = `rig-pose ${pkg.version} — motion from a pose sequence onto a rig-c rig
 
 Usage:
+  rig-pose clean --pose <pose.json> --out <pose.clean.json> [--loop] [--legs 5] [--rest 7] [--coco] [--person <id>]
   rig-pose retarget --rig <rig> --map <map.json> --pose <pose.json> --out <motion.json> [--name dance] [flags]
   rig-pose convert --coco <coco17.json> --out <pose.json>
   rig-pose compare --reference <pose.json> --render <pose.json> --map <map.json> [flags]
   rig-pose --version | --help
 
+clean (required before retarget; rig-c/pose#67)
+  --pose <file>         rig-pose-sequence/1 as a scan wrote it, or COCO-17 with --coco
+  --out <file>          the cleaned rig-pose-sequence/1, carrying the record of what was done ("cleaned")
+  --coco                read --pose as coco17-sequence/1 and convert it first (neck = the shoulders' midpoint)
+  --person <id>         the person to clean when the sequence holds more than one; only that person is written
+  --loop                the sequence is one cycle (a gait's strike to strike): every window wraps, last frame
+                        to first, and the floor is re-pinned
+  --legs <n>            Savitzky–Golay window over the legs — both hips, knees and ankles (default: 5)
+  --rest <n>            Savitzky–Golay window over every other joint (default: 7)
+                        n is 1 (none), or odd and ≥ 5: a quadratic through 3 points passes through all three
+
+  In order, each step printed with its figures: (1) spikes — a joint more than 0.2 trunk lengths
+  (neck → mid_hip, the median over the clip) from its 5-frame median takes the median, each listed by
+  frame and joint; without --loop the first and last two frames, whose window a clip end cuts, are not
+  tested and are listed as untested; (2) occlusion — a joint not "observed", or scored under 0.3, takes its 3-frame median;
+  (3) a quadratic Savitzky–Golay per joint, the window cut at the ends (wrapped with --loop); (4) with
+  --loop, the figure moved in y so the lowest ankle over the cycle is where it was before smoothing.
+  A median is per coordinate over the window's frames where the joint has a position. A joint with no
+  position on a frame is left without one (retarget holds it). States and scores are written as read.
+  Jitter: the mean |second difference| of y over every joint, px/f², before and after.
+
 retarget
   --rig <path>          the rig spec rigc builds from: a rig.json, or a directory holding one
                         (with its motion.json beside it — @rig-c/parts writes the pair to <out>/rig/)
   --map <map.json>      rig-pose-map/1: which bones carry which joints
-  --pose <pose.json>    rig-pose-sequence/1 (body-18 per frame), or COCO-17 with --coco
+  --pose <pose.json>    rig-pose-sequence/1 (body-18 per frame) that rig-pose clean wrote; a sequence without
+                        its "cleaned" record is refused (POSE_NOT_CLEANED), naming the clean command to run
   --out <motion.json>   where the motion spec goes: the rig's own animations plus the new one,
                         ready for \`rigc build --rig <rig> --motion <motion.json>\`
   --name <name>         the new animation's name (default: dance); refused if the rig has one by that name
-  --coco                read --pose as coco17-sequence/1 and convert it first
+  --coco                read --pose as coco17-sequence/1: refused (POSE_NOT_CLEANED) — clean it with
+                        rig-pose clean --coco, then retarget the cleaned file
   --person <id>         the person to follow when the sequence holds more than one
   --base-motion <path>  the rig's motion spec, when it is not motion.json beside rig.json
   --images <dir>        passed to rigc build: where the rig spec's images are, when its own "images" path
                         does not reach them (a rig.json copied away from its images)
   --min-score <s>       a joint scored below s is not good on that frame and holds its last good
                         value (default: 0.3); a joint with no score is good
-  --smooth <n>          Savitzky–Golay over n frames of joint positions: a centred least-squares cubic,
-                        read at each frame (default: 1, none); n is odd and ≥ 5 — a cubic through 3
-                        points passes through all three, so 3 would change nothing
+  --smooth <n>          an alias kept since rig-c/pose#67: the smoothing is clean's (--legs, --rest); retarget
+                        prints "--smooth is carried by clean; ignored" and smooths nothing
   --flip <deg>|off      a segment that turns more than <deg> degrees in one frame of the pose is
                         spread over the frames around the jump, centred on it, and listed as FLIP
                         (default: off, every turn kept as the pose gives it; 90 is the measured setting)
@@ -179,12 +203,6 @@ function num(f: Map<string, string>, name: string, dflt: number, ok: (n: number)
   return n;
 }
 
-function smoothOf(f: Map<string, string>): number {
-  const n = num(f, 'smooth', 1, (v) => Number.isInteger(v) && v >= 1 && v % 2 === 1, '1 (none) or an odd whole number ≥ 5');
-  if (n === 3) throw new Usage('--smooth is "3"; a cubic fitted through 3 points passes through all three, so a window of 3 changes nothing — it must be 1 (none) or an odd whole number ≥ 5');
-  return n;
-}
-
 function flipOf(f: Map<string, string>): number | 'off' {
   if (!f.has('flip') || f.get('flip') === 'off') return 'off';
   return num(f, 'flip', 90, (v) => v > 0 && v < 180, 'off, or degrees in (0, 180) — a one-frame turn is never more than 180°');
@@ -226,7 +244,7 @@ function retargetArgs(argv: string[]): RetargetArgs {
     baseMotion: f.get('base-motion'),
     images: f.get('images'),
     minScore: num(f, 'min-score', 0.3, (n) => n >= 0, 'a number ≥ 0'),
-    smooth: smoothOf(f),
+    smoothAlias: f.get('smooth'),
     flip: flipOf(f),
     short: shortOf(f),
     legScale: legScaleOf(f),
@@ -299,6 +317,66 @@ function compareArgs(argv: string[]): CompareArgs {
   };
 }
 
+/** A window flag of clean: 1, or odd and ≥ 5 (`windowProblem`). */
+function windowOf(f: Map<string, string>, name: string, dflt: number): number {
+  const v = f.get(name);
+  if (v === undefined) return dflt;
+  const n = Number(v);
+  const why = windowProblem(`--${name}`, Number.isFinite(n) ? n : NaN);
+  if (!Number.isFinite(n) || why !== null) throw new Usage(why ?? `--${name} is "${v}"; it must be 1 (none) or an odd whole number ≥ 5`);
+  return n;
+}
+
+const fmt = (v: number, d = 2) => v.toFixed(d);
+function runsOf(frames: number[]): string {
+  const out: string[] = [];
+  let a = -1;
+  let b = -1;
+  for (const f of frames) {
+    if (f === b + 1) b = f;
+    else {
+      if (a >= 0) out.push(a === b ? `${a}` : `${a}–${b}`);
+      a = f;
+      b = f;
+    }
+  }
+  if (a >= 0) out.push(a === b ? `${a}` : `${a}–${b}`);
+  return out.join(', ');
+}
+
+/** `rig-pose clean` (#67): read, clean, print each step's figures, write. */
+function runClean(argv: string[], say: (l: string) => void): void {
+  const f = parseFlags(argv, ['pose', 'out', 'legs', 'rest', 'person'], ['loop', 'coco']);
+  const input = need(f, 'pose');
+  const out = need(f, 'out');
+  const params = { loop: f.has('loop'), legs: windowOf(f, 'legs', 5), rest: windowOf(f, 'rest', 7) };
+  const text = readFileSync(input, 'utf8');
+  const seq = f.has('coco') ? convertCoco17(text, input) : readPoseSequence(text, input);
+  const c = clean(seq, params, f.get('person'), input);
+  const n = seq.frames.length;
+  const tOf = (i: number) => `t=${seq.frames[i]!.t.toFixed(3)}s`;
+  say(`rig-pose clean: ${n} frame(s) of person "${c.person}" from ${input}${f.has('coco') ? ' (COCO-17)' : ''}; legs ${params.legs}, rest ${params.rest}, ${params.loop ? 'loop (every window wraps)' : 'no loop (windows cut at the ends)'}`);
+  say(`  TRUNK  neck → mid_hip: median ${fmt(c.trunk.length)} px over ${c.trunk.frames} frame(s); a spike is > ${fmt(SPIKE_TRUNKS * c.trunk.length)} px (${SPIKE_TRUNKS} trunk) from its ${SPIKE_WINDOW}-frame median`);
+  for (const s of c.spikes) say(`  SPIKE  joint "${s.joint}" frame ${s.frame} (${tOf(s.frame)}): ${fmt(s.off)} px from its ${SPIKE_WINDOW}-frame median, over ${fmt(SPIKE_TRUNKS * c.trunk.length)} — took the median`);
+  say(`  SPIKES ${c.spikes.length} replaced; ${untestedText(c.untested)}`);
+  const byJoint = new Map<string, typeof c.occluded>();
+  for (const o of c.occluded) byJoint.set(o.joint, [...(byJoint.get(o.joint) ?? []), o]);
+  for (const [joint, os] of byJoint) say(`  OCCLUDED joint "${joint}" on ${os.length} frame(s) (${runsOf(os.map((o) => o.frame))}): not observed or scored under ${OCCLUSION_SCORE}; took its ${OCCLUSION_WINDOW}-frame median, moved up to ${fmt(Math.max(...os.map((o) => o.moved)))} px`);
+  say(`  OCCLUSION ${c.occluded.length} joint-frame(s) took the median`);
+  for (const m of c.missing) say(`  MISSING joint "${m.joint}" frame${m.from === m.to ? ` ${m.from}` : `s ${m.from}–${m.to}`}: no position; left without one (retarget holds it)`);
+  const sg = (w: number) => (w === 1 ? '1 frame (none)' : `${w} frames`);
+  say(`  SMOOTH quadratic Savitzky–Golay per joint: legs (${LEGS.join(', ')}) over ${sg(params.legs)}, the rest over ${sg(params.rest)}; ${params.loop ? 'circular' : 'the window cut at the ends'}`);
+  if (params.loop) {
+    if (c.floor === null) say('  FLOOR  no ankle has a position on any frame; not re-pinned');
+    else say(`  FLOOR  the lowest ankle over the cycle: y ${fmt(c.floor.before)} before smoothing, ${fmt(c.floor.after)} after; every joint moved ${c.floor.shift >= 0 ? '+' : ''}${fmt(c.floor.shift, 3)} px in y`);
+  }
+  const jit = (v: number | null) => (v === null ? 'not measured' : `${fmt(v, 3)}`);
+  say(`  JITTER mean |second difference| of y over ${c.triples} joint-frame triple(s): ${jit(c.record.jitter.before)} → ${jit(c.record.jitter.after)} px/f²${c.record.jitter.before !== null && c.record.jitter.after !== null && c.record.jitter.before > 0 ? ` (${fmt(100 * (1 - c.record.jitter.after / c.record.jitter.before), 1)}% lower)` : ''}`);
+  writeFileSync(out, writePoseSequence(c.seq));
+  say(`  CLEAN  ${cleanLine(c.record)}`);
+  say(`  wrote ${out}`);
+}
+
 export function main(argv: string[]): number {
   const [cmd, ...rest] = argv;
   if (cmd === undefined || cmd === '--help' || cmd === '-h' || cmd === 'help') {
@@ -322,6 +400,10 @@ export function main(argv: string[]): number {
       runCompare(compareArgs(rest), (l) => process.stdout.write(`${l}\n`));
       return 0;
     }
+    if (cmd === 'clean') {
+      runClean(rest, (l) => process.stdout.write(`${l}\n`));
+      return 0;
+    }
     if (cmd === 'convert') {
       const f = parseFlags(rest, ['coco', 'out'], []);
       const input = need(f, 'coco');
@@ -331,7 +413,7 @@ export function main(argv: string[]): number {
       process.stdout.write(`rig-pose convert: ${seq.frames.length} frame(s) of COCO-17 → body-18; wrote ${out}\n`);
       return 0;
     }
-    process.stderr.write(`rig-pose: unknown command "${cmd}" — the commands are: retarget, convert, compare\n`);
+    process.stderr.write(`rig-pose: unknown command "${cmd}" — the commands are: clean, retarget, convert, compare\n`);
     return 2;
   } catch (e) {
     if (e instanceof Usage) {

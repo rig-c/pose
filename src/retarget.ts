@@ -19,9 +19,8 @@
  * pose puts the segment's end, relative to the translated joint and scaled. So
  * the hip and its travel are computed before any bone's target.
  *
- * Smoothing is Savitzky–Golay: a centred least-squares cubic over the window,
- * evaluated at the frame, on each joint's positions after its holds. Centred,
- * it moves no motion in time; a cubic keeps a peak a moving average flattens.
+ * Smoothing is not done here: the sequence comes cleaned (`clean.ts`, #67 —
+ * spikes, occlusion, a per-joint Savitzky–Golay), and its record says how.
  *
  * The short hold (rig-c/pose#22) comes next: a segment whose picture length on
  * a frame is under `short` of its own median length over the sequence is seen
@@ -35,7 +34,7 @@
  * The flip guard (rig-c/pose#15) then spreads a segment's turn greater than
  * `flip` degrees in one frame over the frames around it, linearly and centred on
  * the jump (`spreadFlips`). It reads the mapped segments' target angles after
- * holds, smoothing and the short hold, and before the hinge check. A reach's
+ * holds and the short hold, and before the hinge check. A reach's
  * target is aimed later, from posed positions, and is neither held short nor
  * guarded.
  *
@@ -52,7 +51,7 @@
  * against it (`artTurn`, and `artRange` where it leaves its range).
  *
  * The lines across the body — hips, shoulders, eyes — are read from the pose
- * after holds and smoothing, whether the map uses them or not: a line under
+ * after holds, whether the map uses them or not: a line under
  * `TURN_FRACTION` of its median picture length, or reversed (pointing more
  * than 90° from the subject's right to left), for ≥ `TURN_SECONDS`, is a `TURN`:
  * the body or head turned, a pose a flat rig cannot draw. It changes no key.
@@ -77,8 +76,6 @@ const DEG = 180 / Math.PI;
 export interface RetargetOptions extends SwitchOptions {
   /** A joint with a score below this is not good on that frame (a joint with no score is). */
   minScore: number;
-  /** Savitzky–Golay window over joint positions, in frames: 1 = none, else odd and ≥ 5. */
-  smooth: number;
   /** What a hinge bent the wrong way does: refuse the run, or straighten that hinge on that frame. */
   bends: 'refuse' | 'clamp';
   /** Degrees past straight a hinge may bend the wrong way before it counts. */
@@ -331,64 +328,6 @@ function median(xs: number[]): number {
   return s.length % 2 === 1 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
 }
 
-/**
- * Savitzky–Golay, centred: at each frame, the least-squares polynomial of
- * `order` over the frames of the window that exist (clipped at the ends), read
- * at that frame. With fewer points than order + 1 the order drops to fit them
- * exactly, so a window clipped to 4 frames or fewer returns the input there.
- * A polynomial of degree ≤ `order` passes through unchanged.
- */
-export function savitzkyGolay(xs: readonly Pt[], window: number, order = 3): Pt[] {
-  if (window <= 1) return xs.map((x) => [x[0], x[1]]);
-  const h = window >> 1;
-  const n = xs.length;
-  const cache = new Map<string, number[]>();
-  return xs.map((_, i) => {
-    const lo = Math.max(0, i - h) - i;
-    const hi = Math.min(n - 1, i + h) - i;
-    const key = `${lo},${hi}`;
-    let w = cache.get(key);
-    if (w === undefined) {
-      w = sgWeights(lo, hi, Math.min(order, hi - lo));
-      cache.set(key, w);
-    }
-    let x = 0;
-    let y = 0;
-    for (let u = lo; u <= hi; u++) {
-      const c = w[u - lo]!;
-      x += c * xs[i + u]![0];
-      y += c * xs[i + u]![1];
-    }
-    return [x, y];
-  });
-}
-
-/** The weights that read a least-squares polynomial of degree q over u = lo..hi at u = 0. */
-function sgWeights(lo: number, hi: number, q: number): number[] {
-  const m = q + 1;
-  // Normal equations: A[j][l] = Σ u^(j+l); solve A z = e0, then w(u) = Σ z_j u^j.
-  const A = Array.from({ length: m }, (_, j) => Array.from({ length: m + 1 }, (_, l) => {
-    if (l === m) return j === 0 ? 1 : 0;
-    let s = 0;
-    for (let u = lo; u <= hi; u++) s += u ** (j + l);
-    return s;
-  }));
-  for (let c = 0; c < m; c++) {
-    let piv = c;
-    for (let r = c + 1; r < m; r++) if (Math.abs(A[r]![c]!) > Math.abs(A[piv]![c]!)) piv = r;
-    [A[c], A[piv]] = [A[piv]!, A[c]!];
-    for (let r = 0; r < m; r++) {
-      if (r === c) continue;
-      const f = A[r]![c]! / A[c]![c]!;
-      for (let l = c; l <= m; l++) A[r]![l]! -= f * A[c]![l]!;
-    }
-  }
-  const z = A.map((row, j) => row[m]! / row[j]!);
-  const w: number[] = [];
-  for (let u = lo; u <= hi; u++) w.push(z.reduce((s, zj, j) => s + zj * u ** j, 0));
-  return w;
-}
-
 const r3 = (v: number) => {
   const r = Math.round(v * 1000) / 1000;
   return Object.is(r, -0) ? 0 : r;
@@ -439,7 +378,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   const series = new Map<string, Pt[]>();
   const good = new Map<string, boolean[]>();
   const holds: Hold[] = [];
-  /** A point held where it is not good, then smoothed; or why it is good on no frame. */
+  /** A point held where it is not good; or why it is good on no frame. */
   const heldOf = (name: string): { at: Pt[]; good: boolean[]; holds: Hold[] } | { never: string } => {
     const raw = frames.map((f) => pointOn(f, name, opts.minScore));
     const firstGood = raw.findIndex((v) => typeof v !== 'string');
@@ -463,7 +402,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         spans.push(span);
       }
     }
-    return { at: savitzkyGolay(out, opts.smooth), good: raw.map((v) => typeof v !== 'string'), holds: spans };
+    return { at: out, good: raw.map((v) => typeof v !== 'string'), holds: spans };
   };
   for (const name of [...needed].sort()) {
     const h = heldOf(name);
@@ -477,7 +416,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   }
   p.throwIfAny();
 
-  // TURN: the lines across the body, read from the pose (held and smoothed as the
+  // TURN: the lines across the body, read from the pose (held as the
   // map's points are, whether or not the map uses them). A reading; no key moves.
   const turns: Turn[] = [];
   const turnsUnread: Retarget['turnsUnread'] = [];
