@@ -9,7 +9,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { readMap, resolveMap, type JointMap } from './map.ts';
 import { convertCoco17, personTrack, readPoseSequence } from './pose.ts';
-import { lineOf, Problems, Refusal, type Problem } from './problems.ts';
+import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './problems.ts';
+import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, readIdle, targetOf, trackLabel, type IdleReading, type RigcTrack, type Target } from './idle.ts';
 import { bendLine, endOnLine, flipLine, holdLine, rangeLine, retarget, shortLine, turnLine, type RetargetOptions } from './retarget.ts';
 import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, readBuild, resolveRig, restOf, slotsOf } from './rigc.ts';
 import { artRangeLine, chainsMoving, switchLine, uncoveredFolds } from './switch.ts';
@@ -35,6 +36,12 @@ export interface RetargetArgs extends RetargetOptions {
   render?: string;
   /** Write the run's measurements as JSON here. */
   report?: string;
+  /** The rig's animation read as its idle (default: idle); naming one the motion spec lacks is refused. */
+  idle?: string;
+  /** Loop the idle's dropped tracks into the new animation (#43 item 2). */
+  carryIdle?: boolean;
+  /** A rig-pose-tracks/1 fragment merged into the new animation. */
+  merge?: string;
 }
 
 export interface RunResult {
@@ -52,8 +59,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     throw new Refusal(problems);
   };
   const args = new Problems();
-  for (const [flag, path] of [['--map', a.map], ['--pose', a.pose]] as const) {
-    if (!existsSync(path)) args.add('ARG_PATH', `${flag} ${path} does not exist`);
+  for (const [flag, path] of [['--map', a.map], ['--pose', a.pose], ['--merge', a.merge]] as const) {
+    if (path !== undefined && !existsSync(path)) args.add('ARG_PATH', `${flag} ${path} does not exist`);
   }
   // A file this run writes goes into a directory that is there already; --build and --render make theirs.
   for (const [flag, path] of [['--out', a.out], ['--report', a.report]] as const) {
@@ -67,6 +74,11 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
   const base = baseMotionOf(input);
   const animations = base.animations as Record<string, unknown>;
   if (a.name in animations) refuse([{ code: 'MOTION_NAME_FREE', text: `the rig's motion spec already has an animation "${a.name}" (it has ${Object.keys(animations).join(', ')}); name this one with --name` }]);
+  const idleName = a.idle ?? 'idle';
+  if (!(idleName in animations) && (a.idle !== undefined || a.carryIdle === true)) {
+    refuse([{ code: 'IDLE_NAME', text: `${a.idle !== undefined ? `--idle "${idleName}"` : '--carry-idle reads the animation "idle", and'} the rig's motion spec ${input.motion === null ? '— there is none, so it has no animations' : `${input.motion} has no animation "${idleName}" (it has ${Object.keys(animations).join(', ') || 'none'})`}; name the rig's idle with --idle` }]);
+  }
+  const fragment = a.merge === undefined ? [] : readFragment(parseJson(readFileSync(a.merge, 'utf8'), a.merge, 'MERGE_JSON'), a.merge);
   const map = readMap(readFileSync(a.map, 'utf8'), a.map);
   const poseText = readFileSync(a.pose, 'utf8');
   const seq = a.coco ? convertCoco17(poseText, a.pose) : readPoseSequence(poseText, a.pose);
@@ -87,7 +99,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     resolveMap(map, rest, a.map, slots);
 
     const r = retarget(rest, map, frames, times, a, slots);
-    say(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, smooth ${a.smooth}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)${a.legScale !== undefined && a.legScale !== 'off' ? `, leg-scale ${a.legScale[0]}–${a.legScale[1]}` : ''}${a.plantFeet === true ? ', plant-feet' : ''}`);
+    say(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, smooth ${a.smooth}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)${a.legScale !== undefined && a.legScale !== 'off' ? `, leg-scale ${a.legScale[0]}–${a.legScale[1]}` : ''}${a.plantFeet === true ? ', plant-feet' : ''}${a.carryIdle === true ? ', carry-idle' : ''}${a.merge !== undefined ? `, merge ${a.merge}` : ''}`);
     say(`  RIGC   rig-c ${rigc.version} (${rigc.entry}) gates and poses this run`);
     if (r.scale !== null) say(`  SCALE  ${r.scale.factor.toFixed(5)} rig units per picture px (rig ${r.scale.rig.toFixed(2)} / pose median ${r.scale.pose.toFixed(2)})`);
     for (const h of r.holds) say(`  HOLD   ${holdLine(h, r.times)}`);
@@ -117,7 +129,48 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       say(`  FEET   steps (the supporting ankle > 0.03 leg lengths a frame; re-planted after 2 frames < 0.01): ${f.steps.map((x) => `${x.side} ${span(x.frames)} → ${x.to === null ? 'the pose\'s travel' : `${x.to} supports`}, ${x.replant === null ? 'never re-planted' : `re-planted at ${x.replant}`}`).join('; ') || 'none'}`);
     }
 
-    const motion = { ...base, animations: { ...animations, [a.name]: r.animation } };
+    // The idle against the new animation (#43 item 2): what it drops, and with --carry-idle, looped back in.
+    const groups = (isObject(base.groups) ? base.groups : {}) as Record<string, string[]>;
+    const easings = (isObject(base.easings) ? base.easings : {}) as Record<string, number[]>;
+    const own = r.animation.tracks as unknown as RigcTrack[];
+    const T = r.animation.duration;
+    let idle: IdleReading | null = null;
+    if (!(idleName in animations)) say(`  IDLE   ${input.motion === null ? 'the rig has no motion spec' : `the rig's motion spec has no animation "idle" (it has ${Object.keys(animations).join(', ') || 'none'})`}; no idle read (--idle names another)`);
+    else {
+      const setupOf = (t: Target, property: string, sample: unknown): unknown => {
+        if (t.kind === 'slot' && property === 'attachment') return slots.get(t.name)?.setup;
+        if ((t.kind === 'bone' || t.kind === 'group') && Array.isArray(sample)) return boneIdentity(property, sample.length);
+        return undefined;
+      };
+      const mapped = [...map.chains.flatMap((c) => c.bones), ...(map.translate === null ? [] : [map.translate.bone])];
+      const below = new Map<string, string[]>();
+      for (const m of new Set(mapped)) {
+        for (let b = rest.get(m)?.parent ?? null; b !== null; b = rest.get(b)?.parent ?? null) {
+          const list = below.get(b) ?? [];
+          if (!list.includes(m)) list.push(m);
+          below.set(b, list);
+        }
+      }
+      idle = readIdle(idleName, a.name, animations[idleName] as Record<string, unknown>, own, T, { groups, easings }, setupOf, a.carryIdle === true, (bone) => below.get(bone) ?? [], (bone) => {
+        const hip = map.translate?.bone;
+        if (hip === undefined) return null;
+        for (let b = rest.get(hip)?.parent ?? null; b !== null; b = rest.get(b)?.parent ?? null) if (b === bone) return hip;
+        return null;
+      });
+      say(`  IDLE   animation "${idleName}" (${idle.duration.toFixed(3)}s, ${idle.tracks} track(s)) against "${a.name}": ${idle.dropped.length} dropped (${a.carryIdle === true ? `${idle.carriedTracks.length} carried, looped to ${T.toFixed(3)}s` : 'not carried; --carry-idle loops them in'}), ${idle.keptOut.length} kept out`);
+      for (const d of idle.dropped) say(`  IDLE-DROPPED ${droppedLine(d, a.name, a.carryIdle === true, T)}`);
+      for (const k of idle.keptOut) say(`  IDLE-KEPT-OUT ${keptOutLine(k)}`);
+      for (const n of idle.notTracks) say(`  IDLE-KEPT-OUT "${idleName}"'s ${n} timeline(s): not a track; neither compared nor carried`);
+    }
+    const carried = idle?.carriedTracks ?? [];
+    if (fragment.length > 0) {
+      const problems = mergeProblems(fragment, a.merge!, a.name, [...own, ...carried], T, groups);
+      if (problems.length > 0) refuse(problems);
+      for (const tr of fragment) say(`  MERGE  ${a.merge}: ${trackLabel(tr, groups)}, ${tr.keys.length} key(s) at t=${tr.keys[0]!.t}${tr.keys.length > 1 ? `–${tr.keys[tr.keys.length - 1]!.t}` : ''}s`);
+    }
+    const added = [...carried, ...fragment];
+    const animation = added.length === 0 ? r.animation : { ...r.animation, tracks: [...own, ...added] };
+    const motion = { ...base, animations: { ...animations, [a.name]: animation } };
     const g1 = gate(input.rig, motion, join(scratch, 'with'), a.profile, a.images);
     if (!g1.green) {
       refuse([{ code: 'RIG_GATE', text: `rigc build --profile ${a.profile} is red with "${a.name}" in (exit ${g1.run.status}); nothing written` }, ...g1.fails.map((f) => ({ code: 'RIGC', text: f }))]);
@@ -128,13 +181,23 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     const posed = poseFrames(doc, a.name, r.times);
     const landings = measureLanding(doc, a.name, map, r, posed);
     const p = new Problems();
+    // A carried idle track on a bone above a mapped one moves it where the keys did not ask (the key formula holds unmapped bones at setup).
+    const carriedAbove = (bone: string): string => {
+      const above = new Set<string>();
+      for (let b = rest.get(bone)?.parent ?? null; b !== null; b = rest.get(b)?.parent ?? null) above.add(b);
+      const hits = carried.filter((tr) => {
+        const t = targetOf(tr);
+        return t !== null && (t.kind === 'bone' ? above.has(t.name) : t.kind === 'group' && (groups[t.name] ?? []).some((m) => above.has(m)));
+      });
+      return hits.length === 0 ? '' : `; --carry-idle carried ${hits.map((tr) => trackLabel(tr, groups)).join(', ')} onto bones above it`;
+    };
     for (const l of landings) {
       const unit = l.kind === 'angle' ? '°' : l.kind === 'scale' ? ' of its setup length' : ' units';
       const what = l.kind === 'angle' ? 'aim' : l.kind === 'scale' ? 'scale' : l.kind === 'foot' ? 'ankle' : 'origin';
       const tol = l.kind === 'foot' ? Number(l.tolerance.toPrecision(3)) : l.tolerance;
       const line = `bone "${l.bone}" ${what} — worst |reached − asked| ${l.worst.toPrecision(3)}${unit} at frame ${l.frame} (t=${r.times[l.frame]!.toFixed(3)}s); the tolerance is ${tol}${unit}`;
       if (landed(l)) say(`  LAND   ${line}`);
-      else p.add('POSE_LANDS', `${line} — the rig does not turn the way the key formula assumes (a constraint, a scaled or sheared parent, a non-normal inherit mode)`);
+      else p.add('POSE_LANDS', `${line} — the rig does not turn the way the key formula assumes (a constraint, a scaled or sheared parent, a non-normal inherit mode)${carriedAbove(l.bone)}`);
     }
     p.throwIfAny();
 
@@ -186,7 +249,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         animation: a.name,
         frames: seq.frames.length,
         duration: r.animation.duration,
-        options: { minScore: a.minScore, smooth: a.smooth, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true },
+        options: { minScore: a.minScore, smooth: a.smooth, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null },
         scale: r.scale,
         holds: r.holds,
         short: r.short,
@@ -206,6 +269,9 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         pivot: r.pivot,
         feet: r.feet === null ? null : { planted: r.planted, legLength: r.feet.legLength, supports: r.feet.supports, jumps: r.feet.jumps, steps: r.feet.steps, changes: r.feet.changes, reading: feetReading },
         shear,
+        idleDropped: idle === null ? null : idle.dropped,
+        idleKeptOut: idle === null ? null : idle.keptOut,
+        merged: fragment.map((tr) => ({ track: trackLabel(tr, groups), keys: tr.keys.length })),
       }, null, 2)}\n`);
     }
     say(`  wrote ${a.out} — animations: ${Object.keys(motion.animations).join(', ')}`);

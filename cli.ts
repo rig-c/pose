@@ -64,6 +64,17 @@ retarget
                         travel and re-plants on landing; a supporting ankle moving > 0.03 leg lengths a frame
                         releases its plant to the other foot, or to the pose's travel, until it is still
                         (< 0.01 for 2 frames) (FEET lines)
+  --idle <name>         the rig's animation read as its idle (default: idle). Every idle track the new
+                        animation does not key, on any channel, is listed as IDLE-DROPPED (a blink, a
+                        breath); one it keys is IDLE-KEPT-OUT, naming the track that keys it, and so is a
+                        rotate, scale or shear of a bone above a mapped bone (a translate of one is carried)
+  --carry-idle          loop the IDLE-DROPPED tracks into the new animation: the idle's keys repeated
+                        every idle duration and cut at the new animation's end, with the value
+                        interpolated there (default: off — a blink keyed over a set's art is the author's call)
+  --merge <file>        merge rig-pose-tracks/1 into the new animation: { "spec": "rig-pose-tracks/1",
+                        "tracks": [ <rigc-motion track> … ] } at absolute times from its start (blinks read
+                        off the video); a track on a target and property it already keys is refused
+                        (MERGE_CONFLICT), and so is a key past its duration (MERGE_TIME)
   --switch-tolerance <d>  a set of alternate drawings (the map's "alternates") may show on a frame where
                         every segment of its chains is within d degrees of its key skeleton (default: 25)
   --switch-min <s>      a run of one set shorter than s seconds is dropped (default: 0.25)
@@ -75,7 +86,8 @@ retarget
   --build <dir>         keep the gated build (skeleton.json, .atlas, .model.json) here
   --render <dir>        keep rigc's render of the animation (frames, contact.png, folds.json) here
   --report <file>       write the run's measurements (holds, short, endOn, flips, bends, landings, folds,
-                        switches, uncovered, turns, range, artRange) as JSON
+                        switches, uncovered, turns, range, artRange,
+                        idleDropped, idleKeptOut, merged) as JSON
 
   It writes nothing until rigc's gate is green with the animation in, every mapped bone lands on
   the angle the pose asks for (posed by rig-c's own poser), and no hinge bends the wrong way.
@@ -179,7 +191,7 @@ function legScaleOf(f: Map<string, string>): [number, number] | 'off' {
 }
 
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report', 'leg-scale'], ['coco', 'plant-feet']);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report', 'leg-scale', 'idle', 'merge'], ['coco', 'plant-feet', 'carry-idle']);
   const bends = f.get('bends') ?? 'refuse';
   if (bends !== 'refuse' && bends !== 'clamp') throw new Usage(`--bends is "${bends}"; it must be refuse or clamp`);
   const switchAt = f.get('switch-at') ?? 'first';
@@ -213,6 +225,9 @@ function retargetArgs(argv: string[]): RetargetArgs {
     build: f.get('build'),
     render: f.get('render'),
     report: f.get('report'),
+    idle: f.get('idle'),
+    carryIdle: f.has('carry-idle'),
+    merge: f.get('merge'),
   };
 }
 

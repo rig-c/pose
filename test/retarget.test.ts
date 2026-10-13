@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { poseRawAnimation, poseRawSetup, readModel, type CompiledDocument, type RawBone } from 'rig-c/core';
 import { Plate } from 'rig-c/plate';
 import { holdShort, isAcross, mergeRuns, savitzkyGolay, spreadFlips } from '../src/retarget.ts';
+import { loopTrack, type RigcTrack } from '../src/idle.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const CLI = join(ROOT, 'cli.ts');
@@ -2515,4 +2516,242 @@ describe('#47: --leg-scale and --plant-feet', () => {
     // Control: the same map reads, without the flag.
     expect(retarget(c).status).toBe(0);
   }, SLOW);
+});
+
+// ===========================================================================
+
+describe('#43 item 2: the idle tracks a retarget drops, --carry-idle, --merge', () => {
+  // The stick's idle (1 s): a bone scale track on "neck" (a raw curve, then a named easing), an
+  // attachment track on a "face" slot (its last key before the idle's end, so a loop holds it), and
+  // a rotate on "sleeve_r0", which the retarget keys itself. The card's pose runs 1.875 s, so the
+  // second cycle is cut inside its eased segment.
+  const D = 1;
+  const T = (BASE.n - 1) * BASE.dt;
+  const idle = {
+    duration: D,
+    tracks: [
+      { bone: 'neck', property: 'scaley', keys: [{ t: 0, v: [1], curve: [0.2, 1, 0.3, 1.5] }, { t: 0.5, v: [1.5], ease: 'soft' }, { t: 1, v: [1] }] },
+      { slot: 'face', property: 'attachment', keys: [{ t: 0, v: 'open' }, { t: 0.6, v: 'shut' }, { t: 0.8, v: 'open' }] },
+      { bone: 'sleeve_r0', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 1, v: [10] }] },
+    ],
+  };
+  const motion = { spec: 'rigc-motion/1', archetype: 'stick', cut: 'stick', easings: { soft: [0.25, 0.1, 0.25, 1] }, animations: { idle } };
+  const rig: RigOpts = {
+    motion,
+    extraSlots: [{ name: 'face', bone: 'neck', attachment: 'open' }],
+    extra: { face: { open: { image: 'seg.png' }, shut: { image: 'seg.png' } } },
+  };
+  const blink = (keys: Array<{ t: number; v: number[] }>, extra: Record<string, unknown> = {}) => ({ spec: 'rig-pose-tracks/1', tracks: [{ bone: 'neck', property: 'scalex', keys, ...extra }] });
+  const writeFragment = (c: Case, doc: unknown): string => {
+    const f = join(c.dir, 'blink.tracks.json');
+    writeFileSync(f, JSON.stringify(doc, null, 2));
+    return f;
+  };
+  /** Each time's pose of `anim` in the kept build, by rig-c's poser. */
+  const poseAt = (build: string, anim: string, t: number) => {
+    const p = poseRawAnimation(loadBuild(build), anim, t === 0 ? [] : [t]);
+    return p[p.length - 1]!;
+  };
+  const neck = (build: string, anim: string, t: number, k: 'scaleX' | 'scaleY') => poseAt(build, anim, t).bones.find((b) => b.name === 'neck')![k];
+  const face = (build: string, anim: string, t: number) => poseAt(build, anim, t).slots.find((row) => row[0] === 'face')![1];
+
+  test('IDLE-DROPPED lists the bone scale and the slot attachment tracks; the retarget\'s own bone is IDLE-KEPT-OUT; the report says the same', () => {
+    const c = setup({ rig });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--report', report]);
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'IDLE')).toEqual(['IDLE   animation "idle" (1.000s, 3 track(s)) against "dance": 2 dropped (not carried; --carry-idle loops them in), 1 kept out']);
+    expect(linesOf(r, 'IDLE-DROPPED')).toEqual([
+      'IDLE-DROPPED bone "neck" scaley: 3 key(s) over the idle\'s 1.000s; "dance" does not key it — not carried (no --carry-idle)',
+      'IDLE-DROPPED slot "face" attachment: 3 key(s) over the idle\'s 1.000s; "dance" does not key it — not carried (no --carry-idle)',
+    ]);
+    expect(linesOf(r, 'IDLE-KEPT-OUT')).toEqual(['IDLE-KEPT-OUT bone "sleeve_r0" rotate: "dance"\'s own bone "sleeve_r0" rotate keys it, so the idle\'s track is not carried']);
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as { idleDropped: Array<{ target: unknown; property: string; keys: number; duration: number; carried: unknown }>; idleKeptOut: Array<{ target: unknown }> };
+    expect(rep.idleDropped.map((d) => [d.target, d.property, d.keys, d.duration, d.carried])).toEqual([[{ kind: 'bone', name: 'neck' }, 'scaley', 3, 1, null], [{ kind: 'slot', name: 'face' }, 'attachment', 3, 1, null]]);
+    expect(rep.idleKeptOut.map((k) => k.target)).toEqual([{ kind: 'bone', name: 'sleeve_r0' }]);
+  }, SLOW);
+
+  test('everything off: the motion written is the plain retarget\'s, byte for byte, beside the idle', () => {
+    const c = setup({ rig });
+    expect(retarget(c).status).toBe(0);
+    const plain = setup();
+    expect(retarget(plain).status).toBe(0);
+    const a = motionOf(c.out);
+    const b = motionOf(plain.out);
+    expect(JSON.stringify(a.animations.dance)).toBe(JSON.stringify(b.animations.dance));
+    expect(readFileSync(c.out, 'utf8')).toBe(`${JSON.stringify({ ...motion, animations: { idle, dance: b.animations.dance } }, null, 2)}\n`);
+  }, SLOW);
+
+  test('--carry-idle loops both into "dance": rig-c\'s poser reads the idle at t mod 1 s in the second cycle and at the cut; the gate is green and every bone lands', () => {
+    const c = setup({ rig });
+    const r = retarget(c, ['--carry-idle']);
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'IDLE-DROPPED')).toEqual([
+      'IDLE-DROPPED bone "neck" scaley: 3 key(s) over the idle\'s 1.000s; "dance" does not key it — carried: 5 key(s), 2 cycle(s), cut at 1.875s',
+      'IDLE-DROPPED slot "face" attachment: 3 key(s) over the idle\'s 1.000s; "dance" does not key it — carried: 6 key(s), 2 cycle(s), cut at 1.875s',
+    ]);
+    expect(linesOf(r, 'GATE')[0]).toStartWith('GATE   rigc build --profile spine: green');
+    expect(fails(r)).toEqual([]);
+    expect(misses(c.build, BASE)).toEqual([]);
+    const tracks = motionOf(c.out).animations.dance.tracks as unknown as RigcTrack[];
+    const scale = tracks.find((t) => t.bone === 'neck')!;
+    // The seam at 1 s is one key (the idle's last and first agree); the cut key at 1.875 s carries no ease.
+    expect(scale.keys.map((k) => k.t)).toEqual([0, 0.5, 1, 1.5, T]);
+    expect(scale.keys[1]!.ease).toBe('soft');
+    // The segment the cut falls in: its named easing becomes the raw curve of its first part.
+    expect(scale.keys[3]!.ease).toBeUndefined();
+    expect(scale.keys[3]!.curve).toHaveLength(4);
+    expect(Object.keys(scale.keys[4]!).sort()).toEqual(['t', 'v']);
+    // The attachment's last key (0.8 s) holds to the cycle's end, and the next cycle opens at 1 s.
+    expect(tracks.find((t) => t.slot === 'face')!.keys.map((k) => [k.t, k.v])).toEqual([[0, 'open'], [0.6, 'shut'], [0.8, 'open'], [1, 'open'], [1.6, 'shut'], [1.8, 'open']]);
+    // Off the cut segment, the second cycle is the idle at t − 1 s.
+    for (const t of [0.25, 0.75, 1.25, 1.45]) expect(Math.abs(neck(c.build, 'dance', t, 'scaleY') - neck(c.build, 'idle', t - Math.floor(t), 'scaleY'))).toBeLessThan(1e-5);
+    // On it (1.5 s to the cut), against the idle's eased segment as a continuous cubic — "soft" from (0.5, 1.5) to (1, 1),
+    // handles (0.625, 1.45) and (0.625, 1). rig-c draws a Bézier as Spine's polyline, so both the carried part and the
+    // idle's whole segment sit off the cubic by that alone: measured, the carried ≤ 9.3e-4 and the idle's own up to
+    // 2.6e-3 (at 0.875 s). The cut key itself is the cubic's value.
+    const cubic = (t: number): number => {
+      const bez = (p: [number, number, number, number], s: number) => (1 - s) ** 3 * p[0] + 3 * (1 - s) ** 2 * s * p[1] + 3 * (1 - s) * s * s * p[2] + s ** 3 * p[3];
+      let lo = 0;
+      let hi = 1;
+      for (let i = 0; i < 60; i++) if (bez([0.5, 0.625, 0.625, 1], (lo + hi) / 2) < t) lo = (lo + hi) / 2; else hi = (lo + hi) / 2;
+      return bez([1.5, 1.45, 1, 1], lo);
+    };
+    for (const t of [1.6, 1.7, 1.8]) {
+      expect(Math.abs(neck(c.build, 'dance', t, 'scaleY') - cubic(t - 1))).toBeLessThan(1.5e-3);
+      expect(Math.abs(neck(c.build, 'idle', t - 1, 'scaleY') - cubic(t - 1))).toBeLessThan(3e-3);
+    }
+    expect(Math.abs(neck(c.build, 'dance', T, 'scaleY') - cubic(T - 1))).toBeLessThan(1e-5);
+    for (const t of [0.3, 0.7, 0.9, 1.3, 1.65, 1.85]) expect(face(c.build, 'dance', t)).toBe(face(c.build, 'idle', t - Math.floor(t)));
+    expect([0.7, 1.65].map((t) => face(c.build, 'dance', t))).toEqual(['shut', 'shut']);
+    // Control: without the flag the face never shuts in "dance", and the neck keeps its setup scale.
+    const off = setup({ rig });
+    expect(retarget(off).status).toBe(0);
+    expect(face(off.build, 'dance', 0.7)).toBe('open');
+    expect(neck(off.build, 'dance', 1.25, 'scaleY')).toBeCloseTo(1, 6);
+    expect(neck(c.build, 'dance', 1.25, 'scaleY')).toBeCloseTo(1.25, 4);
+  }, SLOW);
+
+  test('--merge: a blink fragment shows on its frames; a conflicting track and a late key are refused by name, nothing written', () => {
+    const c = setup({ rig });
+    const ok = writeFragment(c, blink([{ t: 0.5, v: [1] }, { t: 0.625, v: [0.2] }, { t: 0.75, v: [1] }]));
+    const r = retarget(c, ['--merge', ok]);
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'MERGE')).toEqual([`MERGE  ${ok}: bone "neck" scalex, 3 key(s) at t=0.5–0.75s`]);
+    expect([0.375, 0.5, 0.5625, 0.625, 0.75, 0.875].map((t) => Number(neck(c.build, 'dance', t, 'scaleX').toFixed(4)))).toEqual([1, 1, 0.6, 0.2, 1, 1]);
+
+    const conflict = writeFragment(c, { spec: 'rig-pose-tracks/1', tracks: [{ bone: 'sleeve_r0', property: 'rotate', keys: [{ t: 0, v: [0] }] }] });
+    const rc = retarget(c, ['--merge', conflict]);
+    expect(rc.status).toBe(1);
+    expect(fails(rc)).toEqual([`FAIL  MERGE_CONFLICT: ${conflict} tracks[0] (bone "sleeve_r0" rotate) — "dance" already keys it: bone "sleeve_r0" rotate; a fragment adds a track where nothing keys that target and property, it never replaces one`]);
+
+    // The carried idle keys the neck's scaley: a fragment on it conflicts with that, by name.
+    const onIdle = writeFragment(c, { spec: 'rig-pose-tracks/1', tracks: [{ bone: 'neck', property: 'scale', keys: [{ t: 0.5, v: [1, 0.2] }] }] });
+    const ri = retarget(c, ['--merge', onIdle, '--carry-idle']);
+    expect(ri.status).toBe(1);
+    expect(fails(ri)[0]).toBe(`FAIL  MERGE_CONFLICT: ${onIdle} tracks[0] (bone "neck" scale) — "dance" already keys it: bone "neck" scaley; a fragment adds a track where nothing keys that target and property, it never replaces one`);
+
+    const late = writeFragment(c, blink([{ t: 1.5, v: [1] }, { t: 2, v: [0.2] }]));
+    const rl = retarget(c, ['--merge', late]);
+    expect(rl.status).toBe(1);
+    expect(fails(rl)).toEqual([`FAIL  MERGE_TIME: ${late} tracks[0] (bone "neck" scalex) keys[1] at t=2s is past "dance"'s duration 1.875s; a fragment's times are absolute, from the animation's start, within [0, 1.875]`]);
+
+    const bad = writeFragment(c, { spec: 'rig-pose-tracks/0', tracks: [] });
+    const rb = retarget(c, ['--merge', bad]);
+    expect(rb.status).toBe(1);
+    expect(fails(rb)[0]).toStartWith(`FAIL  MERGE_SPEC: ${bad}: "spec" is the string "rig-pose-tracks/0"`);
+    expect(existsSync(c.out)).toBe(true); // the first, green run's
+    rmSync(c.out);
+    expect(retarget(c, ['--merge', conflict]).status).toBe(1);
+    expect(existsSync(c.out)).toBe(false);
+  }, SLOW);
+
+  test('rigc\'s gate judges a merged track like any other: a bone the rig does not have is red', () => {
+    const c = setup({ rig });
+    const f = writeFragment(c, { spec: 'rig-pose-tracks/1', tracks: [{ bone: 'nose', property: 'scaley', keys: [{ t: 0, v: [1] }] }] });
+    const r = retarget(c, ['--merge', f]);
+    expect(r.status).toBe(1);
+    expect(fails(r)[0]).toStartWith('FAIL  RIG_GATE: rigc build --profile spine is red with "dance" in');
+    expect(fails(r).join('\n')).toContain('nose');
+  }, SLOW);
+
+  test('IDLE_NAME: --idle naming an animation the motion spec lacks, and --carry-idle on a rig with no idle, are refused by name', () => {
+    const c = setup({ rig });
+    const r = retarget(c, ['--idle', 'breathe']);
+    expect(r.status).toBe(1);
+    expect(fails(r)).toEqual([`FAIL  IDLE_NAME: --idle "breathe" the rig's motion spec ${join(c.rig, 'motion.json')} has no animation "breathe" (it has idle); name the rig's idle with --idle`]);
+    const bare = setup();
+    const rb = retarget(bare, ['--carry-idle']);
+    expect(rb.status).toBe(1);
+    expect(fails(rb)[0]).toStartWith('FAIL  IDLE_NAME: --carry-idle reads the animation "idle", and the rig\'s motion spec — there is none');
+    // Control: no idle and no flag is a line, not a refusal.
+    const rc = retarget(bare);
+    expect(rc.status).toBe(0);
+    expect(linesOf(rc, 'IDLE')).toEqual(['IDLE   the rig has no motion spec; no idle read (--idle names another)']);
+  }, SLOW);
+
+  test('a rotate, scale or shear above a mapped bone is IDLE-KEPT-OUT; a translate of it is carried, and every bone lands', () => {
+    // "chest_ctl" between the hip and the chest, as on @rig-c/parts rigs: its rotate would turn the chest and the arms
+    // off their keys, its translate only moves them. "root" sits above the first mapped bone (the translated hip).
+    const ctl: RigOpts = {
+      ...rig,
+      bones: (bs) => bs.flatMap((b) => (b.name === 'chest' ? [{ name: 'chest_ctl', parent: 'hip', x: 0, y: 75 }, { ...b, parent: 'chest_ctl', y: 0 }] : [b])),
+      motion: { ...motion, animations: { idle: { duration: D, tracks: [
+        { bone: 'chest_ctl', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 0.5, v: [8] }, { t: 1, v: [0] }] },
+        { bone: 'chest_ctl', property: 'translatey', keys: [{ t: 0, v: [0] }, { t: 0.5, v: [6] }, { t: 1, v: [0] }] },
+        { bone: 'root', property: 'shear', keys: [{ t: 0, v: [0, 0] }, { t: 1, v: [3, 0] }] },
+        { bone: 'neck', property: 'scaley', keys: [{ t: 0, v: [1] }, { t: 0.5, v: [1.5] }, { t: 1, v: [1] }] },
+      ] } } },
+    };
+    const c = setup({ rig: ctl });
+    const r = retarget(c, ['--carry-idle']);
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'IDLE-KEPT-OUT')).toEqual([
+      'IDLE-KEPT-OUT bone "chest_ctl" rotate: moves mapped bone(s) "chest", "sleeve_r0", "sleeve_r1", "sleeve_l0", "sleeve_l1" below it; the retarget\'s keys assume it at setup, so the idle\'s track is not carried',
+      'IDLE-KEPT-OUT bone "root" shear: moves mapped bone(s) "chest", "sleeve_r0", "sleeve_r1", "sleeve_l0", "sleeve_l1", "leg_r0", "leg_r1", "leg_l0", "leg_l1", "hip" below it; the retarget\'s keys assume it at setup, so the idle\'s track is not carried',
+    ]);
+    expect(linesOf(r, 'IDLE-DROPPED').map((l) => l.replace(/:.*— /, ': … — '))).toEqual([
+      'IDLE-DROPPED bone "chest_ctl" translatey: … — carried: 5 key(s), 2 cycle(s), cut at 1.875s',
+      'IDLE-DROPPED bone "neck" scaley: … — carried: 5 key(s), 2 cycle(s), cut at 1.875s',
+    ]);
+    expect(fails(r)).toEqual([]);
+    expect(linesOf(r, 'LAND').length).toBeGreaterThan(0);
+    // The chest moves up and down with the idle, at t mod 1 s, and still points where the pose asks.
+    expect(misses(c.build, BASE)).toEqual([]);
+    const chestY = (anim: string, t: number) => poseAt(c.build, anim, t).bones.find((b) => b.name === 'chest')!.worldY - poseAt(c.build, anim, t).bones.find((b) => b.name === 'hip')!.worldY;
+    const setupY = chestY('idle', 0);
+    for (const t of [0.5, 1.25, 1.5, 1.75]) {
+      const want = chestY('idle', t - Math.floor(t)) - setupY;
+      expect(Math.abs(chestY('dance', t) - setupY - want)).toBeLessThan(1e-4);
+    }
+    expect(chestY('dance', 1.5) - setupY).toBeGreaterThan(5);
+  }, SLOW);
+
+  test('a translate above the translated hip is kept out (it would move the origin the retarget places), and the run lands', () => {
+    const moved = { ...motion, animations: { idle: { duration: D, tracks: [{ bone: 'root', property: 'translatey', keys: [{ t: 0, v: [0] }, { t: 0.5, v: [20] }, { t: 1, v: [0] }] }] } } };
+    const c = setup({ rig: { ...rig, motion: moved } });
+    const r = retarget(c, ['--carry-idle']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'IDLE-KEPT-OUT').some((l) => l.includes('bone "root" translatey') && l.includes('moves the translated bone "hip" below it; the retarget places its origin'))).toBe(true);
+    expect(misses(c.build, BASE)).toEqual([]);
+  }, SLOW);
+
+  test('loopTrack: a hold to the cycle\'s end, a setup key where the first key is late, a seam that jumps, and what it does not carry', () => {
+    const tr = (keys: Array<Record<string, unknown>>, extra: Record<string, unknown> = {}): RigcTrack => ({ bone: 'b', property: 'rotate', keys, ...extra }) as unknown as RigcTrack;
+    const late = loopTrack(tr([{ t: 0.2, v: [5] }, { t: 0.8, v: [9] }]), 1, 2.5, {}, () => [0]);
+    if ('reason' in late) throw new Error(late.reason);
+    expect(late.track.keys).toEqual([
+      { t: 0.2, v: [5] }, { t: 0.8, v: [9], ease: 'stepped' },
+      { t: 1, v: [0], ease: 'stepped' }, { t: 1.2, v: [5] }, { t: 1.8, v: [9], ease: 'stepped' },
+      { t: 2, v: [0], ease: 'stepped' }, { t: 2.2, v: [5] }, { t: 2.5, v: [7] },
+    ]);
+    expect(late.cycles).toBe(3);
+    const jump = loopTrack(tr([{ t: 0, v: [0] }, { t: 1, v: [4] }]), 1, 1.5, {}, () => undefined);
+    if ('reason' in jump) throw new Error(jump.reason);
+    expect(jump.track.keys).toEqual([{ t: 0, v: [0] }, { t: 1, v: [0] }, { t: 1.5, v: [2] }]);
+    expect(jump.seams).toBe('the idle\'s last key (t=1s, [4]) is not what it shows at its start ([0]); the loop keys the start at each seam, so it jumps at t=1.000s');
+    expect(loopTrack(tr([{ t: 0, v: [0] }], { lag: 0.1 }), 1, 2, {}, () => undefined)).toEqual({ reason: 'it carries "lag", which shifts its keys per track or per member; a loop is cut by key time, so it is not carried' });
+    expect('reason' in loopTrack({ slot: 's', property: 'rgba', keys: [{ t: 0.5, v: [1, 1, 1, 1] }] } as RigcTrack, 1, 2, {}, () => undefined)).toBe(true);
+  });
 });
