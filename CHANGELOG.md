@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/rig-c/pose/compare/v0.10.0...v0.11.0) (2026-10-13)
+
+
+### Features
+
+* **retarget:** thin the dense keys to few keys with curves within a stated tolerance (--reduce, --reduce-hip) ([#55](https://github.com/rig-c/pose/issues/55)) ([7628814](https://github.com/rig-c/pose/commit/762881441c6db7739e8a4fee4c81f2b17390fd8f))
+
 ## [0.10.0](https://github.com/rig-c/pose/compare/v0.9.0...v0.10.0) (2026-10-13)
 
 
