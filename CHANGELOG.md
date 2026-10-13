@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/rig-c/pose/compare/v0.11.1...v0.12.0) (2026-10-13)
+
+
+### Features
+
+* **retarget:** plant both feet when the free ankle is within a tolerance of the floor (--stance) ([#64](https://github.com/rig-c/pose/issues/64)) ([b8f359e](https://github.com/rig-c/pose/commit/b8f359ea6e67f17648c04e6c1b331ddff9ad5380))
+
 ## [0.11.1](https://github.com/rig-c/pose/compare/v0.11.0...v0.11.1) (2026-10-13)
 
 
