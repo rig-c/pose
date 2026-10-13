@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/rig-c/pose/compare/v0.8.1...v0.9.0) (2026-10-13)
+
+
+### Features
+
+* **retarget:** legs foreshortened along their axis and feet planted, so the hip carries the pose's bounce (opt-in) ([#50](https://github.com/rig-c/pose/issues/50)) ([9a11c97](https://github.com/rig-c/pose/commit/9a11c9771a0fcc3df0ce50cd0ad77afaca6d539e))
+
 ## [0.8.1](https://github.com/rig-c/pose/compare/v0.8.0...v0.8.1) (2026-10-13)
 
 
