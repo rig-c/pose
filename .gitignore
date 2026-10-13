@@ -1,0 +1,15 @@
+# No entry ends in a slash: a trailing slash matches a directory only, and a
+# symlinked scratch area would then show as untracked in this public repository.
+node_modules
+.DS_Store
+/rig-c-pose-*.tgz
+# Local-only areas: session notes, scratch output, a demo build.
+/scratch
+/render
+# The demo's fetched inputs (the exam painting and its layers) and its build.
+/examples/*/inputs
+/examples/*/build
+# Python caches from the tools/ scripts.
+__pycache__
+# Agent worktrees a harness creates inside the checkout while a squad works.
+/.claude/worktrees

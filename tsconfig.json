@@ -1,0 +1,20 @@
+{
+  // Type-check only. Bun runs the .ts sources directly, so nothing here emits.
+  "compilerOptions": {
+    "target": "ESNext",
+    "lib": ["ESNext"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": ["bun"],
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "strict": true
+  },
+  "include": ["cli.ts", "src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts", "tools/**/*.ts"],
+  "exclude": ["node_modules"]
+}
