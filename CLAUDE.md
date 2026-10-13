@@ -42,8 +42,10 @@ into named failures.
   whose bones are not parent and child — each is refused naming both sides.
 - **Never invent a value.** No defaults guessed from the pose, no "reasonable"
   fallback for a missing field. The one stated substitution is the card's: a
-  missing or low-score joint holds the last good value, and the run lists every
-  frame it held, joint by joint. A joint with no good value yet is a refusal.
+  missing or low-score joint holds the last good value (before its first good
+  frame, that first good value), and the run prints a `HOLD` line for every
+  span it held, joint by joint. A joint the map needs that is good on no frame
+  is a refusal.
 - **The rest pose is rig-c's.** Bone world transforms come from rig-c's own
   poser; this package never re-derives a setup pose, a world matrix or the
   y flip.
@@ -58,6 +60,29 @@ into named failures.
   writer.
 - **Numbers carry their source.** A figure in a comment, a document or a pull
   request is measured and says against what, or it is not written.
+
+## How the pieces fit
+
+| File | What it owns |
+| --- | --- |
+| `src/pose.ts` | `rig-pose-sequence/1` (the reader, the writer) and the COCO-17 conversion |
+| `src/joints.ts` | the vocabulary: body-18, the virtual midpoints, COCO-17 and its mapping |
+| `src/map.ts` | `rig-pose-map/1` and its resolution against the rig's bones |
+| `src/retarget.ts` | the pure retarget: holds, smoothing, angles, the hinge check, keys, hip travel |
+| `src/rigc.ts` | everything that touches rig-c's CLI or the disk: the gate (`rigc build`), the folds (`rigc render --folds`) |
+| `src/verify.ts` | where the gated build actually put each bone, posed by rig-c's own poser |
+| `src/run.ts` | `retarget` end to end, in the order: gate the rig as it is, retarget, gate with the animation in, measure, read folds, write |
+
+- **The key formula and its assumption.** rig-c's `rotate` key adds to the
+  setup rotation, and a child with the `normal` inherit mode turns with its
+  parent, so `key = turn(bone) − turn(nearest mapped bone above)`. That holds
+  for unit-scale, unsheared bones with no constraint pulling them; a rig outside
+  it is not refused by a guess — `verify.ts` measures the landing and
+  `POSE_LANDS` names the bone that missed.
+- **rig-c's gate runs through its launcher** (`rig-c/bin/rigc`), which picks the
+  spine-core round trip where `@esotericsoftware/spine-core` resolves (this
+  repository's development dependency, as in @rig-c/parts) and rigc's own gate
+  where it does not (an install of this package).
 
 ## Conventions
 

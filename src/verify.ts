@@ -35,7 +35,8 @@ export const ORIGIN_TOLERANCE = 0.01;
 
 export function measureLanding(doc: CompiledDocument, animation: string, map: JointMap, r: Retarget): Landing[] {
   const steps = r.times.slice(1).map((t, i) => t - r.times[i]!);
-  const poses = poseRawAnimation(doc, animation, steps, {}, 'setup');
+  // Pose 0 is the animation applied at t = 0 only under reset 'animation' (render's walk); under 'setup' it is the setup pose (rig-c src/core/track.ts).
+  const poses = poseRawAnimation(doc, animation, steps, {}, 'animation');
   const out: Landing[] = [];
   const byName = (bones: RawBone[]) => new Map(bones.map((b) => [b.name, b]));
   const posed = poses.map((p) => byName(p.bones));
