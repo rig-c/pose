@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/rig-c/pose/compare/v0.9.0...v0.10.0) (2026-10-13)
+
+
+### Features
+
+* **retarget:** report the idle tracks the motion drops, carry them looped (--carry-idle), and merge a timed track fragment (--merge) ([#53](https://github.com/rig-c/pose/issues/53)) ([391ac62](https://github.com/rig-c/pose/commit/391ac623c49fa009e006c2e43254e2803fb98c74))
+
 ## [0.9.0](https://github.com/rig-c/pose/compare/v0.8.1...v0.9.0) (2026-10-13)
 
 
