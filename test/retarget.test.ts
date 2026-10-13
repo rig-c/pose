@@ -885,7 +885,7 @@ describe('readers', () => {
     const f = fails(r);
     const p = c.pose;
     expect(f).toContain(`FAIL  POSE_KEYS: ${p} has a key this reader does not know: "camera"; the keys it reads are spec, space, width, height, source, frames`);
-    expect(f).toContain(`FAIL  POSE_SPACE: ${p} "space" is {"units":"picture-px","origin":"top-left","y":"up"}; it must be exactly {"units":"picture-px","origin":"top-left","y":"down"}`);
+    expect(f).toContain(`FAIL  POSE_SPACE: ${p} "space" is {"units":"picture-px","origin":"top-left","y":"up"}; for "rig-pose-sequence/1" it must be exactly {"units":"picture-px","origin":"top-left","y":"down"}`);
     expect(f).toContain(`FAIL  POSE_TIME: ${p} frames[5] "t" is 0.5s, not after frame 4's 0.5s; times must strictly increase`);
     expect(f.some((l) => l.startsWith(`FAIL  POSE_JOINT_NAME: ${p} frames[2] people[0] names joint "r_toe", which body-18 does not have; the joints are nose, neck,`))).toBe(true);
     expect(f).toContain(`FAIL  POSE_JOINT_AT: ${p} frames[3] people[0] joint "nose" is "observed" and has no "at"; an observed joint has a position`);
@@ -1751,6 +1751,18 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
     expect(fails(rb).some((l) => l.includes('MAP_ALT_FRAMES'))).toBe(true);
   }, SLOW);
 
+  test('FRAMES: a window that does not switch says why, frame by frame (#43)', () => {
+    const on = (i: number) => i >= 6 && i <= 9;
+    const c = setup({ rig: ALT_RIG, map: altMap(up({ frames: [[3, 12]] })), pose: poseDoc(armed(on)) });
+    const r = retarget(c);
+    expect(r.status).toBe(0);
+    const l = linesOf(r, 'FRAMES');
+    expect(l).toHaveLength(1);
+    expect(l[0]).toContain('set "up" window 3–12: frames 3–5 outside the tolerance');
+    expect(l[0]).toContain('frames 10–12 outside the tolerance');
+    expect(l[0]).toContain('a window restricts a set, it never forces one');
+  }, SLOW);
+
   test('offsets: a stepped translate on the bone, the offset over the span and 0 outside, read back by rig-c\'s poser', () => {
     const on = (i: number) => i >= 5 && i <= 10;
     const c = setup({ rig: ALT_RIG, map: altMap(up({ offsets: { sleeve_r1: [3, -2] } })), pose: poseDoc(armed(on)) });
@@ -2165,4 +2177,45 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
       expect(reportOf(report).uncovered).toEqual([{ slot: 'arm_mesh', attachment: 'arm_mesh', chains: ['arm_r'], times: [1, 1.125] }]);
     }, SLOW);
   });
+});
+
+// --- #43: what two independent solvers ran into ------------------------------------
+
+describe('#43: the older pose name, --images, the rigc version, and why a window did not switch', () => {
+  test('a rig-c-pose-frames/0 file (painting-px, an fps key) is read as it is; a wrong space for it is refused by name', () => {
+    const doc = poseDoc(BASE) as Record<string, unknown>;
+    const older = { ...doc, spec: 'rig-c-pose-frames/0', space: { units: 'painting-px', origin: 'top-left', y: 'down' }, fps: 8 };
+    const c = setup({ pose: older });
+    const r = retarget(c);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(misses(c.build, BASE)).toEqual([]);
+    const bad = setup({ pose: { ...older, space: doc.space } });
+    const rb = retarget(bad);
+    expect(rb.status).toBe(1);
+    expect(fails(rb).some((l) => l.includes('POSE_SPACE') && l.includes('rig-c-pose-frames/0'))).toBe(true);
+  }, SLOW);
+
+  test('--images reaches a rig.json copied away from its images; without it the gate is red by name', () => {
+    const c = setup();
+    const copy = join(c.dir, 'copied');
+    mkdirSync(copy, { recursive: true });
+    cpSync(join(c.rig, 'rig.json'), join(copy, 'rig.json'));
+    const without = cli(['retarget', '--rig', copy, '--map', c.map, '--pose', c.pose, '--out', c.out]);
+    expect(without.status).toBe(1);
+    expect(fails(without).some((l) => l.includes('RIG_GATE_BASE'))).toBe(true);
+    const withImages = cli(['retarget', '--rig', copy, '--images', join(c.rig, 'images'), '--map', c.map, '--pose', c.pose, '--out', c.out]);
+    expect(withImages.stderr).toBe('');
+    expect(withImages.status).toBe(0);
+  }, SLOW);
+
+  test('the run and the report name the rigc that gated it', () => {
+    const c = setup();
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--report', report]);
+    expect(r.status).toBe(0);
+    const v = (JSON.parse(readFileSync(join(ROOT, 'node_modules', 'rig-c', 'package.json'), 'utf8')) as { version: string }).version;
+    expect(linesOf(r, 'RIGC')[0]).toContain(`rig-c ${v}`);
+    expect((JSON.parse(readFileSync(report, 'utf8')) as { rigc: { version: string } }).rigc.version).toBe(v);
+  }, SLOW);
 });

@@ -50,6 +50,16 @@ export interface PoseSequence {
 
 const TOP_KEYS = ['spec', 'space', 'width', 'height', 'source', 'frames'];
 
+/**
+ * The older name the same file went by: `rig-c-pose-frames/0`, written by the
+ * extraction jobs this package's own demos were made from. It is this format
+ * under another spec string, with `space.units` "painting-px" and an `fps` key
+ * (the time is in each frame's `t`, which wins). It is read as it is; nothing
+ * else about it differs.
+ */
+export const POSE_SPEC_FRAMES0 = 'rig-c-pose-frames/0';
+const FRAMES0_SPACE = { units: 'painting-px', origin: 'top-left', y: 'down' } as const;
+
 /** Read and check a pose sequence; every problem is collected and thrown once. */
 export function readPoseSequence(text: string, where: string): PoseSequence {
   const doc = parseJson(text, where, 'POSE_JSON');
@@ -59,12 +69,15 @@ export function readPoseSequence(text: string, where: string): PoseSequence {
     p.throwIfAny();
     throw new Error('unreachable');
   }
-  refuseUnknownKeys(p, 'POSE_KEYS', where, doc, TOP_KEYS);
+  const frames0 = doc.spec === POSE_SPEC_FRAMES0;
+  refuseUnknownKeys(p, 'POSE_KEYS', where, doc, frames0 ? [...TOP_KEYS, 'fps'] : TOP_KEYS);
   for (const k of TOP_KEYS) if (!(k in doc)) p.add('POSE_KEYS', `${where} has no "${k}"; a ${POSE_SPEC} document carries ${TOP_KEYS.join(', ')}`);
-  if ('spec' in doc && doc.spec !== POSE_SPEC) p.add('POSE_SPEC', `${where} "spec" is ${typeName(doc.spec)}; this reader reads "${POSE_SPEC}"`);
-  if ('space' in doc && JSON.stringify(doc.space) !== JSON.stringify(POSE_SPACE)) {
-    p.add('POSE_SPACE', `${where} "space" is ${JSON.stringify(doc.space)}; it must be exactly ${JSON.stringify(POSE_SPACE)}`);
+  if ('spec' in doc && doc.spec !== POSE_SPEC && !frames0) p.add('POSE_SPEC', `${where} "spec" is ${typeName(doc.spec)}; this reader reads "${POSE_SPEC}" (and the older name "${POSE_SPEC_FRAMES0}")`);
+  const space = frames0 ? FRAMES0_SPACE : POSE_SPACE;
+  if ('space' in doc && JSON.stringify(doc.space) !== JSON.stringify(space)) {
+    p.add('POSE_SPACE', `${where} "space" is ${JSON.stringify(doc.space)}; for "${frames0 ? POSE_SPEC_FRAMES0 : POSE_SPEC}" it must be exactly ${JSON.stringify(space)}`);
   }
+  if (frames0 && 'fps' in doc && !(typeof doc.fps === 'number' && Number.isFinite(doc.fps) && doc.fps > 0)) p.add('POSE_FPS', `${where} "fps" is ${typeName(doc.fps)}; it must be a positive number (each frame's "t" is the time read)`);
   for (const k of ['width', 'height'] as const) {
     if (k in doc && !(Number.isInteger(doc[k]) && (doc[k] as number) > 0)) p.add('POSE_SIZE', `${where} "${k}" is ${typeName(doc[k])}; it must be a positive integer (picture pixels)`);
   }

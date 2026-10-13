@@ -7,11 +7,11 @@
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { readMap, resolveMap } from './map.ts';
+import { readMap, resolveMap, type JointMap } from './map.ts';
 import { convertCoco17, personTrack, readPoseSequence } from './pose.ts';
 import { lineOf, Problems, Refusal, type Problem } from './problems.ts';
 import { bendLine, endOnLine, flipLine, holdLine, rangeLine, retarget, shortLine, turnLine, type RetargetOptions } from './retarget.ts';
-import { attachmentBones, baseMotionOf, buildInto, folds, gate, readBuild, resolveRig, restOf, slotsOf } from './rigc.ts';
+import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, readBuild, resolveRig, restOf, slotsOf } from './rigc.ts';
 import { artRangeLine, chainsMoving, switchLine, uncoveredFolds } from './switch.ts';
 import { landed, measureLanding, measurePosture, poseFrames, postureLines, ANGLE_TOLERANCE, ORIGIN_TOLERANCE } from './verify.ts';
 
@@ -24,6 +24,8 @@ export interface RetargetArgs extends RetargetOptions {
   coco: boolean;
   person?: string;
   baseMotion?: string;
+  /** Passed to rigc build as --images: the directory the rig spec's images resolve in, when rig.json's own `images` does not point there (a copied rig). */
+  images?: string;
   profile: 'spine' | 'spine-html';
   /** Keep the gated build here. */
   build?: string;
@@ -72,17 +74,19 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
   const scratch = mkdtempSync(join(tmpdir(), 'rig-pose-'));
   try {
     // The rig as it stands, through the gate, so the rest pose is rig-c's reading of a green build.
-    const g0 = gate(input.rig, base, join(scratch, 'base'), a.profile);
+    const g0 = gate(input.rig, base, join(scratch, 'base'), a.profile, a.images);
     if (!g0.green) {
       refuse([{ code: 'RIG_GATE_BASE', text: `${input.rig} with ${input.motion ?? 'no motion spec'} is red under rigc build --profile ${a.profile} before any animation is added (exit ${g0.run.status})` }, ...g0.fails.map((f) => ({ code: 'RIGC', text: f }))]);
     }
     const doc0 = readBuild(g0.build);
+    const rigc = rigcVersion();
     const rest = restOf(doc0);
     const slots = slotsOf(doc0);
     resolveMap(map, rest, a.map, slots);
 
     const r = retarget(rest, map, frames, times, a, slots);
     say(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, smooth ${a.smooth}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)`);
+    say(`  RIGC   rig-c ${rigc.version} (${rigc.entry}) gates and poses this run`);
     if (r.scale !== null) say(`  SCALE  ${r.scale.factor.toFixed(5)} rig units per picture px (rig ${r.scale.rig.toFixed(2)} / pose median ${r.scale.pose.toFixed(2)})`);
     for (const h of r.holds) say(`  HOLD   ${holdLine(h, r.times)}`);
     if (a.short !== 'off') {
@@ -96,12 +100,13 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     if (map.alternates.length > 0) {
       if (r.switches.length === 0) say(`  SWITCH none — no set within ${a.switchTolerance}° of the pose for ${a.switchMin}s`);
       for (const s of r.switches) say(`  SWITCH ${switchLine(s, r.times)}`);
+      for (const l of windowLines(map, r.switches, r.distances, r.times, a.switchTolerance)) say(`  FRAMES ${l}`);
     }
     for (const e of r.range) say(`  RANGE  ${rangeLine(e, r.times)}`);
     for (const e of r.artRange) say(`  ART-RANGE ${artRangeLine(e, r.times)}`);
 
     const motion = { ...base, animations: { ...animations, [a.name]: r.animation } };
-    const g1 = gate(input.rig, motion, join(scratch, 'with'), a.profile);
+    const g1 = gate(input.rig, motion, join(scratch, 'with'), a.profile, a.images);
     if (!g1.green) {
       refuse([{ code: 'RIG_GATE', text: `rigc build --profile ${a.profile} is red with "${a.name}" in (exit ${g1.run.status}); nothing written` }, ...g1.fails.map((f) => ({ code: 'RIGC', text: f }))]);
     }
@@ -139,7 +144,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     if (a.build !== undefined) {
       // Built again where it will live, not copied: rigc's page paths are relative to the build (#18).
       rmSync(a.build, { recursive: true, force: true });
-      const kept = buildInto(input.rig, join(scratch, 'with', 'motion.json'), resolve(a.build), a.profile);
+      const kept = buildInto(input.rig, join(scratch, 'with', 'motion.json'), resolve(a.build), a.profile, undefined, a.images);
       if (!kept.green) refuse([{ code: 'RIG_GATE', text: `rigc build into --build ${a.build} is red where the same build was green in scratch (exit ${kept.run.status}); nothing written` }, ...kept.fails.map((x) => ({ code: 'RIGC', text: x }))]);
     }
     writeFileSync(a.out, `${JSON.stringify(motion, null, 2)}\n`);
@@ -150,6 +155,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     if (a.report !== undefined) {
       writeFileSync(a.report, `${JSON.stringify({
         spec: 'rig-pose-report/1',
+        rigc,
         rig: input.name,
         animation: a.name,
         frames: seq.frames.length,
@@ -195,3 +201,37 @@ function spans(ts: number[], step: number): string {
 }
 
 export { lineOf };
+
+/**
+ * For each set with `frames` windows: every stretch of a window the set did not
+ * show on, and why — the pose there was past the tolerance (with the largest
+ * distance), or within it but the run was dropped (shorter than --switch-min, or
+ * taken by another set's span). A window never forces a set; this says so.
+ */
+function windowLines(map: JointMap, switches: ReadonlyArray<{ set: string; frames: [number, number] }>, distances: ReadonlyMap<string, readonly number[]>, times: readonly number[], tolerance: number): string[] {
+  const out: string[] = [];
+  for (const set of map.alternates) {
+    if (set.frames === null) continue;
+    const shown = new Set<number>();
+    for (const sw of switches) if (sw.set === set.name) for (let i = sw.frames[0]; i <= sw.frames[1]; i++) shown.add(i);
+    const d = distances.get(set.name)!;
+    for (const [first, last] of set.frames) {
+      const lastIn = Math.min(last, times.length - 1);
+      const parts: string[] = [];
+      for (let i = first; i <= lastIn;) {
+        if (shown.has(i)) { i++; continue; }
+        let j = i;
+        while (j + 1 <= lastIn && !shown.has(j + 1)) j++;
+        const ds = d.slice(i, j + 1);
+        const worst = Math.max(...ds);
+        const over = ds.filter((x) => x > tolerance).length;
+        const span = i === j ? `frame ${i}` : `frames ${i}–${j}`;
+        parts.push(over === ds.length ? `${span} outside the tolerance (up to ${worst.toFixed(1)}° > ${tolerance}°)` : over === 0 ? `${span} within the tolerance but not shown (a run shorter than --switch-min, or another set's span)` : `${span} partly outside the tolerance (up to ${worst.toFixed(1)}°)`);
+        i = j + 1;
+      }
+      const head = `set "${set.name}" window ${first}–${last}`;
+      out.push(parts.length === 0 ? `${head}: shown on every frame` : `${head}: ${parts.join('; ')} — a window restricts a set, it never forces one`);
+    }
+  }
+  return out;
+}
