@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/rig-c/pose/compare/v0.11.0...v0.11.1) (2026-10-13)
+
+
+### Bug Fixes
+
+* **readme:** the five places a first-time agent trips ([#58](https://github.com/rig-c/pose/issues/58)) ([25d89fe](https://github.com/rig-c/pose/commit/25d89fee2a458227bb346f8ccc0abb7c8db23a6c))
+
 ## [0.11.0](https://github.com/rig-c/pose/compare/v0.10.0...v0.11.0) (2026-10-13)
 
 
