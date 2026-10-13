@@ -90,6 +90,8 @@ export interface ArtRange {
   turn: number;
   /** The bone's range, degrees. */
   limits: [number, number];
+  /** Whether the bone was held at the limit (the set's `turn`) or followed the pose (its chain's `range` only). */
+  clamped: boolean;
 }
 
 export interface Uncovered {
@@ -321,9 +323,11 @@ export const overflow = (v: number, [min, max]: readonly [number, number]): numb
 
 /**
  * The art turn of each switch, in place (`artTurn`), and the art-range demand:
- * inside a span, per bone with both a `drawn` angle in the set and a `range` on
- * its chain, every frame whose signed art turn wrap(target − drawn) falls
- * outside that range, in runs merged across a gap of `gap` frames.
+ * inside a span, per bone with a `drawn` angle in the set and limits — the
+ * set's `turn` for it, else its chain's `range` — every frame whose signed art
+ * turn wrap(target − drawn) falls outside them, in runs merged across a gap of
+ * `gap` frames. Measured on the targets as the pose asks them, before
+ * `clampArt` holds the set's `turn` limits.
  */
 export function measureArt(switches: Switch[], map: JointMap, targets: ReadonlyMap<string, readonly number[]>, endOf: (i: number) => number, times: readonly number[], gap: number): ArtRange[] {
   const out: ArtRange[] = [];
@@ -336,7 +340,7 @@ export function measureArt(switches: Switch[], map: JointMap, targets: ReadonlyM
       const abs = turns.map(Math.abs);
       sw.artTurn[bone] = { max: r3(Math.max(...abs)), median: r3(median(abs)) };
       const chain = map.chains.find((c) => c.bones.includes(bone))!;
-      const limits = chain.range[bone];
+      const limits = set.turn[bone] ?? chain.range[bone];
       if (limits === undefined) continue;
       const flag = turns.map((t) => overflow(t, limits) > RANGE_SLACK);
       for (const [a, b] of runsOf(flag, gap)) {
@@ -344,7 +348,7 @@ export function measureArt(switches: Switch[], map: JointMap, targets: ReadonlyM
         for (let k = a; k <= b; k++) if (overflow(turns[k]!, limits) > overflow(turns[worst]!, limits)) worst = k;
         const first = sw.frames[0] + a;
         const last = sw.frames[0] + b;
-        out.push({ set: sw.set, chain: chain.name, bone, frames: [first, last], seconds: r6(endOf(last) - times[first]!), maxOverflow: r3(overflow(turns[worst]!, limits)), turn: r3(turns[worst]!), limits });
+        out.push({ set: sw.set, chain: chain.name, bone, frames: [first, last], seconds: r6(endOf(last) - times[first]!), maxOverflow: r3(overflow(turns[worst]!, limits)), turn: r3(turns[worst]!), limits, clamped: bone in set.turn });
       }
     }
   }
@@ -426,5 +430,26 @@ export function switchLine(s: Switch, times: readonly number[]): string {
 }
 
 export function artRangeLine(e: ArtRange, times: readonly number[]): string {
-  return `set "${e.set}" chain "${e.chain}" bone "${e.bone}" turned ${sg(e.turn)} from drawn (range [${e.limits[0]}, ${e.limits[1]}]) ${spanOf(e.frames, times)}: ${e.seconds.toFixed(3)}s, up to ${deg(e.maxOverflow)} past it — demand for another drawing of the set`;
+  return `set "${e.set}" chain "${e.chain}" bone "${e.bone}" turned ${sg(e.turn)} from drawn (range [${e.limits[0]}, ${e.limits[1]}]) ${spanOf(e.frames, times)}: ${e.seconds.toFixed(3)}s, up to ${deg(e.maxOverflow)} past it; ${e.clamped ? 'held at the limit' : 'the bone follows the pose'} — demand for another drawing of the set`;
+}
+
+/**
+ * Inside each span, a bone with a `turn` in the set is held within it: its
+ * target world angle is drawn + clamp(wrap(target − drawn), min, max). Each
+ * bone is clamped on its own world angle, and keys are differences of world
+ * angles, so a forearm under a clamped upper arm keeps its own target.
+ */
+export function clampArt(switches: readonly Switch[], map: JointMap, targets: Map<string, number[]>): void {
+  for (const sw of switches) {
+    const set = map.alternates.find((a) => a.name === sw.set)!;
+    for (const [bone, limits] of Object.entries(set.turn)) {
+      const drawn = set.drawn[bone]!;
+      const target = targets.get(bone)!;
+      for (let i = sw.frames[0]; i <= sw.frames[1]; i++) {
+        const t = wrap(target[i]! - drawn);
+        const c = Math.min(Math.max(t, limits[0]), limits[1]);
+        if (Math.abs(c - t) > RANGE_SLACK) target[i] = wrap(drawn + c);
+      }
+    }
+  }
 }

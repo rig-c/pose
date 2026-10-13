@@ -1857,14 +1857,41 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
       expect(r.stderr).toBe('');
       expect(r.status).toBe(0);
       expect(linesOf(r, 'ART-RANGE')).toEqual([
-        'ART-RANGE set "lift" chain "arm_r" bone "sleeve_r0" turned +30.0° from drawn (range [-10, 10]) frames 4–7 (t=0.500–0.875s): 0.500s, up to 20.0° past it — demand for another drawing of the set',
+        'ART-RANGE set "lift" chain "arm_r" bone "sleeve_r0" turned +30.0° from drawn (range [-10, 10]) frames 4–7 (t=0.500–0.875s): 0.500s, up to 20.0° past it; the bone follows the pose — demand for another drawing of the set',
       ]);
       // Outside the span the key is 10°, at the limit: nothing clamped there either.
       expect(linesOf(r, 'RANGE')).toEqual([]);
       expect(misses(c.build, RANGED)).toEqual([]);
       const rep = reportOf(report);
-      expect(rep.artRange).toEqual([{ set: 'lift', chain: 'arm_r', bone: 'sleeve_r0', frames: [4, 7], seconds: 0.5, maxOverflow: 20, turn: 30, limits: [-10, 10] }]);
+      expect(rep.artRange).toEqual([{ set: 'lift', chain: 'arm_r', bone: 'sleeve_r0', frames: [4, 7], seconds: 0.5, maxOverflow: 20, turn: 30, limits: [-10, 10], clamped: false }]);
       expect(rep.switches[0]!.artTurn).toEqual({ sleeve_r0: { max: 30, median: 30 } });
+    }, SLOW);
+
+    test('the set\'s turn holds the art: drawn −80°, turn ±10, reference 30° past drawn — clamped at drawn +10°, listed, and the forearm keeps its own angle', () => {
+      const c = setup({ rig: ALT_RIG, map: rangedMap([-10, 10], lift({ drawn: { sleeve_r0: -80 }, turn: { sleeve_r0: [-10, 10] } })), pose: poseDoc(RANGED) });
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--report', report]);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      expect(linesOf(r, 'ART-RANGE')).toEqual([
+        'ART-RANGE set "lift" chain "arm_r" bone "sleeve_r0" turned +30.0° from drawn (range [-10, 10]) frames 4–7 (t=0.500–0.875s): 0.500s, up to 20.0° past it; held at the limit — demand for another drawing of the set',
+      ]);
+      expect(reportOf(report).artRange[0]!.clamped).toBe(true);
+      const poses = poseRawAnimation(loadBuild(c.build), 'dance', Array.from({ length: BASE.n - 1 }, () => BASE.dt));
+      for (let i = 4; i <= 7; i++) {
+        const b = byName(poses[i]!.bones);
+        expect(Math.abs(wrap(worldAngle(b, 'sleeve_r0') - -70))).toBeLessThanOrEqual(ANGLE_TOL);
+        expect(Math.abs(wrap(worldAngle(b, 'sleeve_r1') - angleOf(RANGED, 'sleeve_r1', i)))).toBeLessThanOrEqual(ANGLE_TOL);
+      }
+      // Every frame and half-frame: the pose's own angles, the upper arm held at drawn +10° on the span.
+      expect(misses(c.build, RANGED, (b, i) => (b === 'sleeve_r0' && i >= 4 && i <= 7 ? -70 : angleOf(RANGED, b, i)))).toEqual([]);
+    }, SLOW);
+
+    test('MAP_ALT_TURN: a turn on a bone the set has no drawn angle for is refused by name', () => {
+      const c = setup({ rig: ALT_RIG, map: rangedMap([-10, 10], lift({ drawn: { sleeve_r0: -80 }, turn: { sleeve_r1: [-10, 10] } })), pose: poseDoc(RANGED) });
+      const r = retarget(c);
+      expect(r.status).toBe(1);
+      expect(fails(r).some((l) => l.includes('MAP_ALT_TURN') && l.includes('"sleeve_r1"'))).toBe(true);
     }, SLOW);
   });
 
