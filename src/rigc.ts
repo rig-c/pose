@@ -96,11 +96,11 @@ export interface Gate {
 }
 
 /** Build `rig` with `motion` under rigc's gate into `dir/build`; nothing is read from a red build. */
-export function gate(rig: string, motion: Record<string, unknown>, dir: string, profile: string): Gate {
+export function gate(rig: string, motion: Record<string, unknown>, dir: string, profile: string, images?: string): Gate {
   mkdirSync(dir, { recursive: true });
   const motionPath = join(dir, 'motion.json');
   writeFileSync(motionPath, `${JSON.stringify(motion, null, 2)}\n`);
-  return buildInto(rig, motionPath, join(dir, 'build'), profile, join(dir, 'build-report.json'));
+  return buildInto(rig, motionPath, join(dir, 'build'), profile, join(dir, 'build-report.json'), images);
 }
 
 /**
@@ -112,8 +112,8 @@ export function gate(rig: string, motion: Record<string, unknown>, dir: string, 
  * never copied out, which would carry a path climbing from the scratch
  * directory to the filesystem root. --copy-images puts the pages beside it.
  */
-export function buildInto(rig: string, motionPath: string, out: string, profile: string, report?: string): Gate {
-  const run = runRigc(['build', '--rig', rig, '--motion', motionPath, '--out', out, '--profile', profile, '--copy-images', ...(report === undefined ? [] : ['--report', report])]);
+export function buildInto(rig: string, motionPath: string, out: string, profile: string, report?: string, images?: string): Gate {
+  const run = runRigc(['build', '--rig', rig, '--motion', motionPath, '--out', out, '--profile', profile, '--copy-images', ...(images === undefined ? [] : ['--images', images]), ...(report === undefined ? [] : ['--report', report])]);
   const lines = run.out.split('\n');
   return {
     run,
@@ -195,4 +195,13 @@ export function folds(build: string, animation: string, dir: string, fps: number
     meshes: doc.meshes.filter((m) => m.frames.length > 0).map((m) => ({ slot: m.slot, attachment: m.attachment, times: m.frames.map((f) => f.time) })),
     frames: setDir,
   };
+}
+
+/** rig-c's version and the entry its launcher picked (`rigc --version`), so a run names the compiler that gated it. */
+export function rigcVersion(): { version: string; entry: string } {
+  const r = runRigc(['--version']);
+  const lines = r.out.split('\n').map((l) => l.trim()).filter((l) => l !== '');
+  const version = lines.find((l) => /^\d+\.\d+\.\d+/.test(l)) ?? lines[0] ?? 'unknown';
+  const entry = lines.find((l) => l.startsWith('entry:'))?.slice('entry:'.length).trim() ?? 'not stated';
+  return { version, entry };
 }

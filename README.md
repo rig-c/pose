@@ -38,6 +38,7 @@ Nothing is written until every check passes:
 
 and what the run cannot decide for you it lists:
 
+- `RIGC` — the rig-c version and entry that gated and posed the run (also `rigc` in the report): a later rig-c can change the bytes.
 - `HOLD` — a joint missing, or scored under `--min-score`, holds its last good value; one line per span, with the frames and the reason.
 - `SHORT` — a segment shorter in the picture than `--short` of its median length (with `--short <fraction>`; off by default) has its angle there interpolated, not read; one line per span, with the chain, the segment, the frames and the lowest fraction. Below.
 - `END-ON` — a `SHORT` run lasting at least 0.15 s: the limb points at the camera, a pose the rig cannot draw.
@@ -109,6 +110,8 @@ Exit codes: `0` written, `1` refused (every reason printed, nothing written), `2
 
 **From COCO-17** — the layout most pose models and datasets use — `rig-pose convert --coco in.json --out pose.json`, or `retarget --coco`. The input is `{ "format": "coco17-sequence/1", "width", "height", "source", "frames": [{ "t", "keypoints" }] }`, keypoints in COCO's order as 17 `[x, y, score]` or 51 numbers, or `null` for a frame with nobody. The mapping: COCO's `left_*`/`right_*` → body-18's `l_*`/`r_*` (both are the subject's sides), a score of 0 → `missing`, and body-18's `neck`, which COCO lacks, is the shoulders' midpoint scored the lower of the two (OpenPose's definition).
 
+
+**The older name.** `rig-c-pose-frames/0`, written by the extraction jobs this package's demos were made from, is the same file under another spec string. It has `space.units` "painting-px" and an `fps` key; each frame's `t` is the time read. It is read as it is.
 ## The map: `rig-pose-map/1`
 
 Which bones carry which joints. You write it for your rig:
@@ -178,7 +181,7 @@ Either way the `SWITCH` line ends with `moved on …, off …`: each boundary's 
 **TURN.** The cutoff was measured on the three lines across the body before it was fixed ([#6](https://github.com/rig-c/pose/issues/6)): on the 13 s front-facing dance their picture length never drops under 0.81 of its median and none reverses; on a second sequence the hip line falls to 0.17 at frames 465–491 (side-on) and the eye line to 0.22 at 26–58 (head in profile), and 3 frames reverse. 0.5 lies between. A line is reversed when it points more than 90° from the subject's right joint to the left (front-facing, it points at 0°). The lines are read after holds and smoothing, held and smoothed as the map's points are even where the map does not use them; a line whose points are good on no frame is named as not measured.
 
 
-**A stopgap window: `frames`.** A set may state `"frames": [[first, last], …]`: it shows only inside those windows, and on them it is chosen over any set within tolerance that has no window. It is for two sets whose key skeletons the angles cannot tell apart. Measured on HQ's dancer, the hands clasped behind the back and the hands low in front differ by only 2–21°, and the wrist and hand-point scores do not separate them either; the cue that might is #33's depth state. It is recorded in the map as a stopgap, not a selection rule.
+**A stopgap window: `frames`.** A set may state `"frames": [[first, last], …]`: it shows only inside those windows, and on them it is chosen over any set within tolerance that has no window. It is for two sets whose key skeletons the angles cannot tell apart. Measured on HQ's dancer, the hands clasped behind the back and the hands low in front differ by only 2–21°, and the wrist and hand-point scores do not separate them either; the cue that might is #33's depth state. It is recorded in the map as a stopgap, not a selection rule. A window **restricts** a set; it never forces one. Where the set does not show inside its window, the run says why in a `FRAMES` line: the stretch, and whether the pose there was past the tolerance (with the largest distance), or within it but the run was dropped.
 
 **How far a set's art may turn: `turn`.** A drawing reads right only near the angle it was painted at. A set may state, per bone with a `drawn` angle, how far its art may turn from it, `"turn": { "sleeve_r0": [-20, 20] }`. While the set shows, the bone is held within it: its target becomes drawn + clamp(wrap(target − drawn), min, max), each bone on its own world angle, so a forearm under a held upper arm keeps its own target. The landing check measures against the held angle. The overflow the pose asked for is listed as `ART-RANGE`. A `turn` on a bone the set has no `drawn` angle for is refused (`MAP_ALT_TURN`).
 ## Compare: the rig's render against the video

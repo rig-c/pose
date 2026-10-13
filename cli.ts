@@ -33,6 +33,8 @@ retarget
   --coco                read --pose as coco17-sequence/1 and convert it first
   --person <id>         the person to follow when the sequence holds more than one
   --base-motion <path>  the rig's motion spec, when it is not motion.json beside rig.json
+  --images <dir>        passed to rigc build: where the rig spec's images are, when its own "images" path
+                        does not reach them (a rig.json copied away from its images)
   --min-score <s>       a joint scored below s is not good on that frame and holds its last good
                         value (default: 0.3); a joint with no score is good
   --smooth <n>          Savitzky–Golay over n frames of joint positions: a centred least-squares cubic,
@@ -154,7 +156,7 @@ function shortOf(f: Map<string, string>): number | 'off' {
 }
 
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report'], ['coco']);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report'], ['coco']);
   const bends = f.get('bends') ?? 'refuse';
   if (bends !== 'refuse' && bends !== 'clamp') throw new Usage(`--bends is "${bends}"; it must be refuse or clamp`);
   const switchAt = f.get('switch-at') ?? 'first';
@@ -172,6 +174,7 @@ function retargetArgs(argv: string[]): RetargetArgs {
     coco: f.has('coco'),
     person: f.get('person'),
     baseMotion: f.get('base-motion'),
+    images: f.get('images'),
     minScore: num(f, 'min-score', 0.3, (n) => n >= 0, 'a number ≥ 0'),
     smooth: smoothOf(f),
     flip: flipOf(f),
