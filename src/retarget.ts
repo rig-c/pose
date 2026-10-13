@@ -12,6 +12,17 @@
  * Keys are unwrapped across frames, because the runtime interpolates an angle as
  * a plain number (350 → 10 passes through 180).
  *
+ * A chain with `reach` (a trunk from mid_hip) is the one exception to "the
+ * bone points along the pose's segment": its bone is aimed from where its
+ * origin is posed — the translated bone moved by the hip's travel, and every
+ * bone between turned by the nearest mapped bone above it — at the point the
+ * pose puts the segment's end, relative to the translated joint and scaled. So
+ * the hip and its travel are computed before any bone's target.
+ *
+ * Smoothing is Savitzky–Golay: a centred least-squares cubic over the window,
+ * evaluated at the frame, on each joint's positions after its holds. Centred,
+ * it moves no motion in time; a cubic keeps a peak a moving average flattens.
+ *
  * What this cannot know is held to account afterwards: `verify.ts` poses the
  * gated build with rig-c's poser and measures where each bone landed.
  */
@@ -28,7 +39,7 @@ const DEG = 180 / Math.PI;
 export interface RetargetOptions {
   /** A joint with a score below this is not good on that frame (a joint with no score is). */
   minScore: number;
-  /** Centered moving-average window over joint positions, in frames; 1 = none. Odd. */
+  /** Savitzky–Golay window over joint positions, in frames: 1 = none, else odd and ≥ 5. */
   smooth: number;
   /** What a hinge bent the wrong way does: refuse the run, or straighten that hinge on that frame. */
   bends: 'refuse' | 'clamp';
@@ -89,7 +100,7 @@ export interface Retarget {
 type Pt = [number, number];
 
 /** The value of a point on one frame, or why it is not good. */
-function pointOn(joints: Partial<Record<Body18, Joint>>, name: string, minScore: number): Pt | string {
+export function pointOn(joints: Partial<Record<Body18, Joint>>, name: string, minScore: number): Pt | string {
   if (isBody18(name)) {
     const j = joints[name];
     if (j === undefined || j.state === 'missing') return 'missing';
@@ -129,20 +140,62 @@ function median(xs: number[]): number {
   return s.length % 2 === 1 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
 }
 
-function smoothSeries(xs: Pt[], window: number): Pt[] {
-  if (window <= 1) return xs;
+/**
+ * Savitzky–Golay, centred: at each frame, the least-squares polynomial of
+ * `order` over the frames of the window that exist (clipped at the ends), read
+ * at that frame. With fewer points than order + 1 the order drops to fit them
+ * exactly, so a window clipped to 4 frames or fewer returns the input there.
+ * A polynomial of degree ≤ `order` passes through unchanged.
+ */
+export function savitzkyGolay(xs: readonly Pt[], window: number, order = 3): Pt[] {
+  if (window <= 1) return xs.map((x) => [x[0], x[1]]);
   const h = window >> 1;
+  const n = xs.length;
+  const cache = new Map<string, number[]>();
   return xs.map((_, i) => {
-    let sx = 0;
-    let sy = 0;
-    let n = 0;
-    for (let k = Math.max(0, i - h); k <= Math.min(xs.length - 1, i + h); k++) {
-      sx += xs[k]![0];
-      sy += xs[k]![1];
-      n++;
+    const lo = Math.max(0, i - h) - i;
+    const hi = Math.min(n - 1, i + h) - i;
+    const key = `${lo},${hi}`;
+    let w = cache.get(key);
+    if (w === undefined) {
+      w = sgWeights(lo, hi, Math.min(order, hi - lo));
+      cache.set(key, w);
     }
-    return [sx / n, sy / n];
+    let x = 0;
+    let y = 0;
+    for (let u = lo; u <= hi; u++) {
+      const c = w[u - lo]!;
+      x += c * xs[i + u]![0];
+      y += c * xs[i + u]![1];
+    }
+    return [x, y];
   });
+}
+
+/** The weights that read a least-squares polynomial of degree q over u = lo..hi at u = 0. */
+function sgWeights(lo: number, hi: number, q: number): number[] {
+  const m = q + 1;
+  // Normal equations: A[j][l] = Σ u^(j+l); solve A z = e0, then w(u) = Σ z_j u^j.
+  const A = Array.from({ length: m }, (_, j) => Array.from({ length: m + 1 }, (_, l) => {
+    if (l === m) return j === 0 ? 1 : 0;
+    let s = 0;
+    for (let u = lo; u <= hi; u++) s += u ** (j + l);
+    return s;
+  }));
+  for (let c = 0; c < m; c++) {
+    let piv = c;
+    for (let r = c + 1; r < m; r++) if (Math.abs(A[r]![c]!) > Math.abs(A[piv]![c]!)) piv = r;
+    [A[c], A[piv]] = [A[piv]!, A[c]!];
+    for (let r = 0; r < m; r++) {
+      if (r === c) continue;
+      const f = A[r]![c]! / A[c]![c]!;
+      for (let l = c; l <= m; l++) A[r]![l]! -= f * A[c]![l]!;
+    }
+  }
+  const z = A.map((row, j) => row[m]! / row[j]!);
+  const w: number[] = [];
+  for (let u = lo; u <= hi; u++) w.push(z.reduce((s, zj, j) => s + zj * u ** j, 0));
+  return w;
 }
 
 const r3 = (v: number) => {
@@ -200,67 +253,18 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         holds.push(span);
       }
     }
-    series.set(name, smoothSeries(out, opts.smooth));
+    series.set(name, savitzkyGolay(out, opts.smooth));
     good.set(name, raw.map((v) => typeof v !== 'string'));
   }
   p.throwIfAny();
 
-  // Each mapped bone's target world angle per frame.
-  const targets = new Map<string, number[]>();
-  const restOf = new Map<string, number>();
-  for (const c of map.chains) {
-    c.bones.forEach((b, k) => {
-      const from = series.get(c.joints[k]!)!;
-      const to = series.get(c.joints[k + 1]!)!;
-      const angles: number[] = [];
-      for (let i = 0; i < n; i++) {
-        const d = Math.hypot(to[i]![0] - from[i]![0], to[i]![1] - from[i]![1]);
-        angles.push(d > 1e-9 ? pictureAngle(from[i]!, to[i]!) : (angles[i - 1] ?? NaN));
-      }
-      const firstReal = angles.findIndex((a) => !Number.isNaN(a));
-      if (firstReal < 0) p.add('POSE_SEGMENT_ZERO', `chain "${c.name}" — bone "${b}"'s segment ${c.joints[k]} → ${c.joints[k + 1]} has zero length on every frame; it has no direction`);
-      for (let i = 0; i < firstReal; i++) angles[i] = angles[firstReal]!;
-      targets.set(b, angles);
-      restOf.set(b, restAngle(rest, b, c.aim[k]!));
-    });
-  }
-  p.throwIfAny();
-
-  // Hinges: each joint strictly inside a chain.
-  const bends: BendEvent[] = [];
-  for (const c of map.chains) {
-    for (let k = 1; k < c.bones.length; k++) checkHinge(c, k, targets, restOf, keyTimes, opts, bends, p);
-  }
-  if (opts.bends === 'refuse' && bends.length > 0) {
-    for (const e of bends) p.add('POSE_BEND_ONE_WAY', bendLine(e));
-  }
-  p.throwIfAny();
-
-  // Keys: the bone's turn less the turn of the nearest mapped bone above it.
-  const mappedAbove = (b: string): string | null => {
-    for (let a = rest.get(b)!.parent; a !== null; a = rest.get(a)!.parent) if (targets.has(a)) return a;
-    return null;
-  };
-  const tracks: MotionTrack[] = [];
-  for (const c of map.chains) {
-    for (const b of c.bones) {
-      const above = mappedAbove(b);
-      const turn = (bone: string, i: number) => targets.get(bone)![i]! - restOf.get(bone)!;
-      let prev = 0;
-      const keys: MotionKey[] = [];
-      for (let i = 0; i < n; i++) {
-        const raw = turn(b, i) - (above === null ? 0 : turn(above, i));
-        const v = i === 0 ? wrap(raw) : prev + wrap(raw - prev);
-        prev = v;
-        keys.push({ t: keyTimes[i]!, v: [r3(v)] });
-      }
-      tracks.push({ bone: b, property: 'rotate', keys });
-    }
-  }
-
-  // The hip: the travel of one point, scaled, in its parent's axes.
+  // The hip: the travel of one point, scaled, in its parent's axes. It comes
+  // first, because a reach is aimed from where the hip has put its bone.
   let origin: Retarget['origin'] = null;
   let scale: Retarget['scale'] = null;
+  let translateTrack: MotionTrack | null = null;
+  /** The translated bone's world travel from its setup origin, per frame. */
+  const travel: Pt[] = [];
   const t = map.translate;
   if (t !== null) {
     const [pa, pb] = t.scale.pose;
@@ -296,15 +300,126 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
           }
           keys.push({ t: keyTimes[i]!, v: [r3(lx), r3(ly)] });
           at.push([bone.worldX + wx, bone.worldY + wy]);
+          travel.push([wx, wy]);
         }
-        tracks.push({ bone: t.bone, property: 'translate', keys });
+        translateTrack = { bone: t.bone, property: 'translate', keys };
         origin = { bone: t.bone, at };
       }
     }
   }
   p.throwIfAny();
 
+  // Each mapped bone's target world angle per frame, reaches last.
+  const targets = new Map<string, number[]>();
+  const restOf = new Map<string, number>();
+  for (const c of map.chains) {
+    c.bones.forEach((b, k) => {
+      restOf.set(b, restAngle(rest, b, c.aim[k]!));
+      if (c.reach) return;
+      const from = series.get(c.joints[k]!)!;
+      const to = series.get(c.joints[k + 1]!)!;
+      const angles: number[] = [];
+      for (let i = 0; i < n; i++) {
+        const d = Math.hypot(to[i]![0] - from[i]![0], to[i]![1] - from[i]![1]);
+        angles.push(d > 1e-9 ? pictureAngle(from[i]!, to[i]!) : (angles[i - 1] ?? NaN));
+      }
+      fillLeading(angles, () => p.add('POSE_SEGMENT_ZERO', `chain "${c.name}" — bone "${b}"'s segment ${c.joints[k]} → ${c.joints[k + 1]} has zero length on every frame; it has no direction`));
+      targets.set(b, angles);
+    });
+  }
+  p.throwIfAny();
+
+  // Hinges: each joint strictly inside a chain (a reach has one bone, so none).
+  const bends: BendEvent[] = [];
+  for (const c of map.chains) {
+    for (let k = 1; k < c.bones.length; k++) checkHinge(c, k, targets, restOf, keyTimes, opts, bends, p);
+  }
+  if (opts.bends === 'refuse' && bends.length > 0) {
+    for (const e of bends) p.add('POSE_BEND_ONE_WAY', bendLine(e));
+  }
+  p.throwIfAny();
+
+  // Reaches: from the bone's posed origin at the pose's end point, anchored at
+  // the translated bone. A reach above another is aimed first.
+  const depth = (b: string): number => {
+    let d = 0;
+    for (let a = rest.get(b)!.parent; a !== null; a = rest.get(a)!.parent) d++;
+    return d;
+  };
+  const reaches = map.chains.filter((c) => c.reach).sort((x, y) => depth(x.bones[0]!) - depth(y.bones[0]!));
+  if (reaches.length > 0 && t !== null && scale !== null) {
+    const s = scale.factor;
+    const tb = rest.get(t.bone)!;
+    /** The world turn of `b`'s nearest mapped bone-or-ancestor, degrees, on frame i. */
+    const turnAbove = (b: string, i: number): number => {
+      for (let a: string | null = b; a !== null; a = rest.get(a)!.parent) {
+        const tg = targets.get(a);
+        if (tg !== undefined) return tg[i]! - restOf.get(a)!;
+      }
+      return 0;
+    };
+    /** Where the poser will put `b`'s origin on frame i: forward from the translated bone. */
+    const posedOrigin = (b: string, i: number): Pt => {
+      if (b === t.bone) return [tb.worldX + travel[i]![0], tb.worldY + travel[i]![1]];
+      const parent = rest.get(b)!.parent!;
+      const po = posedOrigin(parent, i);
+      const r = turnAbove(parent, i) / DEG;
+      const ox = rest.get(b)!.worldX - rest.get(parent)!.worldX;
+      const oy = rest.get(b)!.worldY - rest.get(parent)!.worldY;
+      return [po[0] + Math.cos(r) * ox - Math.sin(r) * oy, po[1] + Math.sin(r) * ox + Math.cos(r) * oy];
+    };
+    for (const c of reaches) {
+      const b = c.bones[0]!;
+      const anchor = series.get(c.joints[0]!)!;
+      const end = series.get(c.joints[1]!)!;
+      const angles: number[] = [];
+      for (let i = 0; i < n; i++) {
+        const o = posedOrigin(b, i);
+        const tx = tb.worldX + travel[i]![0] + (end[i]![0] - anchor[i]![0]) * s;
+        const ty = tb.worldY + travel[i]![1] - (end[i]![1] - anchor[i]![1]) * s;
+        const d = Math.hypot(tx - o[0], ty - o[1]);
+        angles.push(d > 1e-9 ? Math.atan2(ty - o[1], tx - o[0]) * DEG : (angles[i - 1] ?? NaN));
+      }
+      fillLeading(angles, () => p.add('POSE_SEGMENT_ZERO', `chain "${c.name}" — bone "${b}" reaches for ${c.joints[1]}, which the pose puts on the bone's posed origin on every frame; it has no direction`));
+      targets.set(b, angles);
+    }
+  }
+  p.throwIfAny();
+
+  // Keys: the bone's turn less the turn of the nearest mapped bone above it.
+  const mappedAbove = (b: string): string | null => {
+    for (let a = rest.get(b)!.parent; a !== null; a = rest.get(a)!.parent) if (targets.has(a)) return a;
+    return null;
+  };
+  const tracks: MotionTrack[] = [];
+  for (const c of map.chains) {
+    for (const b of c.bones) {
+      const above = mappedAbove(b);
+      const turn = (bone: string, i: number) => targets.get(bone)![i]! - restOf.get(bone)!;
+      let prev = 0;
+      const keys: MotionKey[] = [];
+      for (let i = 0; i < n; i++) {
+        const raw = turn(b, i) - (above === null ? 0 : turn(above, i));
+        const v = i === 0 ? wrap(raw) : prev + wrap(raw - prev);
+        prev = v;
+        keys.push({ t: keyTimes[i]!, v: [r3(v)] });
+      }
+      tracks.push({ bone: b, property: 'rotate', keys });
+    }
+  }
+  if (translateTrack !== null) tracks.push(translateTrack);
+
   return { animation: { duration: keyTimes[n - 1]!, tracks }, times: keyTimes, targets, origin, holds, bends, scale };
+}
+
+/** Frames before the first with a direction take its value; none at all is a problem. */
+function fillLeading(angles: number[], none: () => void): void {
+  const firstReal = angles.findIndex((a) => !Number.isNaN(a));
+  if (firstReal < 0) {
+    none();
+    return;
+  }
+  for (let i = 0; i < firstReal; i++) angles[i] = angles[firstReal]!;
 }
 
 function checkHinge(c: Chain, k: number, targets: Map<string, number[]>, restOf: Map<string, number>, times: readonly number[], opts: RetargetOptions, out: BendEvent[], p: Problems): void {

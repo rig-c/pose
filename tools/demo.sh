@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
-# The README demo: a pose sequence retargeted onto a rig, then the source video
-# and the rig side by side as a clip and as a contact sheet. Not shipped.
+# The README demo: a pose sequence retargeted onto a rig, then the pose and
+# the rig side by side as a clip and as a contact sheet. Not shipped.
 #
-#   tools/demo.sh --rig <rig dir> --map <map.json> --pose <pose.json> --video <video> --out <dir> \
-#                 [--name dance] [--height 480] [--sheet-times "0,1.08,…"] [-- <extra retarget flags>]
+#   tools/demo.sh --rig <rig dir> --map <map.json> --pose <pose.json> --out <dir> \
+#                 [--name dance] [--height 480] [--sheet-times "0,1.08,…"]
+#                 [--video <source> [--audio <source audio>]] [-- <extra retarget flags>]
+#
+# The left pane is the pose itself, drawn as limbs (tools/skeleton.ts), so a
+# published demo carries nothing of the footage the joints came from. With
+# --video the left pane is the footage instead: a local check that the rig
+# keeps time with the dancer, never for publishing. --audio muxes the source
+# audio at offset 0 into clip-audio.mp4.
 #
 # Writes into --out: motion.json, report.json and run.txt (the retarget's own
 # output), build/ (the gated build), render/ (rigc's frames at the pose's frame
@@ -26,6 +33,7 @@ while [ $# -gt 0 ]; do
     --map) map="$2"; shift 2 ;;
     --pose) pose="$2"; shift 2 ;;
     --video) video="$2"; shift 2 ;;
+    --audio) audio="$2"; shift 2 ;;
     --out) out="$2"; shift 2 ;;
     --name) name="$2"; shift 2 ;;
     --height) height="$2"; shift 2 ;;
@@ -34,7 +42,7 @@ while [ $# -gt 0 ]; do
     *) echo "demo.sh: unknown argument $1" >&2; exit 2 ;;
   esac
 done
-for v in rig map pose video out; do
+for v in rig map pose out; do
   if [ -z "${!v:-}" ]; then echo "demo.sh: --$v is required" >&2; exit 2; fi
 done
 for tool in bun ffmpeg ffprobe; do
@@ -56,9 +64,15 @@ bun "$here/node_modules/rig-c/bin/rigc.cjs" render --candidate "$out/build" --an
 setdir="$out/hi/$(bun -e "const f=JSON.parse(require('fs').readFileSync('$out/hi/frames.json','utf8'));console.log(f.sets.find(s=>s.animation==='$name').dir)")"
 frames=$(ls "$setdir"/f*.png | wc -l | tr -d ' ')
 
-# 3. The video at the same frame rate, from its first frame — the pose's t = 0.
+# 3. The left pane: the pose drawn as limbs, or with --video the footage at the
+# same frame rate from its first frame (the pose's t = 0).
 mkdir -p "$out/vid" "$out/rig"
-ffmpeg -loglevel error -y -i "$video" -vf "fps=$fps,scale=-2:$height" -frames:v "$frames" "$out/vid/v%04d.png"
+if [ -n "${video:-}" ]; then
+  ffmpeg -loglevel error -y -i "$video" -vf "fps=$fps,scale=-2:$height" -frames:v "$frames" -start_number 0 "$out/vid/v%04d.png"
+else
+  bun "$here/tools/skeleton.ts" --pose "$pose" --out "$out/vid" --height "$height" > /dev/null
+  for f in "$out/vid"/s*.png; do mv "$f" "$out/vid/v${f##*/s}"; done
+fi
 # The rig's frames flattened onto white at the same height. The white is drawn
 # on a copy of each frame, not taken from a \`color\` source: a source runs on
 # its own clock (25 fps by default) and overlaying onto it re-times the frames —
@@ -68,11 +82,15 @@ ffmpeg -loglevel error -y -framerate "$fps" -i "$setdir/f%04d.png" \
   -frames:v "$frames" -start_number 0 "$out/rig/r%04d.png"
 
 # 4. The clip: video | rig.
-ffmpeg -loglevel error -y -framerate "$fps" -i "$out/vid/v%04d.png" -framerate "$fps" -start_number 0 -i "$out/rig/r%04d.png" \
+ffmpeg -loglevel error -y -framerate "$fps" -start_number 0 -i "$out/vid/v%04d.png" -framerate "$fps" -start_number 0 -i "$out/rig/r%04d.png" \
   -filter_complex "[0:v][1:v]hstack=inputs=2,format=yuv420p" -c:v libx264 -crf 20 -movflags +faststart "$out/clip.mp4"
 ffmpeg -loglevel error -y -i "$out/clip.mp4" \
   -filter_complex "fps=12,scale=-2:$((height * 3 / 4)):flags=lanczos,split[a][b];[a]palettegen=max_colors=128[p];[b][p]paletteuse=dither=bayer:bayer_scale=4" \
   "$out/clip.gif"
+
+if [ -n "${audio:-}" ]; then
+  ffmpeg -loglevel error -y -i "$out/clip.mp4" -itsoffset 0 -i "$audio" -map 0:v -map 1:a -c:v copy -c:a aac -b:a 160k -shortest "$out/clip-audio.mp4"
+fi
 
 # 5. The sheet: the pair at each sheet time, six to a row.
 select=""
@@ -95,7 +113,8 @@ fs.writeFileSync('$out/demo.json', JSON.stringify({
   spec: 'rig-pose-demo/1',
   rigPose: pkg('$here/package.json'), rigC: pkg('$here/node_modules/rig-c/package.json'),
   rig: '$rig', map: { path: '$map', sha256: sha('$map') }, pose: { path: '$pose', sha256: sha('$pose') },
-  video: { path: '$video', sha256: sha('$video') }, animation: '$name', fps: $fps, frames: $frames,
+  left: '${video:+video}' || 'skeleton',
+  video: '${video:-}' ? { path: '${video:-}', sha256: sha('${video:-}') } : null, animation: '$name', fps: $fps, frames: $frames,
   sheetTimes: '$times'.split(',').map(Number),
 }, null, 2) + '\n');
 "

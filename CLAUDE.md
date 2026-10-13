@@ -68,9 +68,9 @@ into named failures.
 | `src/pose.ts` | `rig-pose-sequence/1` (the reader, the writer) and the COCO-17 conversion |
 | `src/joints.ts` | the vocabulary: body-18, the virtual midpoints, COCO-17 and its mapping |
 | `src/map.ts` | `rig-pose-map/1` and its resolution against the rig's bones |
-| `src/retarget.ts` | the pure retarget: holds, smoothing, angles, the hinge check, keys, hip travel |
+| `src/retarget.ts` | the pure retarget: holds, Savitzky–Golay smoothing, hip travel, angles, reaches, the hinge check, keys |
 | `src/rigc.ts` | everything that touches rig-c's CLI or the disk: the gate (`rigc build`), the folds (`rigc render --folds`) |
-| `src/verify.ts` | where the gated build actually put each bone, posed by rig-c's own poser |
+| `src/verify.ts` | where the gated build actually put each bone, posed by rig-c's own poser; the posture reading (hip tilt, sway) |
 | `src/run.ts` | `retarget` end to end, in the order: gate the rig as it is, retarget, gate with the animation in, measure, read folds, write |
 
 - **The key formula and its assumption.** rig-c's `rotate` key adds to the

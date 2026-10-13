@@ -3,15 +3,15 @@
  * it with the animation in, measure where the rig landed, read the folds, and
  * write — only when every check passed.
  */
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { readMap, resolveMap } from './map.ts';
 import { convertCoco17, personTrack, readPoseSequence } from './pose.ts';
 import { lineOf, Problems, Refusal, type Problem } from './problems.ts';
 import { bendLine, holdLine, retarget, type RetargetOptions } from './retarget.ts';
 import { baseMotionOf, folds, gate, readBuild, resolveRig, restOf } from './rigc.ts';
-import { landed, measureLanding, ANGLE_TOLERANCE, ORIGIN_TOLERANCE } from './verify.ts';
+import { landed, measureLanding, measurePosture, poseFrames, postureLines, ANGLE_TOLERANCE, ORIGIN_TOLERANCE } from './verify.ts';
 
 export interface RetargetArgs extends RetargetOptions {
   rig: string;
@@ -45,9 +45,18 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
   const refuse = (problems: readonly Problem[]): never => {
     throw new Refusal(problems);
   };
+  const args = new Problems();
   for (const [flag, path] of [['--map', a.map], ['--pose', a.pose]] as const) {
-    if (!existsSync(path)) refuse([{ code: 'ARG_PATH', text: `${flag} ${path} does not exist` }]);
+    if (!existsSync(path)) args.add('ARG_PATH', `${flag} ${path} does not exist`);
   }
+  // A file this run writes goes into a directory that is there already; --build and --render make theirs.
+  for (const [flag, path] of [['--out', a.out], ['--report', a.report]] as const) {
+    if (path === undefined) continue;
+    const dir = dirname(path);
+    if (!existsSync(dir)) args.add('ARG_PATH', `${flag} ${path} — directory ${dir} does not exist`);
+    else if (!statSync(dir).isDirectory()) args.add('ARG_PATH', `${flag} ${path} — ${dir} is not a directory`);
+  }
+  args.throwIfAny();
   const input = resolveRig(a.rig, a.baseMotion);
   const base = baseMotionOf(input);
   const animations = base.animations as Record<string, unknown>;
@@ -82,7 +91,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     say(`  GATE   rigc build --profile ${a.profile}: green${g1.summary === null ? '' : ` — ${g1.summary}`}`);
 
     const doc = readBuild(g1.build);
-    const landings = measureLanding(doc, a.name, map, r);
+    const posed = poseFrames(doc, a.name, r.times);
+    const landings = measureLanding(doc, a.name, map, r, posed);
     const p = new Problems();
     for (const l of landings) {
       const unit = l.kind === 'angle' ? '°' : ' units';
@@ -92,6 +102,9 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       else p.add('POSE_LANDS', `${line} — the rig does not turn the way the key formula assumes (a constraint, a scaled or sheared parent, a non-normal inherit mode)`);
     }
     p.throwIfAny();
+
+    const posture = measurePosture(posed, new Map(doc.bones.map((b) => [b.name, b.length ?? 0])), map, r, frames, a.minScore);
+    if (posture !== null) for (const l of postureLines(posture)) say(`  POSTURE ${l}`);
 
     const dts = r.times.slice(1).map((t, i) => t - r.times[i]!).sort((x, y) => x - y);
     const fps = dts.length === 0 ? 12 : Math.max(1, Math.min(60, Math.round(1 / dts[dts.length >> 1]!)));
@@ -122,6 +135,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         bends: r.bends,
         gate: g1.summary,
         landings,
+        posture,
         folds: f.meshes,
       }, null, 2)}\n`);
     }
