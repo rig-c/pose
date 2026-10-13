@@ -486,3 +486,106 @@ export function plantHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel:
   }
   return hip;
 }
+
+// --- stance (rig-c/pose#60) --------------------------------------------------
+
+/** A free leg is stretched by at most this factor to reach the floor; past it the frame is reported, not forced. */
+export const STANCE_CAP = 1.08;
+
+/** A run of frames with one free side in one state. */
+export interface StanceRun {
+  /** `both`: the free ankle within the tolerance of the floor, so both feet are planted; `lifted`: above it, the pose's height kept. */
+  state: 'both' | 'lifted';
+  /** The side that is not supporting. */
+  side: Side;
+  frames: [number, number];
+  /** The free ankle's largest height above the supporting one in the picture, in that side's leg lengths. */
+  maxHeight: number;
+  /** `both`: the smallest and largest stretch keyed (capped); `lifted`: null. */
+  k: { min: number; max: number } | null;
+}
+
+/** A run of planted-both frames whose stretch needed more than the cap (or could not reach: `needed` null). */
+export interface StanceOver {
+  side: Side;
+  frames: [number, number];
+  /** The largest stretch the floor needed, or null where the free ankle is not below its leg's root. */
+  needed: number | null;
+  /** The free ankle's largest height left above the floor after the cap, world units. */
+  left: number;
+}
+
+export interface Stance {
+  /** The tolerance, in leg lengths (FEET's: the median picture hip → ankle of the free side). */
+  tolerance: number;
+  cap: number;
+  runs: StanceRun[];
+  over: StanceOver[];
+  /** Per frame: the free side and the stretch keyed on it, or null (lifted, a jump, no support). */
+  stretch: Array<{ side: Side; k: number } | null>;
+}
+
+/** World positions (y up) on one frame: each leg chain's first bone's origin and each ankle. */
+export interface StancePosed {
+  root: Record<Side, Pt>;
+  ankle: Record<Side, Pt>;
+}
+
+/**
+ * Both feet planted when the free ankle is near the floor (rig-c/pose#60). On a
+ * frame with a supporting side (so outside every jump), the free ankle's height
+ * above the supporting one is read in the picture (`ankle`, px, y down) in the
+ * free side's leg length — the unit of every FEET threshold. Within `tolerance`,
+ * the frame is planted both: the free leg is to be stretched along its chain by
+ * k = (root y − floor y) / (root y − ankle y) on the posed rig (`posed`, world,
+ * y up), the floor being the supporting ankle's posed y; k is capped at
+ * `STANCE_CAP`, and a frame past it is listed in `over`. Above the tolerance
+ * the foot is lifted and keeps the pose's height.
+ */
+export function stanceOf(feet: Feet, ankle: Record<Side, readonly Pt[]>, tolerance: number, posed: (i: number) => StancePosed): Stance {
+  const n = feet.support.length;
+  const stretch: Stance['stretch'] = new Array(n).fill(null);
+  type Row = { state: 'both' | 'lifted'; side: Side; height: number; k: number | null; needed: number | null; over: boolean; left: number };
+  const rows: Array<Row | null> = new Array<Row | null>(n).fill(null);
+  for (let i = 0; i < n; i++) {
+    const s = feet.support[i] ?? null;
+    if (s === null) continue;
+    const f: Side = s === 'r' ? 'l' : 'r';
+    const height = (ankle[s][i]![1] - ankle[f][i]![1]) / feet.legLength[f];
+    if (height > tolerance) {
+      rows[i] = { state: 'lifted', side: f, height, k: null, needed: null, over: false, left: 0 };
+      continue;
+    }
+    const p = posed(i);
+    const floor = p.ankle[s][1];
+    const root = p.root[f][1];
+    const a = p.ankle[f][1];
+    const ok = root - a > 1e-9 && root - floor > 1e-9;
+    const needed = ok ? (root - floor) / (root - a) : null;
+    const k = needed === null ? 1 : Math.min(needed, STANCE_CAP);
+    const over = needed === null || needed > STANCE_CAP;
+    const left = root - k * (root - a) - floor;
+    rows[i] = { state: 'both', side: f, height, k, needed, over, left };
+    if (k !== 1) stretch[i] = { side: f, k };
+  }
+  const runs: StanceRun[] = [];
+  const over: StanceOver[] = [];
+  for (let i = 0; i < n; i++) {
+    const r = rows[i];
+    if (r === null) continue;
+    const last = runs[runs.length - 1];
+    if (last !== undefined && last.frames[1] === i - 1 && last.state === r.state && last.side === r.side) {
+      last.frames[1] = i;
+      last.maxHeight = Math.max(last.maxHeight, r.height);
+      if (last.k !== null && r.k !== null) last.k = { min: Math.min(last.k.min, r.k), max: Math.max(last.k.max, r.k) };
+    } else runs.push({ state: r.state, side: r.side, frames: [i, i], maxHeight: r.height, k: r.k === null ? null : { min: r.k, max: r.k } });
+    if (!r.over) continue;
+    const o = over[over.length - 1];
+    if (o !== undefined && o.frames[1] === i - 1 && o.side === r.side) {
+      o.frames[1] = i;
+      o.needed = o.needed === null || r.needed === null ? null : Math.max(o.needed, r.needed);
+      o.left = Math.max(o.left, r.left);
+    } else over.push({ side: r.side, frames: [i, i], needed: r.needed, left: r.left });
+  }
+  return { tolerance, cap: STANCE_CAP, runs, over, stretch };
+}

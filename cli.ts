@@ -64,6 +64,12 @@ retarget
                         travel and re-plants on landing; a supporting ankle moving > 0.03 leg lengths a frame
                         releases its plant to the other foot, or to the pose's travel, until it is still
                         (< 0.01 for 2 frames) (FEET lines)
+  --stance <leg lengths> with --plant-feet: on a frame outside the jumps, a free ankle within this many
+                        leg lengths (FEET's) of the supporting one in the picture is planted too — its leg's
+                        scalex keys stretched by k = (root y − floor y) / (root y − ankle y) until the foot
+                        reaches the floor, k capped at 1.08 (past it the frame is reported, not forced); above
+                        it the foot is lifted and keeps the pose's height (STANCE lines; default: off; 0.07 is
+                        the card's, rig-c/pose#60)
   --idle <name>         the rig's animation read as its idle (default: idle). Every idle track the new
                         animation does not key, on any channel, is listed as IDLE-DROPPED (a blink, a
                         breath); one it keys is IDLE-KEPT-OUT, naming the track that keys it, and so is a
@@ -200,7 +206,7 @@ function legScaleOf(f: Map<string, string>): [number, number] | 'off' {
 }
 
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip'], ['coco', 'plant-feet', 'carry-idle']);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance'], ['coco', 'plant-feet', 'carry-idle']);
   const bends = f.get('bends') ?? 'refuse';
   if (bends !== 'refuse' && bends !== 'clamp') throw new Usage(`--bends is "${bends}"; it must be refuse or clamp`);
   const switchAt = f.get('switch-at') ?? 'first';
@@ -225,6 +231,7 @@ function retargetArgs(argv: string[]): RetargetArgs {
     short: shortOf(f),
     legScale: legScaleOf(f),
     plantFeet: f.has('plant-feet'),
+    stance: stanceOf(f),
     bends,
     bendTolerance: num(f, 'bend-tolerance', 0, (n) => n >= 0 && n < 180, 'degrees in [0, 180)'),
     switchTolerance: num(f, 'switch-tolerance', 25, (n) => n >= 0 && n < 180, 'degrees in [0, 180)'),
@@ -239,6 +246,14 @@ function retargetArgs(argv: string[]): RetargetArgs {
     merge: f.get('merge'),
     ...reduceOf(f),
   };
+}
+
+/** --stance (rig-c/pose#60): off unless given, and only with --plant-feet. */
+function stanceOf(f: Map<string, string>): number | 'off' {
+  if (!f.has('stance') || f.get('stance') === 'off') return 'off';
+  const v = num(f, 'stance', 0, (n) => n > 0 && n < 1, 'off, or leg lengths in (0, 1)');
+  if (!f.has('plant-feet')) throw new Usage(`--stance is "${f.get('stance')}" without --plant-feet; it plants the free foot beside the supporting one that --plant-feet holds`);
+  return v;
 }
 
 /** --reduce and --reduce-hip (rig-c/pose#32): off unless given; the hip only with the bones. */
