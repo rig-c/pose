@@ -19,7 +19,7 @@ import { screenToSpineDegrees } from 'rig-c/transform';
 import type { Body18 } from './joints.ts';
 import { isBody18, VIRTUAL } from './joints.ts';
 import type { Chain, JointMap, Rest } from './map.ts';
-import { rigPoint } from './map.ts';
+import { aimAngle, rigPoint } from './map.ts';
 import type { Joint } from './pose.ts';
 import { Problems } from './problems.ts';
 
@@ -120,10 +120,7 @@ export function pictureAngle(from: Pt, to: Pt): number {
 
 /** The rest angle of a mapped bone's aim, Spine world degrees, from rig-c's setup pose. */
 export function restAngle(rest: Rest, bone: string, aim: string): number {
-  const b = rest.get(bone)!;
-  if (aim === 'x') return Math.atan2(b.c, b.a) * DEG;
-  const a = rest.get(aim)!;
-  return Math.atan2(a.worldY - b.worldY, a.worldX - b.worldX) * DEG;
+  return aimAngle(rest, new Map([...rest].map(([n, b]) => [n, b.length])), bone, aim);
 }
 
 function median(xs: number[]): number {

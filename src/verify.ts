@@ -9,11 +9,10 @@
  * aim each bone reached and the aim the pose asked for is the verdict.
  */
 import { poseRawAnimation, type CompiledDocument, type RawBone } from 'rig-c/core';
-import type { JointMap } from './map.ts';
+import { aimAngle, type JointMap } from './map.ts';
 import type { Retarget } from './retarget.ts';
 import { wrap } from './retarget.ts';
 
-const DEG = 180 / Math.PI;
 
 export interface Landing {
   bone: string;
@@ -40,6 +39,7 @@ export function measureLanding(doc: CompiledDocument, animation: string, map: Jo
   const out: Landing[] = [];
   const byName = (bones: RawBone[]) => new Map(bones.map((b) => [b.name, b]));
   const posed = poses.map((p) => byName(p.bones));
+  const lengths = new Map(doc.bones.map((b) => [b.name, b.length ?? 0]));
   for (const c of map.chains) {
     c.bones.forEach((b, k) => {
       const aim = c.aim[k]!;
@@ -47,8 +47,7 @@ export function measureLanding(doc: CompiledDocument, animation: string, map: Jo
       let worst = -1;
       let frame = 0;
       posed.forEach((bones, i) => {
-        const o = bones.get(b)!;
-        const reached = aim === 'x' ? Math.atan2(o.c, o.a) * DEG : Math.atan2(bones.get(aim)!.worldY - o.worldY, bones.get(aim)!.worldX - o.worldX) * DEG;
+        const reached = aimAngle(bones, lengths, b, aim);
         const e = Math.abs(wrap(reached - asked[i]!));
         if (e > worst) {
           worst = e;
