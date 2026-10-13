@@ -1,6 +1,6 @@
 {
   "name": "@rig-c/pose",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "Puts motion from a body-18 pose sequence onto a rig built with rig-c: bone keys in rig-c's motion format, checked through rig-c's gate before anything is written. A CLI for agents that cannot see the rig.",
   "type": "module",
   "bin": {
