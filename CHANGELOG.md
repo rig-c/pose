@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/rig-c/pose/compare/v0.8.0...v0.8.1) (2026-10-13)
+
+
+### Bug Fixes
+
+* **retarget:** read the older pose name, --images, the rigc version, and why a frames window did not switch ([#48](https://github.com/rig-c/pose/issues/48)) ([72d455b](https://github.com/rig-c/pose/commit/72d455bce1395caaca16e9bf3d9c6e7e07b19de1))
+
 ## [0.8.0](https://github.com/rig-c/pose/compare/v0.7.0...v0.8.0) (2026-10-13)
 
 
