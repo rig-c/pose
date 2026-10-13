@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/rig-c/pose/compare/v0.4.0...v0.5.0) (2026-10-13)
+
+
+### Features
+
+* **retarget:** a set's turn holds its art within a stated turn from the drawn angle ([#30](https://github.com/rig-c/pose/issues/30)) ([9196aa9](https://github.com/rig-c/pose/commit/9196aa9eb45d62a17a59303916a8f998f2e63d98))
+
 ## [0.4.0](https://github.com/rig-c/pose/compare/v0.3.0...v0.4.0) (2026-10-13)
 
 
