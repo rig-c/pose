@@ -13,7 +13,9 @@ import { lineOf, Problems, Refusal, type Problem } from './problems.ts';
 import { bendLine, endOnLine, flipLine, holdLine, rangeLine, retarget, shortLine, turnLine, type RetargetOptions } from './retarget.ts';
 import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, readBuild, resolveRig, restOf, slotsOf } from './rigc.ts';
 import { artRangeLine, chainsMoving, switchLine, uncoveredFolds } from './switch.ts';
-import { landed, measureLanding, measurePosture, poseFrames, postureLines, ANGLE_TOLERANCE, ORIGIN_TOLERANCE } from './verify.ts';
+import { landed, measureFeet, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
+import { legsOf } from './legs.ts';
+import type { LegScale } from './legs.ts';
 
 export interface RetargetArgs extends RetargetOptions {
   rig: string;
@@ -85,7 +87,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     resolveMap(map, rest, a.map, slots);
 
     const r = retarget(rest, map, frames, times, a, slots);
-    say(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, smooth ${a.smooth}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)`);
+    say(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, smooth ${a.smooth}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)${a.legScale !== undefined && a.legScale !== 'off' ? `, leg-scale ${a.legScale[0]}–${a.legScale[1]}` : ''}${a.plantFeet === true ? ', plant-feet' : ''}`);
     say(`  RIGC   rig-c ${rigc.version} (${rigc.entry}) gates and poses this run`);
     if (r.scale !== null) say(`  SCALE  ${r.scale.factor.toFixed(5)} rig units per picture px (rig ${r.scale.rig.toFixed(2)} / pose median ${r.scale.pose.toFixed(2)})`);
     for (const h of r.holds) say(`  HOLD   ${holdLine(h, r.times)}`);
@@ -104,6 +106,16 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     }
     for (const e of r.range) say(`  RANGE  ${rangeLine(e, r.times)}`);
     for (const e of r.artRange) say(`  ART-RANGE ${artRangeLine(e, r.times)}`);
+    for (const l of r.legScale) say(`  LEG-SCALE ${legScaleLine(l, r.times)}`);
+    if (r.pivot !== null) say(`  PIVOT  bone "${r.pivot.bone}"'s origin is ${r.pivot.distance.toFixed(2)} units (${r.pivot.hipWidths.toFixed(3)} hip widths) from its thigh roots' midpoint (${r.pivot.roots.join(' + ')}): dx ${r.pivot.offset[0].toFixed(2)}, dy ${r.pivot.offset[1].toFixed(2)}, at setup — the pivot every hip turn swings the legs about`);
+    if (r.feet !== null) {
+      const f = r.feet;
+      const span = (x: [number, number]) => (x[0] === x[1] ? `${x[0]}` : `${x[0]}–${x[1]}`);
+      say(`  FEET   ${r.planted ? 'planted' : 'read, not planted (no --plant-feet)'}: leg length (median hip → ankle) r ${f.legLength.r.toFixed(1)}px, l ${f.legLength.l.toFixed(1)}px; ${f.supports.length} support span(s), ${f.changes.filter((c) => c.from !== null).length} change(s) of support, ${f.jumps.length} jump(s), ${f.steps.length} step(s)`);
+      say(`  FEET   supports: ${f.supports.map((x) => `${x.side} ${span(x.frames)}`).join(', ') || 'none'}`);
+      say(`  FEET   jumps (both ankles and mid_hip > 0.05 leg lengths above their rolling floor, ≥ 2 frames): ${f.jumps.map(span).join(', ') || 'none'}`);
+      say(`  FEET   steps (the supporting ankle > 0.03 leg lengths a frame; re-planted after 2 frames < 0.01): ${f.steps.map((x) => `${x.side} ${span(x.frames)} → ${x.to === null ? 'the pose\'s travel' : `${x.to} supports`}, ${x.replant === null ? 'never re-planted' : `re-planted at ${x.replant}`}`).join('; ') || 'none'}`);
+    }
 
     const motion = { ...base, animations: { ...animations, [a.name]: r.animation } };
     const g1 = gate(input.rig, motion, join(scratch, 'with'), a.profile, a.images);
@@ -117,16 +129,30 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     const landings = measureLanding(doc, a.name, map, r, posed);
     const p = new Problems();
     for (const l of landings) {
-      const unit = l.kind === 'angle' ? '°' : ' units';
-      const tol = l.kind === 'angle' ? ANGLE_TOLERANCE : ORIGIN_TOLERANCE;
-      const line = `bone "${l.bone}" ${l.kind === 'angle' ? 'aim' : 'origin'} — worst |reached − asked| ${l.worst.toPrecision(3)}${unit} at frame ${l.frame} (t=${r.times[l.frame]!.toFixed(3)}s); the tolerance is ${tol}${unit}`;
+      const unit = l.kind === 'angle' ? '°' : l.kind === 'scale' ? ' of its setup length' : ' units';
+      const what = l.kind === 'angle' ? 'aim' : l.kind === 'scale' ? 'scale' : l.kind === 'foot' ? 'ankle' : 'origin';
+      const tol = l.kind === 'foot' ? Number(l.tolerance.toPrecision(3)) : l.tolerance;
+      const line = `bone "${l.bone}" ${what} — worst |reached − asked| ${l.worst.toPrecision(3)}${unit} at frame ${l.frame} (t=${r.times[l.frame]!.toFixed(3)}s); the tolerance is ${tol}${unit}`;
       if (landed(l)) say(`  LAND   ${line}`);
       else p.add('POSE_LANDS', `${line} — the rig does not turn the way the key formula assumes (a constraint, a scaled or sheared parent, a non-normal inherit mode)`);
     }
     p.throwIfAny();
 
-    const posture = measurePosture(posed, new Map(doc.bones.map((b) => [b.name, b.length ?? 0])), map, r, frames, a.minScore);
+    const lengths = new Map(doc.bones.map((b) => [b.name, b.length ?? 0]));
+    const posture = measurePosture(posed, lengths, map, r, frames, a.minScore);
     if (posture !== null) for (const l of postureLines(posture)) say(`  POSTURE ${l}`);
+    const legBones = legBonesOf(map);
+    const feetReading = legBones === null ? null : measureFeet(posed, lengths, r, legBones);
+    if (feetReading !== null) {
+      const f = feetReading;
+      say(`  FEET   the posed build, outside jumps: the lowest ankle's vertical range ${f.lowest.range.toFixed(2)} units = ${f.lowest.legs.toFixed(4)} leg lengths (rig leg r ${f.legLength.r.toFixed(1)}, l ${f.legLength.l.toFixed(1)} units) over ${f.lowest.frames} frames`);
+      const worst = (k: 'verticalLegs' | 'horizontalLegs') => f.plants.reduce<(typeof f.plants)[number] | null>((m, x) => (m === null || x[k] > m[k] ? x : m), null);
+      const wv = worst('verticalLegs');
+      const wh = worst('horizontalLegs');
+      if (wv !== null && wh !== null) say(`  FEET   the supporting ankle over each support span: worst vertical range ${wv.vertical.toFixed(2)} units = ${wv.verticalLegs.toFixed(4)} leg lengths (${wv.side} ${wv.frames[0]}–${wv.frames[1]}), worst horizontal drift ${wh.horizontal.toFixed(2)} units = ${wh.horizontalLegs.toFixed(4)} leg lengths (${wh.side} ${wh.frames[0]}–${wh.frames[1]})`);
+    }
+    const shear = r.scales.size === 0 ? [] : measureShear(doc, posed, r.scales.keys());
+    for (const x of shear) say(`  SHEAR  bone "${x.bone}": art sheared up to ${x.shear.toFixed(2)}° (frame ${x.frame}); world x axis ${x.x[0].toFixed(3)} … ${x.x[1].toFixed(3)}, y axis ${x.y[0].toFixed(3)} … ${x.y[1].toFixed(3)} of setup — a scaled bone, or one under it; a reading`);
 
     const dts = r.times.slice(1).map((t, i) => t - r.times[i]!).sort((x, y) => x - y);
     const fps = dts.length === 0 ? 12 : Math.max(1, Math.min(60, Math.round(1 / dts[dts.length >> 1]!)));
@@ -160,7 +186,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         animation: a.name,
         frames: seq.frames.length,
         duration: r.animation.duration,
-        options: { minScore: a.minScore, smooth: a.smooth, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile },
+        options: { minScore: a.minScore, smooth: a.smooth, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true },
         scale: r.scale,
         holds: r.holds,
         short: r.short,
@@ -176,6 +202,10 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         turns: r.turns,
         range: r.range,
         artRange: r.artRange,
+        legScale: r.legScale.map(({ scale: _scale, ...rest }) => rest),
+        pivot: r.pivot,
+        feet: r.feet === null ? null : { planted: r.planted, legLength: r.feet.legLength, supports: r.feet.supports, jumps: r.feet.jumps, steps: r.feet.steps, changes: r.feet.changes, reading: feetReading },
+        shear,
       }, null, 2)}\n`);
     }
     say(`  wrote ${a.out} — animations: ${Object.keys(motion.animations).join(', ')}`);
@@ -234,4 +264,19 @@ function windowLines(map: JointMap, switches: ReadonlyArray<{ set: string; frame
     }
   }
   return out;
+}
+
+/** Each leg's first bone (its root, the thigh) and last bone (whose tip is the ankle), when the map has both. */
+function legBonesOf(map: JointMap): { r: { root: string; ankle: string }; l: { root: string; ankle: string } } | null {
+  const l = legsOf(map, 'reading the feet');
+  if ('problems' in l) return null;
+  return { r: { root: l.legs.r.chain.bones[0]!, ankle: l.legs.r.ankleBone }, l: { root: l.legs.l.chain.bones[0]!, ankle: l.legs.l.ankleBone } };
+}
+
+/** A LEG-SCALE line: the segment, its straight length, its ratio's spread, and the frames clamped. */
+function legScaleLine(l: LegScale, times: readonly number[]): string {
+  const span = (x: [number, number]) => (x[0] === x[1] ? `${x[0]}` : `${x[0]}–${x[1]}`);
+  const count = (rs: Array<[number, number]>) => rs.reduce((k, x) => k + x[1] - x[0] + 1, 0);
+  const clamp = (rs: Array<[number, number]>, at: number, how: string) => (rs.length === 0 ? `none ${how} ${at}` : `${count(rs)} frame(s) ${how} ${at}, clamped (frames ${rs.map(span).join(', ')})`);
+  return `chain "${l.chain}" bone "${l.bone}" (${l.joints[0]} → ${l.joints[1]}): straight length ${l.straight.toFixed(1)}px (95th percentile of ${times.length} frames); picture length ÷ straight ${l.ratio.min.toFixed(3)} … ${l.ratio.max.toFixed(3)} (median ${l.ratio.median.toFixed(3)}); scalex keyed in [${l.limits[0]}, ${l.limits[1]}]: ${clamp(l.low, l.limits[0], 'under')}; ${clamp(l.high, l.limits[1], 'over')}`;
 }

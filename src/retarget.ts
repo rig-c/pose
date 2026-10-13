@@ -64,11 +64,13 @@ import { screenToSpineDegrees } from 'rig-c/transform';
 import type { Body18 } from './joints.ts';
 import { isBody18, VIRTUAL } from './joints.ts';
 import type { Chain, JointMap, Rest, RigSlots } from './map.ts';
-import { aimAngle, rigPoint } from './map.ts';
+import { aimAngle, descends, rigPoint } from './map.ts';
 import type { Joint } from './pose.ts';
-import { Problems } from './problems.ts';
+import { Problems, Refusal } from './problems.ts';
 import type { ArtRange, SlotTrack, Switch, SwitchOptions } from './switch.ts';
 import { clampArt, coveredChains, measureArt, overflow, RANGE_SLACK, runsOf, selectSwitches } from './switch.ts';
+import type { Feet, LegScale, PathPose, Posing, Side } from './legs.ts';
+import { isLegSegment, legScaleOf, legsOf, pathFrom, plantHip, posePath, rootOf, SIDES, supportsOf, tipOf } from './legs.ts';
 
 const DEG = 180 / Math.PI;
 
@@ -85,6 +87,10 @@ export interface RetargetOptions extends SwitchOptions {
   flip: number | 'off';
   /** A segment shorter in the picture than this fraction of its median length has its angle held there (`holdShort`); 'off' reads every frame. */
   short: number | 'off';
+  /** Leg segments scaled along their x axis by picture length over straight length, clamped to [min, max] (`legs.ts`); 'off' (the default) scales nothing. */
+  legScale?: [number, number] | 'off';
+  /** The hip derived from the supporting foot (`legs.ts`); false (the default) moves it by the pose's travel. */
+  plantFeet?: boolean;
 }
 
 export interface Hold {
@@ -170,7 +176,7 @@ export interface MotionKey {
 }
 export interface MotionTrack {
   bone: string;
-  property: 'rotate' | 'translate';
+  property: 'rotate' | 'translate' | 'scalex';
   keys: MotionKey[];
 }
 export interface Animation {
@@ -251,6 +257,29 @@ export interface Retarget {
   range: RangeDemand[];
   /** Every run a bone inside a span turned from its drawn angle past its range. */
   artRange: ArtRange[];
+  /** With --leg-scale: each leg segment's scale, straight length and clamped runs. */
+  legScale: LegScale[];
+  /** Per scaled bone, the scale its x axis must reach on each frame (relative to setup); the scalex key of a bone under a scaled bone differs from it. */
+  scales: Map<string, number[]>;
+  /** The supports and jumps read off the reference ankles, when the map has both legs (whether or not --plant-feet used them). */
+  feet: Feet | null;
+  /** Whether the hip was derived from the supporting foot. */
+  planted: boolean;
+  /** Each ankle's world position on every frame, as the keys put it, when legs are scaled or feet planted. */
+  ankles: { bones: Record<Side, string>; at: Record<Side, Pt[]> } | null;
+  /** The translated bone's origin against its thigh roots' midpoint, at setup. */
+  pivot: Pivot | null;
+}
+
+/** The hip's pivot against the thigh roots, at setup (rig-c/pose#47). */
+export interface Pivot {
+  bone: string;
+  roots: [string, string];
+  /** Hip origin − the roots' midpoint, world units. */
+  offset: Pt;
+  distance: number;
+  /** The distance in hip widths (the roots' distance apart). */
+  hipWidths: number;
 }
 
 type Pt = [number, number];
@@ -358,6 +387,24 @@ const r3 = (v: number) => {
   const r = Math.round(v * 1000) / 1000;
   return Object.is(r, -0) ? 0 : r;
 };
+/** A scale key: to 1e-6, so its rounding moves an ankle 500 units out by at most 0.00025. */
+const r6 = (v: number) => {
+  const r = Math.round(v * 1e6) / 1e6;
+  return Object.is(r, -0) ? 0 : r;
+};
+
+/** The translated bone's origin against the midpoint of the two legs' first bones, at setup. */
+function pivotOf(rest: Rest, bone: string | null, legs: ReturnType<typeof legsOf> | null): Pivot | null {
+  if (bone === null || legs === null || !('legs' in legs)) return null;
+  const roots: [string, string] = [legs.legs.r.chain.bones[0]!, legs.legs.l.chain.bones[0]!];
+  const a = rest.get(roots[0])!;
+  const b = rest.get(roots[1])!;
+  const h = rest.get(bone)!;
+  const offset: Pt = [h.worldX - (a.worldX + b.worldX) / 2, h.worldY - (a.worldY + b.worldY) / 2];
+  const width = Math.hypot(b.worldX - a.worldX, b.worldY - a.worldY);
+  const distance = Math.hypot(offset[0], offset[1]);
+  return { bone, roots, offset, distance, hipWidths: width > 1e-9 ? distance / width : NaN };
+}
 
 /**
  * Retarget. Refuses (every reason at once) when a point the map needs is never
@@ -493,30 +540,17 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         const s = rigLen / poseLen;
         scale = { factor: s, pose: poseLen, rig: rigLen };
         const P = series.get(t.joint)!;
-        const bone = rest.get(t.bone)!;
-        const parent = bone.parent === null ? null : rest.get(bone.parent)!;
-        const keys: MotionKey[] = [];
-        const at: Pt[] = [];
         for (let i = 0; i < n; i++) {
           const wx = (P[i]![0] - P[0]![0]) * s;
           const wy = -(P[i]![1] - P[0]![1]) * s;
-          let lx = wx;
-          let ly = wy;
-          if (parent !== null) {
-            const det = parent.a * parent.d - parent.b * parent.c;
-            lx = (parent.d * wx - parent.b * wy) / det;
-            ly = (-parent.c * wx + parent.a * wy) / det;
-          }
-          keys.push({ t: keyTimes[i]!, v: [r3(lx), r3(ly)] });
-          at.push([bone.worldX + wx, bone.worldY + wy]);
           travel.push([wx, wy]);
         }
-        translateTrack = { bone: t.bone, property: 'translate', keys };
-        origin = { bone: t.bone, at };
       }
     }
   }
   p.throwIfAny();
+  /** The pose's own travel of the hip, world, before --plant-feet replaces it. */
+  const poseTravel: Pt[] = travel.map((v) => [v[0], v[1]]);
 
   // Each mapped bone's target world angle per frame, reaches last.
   const targets = new Map<string, number[]>();
@@ -594,6 +628,111 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     for (const e of bends) p.add('POSE_BEND_ONE_WAY', bendLine(e));
   }
   p.throwIfAny();
+
+  // The legs (#47): each leg segment's scale, the supports and jumps, and with
+  // --plant-feet the hip derived from the supporting foot — before the reaches,
+  // which are aimed from where the hip is.
+  const legScaleOn = opts.legScale !== undefined && opts.legScale !== 'off';
+  const plantOn = opts.plantFeet === true;
+  const legScale: LegScale[] = [];
+  const scales = new Map<string, number[]>();
+  let feet: Feet | null = null;
+  let legs: ReturnType<typeof legsOf> | null = null;
+  let legPath: string[] | null = null;
+  let legTop: string | null = null;
+  const restTurn = (b: string, i: number): number => targets.get(b)![i]! - restOf.get(b)!;
+  const aimX = new Map<string, boolean>();
+  for (const c of map.chains) c.bones.forEach((b, k) => aimX.set(b, c.aim[k] === 'x'));
+  {
+    const why = plantOn ? '--plant-feet' : legScaleOn ? '--leg-scale' : 'reading the feet';
+    legs = legsOf(map, why);
+    if ('problems' in legs) {
+      if (plantOn || legScaleOn) for (const x of legs.problems) p.add('LEGS_MAP', x);
+    } else {
+      const L = legs.legs;
+      const top = t !== null && SIDES.every((s) => L[s].ankleBone === t.bone || descends(rest, L[s].ankleBone, t.bone)) ? t.bone : rootOf(rest, L.r.ankleBone);
+      if (plantOn && (t === null || top !== t.bone)) p.add('LEGS_MAP', t === null ? '--plant-feet places the hip, and the map has no "translate"' : `--plant-feet places the translated bone "${t.bone}", and the legs' last bones (${L.r.ankleBone}, ${L.l.ankleBone}) do not both descend from it`);
+      const path = pathFrom(rest, top, [L.r.ankleBone, L.l.ankleBone]);
+      if (path === null || rootOf(rest, L.l.ankleBone) !== rootOf(rest, L.r.ankleBone)) {
+        if (plantOn || legScaleOn) p.add('LEGS_MAP', `the legs' last bones ${L.r.ankleBone} and ${L.l.ankleBone} do not hang from one bone`);
+      } else {
+        legPath = path;
+        legTop = top;
+      }
+      const hipOf = (s: Side) => series.get(`${s}_hip`);
+      const ankleOf = (s: Side) => series.get(`${s}_ankle`);
+      const hr = hipOf('r'), hl = hipOf('l'), ar = ankleOf('r'), al = ankleOf('l');
+      if (hr !== undefined && hl !== undefined && ar !== undefined && al !== undefined) feet = supportsOf({ r: ar, l: al }, { r: hr, l: hl }, keyTimes, secondsOf);
+      else if (plantOn) p.add('LEGS_MAP', `--plant-feet reads both hips and both ankles from the pose; the map's chains use ${['r_hip', 'l_hip', 'r_ankle', 'l_ankle'].filter((j) => !series.has(j)).join(', ')} nowhere`);
+    }
+  }
+  if (legScaleOn) {
+    const limits = opts.legScale as [number, number];
+    for (const c of map.chains) {
+      if (c.reach) continue;
+      c.bones.forEach((b, k) => {
+        const joints: [string, string] = [c.joints[k]!, c.joints[k + 1]!];
+        if (!isLegSegment(joints[0], joints[1])) return;
+        if (c.aim[k] !== 'x') {
+          p.add('LEGS_MAP', `--leg-scale scales chain "${c.name}" bone "${b}" (${joints[0]} → ${joints[1]}) along its own x axis, and the map aims it ${JSON.stringify(c.aim[k])}; a leg segment it scales must be aimed "x"`);
+          return;
+        }
+        const from = series.get(joints[0])!;
+        const to = series.get(joints[1])!;
+        const ls = legScaleOf(from.map((f, i) => Math.hypot(to[i]![0] - f[0], to[i]![1] - f[1])), limits);
+        if (!(ls.straight > 1e-6)) {
+          p.add('LEGS_MAP', `--leg-scale: chain "${c.name}" bone "${b}"'s segment ${joints[0]} → ${joints[1]} has a straight length (95th percentile) of ${ls.straight}px; there is nothing to scale against`);
+          return;
+        }
+        legScale.push({ chain: c.name, bone: b, joints, ...ls });
+        scales.set(b, ls.scale);
+      });
+    }
+    if (legScale.length === 0 && !p.any) p.add('LEGS_MAP', '--leg-scale scales the leg segments (two of one side\'s hip, knee and ankle), and the map aims none');
+  }
+  p.throwIfAny();
+  /** Every bone on the legs' path posed on frame i, by the targets as they stand. */
+  const poseLegs = (i: number): PathPose => {
+    const r = posePath(rest, legPath!, (b): Posing | null => (targets.has(b) ? { turn: restTurn(b, i), target: targets.get(b)![i]!, aimX: aimX.get(b)! } : null), (b) => scales.get(b)?.[i] ?? null);
+    if (typeof r === 'string') throw new Refusal([{ code: 'LEGS_MAP', text: r }]);
+    return r;
+  };
+  if (plantOn) {
+    // The plant is derived from the targets before the range clamp, so nothing after may turn a bone on the legs' path.
+    const onPath = new Set(legPath!);
+    for (const c of map.chains) for (const b of Object.keys(c.range)) if (onPath.has(b)) p.add('LEGS_RANGE', `--plant-feet places the hip through chain "${c.name}" bone "${b}", which has a "range"; a clamp after the plant would move the planted foot — drop the range or --plant-feet`);
+    for (const a of map.alternates) {
+      for (const b of [...Object.keys(a.turn), ...Object.keys(a.offsets)]) if (onPath.has(b)) p.add('LEGS_RANGE', `--plant-feet places the hip through bone "${b}", which set "${a.name}" turns or offsets; that would move the planted foot — drop it from the set or --plant-feet`);
+    }
+    p.throwIfAny();
+    const offsets = Array.from({ length: n }, (_, i) => {
+      const lp = poseLegs(i);
+      return { r: tipOf(rest, lp, legs !== null && 'legs' in legs ? legs.legs.r.ankleBone : ''), l: tipOf(rest, lp, legs !== null && 'legs' in legs ? legs.legs.l.ankleBone : '') };
+    });
+    const tb = rest.get(t!.bone)!;
+    const hip = plantHip(feet!, (i, s) => offsets[i]![s], (i) => poseTravel[i]!, [tb.worldX, tb.worldY]);
+    for (let i = 0; i < n; i++) travel[i] = [hip[i]![0] - tb.worldX, hip[i]![1] - tb.worldY];
+  }
+  if (t !== null && scale !== null) {
+    const bone = rest.get(t.bone)!;
+    const parent = bone.parent === null ? null : rest.get(bone.parent)!;
+    const keys: MotionKey[] = [];
+    const at: Pt[] = [];
+    for (let i = 0; i < n; i++) {
+      const [wx, wy] = travel[i]!;
+      let lx = wx;
+      let ly = wy;
+      if (parent !== null) {
+        const det = parent.a * parent.d - parent.b * parent.c;
+        lx = (parent.d * wx - parent.b * wy) / det;
+        ly = (-parent.c * wx + parent.a * wy) / det;
+      }
+      keys.push({ t: keyTimes[i]!, v: [r3(lx), r3(ly)] });
+      at.push([bone.worldX + wx, bone.worldY + wy]);
+    }
+    translateTrack = { bone: t.bone, property: 'translate', keys };
+    origin = { bone: t.bone, at };
+  }
 
   // Reaches: from the bone's posed origin at the pose's end point, anchored at
   // the translated bone. A reach above another is aimed first.
@@ -685,6 +824,25 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   const artRange = measureArt(sw.switches, map, targets, endOf, keyTimes, RANGE_GAP);
   clampArt(sw.switches, map, targets);
 
+  // The legs on their final targets: a bone under a scaled bone is keyed through
+  // its parent's posed matrix (legs.ts), and each ankle's world position is read.
+  const legPoses: PathPose[] | null = legPath !== null && (legScaleOn || plantOn) ? Array.from({ length: n }, (_, i) => poseLegs(i)) : null;
+  let ankles: Retarget['ankles'] = null;
+  if (legPoses !== null && legs !== null && 'legs' in legs) {
+    const L = legs.legs;
+    const topRest = rest.get(legTop!)!;
+    const at = { r: [] as Pt[], l: [] as Pt[] };
+    legPoses.forEach((lp, i) => {
+      const o: Pt = origin !== null && origin.bone === legTop ? origin.at[i]! : [topRest.worldX, topRest.worldY];
+      for (const sd of SIDES) {
+        const tip = tipOf(rest, lp, L[sd].ankleBone);
+        at[sd].push([o[0] + tip[0], o[1] + tip[1]]);
+      }
+    });
+    ankles = { bones: { r: L.r.ankleBone, l: L.l.ankleBone }, at };
+  }
+  const solvedKey = (b: string, i: number) => legPoses?.[i]!.solved.get(b);
+
   // Keys: the bone's turn less the turn of the nearest mapped bone above it.
   const tracks: Array<MotionTrack | SlotTrack> = [];
   for (const c of map.chains) {
@@ -699,6 +857,22 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         keys.push({ t: keyTimes[i]!, v: [r3(v)] });
       }
       tracks.push({ bone: b, property: 'rotate', keys });
+      // A bone under a scaled bone: the rotate key that lands it through its parent's scale (legs.ts).
+      if (solvedKey(b, 0) !== undefined) {
+        let last = 0;
+        keys.forEach((k, i) => {
+          const raw = solvedKey(b, i)!.rotate;
+          last = i === 0 ? wrap(raw) : last + wrap(raw - last);
+          k.v = [r3(last)];
+        });
+      }
+    }
+  }
+  // Scale keys: a scaled leg segment's own scale, or the scale that lands a bone under one at its asked length.
+  for (const c of map.chains) {
+    for (const b of c.bones) {
+      if (!scales.has(b) && solvedKey(b, 0) === undefined) continue;
+      tracks.push({ bone: b, property: 'scalex', keys: Array.from({ length: n }, (_, i) => ({ t: keyTimes[i]!, v: [r6(solvedKey(b, i)?.scale ?? scales.get(b)?.[i] ?? 1)] })) });
     }
   }
   if (translateTrack !== null) tracks.push(translateTrack);
@@ -708,6 +882,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     animation: { duration: keyTimes[n - 1]!, tracks },
     times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale,
     switches: sw.switches, shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
+    legScale, scales, feet, planted: plantOn, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs),
   };
 }
 
