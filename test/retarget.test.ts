@@ -1582,3 +1582,26 @@ describe('--short leaves a line across the body alone (the hip line, the eye lin
     expect(isAcross('mid_hip', 'neck')).toBe(false);
   });
 });
+
+// --- skeleton.json's `images` resolves to the parts (#25) ---------------------------
+
+describe('the kept skeleton.json names an images directory that holds the parts', () => {
+  const imagesOf = (build: string): string => {
+    const doc = JSON.parse(readFileSync(join(build, 'skeleton.json'), 'utf8')) as { skeleton: { images?: string } };
+    expect(typeof doc.skeleton.images).toBe('string');
+    return join(build, doc.skeleton.images!);
+  };
+  for (const name of ['build', 'wave-build', 'out/nested/wave', 'trailing/']) {
+    test(`--build ${name}: skeleton.images, read from skeleton.json's own folder, is a folder holding every part image`, () => {
+      const dir = tempDir();
+      writeRig(dir);
+      writeFileSync(join(dir, 'map.json'), JSON.stringify(baseMap(), null, 2));
+      writeFileSync(join(dir, 'pose.json'), JSON.stringify(poseDoc(BASE), null, 2));
+      const r = spawnSync(process.execPath, [CLI, 'retarget', '--rig', 'rig', '--map', 'map.json', '--pose', 'pose.json', '--out', 'motion.json', '--build', name], { cwd: dir, encoding: 'utf8' });
+      expect(r.status).toBe(0);
+      const images = imagesOf(join(dir, name));
+      expect(existsSync(images)).toBe(true);
+      expect(existsSync(join(images, 'seg.png'))).toBe(true);
+    }, SLOW);
+  }
+});
