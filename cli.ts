@@ -67,10 +67,9 @@ retarget
   --stance <leg lengths> with --plant-feet: on a frame outside the jumps, a free ankle within this many
                         leg lengths (FEET's) of the supporting one in the picture is planted too — its leg's
                         scalex keys stretched by k = (root y − floor y) / (root y − ankle y) until the foot
-                        reaches the floor, k held to [1, 1.08] (a free ankle below the support is not shrunk,
-                        and is listed; past 1.08 the frame is reported, not forced) and blended from 1 over the
-                        first and last 3 frames of each run; above it the foot is lifted and keeps the pose's
-                        height (STANCE lines; default: off; 0.07 is the card's, rig-c/pose#60)
+                        reaches the floor, raised or lowered, k within [0.92, 1.08] (past it, reported, not forced); above
+                        it the foot is lifted and keeps the pose's height (STANCE lines; default: off; 0.07 is
+                        the card's, rig-c/pose#60)
   --idle <name>         the rig's animation read as its idle (default: idle). Every idle track the new
                         animation does not key, on any channel, is listed as IDLE-DROPPED (a blink, a
                         breath); one it keys is IDLE-KEPT-OUT, naming the track that keys it, and so is a
