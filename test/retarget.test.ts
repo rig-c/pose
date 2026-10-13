@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { poseRawAnimation, poseRawSetup, readModel, type CompiledDocument, type RawBone } from 'rig-c/core';
 import { Plate } from 'rig-c/plate';
+import { savitzkyGolay } from '../src/retarget.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const CLI = join(ROOT, 'cli.ts');
@@ -883,13 +884,50 @@ describe('the command line', () => {
     const c = setup();
     const r = retarget(c, ['--smooth', '4']);
     expect(r.status).toBe(2);
-    expect(r.stderr).toContain('--smooth is "4"; it must be an odd whole number ≥ 1');
+    expect(r.stderr).toContain('--smooth is "4"; it must be 1 (none) or an odd whole number ≥ 5');
     expect(existsSync(c.out)).toBe(false);
   });
-  test('control: an odd --smooth over a still pose is accepted', () => {
-    const c = setup({ pose: poseDoc({ ...BASE, n: 4, trunk: () => 90, ru: () => 150, rf: () => 170, hip: () => [0, 0] }) });
+  test('--smooth 3 is exit 2: a cubic through 3 points changes nothing', () => {
+    const c = setup();
     const r = retarget(c, ['--smooth', '3']);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('--smooth is "3"; a cubic fitted through 3 points passes through all three, so a window of 3 changes nothing — it must be 1 (none) or an odd whole number ≥ 5');
+    expect(existsSync(c.out)).toBe(false);
+  });
+  test('control: an odd --smooth ≥ 5 over a still pose is accepted', () => {
+    const c = setup({ pose: poseDoc({ ...BASE, n: 6, trunk: () => 90, ru: () => 150, rf: () => 170, hip: () => [0, 0] }) });
+    const r = retarget(c, ['--smooth', '5']);
     expect(r.status).toBe(0);
+    expect(r.stdout).toContain('smooth 5');
+  }, SLOW);
+
+  test('ARG_PATH: --out into a directory that does not exist is refused up front; nothing written', () => {
+    const c = setup();
+    const out = join(c.dir, 'no', 'such', 'motion.json');
+    const r = cli(['retarget', '--rig', c.rig, '--map', c.map, '--pose', c.pose, '--out', out, '--build', c.build]);
+    expect(r.status).toBe(1);
+    expect(fails(r)).toEqual([`FAIL  ARG_PATH: --out ${out} — directory ${join(c.dir, 'no', 'such')} does not exist`]);
+    expect(r.stdout).toBe('');
+    expect(existsSync(join(c.dir, 'no'))).toBe(false);
+    expect(existsSync(c.build)).toBe(false);
+  });
+  test('ARG_PATH: --report into a directory that does not exist, the same', () => {
+    const c = setup();
+    const report = join(c.dir, 'gone', 'report.json');
+    const r = retarget(c, ['--report', report]);
+    expect(r.status).toBe(1);
+    expect(fails(r)).toEqual([`FAIL  ARG_PATH: --report ${report} — directory ${join(c.dir, 'gone')} does not exist`]);
+    expect(existsSync(c.out)).toBe(false);
+    expect(existsSync(c.build)).toBe(false);
+  });
+  test('control: --build and --render into directories not there yet are made', () => {
+    const c = setup();
+    const build = join(c.dir, 'deep', 'er', 'build');
+    const render = join(c.dir, 'deep', 'est', 'render');
+    const r = cli(['retarget', '--rig', c.rig, '--map', c.map, '--pose', c.pose, '--out', c.out, '--build', build, '--render', render]);
+    expect(r.status).toBe(0);
+    expect(existsSync(join(build, 'skeleton.model.json'))).toBe(true);
+    expect(existsSync(render)).toBe(true);
   }, SLOW);
 });
 
@@ -964,4 +1002,287 @@ describe('--build keeps a build rigc can draw where it was copied', () => {
     expect(rr.status).toBe(0);
     expect(existsSync(join(out, 'dance', 'contact.png'))).toBe(true);
   }, SLOW);
+});
+
+// --- smoothing: Savitzky–Golay ------------------------------------------------
+
+describe('smoothing is a centred Savitzky–Golay cubic', () => {
+  /** A deterministic uniform noise in [−1, 1] (a linear congruential generator). */
+  const noise = (seed: number) => {
+    let x = seed >>> 0;
+    return (): number => {
+      x = (Math.imul(x, 1664525) + 1013904223) >>> 0;
+      return (x / 2 ** 32) * 2 - 1;
+    };
+  };
+  const cubic = (u: number): Pt => [0.01 * u ** 3 - 0.3 * u ** 2 + 2 * u + 5, -0.002 * u ** 3 + u];
+
+  test('a cubic passes through unchanged, ends included, at every window', () => {
+    const xs = Array.from({ length: 40 }, (_, u) => cubic(u));
+    for (const w of [1, 5, 7, 9, 11]) {
+      const out = savitzkyGolay(xs, w);
+      const worst = Math.max(...out.map((p, i) => Math.hypot(p[0] - xs[i]![0], p[1] - xs[i]![1])));
+      expect(worst).toBeLessThan(1e-6);
+    }
+  });
+
+  test('noise around a cubic: its variance drops to about the filter\'s gain (0.486 at 5, 0.255 at 9)', () => {
+    const rnd = noise(8);
+    const n = 400;
+    const clean = Array.from({ length: n }, (_, u) => cubic(u / 10));
+    const e: Pt[] = clean.map(() => [rnd(), rnd()]);
+    const noisy = clean.map((p, i): Pt => [p[0] + e[i]![0], p[1] + e[i]![1]]);
+    const variance = (pts: Pt[]) => pts.reduce((s, p) => s + p[0] ** 2 + p[1] ** 2, 0) / pts.length;
+    const before = variance(e);
+    const ratio = (w: number) => variance(savitzkyGolay(noisy, w).map((p, i): Pt => [p[0] - clean[i]![0], p[1] - clean[i]![1]])) / before;
+    expect(ratio(5)).toBeLessThan(0.6);
+    expect(ratio(9)).toBeLessThan(0.35);
+    expect(ratio(9)).toBeLessThan(ratio(5));
+    // Control: window 1 is the input.
+    expect(ratio(1)).toBeCloseTo(1, 12);
+  });
+
+  test('a centred filter keeps a peak in time: a symmetric bump\'s top stays on its frame', () => {
+    const xs = Array.from({ length: 41 }, (_, i): Pt => [Math.exp(-(((i - 20) / 3) ** 2)), 0]);
+    const out = savitzkyGolay(xs, 7);
+    const top = out.reduce((b, p, i) => (p[0] > out[b]![0] ? i : b), 0);
+    expect(top).toBe(20);
+  });
+});
+
+// --- midpoints: "a+b" -----------------------------------------------------------
+
+describe('a rig point may be the midpoint of two ("a+b")', () => {
+  const midMap = (): Record<string, unknown> => ({
+    ...baseMap(),
+    chains: baseChains().map((c) => (c.name === 'trunk' ? { ...c, aim: ['sleeve_r0+sleeve_l0'] } : c)),
+    translate: { bone: 'hip', joint: 'mid_hip', scale: { pose: ['mid_hip', 'neck'], rig: ['leg_r0+leg_l0', 'neck'] } },
+  });
+
+  test('the trunk aimed at the shoulders\' midpoint, and the scale from the legs\' midpoint: the card\'s pose lands', () => {
+    // The stick rig's shoulders' midpoint is on the chest's y axis, as its neck is, and the legs' midpoint is the hip.
+    const c = setup({ map: midMap() });
+    const r = retarget(c);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'SCALE')[0]).toContain('1.50000 rig units per picture px (rig 150.00 / pose median 100.00)');
+    expect(misses(c.build, BASE)).toEqual([]);
+  }, SLOW);
+
+  test('each half of a midpoint aim must turn with the bone', () => {
+    const map = midMap();
+    map.chains = baseChains().map((ch) => (ch.name === 'trunk' ? { ...ch, aim: ['sleeve_r0+hip'] } : ch));
+    const c = setup({ map });
+    const r = retarget(c);
+    expect(r.status).toBe(1);
+    expect(fails(r)).toContain('FAIL  MAP_AIM_DESCENDS: chain "trunk" — bone "chest" aims at "hip", which does not descend from it; turning "chest" would not turn that direction');
+    expect(existsSync(c.out)).toBe(false);
+  }, SLOW);
+
+  test('a missing half is named, in an aim and in the scale; three halves are not a point', () => {
+    const map = midMap();
+    map.chains = baseChains().map((ch) => (ch.name === 'trunk' ? { ...ch, aim: ['sleeve_r0+sleeve_x9'] } : ch));
+    map.translate = { bone: 'hip', joint: 'mid_hip', scale: { pose: ['mid_hip', 'neck'], rig: ['leg_r0+leg_x9', 'neck'] } };
+    const c = setup({ map });
+    const r = retarget(c);
+    expect(r.status).toBe(1);
+    expect(fails(r)).toContain('FAIL  MAP_AIM_EXISTS: chain "trunk" — bone "chest" aims at "sleeve_x9" (of "sleeve_r0+sleeve_x9"), which is not in the rig');
+    expect(fails(r)).toContain('FAIL  MAP_BONE_EXISTS: "translate" "scale.rig" — "leg_r0+leg_x9" reads "leg_x9", which is not a bone in the rig (a point is a bone name, name:tip, or a+b)');
+    const map3 = midMap();
+    map3.chains = baseChains().map((ch) => (ch.name === 'trunk' ? { ...ch, aim: ['sleeve_r0+sleeve_l0+neck'] } : ch));
+    const c3 = setup({ map: map3 });
+    const r3 = retarget(c3);
+    expect(r3.status).toBe(1);
+    expect(fails(r3)).toEqual([`FAIL  MAP_POINT: chain "trunk" names the point "sleeve_r0+sleeve_l0+neck"; a point is a bone name, name:tip (the end of its x axis), or a+b (the midpoint of two of those)`]);
+  }, SLOW);
+});
+
+// --- the pelvis: hip tilt, and a trunk that reaches ---------------------------------
+
+describe('the pelvis tilts and the trunk reaches from the posed hip for the shoulders', () => {
+  /** Hip-line tilt, Spine degrees; frame 0 is off level. */
+  const tilt = (i: number): number => 12 * Math.sin(i * 0.5) + (i === 0 ? 5 : 0);
+  /** The chest's world angle on the rig, Spine degrees, which the pose's mid-shoulder is built from. */
+  const chestAngle = (i: number): number => 90 + 15 * Math.sin(i * 0.4 + 1);
+  /**
+   * The stick rig with a control bone between hip and chest, as @rig-c/parts
+   * builds one (chest_ctl 40 above the hip, the chest 35 above that): the
+   * chest's posed origin is reached through an unmapped bone. The shoulders'
+   * midpoint is 65 above the chest.
+   */
+  const ctlBones = (bs: BoneSpec[]): BoneSpec[] => bs.flatMap((b) => (b.name === 'chest' ? [{ name: 'chest_ctl', parent: 'hip', x: 0, y: 40 }, { ...b, parent: 'chest_ctl', y: 35 }] : [b]));
+  const CHEST: Pt = [0, 75];
+  const SHOULDERS = 65;
+  const rot = (deg: number, v: Pt): Pt => [Math.cos(deg * RAD) * v[0] - Math.sin(deg * RAD) * v[1], Math.sin(deg * RAD) * v[0] + Math.cos(deg * RAD) * v[1]];
+  /** The rig's mid-shoulder relative to its hip, world (y up), on frame i — what the pose is drawn from. */
+  const shoulderOffset = (i: number): Pt => add(rot(tilt(i), CHEST), [SHOULDERS * Math.cos(chestAngle(i) * RAD), SHOULDERS * Math.sin(chestAngle(i) * RAD)]);
+
+  const pelvisPose = (): Record<string, unknown> =>
+    poseDoc(BASE, (i, j) => {
+      const h = BASE.hip(i);
+      const mid: Pt = [200 + h[0], 400 + h[1]];
+      const d = dir(tilt(i), 15);
+      const o = shoulderOffset(i);
+      const msh: Pt = [mid[0] + o[0] / SCALE, mid[1] - o[1] / SCALE];
+      const set = (name: string, at: Pt) => (j[name] = { state: 'observed', at, score: 0.9 });
+      const shift = (names: string[], from: Pt, to: Pt) => {
+        for (const n of names) {
+          const a = j[n]!.at as Pt;
+          set(n, [a[0] + to[0] - from[0], a[1] + to[1] - from[1]]);
+        }
+      };
+      // Each limb moves with its root, so every segment keeps the card's angle.
+      shift(['r_knee', 'r_ankle'], j.r_hip!.at as Pt, add(mid, [-d[0], -d[1]]));
+      shift(['l_knee', 'l_ankle'], j.l_hip!.at as Pt, add(mid, d));
+      shift(['r_elbow', 'r_wrist'], j.r_shoulder!.at as Pt, add(msh, [-20, 0]));
+      shift(['l_elbow', 'l_wrist'], j.l_shoulder!.at as Pt, add(msh, [20, 0]));
+      set('r_hip', add(mid, [-d[0], -d[1]]));
+      set('l_hip', add(mid, d));
+      set('r_shoulder', add(msh, [-20, 0]));
+      set('l_shoulder', add(msh, [20, 0]));
+      // The scale's pose length stays 100 px, so the figure scale is exactly 1.5.
+      set('neck', add(mid, [0, -POSE_TRUNK]));
+    });
+  const pelvisMap = (reach: boolean): Record<string, unknown> => ({
+    ...baseMap(),
+    chains: [
+      { name: 'pelvis', bones: ['hip'], joints: ['r_hip', 'l_hip'], aim: ['leg_r0>leg_l0'] },
+      { name: 'trunk', bones: ['chest'], joints: ['mid_hip', 'mid_shoulder'], aim: ['sleeve_r0+sleeve_l0'], ...(reach ? { reach: true } : {}) },
+      ...baseChains().filter((c) => c.name !== 'trunk'),
+    ],
+  });
+
+  /**
+   * Read back by rig-c's poser, independently: the hip line's angle against
+   * tilt(i), and the rig's mid-shoulder against where the pose puts it — the
+   * hip's setup origin, plus its scaled travel, plus the pose's mid_hip →
+   * mid_shoulder scaled. Tolerances: 0.01° and 0.01 units. A rotate key is
+   * rounded to 0.001° (≤ 0.0005° each on the hip and the chest; levers of 140
+   * and 65 units: ≤ 0.0018 units), a translate key to 0.001 (≤ 0.0007 units),
+   * and rig-c stores float32 (≈ 3e-5 at 400 units): 0.01 is above three times
+   * their sum.
+   */
+  function pelvisMisses(build: string): string[] {
+    const doc = loadBuild(build);
+    const setupHip = byName(poseRawSetup(doc).bones).get('hip')!;
+    const poses = poseRawAnimation(doc, 'dance', Array.from({ length: BASE.n - 1 }, () => BASE.dt));
+    const out: string[] = [];
+    poses.forEach((p, i) => {
+      const b = byName(p.bones);
+      const lr = b.get('leg_r0')!;
+      const ll = b.get('leg_l0')!;
+      const line = Math.atan2(ll.worldY - lr.worldY, ll.worldX - lr.worldX) * DEG;
+      if (Math.abs(wrap(line - tilt(i))) > ANGLE_TOL) out.push(`frame ${i}: hip line ${line.toFixed(4)}° want ${tilt(i).toFixed(4)}°`);
+      const sr = b.get('sleeve_r0')!;
+      const sl = b.get('sleeve_l0')!;
+      const got: Pt = [(sr.worldX + sl.worldX) / 2, (sr.worldY + sl.worldY) / 2];
+      const h = BASE.hip(i);
+      const o = shoulderOffset(i);
+      const want: Pt = [setupHip.worldX + h[0] * SCALE + o[0], setupHip.worldY - h[1] * SCALE + o[1]];
+      const e = Math.hypot(got[0] - want[0], got[1] - want[1]);
+      if (!(e <= ORIGIN_TOL)) out.push(`frame ${i}: mid-shoulder (${got[0].toFixed(3)}, ${got[1].toFixed(3)}) want (${want[0].toFixed(3)}, ${want[1].toFixed(3)}) (|e| ${e.toFixed(4)})`);
+    });
+    return out;
+  }
+
+  test('the hip line tilts with the pose and the rig\'s mid-shoulder lands on the pose\'s', () => {
+    const c = setup({ rig: { bones: ctlBones }, map: pelvisMap(true), pose: pelvisPose() });
+    const r = retarget(c);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'LAND').some((l) => l.startsWith('LAND   bone "chest" aim'))).toBe(true);
+    expect(pelvisMisses(c.build)).toEqual([]);
+  }, SLOW);
+
+  test('control: the same trunk without "reach" points along the pose\'s segment, and its shoulders miss', () => {
+    const c = setup({ rig: { bones: ctlBones }, map: pelvisMap(false), pose: pelvisPose() });
+    const r = retarget(c);
+    expect(r.status).toBe(0);
+    const m = pelvisMisses(c.build);
+    expect(m.some((l) => l.includes('hip line'))).toBe(false);
+    const worst = Math.max(...m.map((l) => Number(/\|e\| ([\d.]+)/.exec(l)?.[1] ?? 0)));
+    expect(worst).toBeGreaterThan(1);
+  }, SLOW);
+
+  test('mutant: the reach\'s posed origin ignores the hip\'s turn, and the shoulders miss', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const from = 'const r = turnAbove(parent, i) / DEG;';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'const r = 0;'));
+      const c = setup({ rig: { bones: ctlBones }, map: pelvisMap(true), pose: pelvisPose() });
+      const r = retarget(c, [], join(d, 'cli.ts'));
+      expect(r.status).toBe(0);
+      expect(pelvisMisses(c.build).some((l) => l.includes('mid-shoulder'))).toBe(true);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+
+  test('POSTURE lines and the report\'s posture: the rig\'s tilt and sway beside the reference\'s', () => {
+    const c = setup({ rig: { bones: ctlBones }, map: pelvisMap(true), pose: pelvisPose() });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--report', report]);
+    expect(r.status).toBe(0);
+    const lines = linesOf(r, 'POSTURE');
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toStartWith('POSTURE hip tilt range (chain "pelvis", r_hip → l_hip, Spine degrees): reference ');
+    expect(lines[1]).toContain('mid_hip = "hip", mid_shoulder = "sleeve_r0+sleeve_l0"');
+    const q = (JSON.parse(readFileSync(report, 'utf8')) as { posture: { tilt: { reference: { range: number }; ratio: number }; sway: { ratio: number } } }).posture;
+    const tilts = Array.from({ length: BASE.n }, (_, i) => tilt(i));
+    expect(q.tilt.reference.range).toBeCloseTo(Math.max(...tilts) - Math.min(...tilts), 6);
+    expect(q.tilt.ratio).toBeCloseTo(1, 3);
+    // The rig's shoulders land on the pose's (above), so its sway is the reference's.
+    expect(q.sway.ratio).toBeCloseTo(1, 3);
+  }, SLOW);
+
+  test('control: a map without a pelvis chain prints no POSTURE line', () => {
+    const c = setup();
+    const r = retarget(c);
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'POSTURE')).toEqual([]);
+  }, SLOW);
+
+  const reachCases: Array<{ what: string; map: () => Record<string, unknown>; want: string }> = [
+    {
+      what: 'on a chain of two bones',
+      map: () => ({ ...pelvisMap(false), chains: [...baseChains().filter((c) => c.name !== 'arm_r'), { name: 'arm_r', bones: ['sleeve_r0', 'sleeve_r1'], joints: ['r_shoulder', 'r_elbow', 'r_wrist'], reach: true }] }),
+      want: 'FAIL  MAP_REACH: chain "arm_r" has "reach" and 2 bones; a reach turns one bone from its posed origin, so the chain must have exactly one',
+    },
+    {
+      what: 'from a joint other than the translated one',
+      map: () => ({ ...baseMap(), chains: baseChains().map((c) => (c.name === 'trunk' ? { ...c, joints: ['neck', 'nose'], aim: ['neck'], reach: true } : c)) }),
+      want: 'FAIL  MAP_REACH: chain "trunk" has "reach" and starts at joint "neck"; the reach is measured from the translated joint, so its first joint must be "mid_hip"',
+    },
+    {
+      what: 'with no translate',
+      map: () => ({ spec: 'rig-pose-map/1', chains: baseChains().map((c) => (c.name === 'trunk' ? { ...c, reach: true } : c)) }),
+      want: 'FAIL  MAP_REACH: chain "trunk" has "reach" and the map has no "translate"; a reach is anchored at the translated bone\'s posed origin',
+    },
+    {
+      what: 'with an aim that is not one point',
+      map: () => ({ ...baseMap(), chains: baseChains().map((c) => (c.name === 'trunk' ? { ...c, aim: ['x'], reach: true } : c)) }),
+      want: 'FAIL  MAP_REACH: chain "trunk" has "reach" and aims "x"; a reach aims from the bone\'s own origin at one point, so "aim" must name it (a bone, name:tip or a+b)',
+    },
+    {
+      what: 'on a bone that does not ride the translated bone',
+      map: () => ({ ...baseMap(), translate: { bone: 'leg_r0', joint: 'mid_hip', scale: { pose: ['mid_hip', 'neck'], rig: ['hip', 'neck'] } }, chains: baseChains().filter((c) => c.name !== 'leg_r').map((c) => (c.name === 'trunk' ? { ...c, reach: true } : c)) }),
+      want: 'FAIL  MAP_REACH: chain "trunk" — bone "chest" reaches from its posed origin, but it does not descend from the translated bone "leg_r0"; its origin would not travel with the anchor',
+    },
+  ];
+  for (const rc of reachCases) {
+    test(`MAP_REACH: refused ${rc.what}`, () => {
+      const c = setup({ map: rc.map() });
+      const r = retarget(c);
+      expect(r.status).toBe(1);
+      expect(fails(r)).toContain(rc.want);
+      expect(existsSync(c.out)).toBe(false);
+    }, SLOW);
+  }
 });

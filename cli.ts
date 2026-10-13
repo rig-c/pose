@@ -32,7 +32,9 @@ retarget
   --base-motion <path>  the rig's motion spec, when it is not motion.json beside rig.json
   --min-score <s>       a joint scored below s is not good on that frame and holds its last good
                         value (default: 0.3); a joint with no score is good
-  --smooth <n>          centered moving average over n frames of joint positions, n odd (default: 1, none)
+  --smooth <n>          Savitzky–Golay over n frames of joint positions: a centred least-squares cubic,
+                        read at each frame (default: 1, none); n is odd and ≥ 5 — a cubic through 3
+                        points passes through all three, so 3 would change nothing
   --bends refuse|clamp  a hinge (elbow, knee: any joint inside a chain) bent the wrong way refuses
                         the run (default), or is straightened on that frame and listed
   --bend-tolerance <d>  degrees past straight a hinge may bend the wrong way before it counts (default: 0)
@@ -88,6 +90,12 @@ function num(f: Map<string, string>, name: string, dflt: number, ok: (n: number)
   return n;
 }
 
+function smoothOf(f: Map<string, string>): number {
+  const n = num(f, 'smooth', 1, (v) => Number.isInteger(v) && v >= 1 && v % 2 === 1, '1 (none) or an odd whole number ≥ 5');
+  if (n === 3) throw new Usage('--smooth is "3"; a cubic fitted through 3 points passes through all three, so a window of 3 changes nothing — it must be 1 (none) or an odd whole number ≥ 5');
+  return n;
+}
+
 function retargetArgs(argv: string[]): RetargetArgs {
   const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'min-score', 'smooth', 'bends', 'bend-tolerance', 'profile', 'build', 'render', 'report'], ['coco']);
   const bends = f.get('bends') ?? 'refuse';
@@ -106,7 +114,7 @@ function retargetArgs(argv: string[]): RetargetArgs {
     person: f.get('person'),
     baseMotion: f.get('base-motion'),
     minScore: num(f, 'min-score', 0.3, (n) => n >= 0, 'a number ≥ 0'),
-    smooth: num(f, 'smooth', 1, (n) => Number.isInteger(n) && n >= 1 && n % 2 === 1, 'an odd whole number ≥ 1'),
+    smooth: smoothOf(f),
     bends,
     bendTolerance: num(f, 'bend-tolerance', 0, (n) => n >= 0 && n < 180, 'degrees in [0, 180)'),
     profile,

@@ -22,10 +22,21 @@
  * end of a bone's x axis) — right for a head, whose eye line
  * (`"eye_r>eye_l"` against the joints `r_eye`, `l_eye`) turns with it.
  *
+ * Wherever the map names a point of the rig — an aim's end, a scale's end — it
+ * may also be `"a+b"`, the midpoint of two points (each a bone or `name:tip`):
+ * `"sleeve_r0+sleeve_l0"` is the rig's mid-shoulder.
+ *
+ * `reach: true` on a one-bone chain whose first joint is the translated joint
+ * (a trunk from mid_hip) aims the bone not along the pose's segment but from
+ * where its origin is posed — the hip moved and turned — at the point where the
+ * pose puts the segment's end, relative to the translated joint and scaled: so a
+ * tilted pelvis does not carry the chest off the shoulders' line. Its aim is one
+ * point (a bone, `name:tip` or `a+b`), measured from the bone's own origin.
+ *
  * `translate` moves one bone by the travel of one point, scaled by the ratio of
- * a length measured on the rig (between two bones' origins; `name:tip` is the
- * end of a bone's x axis) to the same length measured in the pose (its median
- * over the frames where both points are good).
+ * a length measured on the rig (between two points: a bone's origin, `name:tip`
+ * the end of a bone's x axis, or `a+b`) to the same length measured in the pose
+ * (its median over the frames where both points are good).
  */
 import type { RawBone } from 'rig-c/core';
 import { POINT_NAMES } from './joints.ts';
@@ -41,6 +52,8 @@ export interface Chain {
   joints: string[];
   aim: string[];
   bend: Bend;
+  /** Aim from the bone's posed origin at the pose's end point, anchored at the translated bone. */
+  reach: boolean;
 }
 export interface Translate {
   bone: string;
@@ -77,10 +90,10 @@ export function readMap(text: string, where: string): JointMap {
     doc.chains.forEach((c: unknown, i: number) => {
       const cw = `${where} chains[${i}]`;
       if (!isObject(c)) {
-        p.add('MAP_CHAIN_SHAPE', `${cw} is ${typeName(c)}; a chain is { name, bones, joints, aim?, bend? }`);
+        p.add('MAP_CHAIN_SHAPE', `${cw} is ${typeName(c)}; a chain is { name, bones, joints, aim?, bend?, reach? }`);
         return;
       }
-      refuseUnknownKeys(p, 'MAP_KEYS', cw, c, ['name', 'bones', 'joints', 'aim', 'bend']);
+      refuseUnknownKeys(p, 'MAP_KEYS', cw, c, ['name', 'bones', 'joints', 'aim', 'bend', 'reach']);
       const name = typeof c.name === 'string' && c.name !== '' ? c.name : null;
       if (name === null) p.add('MAP_CHAIN_NAME', `${cw} "name" is ${typeName(c.name)}; it must be a non-empty string`);
       else if (names.has(name)) p.add('MAP_CHAIN_NAME', `${cw} "name" "${name}" names two chains`);
@@ -99,15 +112,23 @@ export function readMap(text: string, where: string): JointMap {
       let aim = bones === null ? [] : bones.map(() => 'x');
       if ('aim' in c) {
         const a = strings(c.aim);
-        if (a === null || bones === null || a.length !== bones.length) p.add('MAP_CHAIN_AIM', `${label} "aim" is ${typeName(c.aim)}; it must be one entry per bone ("x", a descendant bone's name, or "a>b")`);
-        else aim = a;
+        if (a === null || bones === null || a.length !== bones.length) p.add('MAP_CHAIN_AIM', `${label} "aim" is ${typeName(c.aim)}; it must be one entry per bone ("x", a descendant point, or "a>b")`);
+        else {
+          aim = a;
+          for (const x of a) if (x !== 'x') for (const end of x.split('>')) pointProblem(p, label, end);
+        }
       }
       let bend: Bend = 'rest';
       if ('bend' in c) {
         if (typeof c.bend !== 'string' || !(BENDS as readonly string[]).includes(c.bend)) p.add('MAP_CHAIN_BEND', `${label} "bend" is ${typeName(c.bend)}; it must be one of ${BENDS.join(', ')}`);
         else bend = c.bend as Bend;
       }
-      chains.push({ name: name ?? cw, bones: bones ?? [], joints: joints ?? [], aim, bend });
+      let reach = false;
+      if ('reach' in c) {
+        if (typeof c.reach !== 'boolean') p.add('MAP_REACH', `${label} "reach" is ${typeName(c.reach)}; it must be true or false`);
+        else reach = c.reach;
+      }
+      chains.push({ name: name ?? cw, bones: bones ?? [], joints: joints ?? [], aim, bend, reach });
     });
   }
   let translate: Translate | null = null;
@@ -128,12 +149,44 @@ export function readMap(text: string, where: string): JointMap {
         p.add('MAP_TRANSLATE_SCALE', `${tw} "scale" is ${JSON.stringify(s)}; it must be { pose: [joint, joint], rig: [bone, bone] }, the same length measured in each`);
       } else {
         for (const j of pose) if (!POINT_NAMES.includes(j)) p.add('MAP_JOINT_NAME', `${tw} "scale.pose" names "${j}"; the points are ${POINT_NAMES.join(', ')}`);
+        for (const r of rig) pointProblem(p, `${tw} "scale.rig"`, r);
         if (typeof t.bone === 'string' && typeof t.joint === 'string') translate = { bone: t.bone, joint: t.joint, scale: { pose: [pose[0]!, pose[1]!], rig: [rig[0]!, rig[1]!] } };
       }
     }
   }
+  for (const c of chains) {
+    if (!c.reach) continue;
+    const label = `chain "${c.name}"`;
+    if (c.bones.length !== 1) p.add('MAP_REACH', `${label} has "reach" and ${c.bones.length} bones; a reach turns one bone from its posed origin, so the chain must have exactly one`);
+    const aim = c.aim[0];
+    if (aim !== undefined && (aim === 'x' || aim.includes('>'))) {
+      p.add('MAP_REACH', `${label} has "reach" and aims ${JSON.stringify(aim)}; a reach aims from the bone's own origin at one point, so "aim" must name it (a bone, name:tip or a+b)`);
+    }
+    if (!('translate' in doc)) p.add('MAP_REACH', `${label} has "reach" and the map has no "translate"; a reach is anchored at the translated bone's posed origin`);
+    else if (translate !== null && c.joints[0] !== translate.joint) {
+      p.add('MAP_REACH', `${label} has "reach" and starts at joint "${c.joints[0]}"; the reach is measured from the translated joint, so its first joint must be "${translate.joint}"`);
+    }
+  }
   p.throwIfAny();
   return { chains, translate };
+}
+
+/** A rig point as the map spells it: `name`, `name:tip`, or `a+b`, the midpoint of two such. */
+function pointProblem(p: Problems, label: string, spec: string): void {
+  const parts = spec.split('+');
+  if (parts.length > 2 || parts.some((x) => x === '' || x === ':tip')) {
+    p.add('MAP_POINT', `${label} names the point ${JSON.stringify(spec)}; a point is a bone name, name:tip (the end of its x axis), or a+b (the midpoint of two of those)`);
+  }
+}
+
+/** The points a point spec averages: one (`name`, `name:tip`) or two (`a+b`). */
+export function pointParts(spec: string): string[] {
+  return spec.split('+');
+}
+
+/** The bone a point part is read off (`name:tip` → `name`). */
+export function partBone(part: string): string {
+  return part.endsWith(':tip') ? part.slice(0, -4) : part;
 }
 
 function strings(v: unknown): string[] | null {
@@ -146,7 +199,7 @@ export function descends(rest: Rest, bone: string, ancestor: string): boolean {
   return false;
 }
 
-/** The two points a non-`x` aim runs between: `"a>b"`, or the bone's origin to a descendant's. */
+/** The two points a non-`x` aim runs between: `"a>b"`, or the bone's origin to a descendant point. */
 export function aimEnds(bone: string, aim: string): [string, string] {
   const i = aim.indexOf('>');
   return i < 0 ? [bone, aim] : [aim.slice(0, i), aim.slice(i + 1)];
@@ -171,23 +224,32 @@ export function aimAngle(bones: ReadonlyMap<string, AimBone>, lengths: ReadonlyM
     const b = bones.get(bone)!;
     return Math.atan2(b.c, b.a) * DEG;
   }
-  const at = (spec: string): [number, number] => {
-    const tip = spec.endsWith(':tip');
-    const name = tip ? spec.slice(0, -4) : spec;
-    const b = bones.get(name)!;
-    const l = tip ? lengths.get(name) ?? 0 : 0;
-    return [b.worldX + b.a * l, b.worldY + b.c * l];
-  };
-  const [f, t] = aimEnds(bone, aim).map(at) as [[number, number], [number, number]];
+  const [f, t] = aimEnds(bone, aim).map((e) => pointAt(bones, lengths, e)!) as [[number, number], [number, number]];
   return Math.atan2(t[1] - f[1], t[0] - f[0]) * DEG;
 }
 
-/** A rig point: a bone's origin, or `name:tip`, the end of its x axis. */
+/**
+ * A rig point on any pose of the rig: a bone's origin, `name:tip` (the end of
+ * its x axis), or `a+b` (their midpoint); null when a bone is not there.
+ */
+export function pointAt(bones: ReadonlyMap<string, AimBone>, lengths: ReadonlyMap<string, number>, spec: string): [number, number] | null {
+  let x = 0;
+  let y = 0;
+  const parts = pointParts(spec);
+  for (const part of parts) {
+    const name = partBone(part);
+    const b = bones.get(name);
+    if (b === undefined) return null;
+    const l = part.endsWith(':tip') ? lengths.get(name) ?? 0 : 0;
+    x += b.worldX + b.a * l;
+    y += b.worldY + b.c * l;
+  }
+  return [x / parts.length, y / parts.length];
+}
+
+/** A rig point at the setup pose: a bone's origin, `name:tip`, or `a+b`. */
 export function rigPoint(rest: Rest, spec: string): [number, number] | null {
-  const tip = spec.endsWith(':tip');
-  const b = rest.get(tip ? spec.slice(0, -4) : spec);
-  if (b === undefined) return null;
-  return tip ? [b.worldX + b.a * b.length, b.worldY + b.c * b.length] : [b.worldX, b.worldY];
+  return pointAt(rest, new Map([...rest].map(([n, b]) => [n, b.length])), spec);
 }
 
 /** Check every name the map gives against the rig; every miss is named. */
@@ -218,13 +280,16 @@ export function resolveMap(map: JointMap, rest: Rest, where: string): void {
       const verb = aim.includes('>') ? 'aims through' : 'aims at';
       let ok = true;
       for (const end of [from, to]) {
-        const name = end.endsWith(':tip') ? end.slice(0, -4) : end;
-        if (!rest.has(name)) {
-          p.add('MAP_AIM_EXISTS', `chain "${c.name}" — bone "${b}" ${verb} "${end}", which is not in the rig`);
-          ok = false;
-        } else if (name !== b && !descends(rest, name, b)) {
-          p.add('MAP_AIM_DESCENDS', `chain "${c.name}" — bone "${b}" ${verb} "${name}", which does not descend from it; turning "${b}" would not turn that direction`);
-          ok = false;
+        for (const part of pointParts(end)) {
+          const name = partBone(part);
+          const which = part === end ? `"${end}"` : `"${part}" (of "${end}")`;
+          if (!rest.has(name)) {
+            p.add('MAP_AIM_EXISTS', `chain "${c.name}" — bone "${b}" ${verb} ${which}, which is not in the rig`);
+            ok = false;
+          } else if (name !== b && !descends(rest, name, b)) {
+            p.add('MAP_AIM_DESCENDS', `chain "${c.name}" — bone "${b}" ${verb} "${name}", which does not descend from it; turning "${b}" would not turn that direction`);
+            ok = false;
+          }
         }
       }
       if (ok) {
@@ -242,9 +307,18 @@ export function resolveMap(map: JointMap, rest: Rest, where: string): void {
         if (descends(rest, t.bone, b)) p.add('MAP_TRANSLATE_PARENT', `"translate" — bone "${t.bone}" descends from "${b}", which chain "${owner.get(b)}" turns; a translated bone's parent frame must not move`);
       }
     }
-    for (const r of t.scale.rig) if (rigPoint(rest, r) === null) p.add('MAP_BONE_EXISTS', `"translate" "scale.rig" — "${r}" is not a bone in the rig (a bone name, or name:tip)`);
+    for (const r of t.scale.rig) {
+      for (const part of pointParts(r)) if (!rest.has(partBone(part))) p.add('MAP_BONE_EXISTS', `"translate" "scale.rig" — "${r}"${part === r ? '' : ` reads "${partBone(part)}", which`} is not a bone in the rig (a point is a bone name, name:tip, or a+b)`);
+    }
     const [r0, r1] = t.scale.rig.map((r) => rigPoint(rest, r));
     if (r0 && r1 && Math.hypot(r1[0] - r0[0], r1[1] - r0[1]) < 1e-6) p.add('MAP_TRANSLATE_SCALE', `"translate" "scale.rig" — "${t.scale.rig[0]}" and "${t.scale.rig[1]}" are at the same point; the length is 0`);
+  }
+  for (const c of map.chains) {
+    const b = c.bones[0];
+    if (!c.reach || t === null || b === undefined || !rest.has(b) || !rest.has(t.bone)) continue;
+    if (b !== t.bone && !descends(rest, b, t.bone)) {
+      p.add('MAP_REACH', `chain "${c.name}" — bone "${b}" reaches from its posed origin, but it does not descend from the translated bone "${t.bone}"; its origin would not travel with the anchor`);
+    }
   }
   if (p.any) p.list.unshift({ code: 'MAP_RESOLVES', text: `${where} does not resolve against the rig` });
   p.throwIfAny();
