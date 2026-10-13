@@ -1403,3 +1403,45 @@ describe('the pelvis tilts and the trunk reaches from the posed hip for the shou
     }, SLOW);
   }
 });
+
+// --- the kept build is the same bytes wherever it is made (#18) ---------------
+
+describe('--build writes the same bytes in any folder, and no path out of it', () => {
+  test('two identical runs in two folders at different depths: byte-identical build, motion and report', () => {
+    const root = tempDir();
+    const runIn = (dir: string): string => {
+      mkdirSync(dir, { recursive: true });
+      writeRig(dir);
+      writeFileSync(join(dir, 'map.json'), JSON.stringify(baseMap(), null, 2));
+      writeFileSync(join(dir, 'pose.json'), JSON.stringify(poseDoc(BASE), null, 2));
+      const r = spawnSync(process.execPath, [CLI, 'retarget', '--rig', 'rig', '--map', 'map.json', '--pose', 'pose.json', '--out', 'motion.json', '--build', 'build', '--report', 'report.json'], { cwd: dir, encoding: 'utf8' });
+      expect(r.status).toBe(0);
+      return dir;
+    };
+    const a = runIn(join(root, 'a'));
+    const b = runIn(join(root, 'deep', 'er', 'b'));
+    for (const f of ['build/skeleton.model.json', 'build/skeleton.json', 'build/skeleton.atlas', 'motion.json', 'report.json']) {
+      expect(readFileSync(join(b, f)).equals(readFileSync(join(a, f)))).toBe(true);
+    }
+    const model = readFileSync(join(a, 'build', 'skeleton.model.json'), 'utf8');
+    expect(model).not.toContain(root);
+    expect(model).not.toContain(tmpdir());
+    const pages = (JSON.parse(model) as { images: Array<{ page: string }> }).images.map((i) => i.page);
+    expect(pages.length).toBeGreaterThan(0);
+    for (const p of pages) expect(p.startsWith('../rig/images/')).toBe(true);
+  }, SLOW);
+});
+
+// --- the example runs ------------------------------------------------------------
+
+describe('examples/wave runs as the README says', () => {
+  test('a bones-only rig, a 3 s wave and its map: green, every bone lands, written', () => {
+    const out = join(tempDir(), 'wave.motion.json');
+    const r = cli(['retarget', '--rig', 'examples/wave/rig', '--map', 'examples/wave/map.json', '--pose', 'examples/wave/pose.json', '--out', out]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'LAND')).toHaveLength(11);
+    expect(linesOf(r, 'FOLD')).toEqual(['FOLD   the rig has no slots, so it draws nothing to fold; not measured']);
+    expect(existsSync(out)).toBe(true);
+  }, SLOW);
+});

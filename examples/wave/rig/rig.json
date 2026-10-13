@@ -1,0 +1,24 @@
+{
+  "spec": "rigc-rig/1",
+  "name": "wave",
+  "skeleton": { "width": 400, "height": 600 },
+  "bones": [
+    { "name": "root" },
+    { "name": "hip", "parent": "root", "x": 0, "y": 200 },
+    { "name": "chest", "parent": "hip", "x": 0, "y": 75 },
+    { "name": "neck", "parent": "chest", "x": 0, "y": 75 },
+    { "name": "head", "parent": "neck", "x": 0, "y": 30 },
+    { "name": "eye_r", "parent": "head", "x": -6, "y": 5 },
+    { "name": "eye_l", "parent": "head", "x": 6, "y": 5 },
+    { "name": "sleeve_r0", "parent": "chest", "x": -30, "y": 65, "rotation": -100, "length": 70 },
+    { "name": "sleeve_r1", "parent": "sleeve_r0", "x": 70, "y": 0, "rotation": 20, "length": 60 },
+    { "name": "sleeve_l0", "parent": "chest", "x": 30, "y": 65, "rotation": -80, "length": 70 },
+    { "name": "sleeve_l1", "parent": "sleeve_l0", "x": 70, "y": 0, "rotation": -20, "length": 60 },
+    { "name": "leg_r0", "parent": "hip", "x": -15, "y": 0, "rotation": -95, "length": 80 },
+    { "name": "leg_r1", "parent": "leg_r0", "x": 80, "y": 0, "rotation": -3, "length": 70 },
+    { "name": "leg_l0", "parent": "hip", "x": 15, "y": 0, "rotation": -85, "length": 80 },
+    { "name": "leg_l1", "parent": "leg_l0", "x": 80, "y": 0, "rotation": 3, "length": 70 }
+  ],
+  "slots": [],
+  "skins": {}
+}

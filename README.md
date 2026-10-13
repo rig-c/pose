@@ -8,6 +8,16 @@ Part of the rig-c toolchain: [core](https://github.com/rig-c/core) compiles and 
 
 <!-- demo -->
 
+## Try it
+
+[`examples/wave`](examples/wave) runs with nothing else: a bones-only stick rig (no art), a 3-second wave made from joint angles (`make-pose.ts` writes it), and the map that joins them.
+
+```sh
+rig-pose retarget --rig examples/wave/rig --map examples/wave/map.json --pose examples/wave/pose.json --out wave.motion.json --build wave-build
+```
+
+It prints the gate's verdict and where every mapped bone landed, then writes `wave.motion.json` and the gated build. `rigc preview --candidate wave-build` plays it in the Spine Web Player. A rig with no art shows only its bones.
+
 ## What it does
 
 ```sh
