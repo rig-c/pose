@@ -7,15 +7,16 @@
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { readMap, resolveMap, type JointMap } from './map.ts';
+import { readMap, resolveMap, type JointMap, type Rest } from './map.ts';
 import { convertCoco17, personTrack, readPoseSequence } from './pose.ts';
 import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './problems.ts';
 import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, readIdle, targetOf, trackLabel, type IdleReading, type RigcTrack, type Target } from './idle.ts';
-import { bendLine, endOnLine, flipLine, holdLine, rangeLine, retarget, shortLine, turnLine, type RetargetOptions } from './retarget.ts';
+import { bendLine, endOnLine, flipLine, holdLine, rangeLine, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions } from './retarget.ts';
 import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, readBuild, resolveRig, restOf, slotsOf } from './rigc.ts';
 import { artRangeLine, chainsMoving, switchLine, uncoveredFolds } from './switch.ts';
 import { landed, measureFeet, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
 import { legsOf } from './legs.ts';
+import { reduceKeys, type ReduceBone, type Reduced } from './reduce.ts';
 import type { LegScale } from './legs.ts';
 
 export interface RetargetArgs extends RetargetOptions {
@@ -42,6 +43,10 @@ export interface RetargetArgs extends RetargetOptions {
   carryIdle?: boolean;
   /** A rig-pose-tracks/1 fragment merged into the new animation. */
   merge?: string;
+  /** Thin the mapped bones' rotate keys within this many degrees (#32). */
+  reduce?: number;
+  /** With reduce: thin the hip's translate keys within this many rig units. */
+  reduceHip?: number;
 }
 
 export interface RunResult {
@@ -99,7 +104,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     resolveMap(map, rest, a.map, slots);
 
     const r = retarget(rest, map, frames, times, a, slots);
-    say(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, smooth ${a.smooth}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)${a.legScale !== undefined && a.legScale !== 'off' ? `, leg-scale ${a.legScale[0]}–${a.legScale[1]}` : ''}${a.plantFeet === true ? ', plant-feet' : ''}${a.carryIdle === true ? ', carry-idle' : ''}${a.merge !== undefined ? `, merge ${a.merge}` : ''}`);
+    say(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, smooth ${a.smooth}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)${a.legScale !== undefined && a.legScale !== 'off' ? `, leg-scale ${a.legScale[0]}–${a.legScale[1]}` : ''}${a.plantFeet === true ? ', plant-feet' : ''}${a.carryIdle === true ? ', carry-idle' : ''}${a.merge !== undefined ? `, merge ${a.merge}` : ''}${a.reduce !== undefined ? `, reduce ${a.reduce}°${a.reduceHip !== undefined ? ` (hip ${a.reduceHip} units)` : ''}` : ''}`);
     say(`  RIGC   rig-c ${rigc.version} (${rigc.entry}) gates and poses this run`);
     if (r.scale !== null) say(`  SCALE  ${r.scale.factor.toFixed(5)} rig units per picture px (rig ${r.scale.rig.toFixed(2)} / pose median ${r.scale.pose.toFixed(2)})`);
     for (const h of r.holds) say(`  HOLD   ${holdLine(h, r.times)}`);
@@ -127,6 +132,14 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       say(`  FEET   supports: ${f.supports.map((x) => `${x.side} ${span(x.frames)}`).join(', ') || 'none'}`);
       say(`  FEET   jumps (both ankles and mid_hip > 0.05 leg lengths above their rolling floor, ≥ 2 frames): ${f.jumps.map(span).join(', ') || 'none'}`);
       say(`  FEET   steps (the supporting ankle > 0.03 leg lengths a frame; re-planted after 2 frames < 0.01): ${f.steps.map((x) => `${x.side} ${span(x.frames)} → ${x.to === null ? 'the pose\'s travel' : `${x.to} supports`}, ${x.replant === null ? 'never re-planted' : `re-planted at ${x.replant}`}`).join('; ') || 'none'}`);
+    }
+
+    // --reduce (#32): the dense keys thinned top-down, before anything reads the tracks.
+    const reduced = a.reduce === undefined ? null : reduceTracks(r, map, rest, a.reduce, a.reduceHip);
+    if (reduced !== null) {
+      for (const row of reduced.rows) say(`  REDUCE ${row.kind === 'angle' ? 'bone' : 'hip'} "${row.bone}" ${row.kind === 'angle' ? 'rotate' : 'translate'}: ${row.before} → ${row.after} key(s); worst ${row.kind === 'angle' ? 'aim' : 'origin'} error ${row.worst.toPrecision(3)}${row.kind === 'angle' ? '°' : ' units'} at frame ${row.frame} (t=${r.times[row.frame]!.toFixed(3)}s)`);
+      const sum = (k: 'before' | 'after') => reduced.rows.filter((x) => x.kind === 'angle').reduce((t, x) => t + x[k], 0);
+      say(`  REDUCE rotate keys ${sum('before')} → ${sum('after')} (${(sum('before') / sum('after')).toFixed(2)}×) within ${a.reduce}°${a.reduceHip === undefined ? '; the hip stays dense (no --reduce-hip)' : ''}`);
     }
 
     // The idle against the new animation (#43 item 2): what it drops, and with --carry-idle, looped back in.
@@ -179,7 +192,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
 
     const doc = readBuild(g1.build);
     const posed = poseFrames(doc, a.name, r.times);
-    const landings = measureLanding(doc, a.name, map, r, posed);
+    // A reduced track is held to the dense target plus its tolerance (#32).
+    const landings = measureLanding(doc, a.name, map, r, posed).map((l) => (l.kind === 'angle' && a.reduce !== undefined ? { ...l, tolerance: l.tolerance + a.reduce } : l.kind === 'origin' && a.reduceHip !== undefined ? { ...l, tolerance: l.tolerance + a.reduceHip } : l));
     const p = new Problems();
     // A carried idle track on a bone above a mapped one moves it where the keys did not ask (the key formula holds unmapped bones at setup).
     const carriedAbove = (bone: string): string => {
@@ -249,7 +263,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         animation: a.name,
         frames: seq.frames.length,
         duration: r.animation.duration,
-        options: { minScore: a.minScore, smooth: a.smooth, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null },
+        options: { minScore: a.minScore, smooth: a.smooth, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', reduceHip: a.reduceHip ?? 'off' },
         scale: r.scale,
         holds: r.holds,
         short: r.short,
@@ -272,6 +286,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         idleDropped: idle === null ? null : idle.dropped,
         idleKeptOut: idle === null ? null : idle.keptOut,
         merged: fragment.map((tr) => ({ track: trackLabel(tr, groups), keys: tr.keys.length })),
+        reduce: reduced === null ? null : { tolerance: a.reduce, hipTolerance: a.reduceHip ?? null, rows: reduced.rows },
       }, null, 2)}\n`);
     }
     say(`  wrote ${a.out} — animations: ${Object.keys(motion.animations).join(', ')}`);
@@ -279,6 +294,47 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
+}
+
+/**
+ * The retarget's rotate tracks (and with a hip tolerance, its translate) thinned
+ * in place (#32). Kept regardless, per bone: the frames either side of each
+ * switch boundary on the chains it changes, and the edges of every FLIP spread,
+ * SHORT span and RANGE run on it (the first and last frame the reducer keeps).
+ */
+function reduceTracks(r: ReturnType<typeof retarget>, map: JointMap, rest: Rest, tolerance: number, hipTolerance: number | undefined): Reduced {
+  const n = r.times.length;
+  const keep = new Map<string, Set<number>>();
+  const add = (bone: string, ...frames: number[]) => {
+    const s = keep.get(bone) ?? new Set<number>();
+    for (const f of frames) if (f >= 0 && f < n) s.add(f);
+    keep.set(bone, s);
+  };
+  for (const sw of r.switches) {
+    for (const c of map.chains.filter((x) => sw.chains.includes(x.name))) for (const b of c.bones) add(b, sw.frames[0] - 1, sw.frames[0], sw.frames[1], sw.frames[1] + 1);
+  }
+  for (const x of [...r.flips, ...r.short, ...r.range]) add(x.bone, x.frames[0], x.frames[1]);
+  const mapped = new Set(r.targets.keys());
+  const above = (b: string): string | null => {
+    for (let p = rest.get(b)!.parent; p !== null; p = rest.get(p)!.parent) if (mapped.has(p)) return p;
+    return null;
+  };
+  const rotate = new Map<string, MotionTrack>();
+  for (const tr of r.animation.tracks) if ('bone' in tr && tr.property === 'rotate') rotate.set(tr.bone, tr);
+  const bones: ReduceBone[] = [...rotate.values()].map((tr) => ({ bone: tr.bone, above: above(tr.bone), dense: tr.keys.map((k) => k.v[0]!), keep: keep.get(tr.bone) ?? new Set<number>() }));
+  const hipTrack = r.origin === null || hipTolerance === undefined ? undefined : r.animation.tracks.find((tr): tr is MotionTrack => 'bone' in tr && tr.property === 'translate' && tr.bone === r.origin!.bone && tr.keys.every((k) => k.ease === undefined));
+  const parent = hipTrack === undefined ? null : rest.get(hipTrack.bone)!.parent;
+  const pm = parent === null ? null : rest.get(parent)!;
+  const out = reduceKeys(r.times, bones, tolerance, hipTrack === undefined ? null : {
+    bone: hipTrack.bone,
+    dense: hipTrack.keys.map((k) => [k.v[0]!, k.v[1]!]),
+    keep: new Set<number>(),
+    parent: pm === null ? null : [pm.a, pm.b, pm.c, pm.d],
+    tolerance: hipTolerance!,
+  });
+  for (const [bone, keys] of out.rotate) rotate.get(bone)!.keys = keys;
+  if (hipTrack !== undefined && out.hip !== null) hipTrack.keys = out.hip;
+  return out;
 }
 
 function spans(ts: number[], step: number): string {

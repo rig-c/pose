@@ -2755,3 +2755,126 @@ describe('#43 item 2: the idle tracks a retarget drops, --carry-idle, --merge', 
     expect('reason' in loopTrack({ slot: 's', property: 'rgba', keys: [{ t: 0.5, v: [1, 1, 1, 1] }] } as RigcTrack, 1, 2, {}, () => undefined)).toBe(true);
   });
 });
+
+// ===========================================================================
+
+/** A longer, smooth dance for --reduce: 48 frames at 24 fps, every hinge on its rest side as in BASE. */
+const SMOOTH: Motion = {
+  n: 48,
+  dt: 1 / 24,
+  trunk: (i) => 90 + 10 * Math.sin(i * 0.12),
+  ru: (i) => 120 + 30 * Math.sin(i * 0.2),
+  rf: (i) => 120 + 30 * Math.sin(i * 0.2) + 20 + 10 * Math.sin(i * 0.3),
+  lu: (i) => 60 + 25 * Math.sin(i * 0.15),
+  lf: (i) => 60 + 25 * Math.sin(i * 0.15) - 20 - 10 * Math.sin(i * 0.25),
+  rt: (i) => -90 + 15 * Math.sin(i * 0.2),
+  rs: (i) => -90 + 15 * Math.sin(i * 0.2) - 10 - 5 * Math.sin(i * 0.3),
+  lt: (i) => -90 - 10 * Math.sin(i * 0.2),
+  ls: (i) => -90 - 10 * Math.sin(i * 0.2) + 3 * Math.sin(i * 0.1),
+  hip: (i) => [20 * Math.sin(i * 0.1), -5 * Math.sin(i * 0.2)],
+};
+
+/** Fitting each bone against its own dense keys, its parent's error ignored (the reducer's top-down rule removed). */
+const REDUCE_MUTANT = {
+  from: 'const targets = b.dense.map((d, i) => [eAbove === null ? d : d - eAbove[i]!]);',
+  to: 'const targets = b.dense.map((d) => [d]);',
+};
+
+/** Pose the gated build at the frame times and return the worst world error per mapped bone (degrees) and of the hip's origin (units), against the known motion. */
+function worstErrors(build: string, m: Motion): Map<string, number> {
+  const doc = loadBuild(build);
+  const setupHip = byName(poseRawSetup(doc).bones).get('hip')!;
+  const poses = poseRawAnimation(doc, 'dance', Array.from({ length: m.n - 1 }, () => m.dt), {}, 'animation');
+  const worst = new Map<string, number>();
+  const note = (k: string, e: number) => worst.set(k, Math.max(worst.get(k) ?? 0, e));
+  poses.forEach((p, i) => {
+    const bones = byName(p.bones);
+    for (const bone of Object.keys(BONE_ANGLE)) note(bone, Math.abs(wrap(worldAngle(bones, bone) - angleOf(m, bone, i))));
+    const h = m.hip(i);
+    const hip = bones.get('hip')!;
+    note('hip', Math.hypot(hip.worldX - (setupHip.worldX + h[0] * SCALE), hip.worldY - (setupHip.worldY - h[1] * SCALE)));
+  });
+  return worst;
+}
+const keysOf = (path: string, bone: string, property: string) => motionOf(path).animations.dance!.tracks.find((t) => t.bone === bone && t.property === property)!.keys as Array<{ t: number; v: number[]; curve?: number[] }>;
+
+describe('--reduce: few keys with curves within a stated tolerance (rig-c/pose#32)', () => {
+  test('every bone stays within the tolerance of the known angles on every frame, posed by rig-c; the keys drop; the hip stays dense without --reduce-hip', () => {
+    const c = setup({ pose: poseDoc(SMOOTH) });
+    const dense = retarget(c);
+    expect(dense.status).toBe(0);
+    const before = Object.keys(BONE_ANGLE).reduce((s, b) => s + keysOf(c.out, b, 'rotate').length, 0);
+    expect(before).toBe(9 * 48);
+    const r = retarget(c, ['--reduce', '1']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    const lines = linesOf(r, 'REDUCE');
+    expect(lines).toHaveLength(10);
+    expect(lines.at(-1)).toContain('the hip stays dense (no --reduce-hip)');
+    const after = Object.keys(BONE_ANGLE).reduce((s, b) => s + keysOf(c.out, b, 'rotate').length, 0);
+    expect(after).toBeLessThan(before / 3);
+    expect(lines.at(-1)).toContain(`rotate keys ${before} → ${after}`);
+    expect(keysOf(c.out, 'hip', 'translate')).toHaveLength(48);
+    for (const b of Object.keys(BONE_ANGLE)) {
+      const keys = keysOf(c.out, b, 'rotate');
+      expect(keys[0]!.t).toBe(0);
+      expect(keys.at(-1)!.curve).toBeUndefined();
+    }
+    expect(Object.keys(BONE_ANGLE).some((b) => keysOf(c.out, b, 'rotate').some((k) => k.curve !== undefined))).toBe(true);
+    const worst = worstErrors(c.build, SMOOTH);
+    for (const b of Object.keys(BONE_ANGLE)) expect(worst.get(b)!).toBeLessThanOrEqual(1 + ANGLE_TOL);
+    expect(worst.get('hip')!).toBeLessThanOrEqual(ORIGIN_TOL);
+  }, SLOW);
+
+  test('--reduce-hip thins the hip within its tolerance', () => {
+    const c = setup({ pose: poseDoc(SMOOTH) });
+    const r = retarget(c, ['--reduce', '1', '--reduce-hip', '0.5']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'REDUCE').some((l) => l.startsWith('REDUCE hip "hip" translate: 48 → '))).toBe(true);
+    expect(keysOf(c.out, 'hip', 'translate').length).toBeLessThan(48);
+    expect(worstErrors(c.build, SMOOTH).get('hip')!).toBeLessThanOrEqual(0.5 + ORIGIN_TOL);
+  }, SLOW);
+
+  test('control: a tolerance the reduction did not meet is caught by the independent check', () => {
+    const c = setup({ pose: poseDoc(SMOOTH) });
+    expect(retarget(c, ['--reduce', '3']).status).toBe(0);
+    const worst = worstErrors(c.build, SMOOTH);
+    expect(Math.max(...Object.keys(BONE_ANGLE).map((b) => worst.get(b)!))).toBeGreaterThan(1 + ANGLE_TOL);
+  }, SLOW);
+
+  test('refused: --reduce-hip alone, and --reduce with --plant-feet or --leg-scale', () => {
+    const c = setup();
+    const alone = retarget(c, ['--reduce-hip', '1']);
+    expect(alone.status).toBe(2);
+    expect(alone.stderr).toContain('--reduce-hip is given without --reduce');
+    for (const extra of [['--plant-feet'], ['--leg-scale', '0.8,1.05']]) {
+      const r = retarget(c, ['--reduce', '1', ...extra]);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain(`--reduce is given with ${extra[0]}`);
+    }
+    expect(existsSync(c.out)).toBe(false);
+  });
+
+  test('mutant: fitting each bone against its own dense keys (its parent\'s error ignored) piles errors down a chain, and the run is refused', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'reduce.ts');
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(REDUCE_MUTANT.from)).toHaveLength(2);
+      writeFileSync(path, before.replace(REDUCE_MUTANT.from, REDUCE_MUTANT.to));
+      const c = setup({ pose: poseDoc(SMOOTH) });
+      const r = retarget(c, ['--reduce', '1'], join(d, 'cli.ts'));
+      const worst = r.status === 0 ? worstErrors(c.build, SMOOTH) : null;
+      const red = r.status !== 0 || Object.keys(BONE_ANGLE).some((b) => worst!.get(b)! > 1 + ANGLE_TOL);
+      console.log(`  mutant "reduce ignores the parent's error": exit ${r.status}${r.status !== 0 ? `, ${r.stderr.split('\n').find((l) => l.includes('POSE_LANDS')) ?? r.stderr.split('\n')[0]}` : ''}`);
+      expect(red).toBe(true);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
