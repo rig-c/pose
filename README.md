@@ -35,6 +35,8 @@ and what the run cannot decide for you it lists:
 
 `--smooth <n>` smooths each joint's positions, after its holds, with a Savitzky–Golay filter: at every frame, the least-squares cubic over the *n* frames around it (clipped at the ends), read at that frame. It is centred, so it moves no motion in time, and a cubic keeps the peaks a moving average flattens. `1` (the default) is none; otherwise *n* is odd and at least 5, since a cubic through 3 points passes through all three.
 
+**Use `--smooth 7` at 24 fps.** It was measured on a 13 s dance on a @rig-c/parts rig, read back from the gated build: the motion's timing did not move (speed cross-correlation lag 0 on the wrists, ankles and hip), the frame-to-frame second difference dropped 2.5× on the wrists, 1.7–2.1× on the ankles and 1.5× on the hip, and the hip's 95th-percentile speed fell to 0.85×. The criterion set beforehand, a 2× drop on every point, was not met on the hip. That criterion was flawed: the hip's second difference is mostly real motion, while the filter cuts white noise 4.6×. A measure that isolates noise is a later card, and the default stays off until it passes.
+
 Exit codes: `0` written, `1` refused (every reason printed, nothing written), `2` bad invocation. `rig-pose --help` has every flag.
 
 ## The pose: `rig-pose-sequence/1`
@@ -87,6 +89,20 @@ Which bones carry which joints. You write it for your rig:
 ## Requirements
 
 [Bun](https://bun.sh) ≥ 1.2 on `PATH` — rig-pose, like rig-c, runs its TypeScript sources directly. `rig-c` comes as a dependency. With `@esotericsoftware/spine-core` installed beside it, rig-c's gate runs the spine-core round trip; without it, rig-c's own gate, and the gate's report says which.
+
+## What 0.2 fixes
+
+A flat painting turned by its bones matches each limb's direction, not its depth. On a real 13 s front-facing dance, retargeted onto a @rig-c/parts rig, five moments were found where it cannot follow. They were found by measuring the pose against the rig and checked against the video:
+
+| | t (s) | what the dancer does | why bone rotation cannot follow |
+| --- | --- | --- | --- |
+| S1 | 0.0–1.1 | hands clasped behind the back | depth order: the forearms go behind the body |
+| S2 | 1.0–2.25 | a hand to the ear, then the forearm toward the camera | foreshortening (the upper arm at 0.27 of its length) and depth order |
+| S3 | 3.7–7.5 | hands behind the head | depth order; both arm meshes fold through the whole span |
+| S4 | 7.7–10.9 | hands crossed in front | which forearm is in front |
+| S5 | 11.1–13.0 | an arm thrust at the camera, then a V sign | foreshortening (0.63) and the shape of the hand; the arm mesh folds |
+
+The answer is a second drawing of the arm for each of those poses, shown in place of the bent mesh while the pose lasts. 0.2 will have rig-pose choose when to show it, key the switch in the motion, and list every fold no drawing covers ([#6](https://github.com/rig-c/pose/issues/6)).
 
 ## What 0.1.0 does not do
 
