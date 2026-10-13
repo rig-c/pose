@@ -1672,8 +1672,8 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
     const rep = reportOf(report);
     expect(rep.options.switchTolerance).toBe(25);
     expect(rep.options.switchMin).toBe(0.25);
-    expect(rep.options.switchAt).toBe('peak');
-    // The arm steps onto the key skeleton between frames 4 and 5 (and off between 10 and 11): the central difference is as fast on either side, so each boundary stays where it was (a tie goes to the nearest frame).
+    expect(rep.options.switchAt).toBe('first');
+    // `first` is the default (#31 round 2): each boundary is reported where the selection put it, with its window and its speed.
     const stay = (f: number) => ({ frame: [f, f], frames: 0, seconds: 0, window: [f - 1, f + 1], speed: { old: 60, new: 60 } });
     expect(rep.switches).toEqual([{ set: 'up', chains: ['arm_r'], slots: { sleeve_r0: 'seg_up', cap_r: 'cap_up' }, hides: ['sleeve_r1'], offsets: {}, from: 0.625, to: 1.375, frames: [5, 10], distance: { max: 0, median: 0 }, artTurn: {}, moved: { on: stay(5), off: stay(11) } }]);
     // The bones still land: a switch adds tracks, it moves no key.
@@ -1784,7 +1784,7 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
     expect(reportOf(report).switches[0]!.offsets).toEqual({ sleeve_r1: [3, -2] });
   }, SLOW);
 
-  describe('where a switch is keyed (#31): each boundary at the fastest frame within ±switch-min/2', () => {
+  describe('where a switch is keyed (#31): with --switch-at peak, each boundary at the fastest qualifying frame within ±switch-min/2', () => {
     /** 24 fps, 2 s: the right arm by its upper arm's world angle per frame, the forearm 20° past it (the key skeleton's elbow). */
     const N = 48;
     const DT = 1 / 24;
@@ -1805,10 +1805,10 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
      */
     const DRIFT = at24((i) => (i <= 13 ? 113.5 + i : i === 14 ? 135 : i <= 30 ? 150 : 100));
 
-    test('the pose reaches the key skeleton on a slow frame: the on-key moves to the speed peak 2 frames later, read back by rig-c\'s poser; --switch-at first keeps it', () => {
+    test('the pose reaches the key skeleton on a slow frame: the on-key moves to the speed peak 2 frames later, read back by rig-c\'s poser; the default (first) keeps it', () => {
       const c = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(DRIFT) });
       const report = join(c.dir, 'report.json');
-      const r = retarget(c, ['--report', report]);
+      const r = retarget(c, ['--report', report, '--switch-at', 'peak']);
       expect(r.stderr).toBe('');
       expect(r.status).toBe(0);
       expect(movesOf(report)).toEqual([{
@@ -1827,7 +1827,8 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
       expect(misses(c.build, DRIFT)).toEqual([]);
 
       const first = join(c.dir, 'first.json');
-      const f = retarget(c, ['--report', first, '--switch-at', 'first']);
+      // The default keeps it.
+      const f = retarget(c, ['--report', first]);
       expect(f.status).toBe(0);
       expect(reportOf(first).options.switchAt).toBe('first');
       expect(movesOf(first)).toEqual([{
@@ -1846,7 +1847,7 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
       const approach = (leave: number) => at24((i) => (i <= 11 ? 115.5 + i : i === 12 ? 140 : i < leave ? 150 : 100));
       const short = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(approach(16)) });
       const report = join(short.dir, 'report.json');
-      expect(retarget(short, ['--report', report]).status).toBe(0);
+      expect(retarget(short, ['--report', report, '--switch-at', 'peak']).status).toBe(0);
       // Frames 10–15 are 0.25 s: the on-key may only move earlier (frames 7–10, all 1°/frame), the off-key only later.
       expect(movesOf(report)).toEqual([{
         set: 'up',
@@ -1858,7 +1859,7 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
       }]);
       const long = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(approach(20)) });
       const report2 = join(long.dir, 'report.json');
-      expect(retarget(long, ['--report', report2]).status).toBe(0);
+      expect(retarget(long, ['--report', report2, '--switch-at', 'peak']).status).toBe(0);
       expect(movesOf(report2)[0]!.frames).toEqual([12, 19]);
       expect(movesOf(report2)[0]!.moved.on).toEqual({ frame: [10, 12], frames: 2, seconds: secs(10, 12), window: [7, 13], speed: { old: 1, new: 11.75 } });
     }, SLOW);
@@ -1870,7 +1871,7 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
       const m = at24((i) => (i <= 15 ? 150 : RU[i] ?? 110));
       const c = setup({ rig: ALT_RIG, map: altMap(up(), near()), pose: poseDoc(m) });
       const report = join(c.dir, 'report.json');
-      const r = retarget(c, ['--report', report]);
+      const r = retarget(c, ['--report', report, '--switch-at', 'peak']);
       expect(r.status).toBe(0);
       const mv = movesOf(report);
       expect(mv.map((s) => `${s.set} ${s.frames.join('–')}`)).toEqual(['up 0–21', 'near 22–47']);
@@ -1887,8 +1888,25 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
       const m = at24((i) => (i <= 9 ? 112 : i <= 15 ? RU[i]! : i <= 30 ? 137.5 : 100));
       const c = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(m) });
       const report = join(c.dir, 'report.json');
-      expect(retarget(c, ['--report', report]).status).toBe(0);
+      expect(retarget(c, ['--report', report, '--switch-at', 'peak']).status).toBe(0);
       expect(movesOf(report)[0]!.moved.on).toEqual({ frame: [12, 13], frames: 1, seconds: secs(12, 13), window: [9, 15], speed: { old: 1, new: 6 } });
+    }, SLOW);
+
+    test('the bound: the window\'s peak would newly show the set 55° from its key skeleton (over 2 × 25°), so it is passed over for a slower frame that is within it', () => {
+      // Within 25° from frame 12 (125.5°). Frame 10 is the window's fastest (25°/frame) but 55° off; frame 11 (40° off) is 15.25°/frame.
+      const RU: Record<number, number> = { 10: 95, 11: 110, 12: 125.5, 13: 126.5, 14: 127.5, 15: 128.5 };
+      const m = at24((i) => (i <= 9 ? 60 : i <= 15 ? RU[i]! : i <= 30 ? 150 : 60));
+      const c = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(m) });
+      const report = join(c.dir, 'report.json');
+      expect(retarget(c, ['--report', report, '--switch-at', 'peak']).status).toBe(0);
+      const mv = movesOf(report)[0]!;
+      expect(mv.frames).toEqual([11, 30]);
+      expect(mv.moved.on).toEqual({ frame: [12, 11], frames: -1, seconds: secs(12, 11), window: [9, 15], speed: { old: 8.25, new: 15.25 } });
+      expect(reportOf(report).switches[0]!.distance).toEqual({ max: 40, median: expect.any(Number) });
+      // Control: under a tolerance of 30° (bound 60°) frame 10 qualifies and the boundary goes to the peak.
+      const r2 = join(c.dir, 'report2.json');
+      expect(retarget(c, ['--report', r2, '--switch-at', 'peak', '--switch-tolerance', '30']).status).toBe(0);
+      expect(movesOf(r2)[0]!.moved.on!.frame).toEqual([12, 10]);
     }, SLOW);
 
     test('--switch-at takes peak or first, nothing else', () => {

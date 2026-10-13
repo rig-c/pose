@@ -43,10 +43,14 @@
  * distance, before the range clamp and any set's `turn`, which depend on where
  * the spans are. The window is clipped so every span keeps `switchMin` (a gap
  * between two spans of one set too, so the bridging holds), no boundary
- * reaches its neighbour, and a set with `frames` shows only inside them. Ties
+ * reaches its neighbour, and a set with `frames` shows only inside them; and
+ * a frame qualifies only if the set the move newly shows is within twice the
+ * tolerance of its key skeleton on every frame it newly shows it on (speed
+ * alone showed art up to 135° from its pose on the dancer). Ties
  * go to the frame nearest the original, then the earlier. A boundary between
  * two sets moves once. `switchAt: 'first'` keeps every boundary where the
- * selection put it.
+ * selection put it; it is the CLI's default, because on HQ's dancer the bounded
+ * peak still raised the sets' ART-RANGE runs from 24 to 31 (#31, round 2).
  */
 import type { AlternateSet, JointMap, Rest, RigSlots } from './map.ts';
 import { descends } from './map.ts';
@@ -59,7 +63,7 @@ export interface SwitchOptions {
   switchTolerance: number;
   /** Seconds: a run of one set shorter than this is dropped. */
   switchMin: number;
-  /** Where a boundary is keyed: 'peak' moves it to the fastest frame of its window (#31); 'first' keeps the frame the selection gave it. */
+  /** Where a boundary is keyed: 'first' (the CLI's default) keeps the frame the selection gave it; 'peak' moves it to the fastest qualifying frame of its window (#31). */
   switchAt: 'peak' | 'first';
 }
 
@@ -219,14 +223,19 @@ export function speeds(bones: readonly string[], targets: ReadonlyMap<string, re
   return out;
 }
 
+/** A moved boundary may newly show a set only on frames within this many times the tolerance of its key skeleton (#31). */
+export const MOVE_BOUND = 2;
+
 /**
  * Move each boundary of one group's segments to the fastest frame of its
  * window (`switchAt: 'peak'`), in time order, each clipped against its
  * neighbours as they stand; `vals[s]` is what segment s shows (null: the base
  * art) and `pos[m]` the frame boundary m shows on, between segments m and m+1.
- * Returns one `Move` per boundary.
+ * A candidate frame qualifies only if every frame the move newly shows a set
+ * on is within `MOVE_BOUND` × the tolerance of it; none qualifying, the
+ * boundary stays. Returns one `Move` per boundary.
  */
-function moveBoundaries(vals: ReadonlyArray<AlternateSet | null>, pos: readonly number[], map: JointMap, targets: ReadonlyMap<string, readonly number[]>, times: readonly number[], duration: number, opts: SwitchOptions): Move[] {
+function moveBoundaries(vals: ReadonlyArray<AlternateSet | null>, pos: readonly number[], map: JointMap, targets: ReadonlyMap<string, readonly number[]>, distances: ReadonlyMap<string, readonly number[]>, times: readonly number[], duration: number, opts: SwitchOptions): Move[] {
   const n = times.length;
   const at = [...pos];
   const end = (b: number) => (b < n ? times[b]! : duration);
@@ -257,9 +266,19 @@ function moveBoundaries(vals: ReadonlyArray<AlternateSet | null>, pos: readonly 
     let hi = b;
     while (hi + 1 < next && times[hi + 1]! - times[b]! <= half && len(hi + 1, next) >= needNext - 1e-9 && allowed(leaving, hi)) hi++;
     const sp = speeds([...new Set([...bonesOf(leaving), ...bonesOf(arriving)])], targets, n);
+    // A frame qualifies only if the set it newly shows is within twice the tolerance of its key skeleton on every
+    // frame it newly shows it on (round 1 on the dancer: speed alone showed a set up to 135° from its pose).
+    const near = (a: AlternateSet | null, from: number, to: number): boolean => {
+      if (a === null) return true;
+      const d = distances.get(a.name)!;
+      for (let k = from; k < to; k++) if (d[k]! > MOVE_BOUND * opts.switchTolerance) return false;
+      return true;
+    };
+    const qualifies = (k: number) => (k < b ? near(arriving, k, b) : near(leaving, b, k));
     let best = b;
     if (opts.switchAt === 'peak') {
       for (let k = lo; k <= hi; k++) {
+        if (!qualifies(k)) continue;
         const d = sp[k]! - sp[best]!;
         if (d > 1e-9 || (Math.abs(d) <= 1e-9 && (Math.abs(k - b) < Math.abs(best - b) || (Math.abs(k - b) === Math.abs(best - b) && k < best)))) best = k;
       }
@@ -338,7 +357,7 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
       pos.push(i);
       vals.push(pick[i] ?? null);
     }
-    const moves = moveBoundaries(vals, pos, map, targets, times, duration, opts);
+    const moves = moveBoundaries(vals, pos, map, targets, distances, times, duration, opts);
     for (let s = 0; s < vals.length; s++) {
       const a = vals[s];
       if (a === null || a === undefined) continue;

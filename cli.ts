@@ -49,9 +49,10 @@ retarget
   --switch-tolerance <d>  a set of alternate drawings (the map's "alternates") may show on a frame where
                         every segment of its chains is within d degrees of its key skeleton (default: 25)
   --switch-min <s>      a run of one set shorter than s seconds is dropped (default: 0.25)
-  --switch-at peak|first  where a switch is keyed: peak (default) moves each boundary to the frame within
-                        ±switch-min/2 where the chains it changes turn fastest, so the cut lands in motion;
-                        first keeps the frame the selection gave it
+  --switch-at first|peak  where a switch is keyed: first (default) keeps the frame the selection gave it;
+                        peak moves each boundary to the frame within ±switch-min/2 where the chains it
+                        changes turn fastest, among those that newly show a set only on frames within
+                        2 × the switch tolerance of its key skeleton (it stays when none qualifies)
   --profile spine|spine-html  rigc's gate profile (default: spine, rigc's own default)
   --build <dir>         keep the gated build (skeleton.json, .atlas, .model.json) here
   --render <dir>        keep rigc's render of the animation (frames, contact.png, folds.json) here
@@ -130,7 +131,7 @@ function retargetArgs(argv: string[]): RetargetArgs {
   const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report'], ['coco']);
   const bends = f.get('bends') ?? 'refuse';
   if (bends !== 'refuse' && bends !== 'clamp') throw new Usage(`--bends is "${bends}"; it must be refuse or clamp`);
-  const switchAt = f.get('switch-at') ?? 'peak';
+  const switchAt = f.get('switch-at') ?? 'first';
   if (switchAt !== 'peak' && switchAt !== 'first') throw new Usage(`--switch-at is "${switchAt}"; it must be peak or first`);
   const profile = f.get('profile') ?? 'spine';
   if (profile !== 'spine' && profile !== 'spine-html') throw new Usage(`--profile is "${profile}"; it must be spine or spine-html`);
