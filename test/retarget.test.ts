@@ -1661,7 +1661,7 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
     expect(r.stderr).toBe('');
     expect(r.status).toBe(0);
     expect(linesOf(r, 'SWITCH')).toEqual([
-      'SWITCH set "up" — shows "sleeve_r0" = "seg_up", "cap_r" = "cap_up", hides "sleeve_r1"; chains arm_r; frames 5–10 (t=0.625s until 1.375s) — distance max 0.0°, median 0.0°',
+      'SWITCH set "up" — shows "sleeve_r0" = "seg_up", "cap_r" = "cap_up", hides "sleeve_r1"; chains arm_r; frames 5–10 (t=0.625s until 1.375s) — distance max 0.0°, median 0.0°; moved on frame 5 stays (60.0°/frame; window frames 4–6), off frame 11 stays (60.0°/frame; window frames 10–12)',
     ]);
     // Keyed half a frame before the frame each change shows on; back to the setup attachment the model states (nothing, for the cap).
     expect(slotTracks(c.out)).toEqual([
@@ -1672,7 +1672,10 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
     const rep = reportOf(report);
     expect(rep.options.switchTolerance).toBe(25);
     expect(rep.options.switchMin).toBe(0.25);
-    expect(rep.switches).toEqual([{ set: 'up', chains: ['arm_r'], slots: { sleeve_r0: 'seg_up', cap_r: 'cap_up' }, hides: ['sleeve_r1'], offsets: {}, from: 0.625, to: 1.375, frames: [5, 10], distance: { max: 0, median: 0 }, artTurn: {} }]);
+    expect(rep.options.switchAt).toBe('peak');
+    // The arm steps onto the key skeleton between frames 4 and 5 (and off between 10 and 11): the central difference is as fast on either side, so each boundary stays where it was (a tie goes to the nearest frame).
+    const stay = (f: number) => ({ frame: [f, f], frames: 0, seconds: 0, window: [f - 1, f + 1], speed: { old: 60, new: 60 } });
+    expect(rep.switches).toEqual([{ set: 'up', chains: ['arm_r'], slots: { sleeve_r0: 'seg_up', cap_r: 'cap_up' }, hides: ['sleeve_r1'], offsets: {}, from: 0.625, to: 1.375, frames: [5, 10], distance: { max: 0, median: 0 }, artTurn: {}, moved: { on: stay(5), off: stay(11) } }]);
     // The bones still land: a switch adds tracks, it moves no key.
     expect(misses(c.build, armed(on))).toEqual([]);
     expect(shows(c.build, 'sleeve_r0')).toEqual(each((i) => (on(i) ? 'seg_up' : 'seg')));
@@ -1740,7 +1743,7 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
     const r = retarget(c);
     expect(r.status).toBe(0);
     // Both sets match frames 2–12 exactly: "twin" takes its window 4–7, "up" the rest.
-    expect(linesOf(r, 'SWITCH').map((l) => /set "(\w+)".*frames? ([\d–]+)/.exec(l)!.slice(1).join(' '))).toEqual(['up 2–3', 'twin 4–7', 'up 8–12']);
+    expect(linesOf(r, 'SWITCH').map((l) => /set "(\w+)".*?frames? ([\d–]+)/.exec(l)!.slice(1).join(' '))).toEqual(['up 2–3', 'twin 4–7', 'up 8–12']);
     expect(shows(c.build, 'sleeve_r0')).toEqual(each((i) => (i >= 4 && i <= 7 ? 'seg_out' : on(i) ? 'seg_up' : 'seg')));
     const bad = setup({ rig: ALT_RIG, map: altMap(up(), twin({ frames: [[7, 4]] })), pose: poseDoc(armed(on)) });
     const rb = retarget(bad);
@@ -1755,7 +1758,7 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
     const r = retarget(c, ['--report', report]);
     expect(r.stderr).toBe('');
     expect(r.status).toBe(0);
-    expect(linesOf(r, 'SWITCH')[0]).toEndWith('; offsets "sleeve_r1" (3, -2)');
+    expect(linesOf(r, 'SWITCH')[0]).toContain('; offsets "sleeve_r1" (3, -2); moved on ');
     const tracks = motionOf(c.out).animations.dance!.tracks as unknown as Array<{ bone?: string; slot?: string; property: string; keys: unknown[] }>;
     expect(tracks.map((t) => `${t.bone ?? t.slot}.${t.property}`).slice(-5)).toEqual(['hip.translate', 'sleeve_r1.translate', 'sleeve_r0.attachment', 'cap_r.attachment', 'sleeve_r1.attachment']);
     expect(tracks.find((t) => t.bone === 'sleeve_r1' && t.property === 'translate')!.keys).toEqual([
@@ -1780,6 +1783,121 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
     expect(misses(c.build, armed(on))).toEqual([]);
     expect(reportOf(report).switches[0]!.offsets).toEqual({ sleeve_r1: [3, -2] });
   }, SLOW);
+
+  describe('where a switch is keyed (#31): each boundary at the fastest frame within ±switch-min/2', () => {
+    /** 24 fps, 2 s: the right arm by its upper arm's world angle per frame, the forearm 20° past it (the key skeleton's elbow). */
+    const N = 48;
+    const DT = 1 / 24;
+    const at24 = (ru: (i: number) => number): Motion => ({ ...BASE, n: N, dt: DT, ru, rf: (i) => ru(i) + 20 });
+    interface MoveOut { frame: [number, number]; frames: number; seconds: number; window: [number, number]; speed: { old: number; new: number } }
+    const movesOf = (path: string) => reportOf(path).switches.map((s) => ({ set: s.set as string, frames: s.frames as [number, number], moved: s.moved as { on: MoveOut | null; off: MoveOut | null } }));
+    /** The run's times, rounded to the microsecond as the retarget reads them; a key half a frame before frame i; the seconds from frame a to b. */
+    const r6 = (v: number) => Math.round(v * 1e6) / 1e6;
+    const tOf = (i: number) => r6(i * DT);
+    const keyAt = (i: number) => r6((tOf(i - 1) + tOf(i)) / 2);
+    const secs = (a: number, b: number) => r6(tOf(b) - tOf(a));
+
+    /**
+     * The arm drifts onto the key skeleton at 1°/frame — within 25° from frame 12
+     * (24.5° off), still slow there — then swings the last 23° in: the central
+     * difference is 4.75°/frame on 13, 11.75 on 14, 7.5 on 15. It holds the key
+     * pose to frame 30 and steps off to 100° on 31 (25°/frame on 30 and 31).
+     */
+    const DRIFT = at24((i) => (i <= 13 ? 113.5 + i : i === 14 ? 135 : i <= 30 ? 150 : 100));
+
+    test('the pose reaches the key skeleton on a slow frame: the on-key moves to the speed peak 2 frames later, read back by rig-c\'s poser; --switch-at first keeps it', () => {
+      const c = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(DRIFT) });
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--report', report]);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      expect(movesOf(report)).toEqual([{
+        set: 'up',
+        frames: [14, 30],
+        moved: {
+          on: { frame: [12, 14], frames: 2, seconds: secs(12, 14), window: [9, 15], speed: { old: 1, new: 11.75 } },
+          // A tie on 30 and 31 (the step): the nearest, where it was.
+          off: { frame: [31, 31], frames: 0, seconds: 0, window: [28, 34], speed: { old: 25, new: 25 } },
+        },
+      }]);
+      expect(linesOf(r, 'SWITCH')[0]).toEndWith('; moved on frame 12 → 14 (+2 frames, +0.083s; 1.0°/frame → 11.8°/frame; window frames 9–15), off frame 31 stays (25.0°/frame; window frames 28–34)');
+      // Keyed half a frame before the frame it now shows on.
+      expect(slotTracks(c.out)[0]).toEqual({ slot: 'sleeve_r0', property: 'attachment', keys: [{ t: keyAt(14), v: 'seg_up' }, { t: keyAt(31), v: 'seg' }] });
+      expect(shows(c.build, 'sleeve_r0', N, DT)).toEqual(each((i) => (i >= 14 && i <= 30 ? 'seg_up' : 'seg'), N));
+      expect(misses(c.build, DRIFT)).toEqual([]);
+
+      const first = join(c.dir, 'first.json');
+      const f = retarget(c, ['--report', first, '--switch-at', 'first']);
+      expect(f.status).toBe(0);
+      expect(reportOf(first).options.switchAt).toBe('first');
+      expect(movesOf(first)).toEqual([{
+        set: 'up',
+        frames: [12, 30],
+        moved: {
+          on: { frame: [12, 12], frames: 0, seconds: 0, window: [9, 15], speed: { old: 1, new: 1 } },
+          off: { frame: [31, 31], frames: 0, seconds: 0, window: [28, 34], speed: { old: 25, new: 25 } },
+        },
+      }]);
+      expect(shows(c.build, 'sleeve_r0', N, DT)).toEqual(each((i) => (i >= 12 && i <= 30 ? 'seg_up' : 'seg'), N));
+    }, SLOW);
+
+    test('a window clipped by the minimum span: a span of exactly --switch-min cannot shrink to reach its peak; control: the same approach in a longer span moves', () => {
+      // Within 25° from frame 10 at 1°/frame; the swing in peaks on 12 (11.75°/frame); the span ends where the arm steps off.
+      const approach = (leave: number) => at24((i) => (i <= 11 ? 115.5 + i : i === 12 ? 140 : i < leave ? 150 : 100));
+      const short = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(approach(16)) });
+      const report = join(short.dir, 'report.json');
+      expect(retarget(short, ['--report', report]).status).toBe(0);
+      // Frames 10–15 are 0.25 s: the on-key may only move earlier (frames 7–10, all 1°/frame), the off-key only later.
+      expect(movesOf(report)).toEqual([{
+        set: 'up',
+        frames: [10, 15],
+        moved: {
+          on: { frame: [10, 10], frames: 0, seconds: 0, window: [7, 10], speed: { old: 1, new: 1 } },
+          off: { frame: [16, 16], frames: 0, seconds: 0, window: [16, 19], speed: { old: 25, new: 25 } },
+        },
+      }]);
+      const long = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(approach(20)) });
+      const report2 = join(long.dir, 'report.json');
+      expect(retarget(long, ['--report', report2]).status).toBe(0);
+      expect(movesOf(report2)[0]!.frames).toEqual([12, 19]);
+      expect(movesOf(report2)[0]!.moved.on).toEqual({ frame: [10, 12], frames: 2, seconds: secs(10, 12), window: [7, 13], speed: { old: 1, new: 11.75 } });
+    }, SLOW);
+
+    test('set → set: the boundary between two sets moves once, one key per slot, no frame of base art between them', () => {
+      // "up" (150°) eases toward "near" (110°): nearer "near" from frame 20 (129.5°), then the last 18° fast — 8°/frame on 22.
+      const near = (o: Record<string, unknown> = {}) => out({ name: 'near', pose: keySkeleton(110, 130), ...o });
+      const RU: Record<number, number> = { 16: 145, 17: 140, 18: 135, 19: 131, 20: 129.5, 21: 128, 22: 120, 23: 112 };
+      const m = at24((i) => (i <= 15 ? 150 : RU[i] ?? 110));
+      const c = setup({ rig: ALT_RIG, map: altMap(up(), near()), pose: poseDoc(m) });
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--report', report]);
+      expect(r.status).toBe(0);
+      const mv = movesOf(report);
+      expect(mv.map((s) => `${s.set} ${s.frames.join('–')}`)).toEqual(['up 0–21', 'near 22–47']);
+      const boundary: MoveOut = { frame: [20, 22], frames: 2, seconds: secs(20, 22), window: [17, 23], speed: { old: 1.5, new: 8 } };
+      expect(mv[0]!.moved).toEqual({ on: null, off: boundary });
+      expect(mv[1]!.moved).toEqual({ on: boundary, off: null });
+      expect(slotTracks(c.out)[0]).toEqual({ slot: 'sleeve_r0', property: 'attachment', keys: [{ t: 0, v: 'seg_up' }, { t: keyAt(22), v: 'seg_out' }] });
+      expect(shows(c.build, 'sleeve_r0', N, DT)).toEqual(each((i) => (i <= 21 ? 'seg_up' : 'seg_out'), N));
+    }, SLOW);
+
+    test('a tie goes to the frame nearest the original', () => {
+      // Within 25° from frame 12 (125.5°); 6°/frame on 10 and on 13 both, the window's fastest: 13 is one frame away, 10 two.
+      const RU: Record<number, number> = { 10: 118, 11: 124, 12: 125.5, 13: 126, 14: 137.5, 15: 136 };
+      const m = at24((i) => (i <= 9 ? 112 : i <= 15 ? RU[i]! : i <= 30 ? 137.5 : 100));
+      const c = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(m) });
+      const report = join(c.dir, 'report.json');
+      expect(retarget(c, ['--report', report]).status).toBe(0);
+      expect(movesOf(report)[0]!.moved.on).toEqual({ frame: [12, 13], frames: 1, seconds: secs(12, 13), window: [9, 15], speed: { old: 1, new: 6 } });
+    }, SLOW);
+
+    test('--switch-at takes peak or first, nothing else', () => {
+      const c = setup({ rig: ALT_RIG, map: altMap(up()) });
+      const r = retarget(c, ['--switch-at', 'last']);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain('--switch-at is "last"; it must be peak or first');
+    });
+  });
 
   /** One planted map per case; the control is the first test above. */
   const withChain = (name: string, extra: Record<string, unknown>) => ({ ...altMap(up()), chains: baseChains().map((ch) => (ch.name === name ? { ...ch, ...extra } : ch)) });
@@ -1848,7 +1966,7 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
       expect(r.stderr).toBe('');
       expect(r.status).toBe(0);
       expect(linesOf(r, 'SWITCH')).toEqual([
-        'SWITCH set "lift" — shows "sleeve_r0" = "seg_up"; chains arm_r; frames 4–7 (t=0.500s until 1.000s) — distance max 0.0°, median 0.0°; art turn "sleeve_r0" max 0.0°, median 0.0°; "sleeve_r1" max 0.0°, median 0.0°',
+        'SWITCH set "lift" — shows "sleeve_r0" = "seg_up"; chains arm_r; frames 4–7 (t=0.500s until 1.000s) — distance max 0.0°, median 0.0°; art turn "sleeve_r0" max 0.0°, median 0.0°; "sleeve_r1" max 0.0°, median 0.0°; moved on frame 4 stays (20.0°/frame; window frames 3–5), off frame 8 stays (20.0°/frame; window frames 7–9)',
       ]);
       expect(linesOf(r, 'RANGE')).toEqual([]);
       expect(linesOf(r, 'ART-RANGE')).toEqual([]);
@@ -2010,7 +2128,8 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
       const set = { name: 'folded', slots: { arm_mesh: 'arm_mesh_up' }, chains: ['arm_r'], pose: folded };
       const c = setup({ rig: MESH_RIG, map: altMap(set), pose: poseDoc(HARD) });
       const report = join(c.dir, 'report.json');
-      const r = retarget(c, ['--report', report, '--switch-tolerance', '10']);
+      // Kept where the selection puts it (--switch-at first): what is read here is the coverage, not the timing.
+      const r = retarget(c, ['--report', report, '--switch-tolerance', '10', '--switch-at', 'first']);
       expect(r.status).toBe(0);
       expect(linesOf(r, 'SWITCH')[0]).toContain('frames 6–7');
       expect(foldTimes(r)).toEqual([1, 1.125]);
@@ -2021,7 +2140,7 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
     test('the folding mesh hidden by a set that shows another slot: no fold read on its span either', () => {
       const c = setup({ rig: MESH_RIG, map: altMap(up({ hides: ['arm_mesh'], pose: folded })), pose: poseDoc(HARD) });
       const report = join(c.dir, 'report.json');
-      const r = retarget(c, ['--report', report, '--switch-tolerance', '10']);
+      const r = retarget(c, ['--report', report, '--switch-tolerance', '10', '--switch-at', 'first']);
       expect(r.status).toBe(0);
       expect(slotTracks(c.out).map((t) => t.slot)).toEqual(['sleeve_r0', 'cap_r', 'arm_mesh']);
       expect(foldTimes(r)).toEqual([1, 1.125]);

@@ -154,7 +154,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         animation: a.name,
         frames: seq.frames.length,
         duration: r.animation.duration,
-        options: { minScore: a.minScore, smooth: a.smooth, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, profile: a.profile },
+        options: { minScore: a.minScore, smooth: a.smooth, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile },
         scale: r.scale,
         holds: r.holds,
         short: r.short,
