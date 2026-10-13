@@ -282,7 +282,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         artRange: r.artRange,
         legScale: r.legScale.map(({ scale: _scale, ...rest }) => rest),
         pivot: r.pivot,
-        stance: r.stance === null ? null : { tolerance: r.stance.tolerance, cap: r.stance.cap, runs: r.stance.runs, over: r.stance.over },
+        stance: r.stance === null ? null : { tolerance: r.stance.tolerance, cap: r.stance.cap, runs: r.stance.runs, over: r.stance.over, below: r.stance.below },
         feet: r.feet === null ? null : { planted: r.planted, legLength: r.feet.legLength, supports: r.feet.supports, jumps: r.feet.jumps, steps: r.feet.steps, changes: r.feet.changes, reading: feetReading },
         shear,
         idleDropped: idle === null ? null : idle.dropped,
@@ -404,9 +404,11 @@ function legBonesOf(map: JointMap): { r: { root: string; ankle: string }; l: { r
 export function stanceLines(st: Stance, times: readonly number[]): string[] {
   const span = (x: [number, number]) => (x[0] === x[1] ? `frame ${x[0]} (t=${times[x[0]]!.toFixed(3)}s)` : `frames ${x[0]}–${x[1]} (t=${times[x[0]]!.toFixed(3)}–${times[x[1]]!.toFixed(3)}s)`);
   const tol = `the tolerance ${st.tolerance} leg lengths`;
+  const height = (h: number) => (h > 0 ? `its ankle at most ${h.toFixed(4)} leg lengths above the supporting one in the picture` : 'its ankle never above the supporting one in the picture');
   const out = st.runs.map((r) => (r.state === 'both'
-    ? `planted both: free foot ${r.side} ${span(r.frames)} — its ankle up to ${r.maxHeight.toFixed(4)} leg lengths above the supporting one in the picture, within ${tol}; its leg stretched by k ${r.k!.min === r.k!.max ? r.k!.max.toFixed(4) : `${r.k!.min.toFixed(4)} … ${r.k!.max.toFixed(4)}`} (largest ${r.k!.max.toFixed(4)})`
+    ? `planted both: free foot ${r.side} ${span(r.frames)} — ${height(r.maxHeight)}, within ${tol}; ${r.k! > 1 ? `its leg stretched, largest k ${r.k!.toFixed(4)} (k blended in from 1 over the run's first 3 frames and back over its last 3)` : 'no stretch needed (k 1)'}`
     : `lifted: free foot ${r.side} ${span(r.frames)} — its ankle up to ${r.maxHeight.toFixed(4)} leg lengths above the supporting one in the picture, over ${tol}; the pose's height kept`));
+  for (const b of st.below) out.push(`below the support: free foot ${b.side} ${span(b.frames)} — the posed ankle under the supporting one by up to ${b.depth.toFixed(2)} units (${b.depthLegs.toFixed(4)} leg lengths): the scan's, not stretched (k held at 1)`);
   for (const o of st.over) out.push(`over the cap: free foot ${o.side} ${span(o.frames)} — ${o.needed === null ? 'its ankle is not below its leg\'s root, so no stretch reaches the floor' : `the floor needed k up to ${o.needed.toFixed(4)}, over the cap ${st.cap}; capped`}, the foot left up to ${o.left.toFixed(2)} units above the floor`);
   return out;
 }

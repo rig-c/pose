@@ -732,7 +732,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
           root: { r: world(i, lp.origin.get(L.r.chain.bones[0]!)!), l: world(i, lp.origin.get(L.l.chain.bones[0]!)!) },
           ankle: { r: world(i, tipOf(rest, lp, L.r.ankleBone)), l: world(i, tipOf(rest, lp, L.l.ankleBone)) },
         };
-      });
+      }, scale!.factor);
       for (const side of SIDES) {
         if (!stance.stretch.some((x) => x?.side === side)) continue;
         for (const b of L[side].chain.bones) {

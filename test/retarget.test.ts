@@ -2570,8 +2570,8 @@ describe('#47: --leg-scale and --plant-feet', () => {
       expect(r.status).toBe(0);
       const st = linesOf(r, 'STANCE');
       expect(st).toHaveLength(1);
-      expect(st[0]).toStartWith('STANCE planted both: free foot l frames 0–23 (t=0.000–0.958s) — its ankle up to 0.0300 leg lengths above the supporting one in the picture, within the tolerance 0.07 leg lengths; its leg stretched by k ');
-      const kmax = Number(/\(largest ([0-9.]+)\)/.exec(st[0]!)![1]);
+      expect(st[0]).toStartWith('STANCE planted both: free foot l frames 0–23 (t=0.000–0.958s) — its ankle at most 0.0300 leg lengths above the supporting one in the picture, within the tolerance 0.07 leg lengths; its leg stretched, largest k ');
+      const kmax = Number(/largest k ([0-9.]+)/.exec(st[0]!)![1]);
       expect(kmax).toBeGreaterThan(1);
       expect(kmax).toBeLessThan(1.08);
       // Every scale, both ankles and the hip land, by the package's own check; the stretched scales are the targets.
@@ -2590,13 +2590,64 @@ describe('#47: --leg-scale and --plant-feet', () => {
       expect(rep.stance.over).toEqual([]);
     }, SLOW);
 
+    test('the edges blend: over a planted-both run\'s first and last 3 frames k ramps from 1 to its value and back, as a re-plant blends', () => {
+      // The free ankle 0.03 leg lengths up on frames 0–19: one planted-both run, 0–23, with the same full k from its start
+      // (20 of 24 frames, so the shin's straight length — its 95th percentile — is still the unlifted one, and the leg scale shortens it).
+      const c = setup({ pose: legsPose(() => 1, (i, s) => (s === 'l' && i <= 19 ? 0.03 * PIC : 0)) });
+      expect(retarget(c, FLAGS).status).toBe(0);
+      const before = posedLegs(c.build);
+      const r = retarget(c, [...FLAGS, '--stance', '0.07']);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      const after = posedLegs(c.build);
+      const k = (i: number) => after.len.leg_l0![i]! / before.len.leg_l0![i]!;
+      const full = k(10);
+      expect(full).toBeGreaterThan(1.005);
+      // Weights 1/4, 2/4, 3/4 in (plantHip's (j + 1) / (PLANT_BLEND + 1)); full from frame 3 on the lifted frames.
+      for (const [i, w] of [[0, 0.25], [1, 0.5], [2, 0.75]] as const) expect(k(i)).toBeCloseTo(1 + w * (full - 1), 4);
+      expect(k(0)).toBeGreaterThan(1);
+      expect(k(0)).toBeLessThan(full);
+      for (let i = 3; i <= 19; i++) {
+        expect(k(i)).toBeCloseTo(full, 4);
+        expect(Math.abs(after.ankle.l[i]![1] - after.ankle.r[i]![1])).toBeLessThan(PLANT_TOL);
+      }
+      // On the blended frames the foot is on its way down, not on the floor yet.
+      expect(after.ankle.l[0]![1] - after.ankle.r[0]![1]).toBeGreaterThan(PLANT_TOL);
+    }, SLOW);
+
+    test('k < 1 is never written: a free ankle below the support keeps its scale, and STANCE names the frames', () => {
+      // The left ankle 0.015 leg lengths lower on frame 12: under the 0.02 a change of support needs, so the right still supports;
+      // one frame, so the shin's straight length stays the unlifted one and its leg scale lengthens it there.
+      const c = setup({ pose: legsPose(() => 1, (i, s) => (s === 'l' && i === 12 ? -0.015 * PIC : 0)) });
+      expect(retarget(c, FLAGS).status).toBe(0);
+      const before = posedLegs(c.build);
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, [...FLAGS, '--stance', '0.07', '--report', report]);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      const st = linesOf(r, 'STANCE');
+      expect(linesOf(r, 'FEET')).toContain('FEET   supports: r 0–23');
+      expect(st).toHaveLength(2);
+      expect(st[0]).toBe('STANCE planted both: free foot l frames 0–23 (t=0.000–0.958s) — its ankle never above the supporting one in the picture, within the tolerance 0.07 leg lengths; no stretch needed (k 1)');
+      const below = st.filter((l) => l.startsWith('STANCE below the support: free foot l frame 12 (t=0.500s) — the posed ankle under the supporting one by up to '));
+      expect(below).toHaveLength(1);
+      expect(below[0]).toEndWith(': the scan\'s, not stretched (k held at 1)');
+      expect(st.join('\n')).not.toContain('-0.');
+      const after = posedLegs(c.build);
+      for (let i = 0; i < N; i++) for (const b of ['leg_l0', 'leg_l1']) expect(Math.abs(after.len[b]![i]! - before.len[b]![i]!)).toBeLessThan(1e-6);
+      expect(after.ankle.l[12]![1]).toBeLessThan(after.ankle.r[12]![1] - 0.01);
+      const rep = JSON.parse(readFileSync(report, 'utf8')) as { stance: { below: Array<{ side: string; frames: number[]; depth: number }> } };
+      expect(rep.stance.below.map((b) => [b.side, b.frames])).toEqual([['l', [12, 12]]]);
+      expect(rep.stance.below[0]!.depth).toBeGreaterThan(0);
+    }, SLOW);
+
     test('a difference that needs k > 1.08 is reported over the cap, capped, and not forced', () => {
       const c = setup({ pose: lifted(0.15) });
       const r = retarget(c, [...FLAGS, '--stance', '0.2']);
       expect(r.stderr).toBe('');
       expect(r.status).toBe(0);
       const st = linesOf(r, 'STANCE');
-      expect(st[0]).toContain('(largest 1.0800)');
+      expect(st[0]).toContain('largest k 1.0800');
       const over = st.filter((l) => l.startsWith('STANCE over the cap: free foot l frames 8–15'));
       expect(over).toHaveLength(1);
       expect(over[0]).toMatch(/the floor needed k up to 1\.(0[89]|[1-9])\d*, over the cap 1\.08; capped, the foot left up to [1-9][0-9.]* units above the floor/);
