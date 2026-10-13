@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/rig-c/pose/compare/v0.2.0...v0.2.1) (2026-10-13)
+
+
+### Bug Fixes
+
+* **build:** build --build where it will live, so it carries no path out of it; and a runnable example ([#20](https://github.com/rig-c/pose/issues/20)) ([fb779cd](https://github.com/rig-c/pose/commit/fb779cdd62e53608cd4f269f353ba33dcf40e619))
+
 ## [0.2.0](https://github.com/rig-c/pose/compare/v0.1.1...v0.2.0) (2026-10-13)
 
 
