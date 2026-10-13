@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/rig-c/pose/compare/v0.1.0...v0.1.1) (2026-10-13)
+
+
+### Bug Fixes
+
+* **gates:** lint and tests read this tree only, not an agent worktree nested in it ([#12](https://github.com/rig-c/pose/issues/12)) ([df884d6](https://github.com/rig-c/pose/commit/df884d61209d18d678c47251a3d80a1df8d69038))
+
 ## 0.1.0 (2026-10-13)
 
 
