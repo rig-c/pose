@@ -289,6 +289,108 @@ describe('occlusion: a joint not observed, or scored under 0.3, takes its 3-fram
 
 // ===========================================================================
 
+describe('--hips-inferred (#63): the hips marked inferred, the record says who declared it', () => {
+  test('both hips are inferred on every frame they have a position; positions, scores and every other joint are as without the flag', () => {
+    const doc = seqDoc(12, SMOOTH, (i, j) => {
+      if (i === 3) j.l_hip = { state: 'missing' };
+      if (i === 6) j.r_hip = { state: 'occluded', at: [j.r_hip!.at![0] + 4, j.r_hip!.at![1]], score: 0.4 };
+    });
+    const plain = clean(seqOf(doc), { loop: false, legs: 5, rest: 7 }, undefined, 'mem');
+    const flagged = clean(seqOf(doc), { loop: false, legs: 5, rest: 7, hipsInferred: true }, undefined, 'mem');
+    expect(plain.record.params).toEqual({ loop: false, legs: 5, rest: 7 });
+    expect(plain.inferred).toBeNull();
+    expect(flagged.record.params).toEqual({ loop: false, legs: 5, rest: 7, hipsInferred: { by: 'declared' } });
+    expect(flagged.inferred).toEqual({ r_hip: 12, l_hip: 11 });
+    const jointsOf = (c: typeof plain, i: number) => c.seq.frames[i]!.people[0]!.joints as Record<string, JointDoc>;
+    for (let i = 0; i < 12; i++) {
+      for (const name of BODY18) {
+        const a = jointsOf(plain, i)[name]!;
+        const b = jointsOf(flagged, i)[name]!;
+        if ((name === 'r_hip' || name === 'l_hip') && a.state !== 'missing') expect(b).toEqual({ ...a, state: 'inferred' });
+        else expect(b).toEqual(a);
+      }
+    }
+    // A hip with no position is not given a state it cannot carry.
+    expect(jointsOf(flagged, 3).l_hip).toEqual({ state: 'missing' });
+    expect(jointsOf(flagged, 6).r_hip!.score).toBe(0.4);
+    // Every other figure is the same run's.
+    expect({ ...flagged.record, params: plain.record.params }).toEqual(plain.record);
+    // The record and the states round-trip through the file.
+    const written = writePoseSequence(flagged.seq);
+    const back = readPoseSequence(written, 'mem');
+    expect(back.cleaned!.params.hipsInferred).toEqual({ by: 'declared' });
+    expect(writePoseSequence(back)).toBe(written);
+    expect(cleanLine(flagged.record)).toBe(`${cleanLine(plain.record)}; hips inferred (declared at clean)`);
+  });
+
+  test('the CLI: --hips-inferred prints INFERRED and the CLEAN line names it; control: without it, neither, and the file carries no hipsInferred', () => {
+    const dir = tempDir();
+    const input = join(dir, 'pose.json');
+    writeFileSync(input, JSON.stringify(seqDoc(12)));
+    const out = join(dir, 'flag.json');
+    const r = cli(['clean', '--pose', input, '--out', out, '--hips-inferred']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'INFERRED')).toEqual(['INFERRED r_hip on 12 frame(s), l_hip on 12 frame(s) of 12 marked "inferred" (every frame where it has a position): declared at clean (--hips-inferred); positions and scores unchanged']);
+    expect(linesOf(r, 'CLEAN')[0]).toEndWith('; hips inferred (declared at clean)');
+    const flagged = JSON.parse(readFileSync(out, 'utf8')) as { cleaned: { params: Record<string, unknown> } };
+    expect(flagged.cleaned.params).toEqual({ loop: false, legs: 5, rest: 7, hipsInferred: { by: 'declared' } });
+    const out0 = join(dir, 'plain.json');
+    const r0 = cli(['clean', '--pose', input, '--out', out0]);
+    expect(r0.status).toBe(0);
+    expect(linesOf(r0, 'INFERRED')).toEqual([]);
+    expect(linesOf(r0, 'CLEAN')[0]).not.toContain('inferred');
+    const plain = readFileSync(out0, 'utf8');
+    expect(plain).not.toContain('inferred');
+    expect(plain).not.toContain('hipsInferred');
+    // The two files differ in the hips' state and the record only.
+    expect(readFileSync(out, 'utf8').replaceAll('"state": "inferred"', '"state": "observed"').replace(',\n      "hipsInferred": {\n        "by": "declared"\n      }', '')).toBe(plain);
+  });
+
+  test('a cleaned file cleaned again moves its inferred hips as observed ones (the occlusion step reads them alike)', () => {
+    const once = clean(seqOf(seqDoc(12, SMOOTH, plant)), { loop: false, legs: 1, rest: 1, hipsInferred: true }, undefined, 'mem');
+    const twice = clean(readPoseSequence(writePoseSequence(once.seq), 'mem'), { loop: false, legs: 1, rest: 1 }, undefined, 'mem');
+    expect(twice.occluded).toEqual([]);
+  });
+});
+
+describe('the inferred state (#63) is read by name', () => {
+  test('an inferred joint with no position is refused by name; control: with one, it is read', () => {
+    const bad = seqDoc(6, SMOOTH, (i, j) => {
+      if (i === 2) j.r_hip = { state: 'inferred', score: 0.5 };
+    });
+    let err = '';
+    try {
+      readPoseSequence(JSON.stringify(bad), 'p.json');
+    } catch (e) {
+      err = (e as Error).message;
+    }
+    expect(err).toBe('POSE_JOINT_AT: p.json frames[2] people[0] joint "r_hip" is "inferred" and has no "at"; an inferred joint is a position the detector supplied but did not see, so it has one');
+    const good = seqDoc(6, SMOOTH, (i, j) => {
+      if (i === 2) j.r_hip = { state: 'inferred', at: [485, 600] };
+    });
+    expect((readPoseSequence(JSON.stringify(good), 'p.json').frames[2]!.people[0]!.joints.r_hip)).toEqual({ state: 'inferred', at: [485, 600] });
+  });
+
+  test('a "hipsInferred" record other than { by: "declared" } is refused by name', () => {
+    const good = clean(seqOf(seqDoc(12)), { loop: false, legs: 5, rest: 7, hipsInferred: true }, undefined, 'mem').seq;
+    const doc = JSON.parse(writePoseSequence(good)) as { cleaned: { params: Record<string, unknown> } };
+    doc.cleaned.params.hipsInferred = { by: 'measured', how: 1 };
+    let err = '';
+    try {
+      readPoseSequence(JSON.stringify(doc), 'p.json');
+    } catch (e) {
+      err = (e as Error).message;
+    }
+    expect(err.split('\n')).toEqual([
+      'POSE_CLEANED: p.json "cleaned" "params" "hipsInferred" has a key this reader does not know: "how"; the keys it reads are by',
+      'POSE_CLEANED: p.json "cleaned" "params" "hipsInferred" "by" is the string "measured"; this reader reads "declared" (the person running rig-pose clean --hips-inferred said so)',
+    ]);
+  });
+});
+
+// ===========================================================================
+
 describe('smoothing: a quadratic Savitzky–Golay per joint (moved here from retarget, #67)', () => {
   /** A deterministic uniform noise in [−1, 1] (a linear congruential generator). */
   const noise = (seed: number) => {
@@ -488,7 +590,7 @@ describe('refusals, each beside its control', () => {
     }
     expect(err.split('\n')).toEqual([
       'POSE_CLEANED: p.json "cleaned" "spec" is the string "rig-pose-clean/0"; this reader reads "rig-pose-clean/1"',
-      'POSE_CLEANED: p.json "cleaned" "params" has a key this reader does not know: "extra"; the keys it reads are loop, legs, rest',
+      'POSE_CLEANED: p.json "cleaned" "params" has a key this reader does not know: "extra"; the keys it reads are loop, legs, rest, hipsInferred',
       'POSE_CLEANED: p.json "cleaned" "params" "loop" is the string "yes"; it must be true or false',
       'POSE_CLEANED: p.json "cleaned" "params" "legs" is number 3; it must be 1 (none) or an odd whole number ≥ 5',
       'POSE_CLEANED: p.json "cleaned" spikes.found[0] "frame" is number 12; it must be a frame index in [0, 11]',

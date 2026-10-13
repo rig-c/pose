@@ -246,8 +246,19 @@ export interface Posture {
   rigShoulder: string | null;
   /** Reference frames on which the hips (tilt) and the hips and shoulders (sway) are all good. */
   frames: { tilt: number; sway: number; of: number };
-  /** Hip-line tilt, Spine degrees (r_hip → l_hip; the rig: the pelvis chain's aim). */
-  tilt: { reference: Range; rig: Range; ratio: number };
+  /**
+   * Hip-line tilt, Spine degrees (r_hip → l_hip; the rig: the pelvis chain's
+   * aim). Null when every frame with both hips good has an `inferred` hip
+   * (#63): the tilt is not read, and `tiltWhy` says why.
+   */
+  tilt: { reference: Range; rig: Range; ratio: number } | null;
+  /** Present only when `tilt` is null: why it was not read. */
+  tiltWhy?: string;
+  /**
+   * Present only when some frame with both hips good has an `inferred` hip:
+   * how many such frames the tilt left out, and where the state came from.
+   */
+  hipsInferred?: { frames: number; source: string };
   /**
    * Sway: the x-range of mid_hip − mid_shoulder, in rig units (the reference's
    * picture px × the figure scale) and in each body's own shoulder widths.
@@ -282,8 +293,17 @@ const medianOf = (xs: number[]): number => {
  * the joints it needs are good), the rig is the gated build posed by rig-c.
  * Null when the map has no pelvis chain (joints exactly r_hip, l_hip) or no
  * translate.
+ *
+ * Inferred hips (#63): a frame on which either hip is `inferred` is left out of
+ * the tilt — its hip line is a position the detector supplied but did not see,
+ * and a tilt read off it would be the detector's guess reported as the dancer's.
+ * When that is every frame (`clean --hips-inferred` marks them all), the tilt
+ * is null and `tiltWhy` names the reason and its source (`inferredSource`, read
+ * from the clean record). On some frames only, the tilt is read over the rest
+ * and the line counts the frames left out. Sway is read as before, inferred
+ * hips included: it is a different measure, and the card leaves it as it is.
  */
-export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: ReadonlyMap<string, number>, map: JointMap, r: Retarget, frames: ReadonlyArray<Partial<Record<Body18, Joint>>>, minScore: number): Posture | null {
+export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: ReadonlyMap<string, number>, map: JointMap, r: Retarget, frames: ReadonlyArray<Partial<Record<Body18, Joint>>>, minScore: number, inferredSource = 'source not stated'): Posture | null {
   const pelvis = map.chains.find((c) => c.joints.length === 2 && c.joints[0] === 'r_hip' && c.joints[1] === 'l_hip');
   if (pelvis === undefined || map.translate === null || r.origin === null || r.scale === null) return null;
   const s = r.scale.factor;
@@ -294,11 +314,13 @@ export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: Read
   const refTilt: number[] = [];
   const refSway: number[] = [];
   const refSw: number[] = [];
-  frames.forEach((_, i) => {
+  let inferred = 0;
+  frames.forEach((f, i) => {
     const rh = at(i, 'r_hip');
     const lh = at(i, 'l_hip');
     if (rh === null || lh === null) return;
-    refTilt.push(pictureAngle(rh, lh));
+    if (f.r_hip?.state === 'inferred' || f.l_hip?.state === 'inferred') inferred++;
+    else refTilt.push(pictureAngle(rh, lh));
     const rs = at(i, 'r_shoulder');
     const ls = at(i, 'l_shoulder');
     if (rs === null || ls === null) return;
@@ -307,9 +329,13 @@ export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: Read
   });
   const bone = pelvis.bones[0]!;
   const aim = pelvis.aim[0]!;
-  const rigTilt = posed.map((b) => aimAngle(b, lengths, bone, aim));
-  const tilt = { reference: rangeOf(unwrapped(refTilt)), rig: rangeOf(unwrapped(rigTilt)), ratio: 0 };
-  tilt.ratio = tilt.rig.range / tilt.reference.range;
+  let tilt: Posture['tilt'] = null;
+  const why = `hips inferred (${inferredSource})`;
+  if (inferred === 0 || refTilt.length > 0) {
+    const rigTilt = posed.map((b) => aimAngle(b, lengths, bone, aim));
+    tilt = { reference: rangeOf(unwrapped(refTilt)), rig: rangeOf(unwrapped(rigTilt)), ratio: 0 };
+    tilt.ratio = tilt.rig.range / tilt.reference.range;
+  }
 
   // The rig's mid-shoulder: the point a reach aims at, else the midpoint of the arms' first bones.
   const reach = map.chains.find((c) => c.reach);
@@ -340,7 +366,16 @@ export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: Read
       ratioSw: rig === null || rig.rangeSw === null ? null : rig.rangeSw / reference.rangeSw,
     };
   }
-  return { pelvis: pelvis.name, rigHip: r.origin.bone, rigShoulder, frames: { tilt: refTilt.length, sway: refSway.length, of: frames.length }, tilt, sway };
+  return {
+    pelvis: pelvis.name,
+    rigHip: r.origin.bone,
+    rigShoulder,
+    frames: { tilt: refTilt.length, sway: refSway.length, of: frames.length },
+    tilt,
+    ...(tilt === null ? { tiltWhy: why } : {}),
+    ...(inferred > 0 ? { hipsInferred: { frames: inferred, source: inferredSource } } : {}),
+    sway,
+  };
 }
 
 const f1 = (x: number) => x.toFixed(1);
@@ -350,8 +385,12 @@ const sg = (x: number) => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(1)}`;
 /** The POSTURE lines. */
 export function postureLines(q: Posture): string[] {
   const over = (k: number) => (k === q.frames.of ? '' : ` over ${k} of ${q.frames.of} frames`);
+  const t = q.tilt;
+  const left = q.hipsInferred === undefined ? '' : `; ${q.hipsInferred.frames} frame(s) with an inferred hip not read (${q.hipsInferred.source})`;
   const out = [
-    `hip tilt range (chain "${q.pelvis}", r_hip → l_hip, Spine degrees): reference ${f1(q.tilt.reference.range)}° (${sg(q.tilt.reference.min)}° … ${sg(q.tilt.reference.max)}°${over(q.frames.tilt)}), rig ${f1(q.tilt.rig.range)}° (${sg(q.tilt.rig.min)}° … ${sg(q.tilt.rig.max)}°) — rig/reference ${f3(q.tilt.ratio)}`,
+    t === null
+      ? `hip tilt not read: ${q.tiltWhy}`
+      : `hip tilt range (chain "${q.pelvis}", r_hip → l_hip, Spine degrees): reference ${f1(t.reference.range)}° (${sg(t.reference.min)}° … ${sg(t.reference.max)}°${over(q.frames.tilt)}), rig ${f1(t.rig.range)}° (${sg(t.rig.min)}° … ${sg(t.rig.max)}°) — rig/reference ${f3(t.ratio)}${left}`,
   ];
   const w = q.sway;
   if (w === null) out.push('sway: the reference has no frame with both hips and both shoulders good; not measured');

@@ -25,7 +25,7 @@ The map names **chains**: each limb as bones that descend from one another, pare
 ## Clean first: `rig-pose clean`
 
 ```sh
-rig-pose clean --pose dance.scan.json --out dance.pose.json [--loop] [--legs 5] [--rest 7]
+rig-pose clean --pose dance.scan.json --out dance.pose.json [--loop] [--legs 5] [--rest 7] [--hips-inferred]
 ```
 
 `retarget` reads only a sequence that `clean` wrote ([#67](https://github.com/rig-c/pose/issues/67)). A pose model reads each frame alone, so a hanging wrist moves ±20 px a frame and a cloak-hidden leg jumps 100+ px, and every key carries that shake. `clean` takes it out once, at the sequence, where it can be inspected. A sequence without the record is refused by name (`POSE_NOT_CLEANED`), and the message is the `clean` command to run on that file. There is no flag to skip the step. Windows of 1 (`--legs 1 --rest 1`) are a legitimate run that smooths nothing, and they are recorded as such.
@@ -33,7 +33,7 @@ rig-pose clean --pose dance.scan.json --out dance.pose.json [--loop] [--legs 5] 
 The steps, in this order, each printed with its figures:
 
 1. **Spikes.** A joint more than 0.2 trunk lengths from its 5-frame median takes the median. The trunk is neck → mid-hip, the median over the clip. Each replacement is listed by frame and joint (`SPIKE`). Without `--loop`, a clip end cuts the window of the first and last two frames. There the median is a neighbour's value, and a joint moving steadily would read as a spike. Those frames are **not tested**, and the `SPIKES` line and the record name them. Reflecting the window does not help: the median of `[x2, x1, x0, x1, x2]` is still `x1`.
-2. **Occlusion.** A joint whose state is not `observed`, or whose score is under 0.3, takes its 3-frame median (`OCCLUDED`).
+2. **Occlusion.** A joint whose state is not `observed` (or `inferred`), or whose score is under 0.3, takes its 3-frame median (`OCCLUDED`).
 3. **Smoothing.** A quadratic Savitzky–Golay per joint: the legs (both hips, knees and ankles) over `--legs` frames (default 5), every other joint over `--rest` (default 7). A window is 1 (none) or odd and at least 5. 3 is refused because a quadratic through 3 points passes through all three. Without `--loop`, the window is cut at the ends. Where fewer than three frames have a position, the degree drops to fit the ones that do.
 4. **Floor.** Only with `--loop`: the whole figure moves in y by one constant, so that the lowest ankle over the cycle is where it was before smoothing.
 
@@ -49,6 +49,8 @@ The output carries the record, here the dancer's from the table below:
 ```
 
 `jitter` is the mean |second difference| of y, in px/f², over every joint and every three consecutive frames that have a position, wrapping with `--loop`. It is measured on the sequence as read and on the cleaned positions. `retarget` prints the record as its `CLEAN` line and copies it into `--report`.
+
+**`--hips-inferred`** ([#63](https://github.com/rig-c/pose/issues/63)) declares that the hips are not seen: under a skirt or a cloak the pose model still places them, but where it puts them is its guess. After the four steps, `r_hip` and `l_hip` are marked `inferred` on every frame where they have a position (`INFERRED`), and the record's params carry `"hipsInferred": { "by": "declared" }` — the person running `clean` said so. Positions and scores are unchanged, so `retarget`'s keys are the same with the flag and without it. What changes is the `POSTURE` line, which does not read a hip tilt off inferred hips (below), and the `CLEAN` line, which ends `hips inferred (declared at clean)`.
 
 **Measured** on HQ's references ([#67](https://github.com/rig-c/pose/issues/67)'s bars):
 
@@ -89,7 +91,7 @@ and what the run cannot decide for you it lists:
 - `FLIP` — a segment that turns more than `--flip` degrees in one frame (with `--flip <deg>`; off by default) is spread over the frames around the jump; one line per spread, with the chain, the segment, the jump, the frames and h. Below.
 - `BEND` — with `--bends clamp`, a hinge bent the wrong way is straightened on that frame instead of refusing.
 - `FOLD` — `rigc render --folds` over the new animation: every mesh that folds, and when. A reading, not a gate.
-- `POSTURE` — when the map has a pelvis chain (joints `r_hip`, `l_hip`) and a `translate`: the hip line's tilt range, and the sway — the x-range of mid_hip − mid_shoulder — in rig units and in shoulder widths, the pose's beside the posed rig's. A reading, not a gate.
+- `POSTURE` — when the map has a pelvis chain (joints `r_hip`, `l_hip`) and a `translate`: the hip line's tilt range, and the sway — the x-range of mid_hip − mid_shoulder — in rig units and in shoulder widths, the pose's beside the posed rig's. A reading, not a gate. A frame on which either hip is `inferred` is left out of the tilt. When that is every frame, as after `clean --hips-inferred`, the line is `hip tilt not read: hips inferred (declared at clean)` and the report's `posture` has `"tilt": null` with `"tiltWhy"`; on some frames only, the tilt is read over the others and the line counts the frames left out (`posture.hipsInferred`). The source is read from the clean record, or is `source not stated` when the joints carry the state and the record does not. The sway reads the hips as before.
 - `SWITCH` — with `alternates` in the map ([below](#alternate-drawings-alternates)): each span on which a set of alternate drawings shows, its slots, its frames, how far the pose was from the set's key skeleton, how far each bone with a `drawn` angle was turned from it, and where each of its boundaries was moved to (`moved`, [below](#alternate-drawings-alternates)).
 - `UNCOVERED` — with `alternates` in the map: every fold on a frame where no switch took the folding mesh off screen. This is the list of poses still to paint.
 - `RANGE` — a chain's `range` ([below](#a-joints-range-range)): a bone whose rotate key the pose asks past its range, outside every span of a set depicting its chain, is clamped at the limit; one line per run, with the frames, the seconds and the largest overflow. The demand for an alternate.
@@ -222,7 +224,7 @@ Exit codes: `0` written, `1` refused (every reason printed, nothing written), `2
 ```
 
 - `t` is seconds and strictly increases; the animation's keys are at `t − t₀`.
-- Joints are body-18 (`nose neck r_shoulder r_elbow r_wrist l_shoulder l_elbow l_wrist r_hip r_knee r_ankle l_hip l_knee l_ankle r_eye l_eye r_ear l_ear`); `r`/`l` are the **subject's** sides. `state` is `observed`, `occluded` or `missing`, as in the keypoints file. An unlisted joint is missing.
+- Joints are body-18 (`nose neck r_shoulder r_elbow r_wrist l_shoulder l_elbow l_wrist r_hip r_knee r_ankle l_hip l_knee l_ankle r_eye l_eye r_ear l_ear`); `r`/`l` are the **subject's** sides. `state` is `observed`, `occluded` or `missing`, as in the keypoints file, or `inferred` ([#63](https://github.com/rig-c/pose/issues/63)): a position the detector supplied but did not see. An `inferred` joint carries `at` (one without it is refused, `POSE_JOINT_AT`), and `retarget` keys it as it keys `observed`. An unlisted joint is missing.
 - Two differences from the keypoints file: the unit is `picture-px`, and `at` may lie outside the picture (a hand leaves the frame; the score says how much to believe it).
 - More than one person: `--person <id>`.
 - `score` is whatever the pose model gives. RTMPose's goes above 1, so `--min-score` is a cut on that model's scale, not a probability.

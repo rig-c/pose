@@ -8,7 +8,7 @@ import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeF
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { readMap, resolveMap, type JointMap, type Rest } from './map.ts';
-import { cleanLine } from './clean.ts';
+import { cleanLine, inferredSource } from './clean.ts';
 import { convertCoco17, personTrack, readPoseSequence, type CameraFrame } from './pose.ts';
 import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './problems.ts';
 import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, readIdle, targetOf, trackLabel, type IdleReading, type RigcTrack, type Target } from './idle.ts';
@@ -225,7 +225,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     p.throwIfAny();
 
     const lengths = new Map(doc.bones.map((b) => [b.name, b.length ?? 0]));
-    const posture = measurePosture(posed, lengths, map, r, frames, a.minScore);
+    const posture = measurePosture(posed, lengths, map, r, frames, a.minScore, inferredSource(seq.cleaned));
     if (posture !== null) for (const l of postureLines(posture)) say(`  POSTURE ${l}`);
     const legBones = legBonesOf(map);
     const feetReading = legBones === null ? null : measureFeet(posed, lengths, r, legBones);

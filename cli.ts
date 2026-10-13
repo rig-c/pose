@@ -34,6 +34,10 @@ clean (required before retarget; rig-c/pose#67)
   --legs <n>            Savitzky–Golay window over the legs — both hips, knees and ankles (default: 5)
   --rest <n>            Savitzky–Golay window over every other joint (default: 7)
                         n is 1 (none), or odd and ≥ 5: a quadratic through 3 points passes through all three
+  --hips-inferred       declare the hips inferred (rig-c/pose#63): r_hip and l_hip are marked "inferred" — a
+                        position the detector supplied but did not see — on every frame where they have one, and
+                        the record says so (hipsInferred: { by: "declared" }). Positions are unchanged, so retarget's
+                        keys are too; its POSTURE line does not read the hip tilt ("hip tilt not read: hips inferred")
 
   In order, each step printed with its figures: (1) spikes — a joint more than 0.2 trunk lengths
   (neck → mid_hip, the median over the clip) from its 5-frame median takes the median, each listed by
@@ -346,10 +350,10 @@ function runsOf(frames: number[]): string {
 
 /** `rig-pose clean` (#67): read, clean, print each step's figures, write. */
 function runClean(argv: string[], say: (l: string) => void): void {
-  const f = parseFlags(argv, ['pose', 'out', 'legs', 'rest', 'person'], ['loop', 'coco']);
+  const f = parseFlags(argv, ['pose', 'out', 'legs', 'rest', 'person'], ['loop', 'coco', 'hips-inferred']);
   const input = need(f, 'pose');
   const out = need(f, 'out');
-  const params = { loop: f.has('loop'), legs: windowOf(f, 'legs', 5), rest: windowOf(f, 'rest', 7) };
+  const params = { loop: f.has('loop'), legs: windowOf(f, 'legs', 5), rest: windowOf(f, 'rest', 7), hipsInferred: f.has('hips-inferred') };
   const text = readFileSync(input, 'utf8');
   const seq = f.has('coco') ? convertCoco17(text, input) : readPoseSequence(text, input);
   const c = clean(seq, params, f.get('person'), input);
@@ -372,6 +376,7 @@ function runClean(argv: string[], say: (l: string) => void): void {
   }
   const jit = (v: number | null) => (v === null ? 'not measured' : `${fmt(v, 3)}`);
   say(`  JITTER mean |second difference| of y over ${c.triples} joint-frame triple(s): ${jit(c.record.jitter.before)} → ${jit(c.record.jitter.after)} px/f²${c.record.jitter.before !== null && c.record.jitter.after !== null && c.record.jitter.before > 0 ? ` (${fmt(100 * (1 - c.record.jitter.after / c.record.jitter.before), 1)}% lower)` : ''}`);
+  if (c.inferred !== null) say(`  INFERRED r_hip on ${c.inferred.r_hip} frame(s), l_hip on ${c.inferred.l_hip} frame(s) of ${n} marked "inferred" (every frame where it has a position): declared at clean (--hips-inferred); positions and scores unchanged`);
   writeFileSync(out, writePoseSequence(c.seq));
   say(`  CLEAN  ${cleanLine(c.record)}`);
   say(`  wrote ${out}`);
