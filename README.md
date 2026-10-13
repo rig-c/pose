@@ -181,6 +181,84 @@ Either way the `SWITCH` line ends with `moved on …, off …`: each boundary's 
 **A stopgap window: `frames`.** A set may state `"frames": [[first, last], …]`: it shows only inside those windows, and on them it is chosen over any set within tolerance that has no window. It is for two sets whose key skeletons the angles cannot tell apart. Measured on HQ's dancer, the hands clasped behind the back and the hands low in front differ by only 2–21°, and the wrist and hand-point scores do not separate them either; the cue that might is #33's depth state. It is recorded in the map as a stopgap, not a selection rule.
 
 **How far a set's art may turn: `turn`.** A drawing reads right only near the angle it was painted at. A set may state, per bone with a `drawn` angle, how far its art may turn from it, `"turn": { "sleeve_r0": [-20, 20] }`. While the set shows, the bone is held within it: its target becomes drawn + clamp(wrap(target − drawn), min, max), each bone on its own world angle, so a forearm under a held upper arm keeps its own target. The landing check measures against the held angle. The overflow the pose asked for is listed as `ART-RANGE`. A `turn` on a bone the set has no `drawn` angle for is refused (`MAP_ALT_TURN`).
+## Compare: the rig's render against the video
+
+```sh
+rig-pose compare --reference ref.pose.json --render render.pose.json --map map.json \
+  [--retarget-report report.json] [--reference-hands ref.wholebody.json --render-hands render.wholebody.json] \
+  [--cloth-reference ref.cloth.json --cloth-render render.cloth.json --cloth-windows 3.9-7.4,7.6-11.1] \
+  [--report compare.json] [--sheet compare.png]
+```
+
+Polishing a retarget used to mean rendering it, having a person look, and hearing what was wrong. Most of what a person names can be measured with the same pose detector on both sides ([#38](https://github.com/rig-c/pose/issues/38)). `compare` reads two `rig-pose-sequence/1` files on one time base: the **reference** (the source video's keypoints) and the **render** (the same detector run on `rigc render` frames of the retargeted motion). It lists the differences per body unit, worst first, each with the fix it suggests. The person is then needed only for taste. The detector stays outside rig-pose, as it does for `retarget`.
+
+The figures and bars below are fixed. They were set in [#38](https://github.com/rig-c/pose/issues/38) before any render was measured, and they are grading lines for [rig-c/exam](https://github.com/rig-c/exam). A change to one is a new comment on that issue first.
+
+**One time base.** Both sequences have the same number of frames, and each frame's times differ by at most **1 ms**. Render the motion at the reference's rate, frame for frame. Anything else is refused (`COMPARE_FRAMES`, `COMPARE_TIMES`, with the first frames that differ). The hands files and cloth tracks are held to the same rule against the reference (`COMPARE_HANDS_FRAMES`/`_TIMES`, `COMPARE_CLOTH_FRAMES`/`_TIMES`).
+
+**Positions are normalised per side.** A position is divided by that side's own **hip width**: the median over its frames of |r_hip − l_hip|, in picture px. Directions are compared as Spine angles of the picture segment, |wrap(render − reference)|. Every joint with a position counts, whatever its score; only hand visibility reads scores. A frame where either side lacks a point the measure needs is not measured, and it is never over the bar.
+
+**A finding** is a run of frames over a measure's bar lasting **≥ 0.15 s**. A run is timed from the first frame's time to the end of the last frame, as `END-ON` is: 4 frames at 24 fps (0.167 s) are a finding, 3 (0.125 s) are not. Runs **one frame apart** merge, and the merged gap is not counted as over the bar. A finding's worst frame is the frame of its largest figure. Within a measure, findings are listed worst first.
+
+| unit | measure | figure, per frame | bar | fix class |
+| --- | --- | --- | --- | --- |
+| head | eye-line tilt | \|direction difference\| of r_eye → l_eye | **> 15°** | not derivable |
+| arms | direction, per mapped arm segment | \|direction difference\| | **> 20°** | **paint** inside a set's span, **rig** outside |
+| arms | hand visibility, per hand | mean score of the hand's 21 points (or the wrist's score) on each side | reference **≥ 0.6** while render **< 0.4** | **depth** (#33) |
+| body | torso length | \|mid_shoulder − mid_hip\| ÷ that side's median | the render's range **< 0.5 ×** the reference's, over the whole run | **motion** |
+| body | hip vertical travel | mid_hip's y in hip widths | the same rule as torso length | **motion** |
+| legs | direction, per mapped leg segment | \|direction difference\| | **> 20°** | **paint** inside a set's span, **rig** outside |
+| legs | foot plant, per ankle | the ankle's speed in hip widths per frame (from the frame before) | render **> 0.05** while reference **< 0.02** | **motion** |
+| cloth | lag, swing ratio, overshoot, per window | #34's three figures, on each side | outside #34's bands around the reference's figure | **rig** (physics) |
+
+Why these bars ([#38](https://github.com/rig-c/pose/issues/38)):
+
+- **20° for a segment's direction.** HQ's rule for a set's art is `drawn` ± 20°: the art may turn up to 20° from the angle it was painted at and still read. A bigger difference is an arm that looks different.
+- **0.6 and 0.4 for a hand.** On the 13 s dance, the hands in front (S4) score 0.53–0.88 and the hands hidden behind the back (S1) score 0.41–0.57. 0.6 and 0.4 sit outside that overlap, one on each side.
+- **15°** for the head's tilt, **0.05 / 0.02** hip widths per frame for a sliding foot, and **0.5 ×** of the reference's range for a missing bounce were fixed with the others before the dancer was measured.
+
+**Units and segments.** The map says which segments are compared. An **arm** segment joins two of one side's shoulder, elbow and wrist, and a **leg** segment two of one side's hip, knee and ankle. A segment's name is `chain/bone`. Other chains, such as the trunk, the pelvis or the head, are not compared as segments. The head is measured on its eye line whatever the map says, and the body on its torso and hip. A mapped arm or leg segment whose point has a position on no frame of one side is refused (`COMPARE_JOINT_MISSING`, naming the chain, the bone, the point and the side).
+
+**The fix class** is given only when it can be derived:
+
+- **An arm or leg direction.** The finding's worst frame is checked against the spans in `--retarget-report` (its `switches`: each set's frames and the chains it depicts). Inside a span of a set that depicts the segment's chain, the class is **paint**: the drawing shown there is not this pose. Outside every such span it is **rig**: the art does not show the bone's direction. Without a report, a chain no set of the map depicts is **rig**. A chain some set depicts is not derivable, and the line names those sets.
+- **Hand visibility** is **depth** ([#33](https://github.com/rig-c/pose/issues/33)): the hand is drawn behind something.
+- **A foot slide or no bounce** is **motion**.
+- **Cloth** is **rig**: the cloth is the rig's physics.
+- **A head tilt** has no class in #38, so the line says it is not derivable.
+
+**Hand visibility.** `rig-pose-sequence/1` carries body-18 only, so the hand points come from COCO-WholeBody files, one per side: `--reference-hands` and `--render-hands`. The shape is `{ "spec"?: "coco-wholebody-133", "fps"?, "width"?, "height"?, "source"?, "frames": [{ "t", "points": [[x, y, score] × 133] | null }] }`. The subject's left hand is points 91–111 and the right hand 112–132. A frame's figure is the mean score of the hand's 21 points. A `null` frame (nobody found) is not measured. Without the files, the wrist's score is read instead: an absent or `missing` wrist reads 0, as COCO's v = 0 does. The summary line then says `from wrist scores`. One of the two files without the other is refused with exit 2, because the two sides must be measured the same way.
+
+**Body.** Each figure is read over the whole run, so the unit gives at most one finding per measure, `no bounce`, spanning every frame. Its figure is the ratio of the ranges, render ÷ reference. Its worst frame, the one the sheet draws, is the reference's frame farthest from its median. The summary line always gives both ranges.
+
+**Cloth.** Cloth is measured only when both cloth tracks are given, with `--cloth-windows`. Without them the unit reads `not measured`. A cloth track is HQ's `rig-c-cloth-track/0`: `{ "spec": "rig-c-cloth-track/0", "subject"?, "method"?, "source"?, "fps"?, "frames_count"?, "units"?, "hipWidth": { "median", "unit": "picture px" | "rig world units" }, "origin"?, "axes"?, "skirtSwing"?, "frames": [{ "i", "t", "hip_x", "hip_y", "hip_w", "tilt_deg", "hem_mid", "hem_l", "hem_r", "hem_l_y", "hem_r_y", "hem_band_cx", "skirt_cx", "skirt_top", "skirt_bottom" }] }`, the frame keys all numbers. Every position is already divided by the subject's own median hip width, with x to the right. `hip_x` is the hips' midpoint and `hem_mid` the midpoint of the hem's leftmost and rightmost points in the lower half of the skirt ([#34](https://github.com/rig-c/pose/issues/34)'s hem); only those two and `t` are read. Any other spec, or a key outside that list, is refused (`COMPARE_CLOTH`). The three figures are #34's, as HQ's skirt criteria define them, ported from HQ's measuring script. On HQ's per-frame record of the dancer they reproduce its numbers exactly (reference A 0.958 / 2.634 / 0.061, B 0.696 / 1.409 / 0.000). Read through `rig-c-cloth-track/0`, whose values are rounded to 5 decimals, the reference's lag in A reads 0.959.
+
+- Both signals are smoothed with a Gaussian, σ = 1 frame over ± 4 frames, ends padded, before differentiating (numpy's `gradient`).
+- **lag**, in frames, hem after hip positive: the peak of the normalised cross-correlation of hip-x velocity with hem-x velocity over the window, searched over −6…+12 frames and refined by a parabola.
+- **swing ratio**: per hip stroke, the hem's excursion over the hip's. A stroke runs from one hip reversal (a zero crossing of hip velocity) to the next and moves at least the stroke threshold. A wiggle under the threshold is dropped as a pair. The hem is read `round(lag)` frames after each reversal. The figure is the median over the window's strokes.
+- **overshoot**: per stroke, how far the hem keeps travelling in the stroke's direction after the hips turn, within half of the next stroke (or 12 frames after the last), as a fraction of the hip stroke. The figure is the median.
+- **The stroke threshold** is 0.2 *reference* hip widths: one physical size on both sides (the criteria's Revision 1), expressed in the render's own hip widths. A render track in rig world units is carried by the retarget's scale, `scale.factor` in `--retarget-report` (rig units per reference px): 0.2 × reference hip width × factor ÷ render hip width. On the dancer that is 0.2 × 128.1 × 0.54152 ÷ 92.202 = 0.1505, the criteria's own figure. Without the report it is refused (`COMPARE_CLOTH_SCALE`). A render track in picture px is carried by the torso, as the retarget scales the rig: 0.2 × (reference hip width ÷ reference torso) ÷ (render hip width ÷ render torso), each torso the sequence's median mid_hip → mid_shoulder. A reference track not in picture px is refused (`COMPARE_CLOTH_UNITS`). The `CLOTH` lines print both thresholds and how the render's was carried.
+- **The bands**, per window, around the reference's own figure: lag ± 1.0 frame; swing ratio ± 25 %; overshoot ± 0.10, absolute, floored at 0. A render figure outside its band is a finding over the window's frames. A window with no stroke on one side is listed as not measured.
+- A window is `t0-t1` in seconds, and windows are named A, B, … in the order given. A window's frames are `round((t − t₀) × fps)` up to the end, exclusive. A window of 12 frames or fewer is refused, since the lag search reaches 12.
+
+**Output.** The first line gives the frames, the duration, both hip widths, and the report the spans came from. Then come one summary line per unit (`HEAD`, `ARMS`, `BODY`, `LEGS`, `CLOTH`) and one `FIND` line per finding. A summary line gives the unit's findings and, per measure, its findings, its worst figure with the subject and frame, the frames over the bar (in runs of any length), and the bar. A `FIND` line gives the unit, the measure, the subject and its points, the worst figure with both sides' readings and its frame, the frames and seconds, the frames over the bar, the bar, and the fix class with the reason. With cloth, a `CLOTH` line per window gives both sides' figures. The run ends with the number of findings.
+
+`--report <file>` writes the same as JSON (`rig-pose-compare/1`):
+
+- `inputs`, `frames`, `duration`, `hipWidth: { reference, render }`, `torso: { reference, render }` (medians, px);
+- `rule: { findingSeconds, findingGap, timeTolerance }` and `bars` (every bar above, by name);
+- `units: [{ unit, findings, notMeasured, measures: [{ measure, subjects, source, findings, overBar, notMeasured, bar, ranges? }] }]`;
+- `findings: [{ unit, measure, subject, points, chain, frames: [first, last], seconds, over, worst: { frame, t, figure, reference, render }, figureUnit, bar, fix, fixWhy }]`;
+- `cloth`: `null`, or `{ windows: [{ name, t, frames, reference, render, band }], stroke: { reference, render, carried } }`.
+
+Numbers are rounded to 4 decimals, once, at the writer.
+
+`--sheet <png>` draws the reference skeleton beside the render skeleton at each finding's worst frame, one row per finding, with the finding's own points marked in yellow. It never draws a video frame. A cloth finding is a figure over a window, with no single frame, so it has no row. When no finding has a frame, no sheet is written and the run says so.
+
+**The control** is the reference compared with itself. It must report no finding in any unit, and every summary line says `0 findings`. On HQ's dancer (313 frames, RTMPose, with its whole-body hand points and the retarget's report) it does.
+
+Exit codes: `0` compared, whether it found anything or not, since a finding is not a failure; `1` refused, with every reason printed; `2` bad invocation.
+
 ## Requirements
 
 [Bun](https://bun.sh) ≥ 1.2 on `PATH` — rig-pose, like rig-c, runs its TypeScript sources directly. `rig-c` comes as a dependency. With `@esotericsoftware/spine-core` installed beside it, rig-c's gate runs the spine-core round trip; without it, rig-c's own gate, and the gate's report says which.

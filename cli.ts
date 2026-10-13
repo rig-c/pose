@@ -9,7 +9,9 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import pkg from './package.json' with { type: 'json' };
 import { convertCoco17, writePoseSequence } from './src/pose.ts';
+import { parseWindows } from './src/compare.ts';
 import { lineOf, Refusal } from './src/problems.ts';
+import { runCompare, type CompareArgs } from './src/runcompare.ts';
 import { runRetarget, type RetargetArgs } from './src/run.ts';
 
 const HELP = `rig-pose ${pkg.version} — motion from a pose sequence onto a rig-c rig
@@ -17,6 +19,7 @@ const HELP = `rig-pose ${pkg.version} — motion from a pose sequence onto a rig
 Usage:
   rig-pose retarget --rig <rig> --map <map.json> --pose <pose.json> --out <motion.json> [--name dance] [flags]
   rig-pose convert --coco <coco17.json> --out <pose.json>
+  rig-pose compare --reference <pose.json> --render <pose.json> --map <map.json> [flags]
   rig-pose --version | --help
 
 retarget
@@ -73,7 +76,30 @@ convert
                         keypoints in COCO's order as 17 [x, y, score] or 51 numbers, or null
   --out <file>          the rig-pose-sequence/1 it becomes; neck = the shoulders' midpoint
 
-Exit codes: 0 written, 1 refused (every reason printed), 2 bad invocation.
+compare
+  --reference <file>    rig-pose-sequence/1: the source video's keypoints
+  --render <file>       rig-pose-sequence/1: the same detector on rigc's render of the retargeted motion,
+                        rendered at the reference's rate — same frame count, times within 1 ms
+  --map <map.json>      rig-pose-map/1: its arm and leg segments are compared
+  --retarget-report <f> the retarget's --report: a limb finding inside a set's span suggests paint, outside rig
+  --reference-hands <f> --render-hands <f>
+                        COCO-WholeBody keypoints ({ frames: [{ t, points: [[x, y, score] x 133] }] }) for
+                        hand visibility from the 21 hand points; without them, from the wrist scores
+  --cloth-reference <f> --cloth-render <f> --cloth-windows <t0-t1,...>
+                        cloth tracks (rig-c-cloth-track/0: hip_x and hem_mid per frame, in hip widths) and
+                        the windows, in seconds, #34's lag, swing ratio and overshoot are read over; a render
+                        track in rig world units needs --retarget-report (its scale); without the tracks,
+                        cloth reads "not measured"
+  --report <file>       write the comparison as JSON (rig-pose-compare/1)
+  --sheet <png>         draw the reference and render skeletons side by side at each finding's worst frame
+
+  A finding is a run of frames over a bar lasting >= 0.15 s (gaps of one frame merged), worst first.
+  The bars (README, "Compare"): arm and leg segment direction > 20 deg; hand visibility reference >= 0.6
+  while render < 0.4; foot plant render > 0.05 while reference < 0.02 hip widths/frame; eye-line tilt
+  > 15 deg; torso length and hip height range under 0.5 x the reference's; cloth outside #34's bands.
+  Exit 0 whenever it compared, findings or not.
+
+Exit codes: 0 written (compare: compared), 1 refused (every reason printed), 2 bad invocation.
 `;
 
 class Usage extends Error {}
@@ -162,6 +188,36 @@ function retargetArgs(argv: string[]): RetargetArgs {
   };
 }
 
+function compareArgs(argv: string[]): CompareArgs {
+  const f = parseFlags(argv, ['reference', 'render', 'map', 'retarget-report', 'reference-hands', 'render-hands', 'cloth-reference', 'cloth-render', 'cloth-windows', 'report', 'sheet'], []);
+  const pair = (x: string, y: string) => {
+    if (f.has(x) !== f.has(y)) throw new Usage(`--${f.has(x) ? x : y} is given without --${f.has(x) ? y : x}; the two are read together, so both sides are measured the same way`);
+  };
+  pair('reference-hands', 'render-hands');
+  pair('cloth-reference', 'cloth-render');
+  let clothWindows: CompareArgs['clothWindows'];
+  if (f.has('cloth-reference') && !f.has('cloth-windows')) throw new Usage('--cloth-reference and --cloth-render need --cloth-windows <t0-t1,...>: the figures are read per window');
+  if (f.has('cloth-windows')) {
+    if (!f.has('cloth-reference')) throw new Usage('--cloth-windows is given without --cloth-reference and --cloth-render');
+    const w = parseWindows(f.get('cloth-windows')!);
+    if (typeof w === 'string') throw new Usage(`--cloth-windows is "${f.get('cloth-windows')}": ${w}; it must be t0-t1[,t0-t1...] in seconds`);
+    clothWindows = w;
+  }
+  return {
+    reference: need(f, 'reference'),
+    render: need(f, 'render'),
+    map: need(f, 'map'),
+    retargetReport: f.get('retarget-report'),
+    referenceHands: f.get('reference-hands'),
+    renderHands: f.get('render-hands'),
+    clothReference: f.get('cloth-reference'),
+    clothRender: f.get('cloth-render'),
+    clothWindows,
+    report: f.get('report'),
+    sheet: f.get('sheet'),
+  };
+}
+
 export function main(argv: string[]): number {
   const [cmd, ...rest] = argv;
   if (cmd === undefined || cmd === '--help' || cmd === '-h' || cmd === 'help') {
@@ -181,6 +237,10 @@ export function main(argv: string[]): number {
       runRetarget(retargetArgs(rest), (l) => process.stdout.write(`${l}\n`));
       return 0;
     }
+    if (cmd === 'compare') {
+      runCompare(compareArgs(rest), (l) => process.stdout.write(`${l}\n`));
+      return 0;
+    }
     if (cmd === 'convert') {
       const f = parseFlags(rest, ['coco', 'out'], []);
       const input = need(f, 'coco');
@@ -190,7 +250,7 @@ export function main(argv: string[]): number {
       process.stdout.write(`rig-pose convert: ${seq.frames.length} frame(s) of COCO-17 → body-18; wrote ${out}\n`);
       return 0;
     }
-    process.stderr.write(`rig-pose: unknown command "${cmd}" — the commands are: retarget, convert\n`);
+    process.stderr.write(`rig-pose: unknown command "${cmd}" — the commands are: retarget, convert, compare\n`);
     return 2;
   } catch (e) {
     if (e instanceof Usage) {
@@ -199,7 +259,7 @@ export function main(argv: string[]): number {
     }
     if (e instanceof Refusal) {
       for (const p of e.problems) process.stderr.write(`FAIL  ${lineOf(p)}\n`);
-      process.stderr.write(`rig-pose ${cmd}: ${e.problems.length} problem(s) — nothing written\n`);
+      process.stderr.write(`rig-pose ${cmd}: ${e.problems.length} problem(s) — ${cmd === 'compare' ? 'not compared' : 'nothing written'}\n`);
       return 1;
     }
     throw e;
