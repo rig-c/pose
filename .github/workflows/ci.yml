@@ -106,6 +106,14 @@ jobs:
           ships () { # $1 rev, $2 label
             mkdir -p "$work/tree-$2"
             git archive "$1" | tar -x -C "$work/tree-$2"
+            # A revision with no manifest is not a package yet — the commit
+            # before this repository's first landing — so it packs nothing. Only
+            # the base side may be that; a head without one is a fault.
+            if [ ! -f "$work/tree-$2/package.json" ] && [ "$2" = base ]; then
+              echo "  $1 has no package.json, so the base packs nothing"
+              : > "$work/$2"
+              return 0
+            fi
             if ! npm pack --dry-run --json "$work/tree-$2" > "$work/pack-$2.json" 2> "$work/pack-$2.err"; then
               cat "$work/pack-$2.err"
               echo "npm pack --dry-run failed on $1, so nothing is known about what ships and this job will not report green"
