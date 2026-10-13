@@ -23,11 +23,21 @@
  * evaluated at the frame, on each joint's positions after its holds. Centred,
  * it moves no motion in time; a cubic keeps a peak a moving average flattens.
  *
+ * The short hold (rig-c/pose#22) comes next: a segment whose picture length on
+ * a frame is under `short` of its own median length over the sequence is seen
+ * end-on, or collapsed by blur, and its picture direction there is noise. Its
+ * angle on those frames is not read from the pose but interpolated, the short
+ * way round, between the frames either side at or above the cutoff (flat at the
+ * ends: `holdShort`). A run under the cutoff lasting ≥ `END_ON_SECONDS` (spans
+ * merged across a gap of `END_ON_GAP` frame) is listed as `endOn`: a pose the
+ * rig cannot draw, the demand for an alternate drawing (#6).
+ *
  * The flip guard (rig-c/pose#15) then spreads a segment's turn greater than
  * `flip` degrees in one frame over the frames around it, linearly and centred on
  * the jump (`spreadFlips`). It reads the mapped segments' target angles after
- * holds and smoothing and before the hinge check. A reach's target is aimed
- * later, from posed positions, and is not guarded.
+ * holds, smoothing and the short hold, and before the hinge check. A reach's
+ * target is aimed later, from posed positions, and is neither held short nor
+ * guarded.
  *
  * What this cannot know is held to account afterwards: `verify.ts` poses the
  * gated build with rig-c's poser and measures where each bone landed.
@@ -53,6 +63,8 @@ export interface RetargetOptions {
   bendTolerance: number;
   /** A segment turning more than this many degrees in one frame is spread (`spreadFlips`); 'off' keeps every turn. */
   flip: number | 'off';
+  /** A segment shorter in the picture than this fraction of its median length has its angle held there (`holdShort`); 'off' reads every frame. */
+  short: number | 'off';
 }
 
 export interface Hold {
@@ -97,6 +109,39 @@ export interface Flip {
   clipped: 'start' | 'end' | 'both' | null;
 }
 
+/** One span of frames under the short cutoff: the segment's angle there was interpolated, not read (`holdShort`). */
+export interface Short {
+  chain: string;
+  bone: string;
+  /** The segment the bone carries: from joint, to joint. */
+  joints: [string, string];
+  /** First and last frame under the cutoff; every one of them had its angle replaced, and the frames either side keep the input's. */
+  frames: [number, number];
+  /** The lowest picture length on those frames, as a fraction of the segment's median picture length. */
+  minFraction: number;
+}
+
+/**
+ * A segment under the short cutoff long enough to be a pose (the limb pointing
+ * at the camera), not a blur: short spans merged across a gap of `END_ON_GAP`
+ * frame, lasting ≥ `END_ON_SECONDS`. The demand for an alternate drawing (#6).
+ */
+export interface EndOn {
+  chain: string;
+  bone: string;
+  joints: [string, string];
+  /** First and last frame of the merged run (a gap frame inside it is at or above the cutoff). */
+  frames: [number, number];
+  /** How long it lasts: from the first frame's key time to the end of the last frame (the next frame's key time; for the pose's last frame, one frame on). */
+  seconds: number;
+  minFraction: number;
+}
+
+/** A run under the short cutoff lasting at least this long, in seconds, is listed as `endOn` (rig-c/pose#22). */
+export const END_ON_SECONDS = 0.15;
+/** Short spans this many frames apart or fewer merge into one `endOn` run. */
+export const END_ON_GAP = 1;
+
 export interface MotionKey {
   t: number;
   v: number[];
@@ -121,6 +166,10 @@ export interface Retarget {
   origin: { bone: string; at: Array<[number, number]> } | null;
   holds: Hold[];
   bends: BendEvent[];
+  /** The short hold's spans, per segment in map order. */
+  short: Short[];
+  /** The short runs long enough to be a pose seen end-on. */
+  endOn: EndOn[];
   flips: Flip[];
   /** The figure scale, rig units per picture pixel, and the lengths it came from. */
   scale: { factor: number; pose: number; rig: number } | null;
@@ -358,6 +407,41 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   }
   p.throwIfAny();
 
+  // The short hold, on every limb segment the pose aims directly (not a reach, and
+  // not a line across the body from a left joint to its right twin — the hip line,
+  // the eye line — whose shortening is the body or head turning, not a limb seen
+  // end-on; #22's cutoff was measured on limb segments only): its picture length
+  // against its own median, on the points the angle was read from.
+  const short: Short[] = [];
+  const endOn: EndOn[] = [];
+  if (opts.short !== 'off') {
+    const cutoff = opts.short;
+    /** The end of frame i: the next frame's key time; the last frame lasts as long as the one before it. */
+    const endOf = (i: number): number => (i + 1 < n ? keyTimes[i + 1]! : n > 1 ? 2 * keyTimes[i]! - keyTimes[i - 1]! : keyTimes[i]!);
+    for (const c of map.chains) {
+      if (c.reach) continue;
+      c.bones.forEach((b, k) => {
+        const joints: [string, string] = [c.joints[k]!, c.joints[k + 1]!];
+        if (isAcross(joints[0], joints[1])) return;
+        const from = series.get(joints[0])!;
+        const to = series.get(joints[1])!;
+        const lengths = from.map((f, i) => Math.hypot(to[i]![0] - f[0], to[i]![1] - f[1]));
+        const med = median(lengths);
+        if (med < 1e-6) {
+          p.add('POSE_SHORT_MEDIAN', `chain "${c.name}" — bone "${b}"'s segment ${joints[0]} → ${joints[1]} has median picture length ${med}px over the ${n} frames; --short measures a frame's length against that median, and there is none to measure against`);
+          return;
+        }
+        const spans = holdShort(targets.get(b)!, lengths.map((l) => l / med), cutoff);
+        for (const s of spans) short.push({ chain: c.name, bone: b, joints, ...s });
+        for (const run of mergeRuns(spans, END_ON_GAP)) {
+          const seconds = Math.round((endOf(run.frames[1]) - keyTimes[run.frames[0]]!) * 1e6) / 1e6;
+          if (seconds >= END_ON_SECONDS - 1e-9) endOn.push({ chain: c.name, bone: b, joints, frames: run.frames, seconds, minFraction: run.minFraction });
+        }
+      });
+    }
+  }
+  p.throwIfAny();
+
   // The flip guard, on every segment the pose aims directly (not a reach).
   const flips: Flip[] = [];
   if (opts.flip !== 'off') {
@@ -452,7 +536,78 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   }
   if (translateTrack !== null) tracks.push(translateTrack);
 
-  return { animation: { duration: keyTimes[n - 1]!, tracks }, times: keyTimes, targets, origin, holds, bends, flips, scale };
+  return { animation: { duration: keyTimes[n - 1]!, tracks }, times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale };
+}
+
+type ShortSpan = Omit<Short, 'chain' | 'bone' | 'joints'>;
+
+/**
+ * The short hold on one angle series (degrees), in place. `fraction` is the
+ * segment's picture length on each frame over its median. Each run of frames
+ * under `cutoff` has its angles replaced by the line from the last frame before
+ * it at or above the cutoff to the first one after it, the short way round; a
+ * run at the start or the end of the series holds the one reliable end flat.
+ * With the fraction against the median and a cutoff under 1, half the frames
+ * at least are at or above it, so every run has a reliable end. Returns the runs.
+ */
+/** A line across the body: a left joint and its right twin (r_hip → l_hip, r_eye → l_eye). */
+export function isAcross(a: string, b: string): boolean {
+  const twin = (x: string): string | null => (x.startsWith('r_') ? `l_${x.slice(2)}` : x.startsWith('l_') ? `r_${x.slice(2)}` : null);
+  return twin(a) === b;
+}
+
+export function holdShort(angles: number[], fraction: readonly number[], cutoff: number): ShortSpan[] {
+  const n = angles.length;
+  const out: ShortSpan[] = [];
+  for (let i = 0; i < n; i++) {
+    if (!(fraction[i]! < cutoff)) continue;
+    let j = i;
+    while (j + 1 < n && fraction[j + 1]! < cutoff) j++;
+    const lo = i - 1;
+    const hi = j + 1;
+    let minFraction = fraction[i]!;
+    for (let k = i + 1; k <= j; k++) minFraction = Math.min(minFraction, fraction[k]!);
+    if (lo >= 0 || hi < n) {
+      const a = lo >= 0 ? angles[lo]! : angles[hi]!;
+      const b = hi < n ? angles[hi]! : a;
+      const turn = wrap(b - a);
+      for (let k = i; k <= j; k++) angles[k] = lo < 0 ? b : wrap(a + (turn * (k - lo)) / (hi - lo));
+    }
+    out.push({ frames: [i, j], minFraction });
+    i = j;
+  }
+  return out;
+}
+
+/** Short spans `gap` frames apart or fewer, as one run each: its first and last frame, and the lowest fraction. */
+export function mergeRuns(spans: readonly ShortSpan[], gap: number): ShortSpan[] {
+  const out: ShortSpan[] = [];
+  for (const s of spans) {
+    const last = out[out.length - 1];
+    if (last !== undefined && s.frames[0] - last.frames[1] - 1 <= gap) {
+      last.frames = [last.frames[0], s.frames[1]];
+      last.minFraction = Math.min(last.minFraction, s.minFraction);
+    } else out.push({ frames: [s.frames[0], s.frames[1]], minFraction: s.minFraction });
+  }
+  return out;
+}
+
+const spanOf = (frames: [number, number], times: readonly number[]): string =>
+  frames[0] === frames[1] ? `frame ${frames[0]} (t=${times[frames[0]]!.toFixed(3)}s)` : `frames ${frames[0]}–${frames[1]} (t=${times[frames[0]]!.toFixed(3)}–${times[frames[1]]!.toFixed(3)}s)`;
+
+export function shortLine(s: Short, times: readonly number[], cutoff: number): string {
+  const lo = s.frames[0] - 1;
+  const hi = s.frames[1] + 1;
+  const held = lo < 0 && hi >= times.length
+    ? 'no frame of the pose is at or above it, so nothing was held'
+    : lo < 0 ? `held flat at frame ${hi}'s angle (the pose starts short)`
+      : hi >= times.length ? `held flat at frame ${lo}'s angle (the pose ends short)`
+        : `interpolated from frame ${lo}'s angle to frame ${hi}'s, the short way round`;
+  return `chain "${s.chain}" bone "${s.bone}" (${s.joints[0]} → ${s.joints[1]}) ${spanOf(s.frames, times)}: picture length down to ${s.minFraction.toFixed(2)} of its median, under ${cutoff}; its direction is not read — ${held}`;
+}
+
+export function endOnLine(e: EndOn, times: readonly number[], cutoff: number): string {
+  return `chain "${e.chain}" bone "${e.bone}" (${e.joints[0]} → ${e.joints[1]}) ${spanOf(e.frames, times)}: ${e.seconds.toFixed(3)}s under ${cutoff} of its median picture length (down to ${e.minFraction.toFixed(2)}), ≥ ${END_ON_SECONDS}s — seen end-on, a pose the rig cannot draw`;
 }
 
 type Spread = Omit<Flip, 'chain' | 'bone' | 'joints'>;
