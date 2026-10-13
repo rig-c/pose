@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/rig-c/pose/compare/v0.5.0...v0.6.0) (2026-10-13)
+
+
+### Features
+
+* **map:** a set's frames windows, a stopgap for key skeletons the angles cannot tell apart ([#36](https://github.com/rig-c/pose/issues/36)) ([01b10e3](https://github.com/rig-c/pose/commit/01b10e3617774d1ce9d779bae35a67f526fa8304))
+
 ## [0.5.0](https://github.com/rig-c/pose/compare/v0.4.0...v0.5.0) (2026-10-13)
 
 
