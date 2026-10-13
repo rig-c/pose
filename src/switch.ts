@@ -186,13 +186,20 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
   for (const group of competing(map.alternates)) {
     const pick: Array<AlternateSet | null> = [];
     for (let i = 0; i < n; i++) {
+      // A set with a `frames` window shows only inside it, and there it is chosen
+      // over any set without one (a stopgap for what the angles cannot tell apart).
       let best: AlternateSet | null = null;
       let bestD = Infinity;
+      let bestWindowed = false;
       for (const a of group) {
+        if (a.frames !== null && !a.frames.some(([f, l]) => i >= f && i <= l)) continue;
         const d = distances.get(a.name)![i]!;
-        if (d <= opts.switchTolerance && d < bestD) {
+        if (d > opts.switchTolerance) continue;
+        const windowed = a.frames !== null;
+        if ((windowed && !bestWindowed) || (windowed === bestWindowed && d < bestD)) {
           best = a;
           bestD = d;
+          bestWindowed = windowed;
         }
       }
       pick.push(best);
