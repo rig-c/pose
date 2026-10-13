@@ -16,6 +16,7 @@ import { poseRawAnimation, poseRawSetup, readModel, type CompiledDocument, type 
 import { Plate } from 'rig-c/plate';
 import { holdShort, isAcross, mergeRuns, savitzkyGolay, spreadFlips } from '../src/retarget.ts';
 import { loopTrack, type RigcTrack } from '../src/idle.ts';
+import { readPoseSequence, writePoseSequence } from '../src/pose.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const CLI = join(ROOT, 'cli.ts');
@@ -877,7 +878,7 @@ describe('readers', () => {
       if (i === 2) j.r_toe = { state: 'observed', at: [1, 1] };
       if (i === 3) j.nose = { state: 'observed', score: 0.9 };
     });
-    pose.camera = 'front';
+    pose.lens = 'front';
     pose.space = { units: 'picture-px', origin: 'top-left', y: 'up' };
     (pose.frames as Array<{ t: number }>)[5]!.t = (pose.frames as Array<{ t: number }>)[4]!.t;
     const c = setup({ pose });
@@ -885,7 +886,7 @@ describe('readers', () => {
     expect(r.status).toBe(1);
     const f = fails(r);
     const p = c.pose;
-    expect(f).toContain(`FAIL  POSE_KEYS: ${p} has a key this reader does not know: "camera"; the keys it reads are spec, space, width, height, source, frames`);
+    expect(f).toContain(`FAIL  POSE_KEYS: ${p} has a key this reader does not know: "lens"; the keys it reads are spec, space, width, height, source, frames, camera`);
     expect(f).toContain(`FAIL  POSE_SPACE: ${p} "space" is {"units":"picture-px","origin":"top-left","y":"up"}; for "rig-pose-sequence/1" it must be exactly {"units":"picture-px","origin":"top-left","y":"down"}`);
     expect(f).toContain(`FAIL  POSE_TIME: ${p} frames[5] "t" is 0.5s, not after frame 4's 0.5s; times must strictly increase`);
     expect(f.some((l) => l.startsWith(`FAIL  POSE_JOINT_NAME: ${p} frames[2] people[0] names joint "r_toe", which body-18 does not have; the joints are nose, neck,`))).toBe(true);
@@ -2997,5 +2998,98 @@ describe('--reduce: few keys with curves within a stated tolerance (rig-c/pose#3
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
+  }, SLOW);
+});
+
+// ===========================================================================
+
+describe('#63: the camera a scan read, carried by the sequence', () => {
+  /** A camera whose s steps where it is known: rising 0.002 a frame, dropping 0.05 into frame 6 and 0.04 into frame 11, 0.03 into 14. */
+  const knownS = (i: number): number => 1 + 0.002 * i - (i >= 6 ? 0.05 : 0) - (i >= 11 ? 0.04 : 0) - (i >= 14 ? 0.03 : 0);
+  const camera = (n: number) => Array.from({ length: n }, (_, i) => ({ s: Number(knownS(i).toFixed(6)), tx: 1.5 * i, ty: 0 - 0.25 * i, inliers: 40 + i }));
+  const withCamera = (cam: unknown): Record<string, unknown> => ({ ...poseDoc(BASE), camera: cam });
+
+  test('a valid camera is read; CAMERA names the s range and the three fastest frame-to-frame changes', () => {
+    const c = setup({ pose: withCamera(camera(BASE.n)) });
+    const r = retarget(c);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'CAMERA')).toEqual([
+      'CAMERA the sequence carries the picture\'s camera against frame 0\'s; its joints are normalised by it (p′ = (p − t) / s): s 0.9080 (frame 14) … 1.0100 (frame 5) over 16 frames; s changes fastest at frame 5→6 (t=0.750s) −0.0480, frame 10→11 (t=1.375s) −0.0380, frame 13→14 (t=1.750s) −0.0280; fewest background inliers 40',
+    ]);
+  }, SLOW);
+
+  test('the camera is read, not applied: the motion is the same bytes with it and without it', () => {
+    const plain = setup();
+    const carried = setup({ pose: withCamera(camera(BASE.n)) });
+    const r0 = retarget(plain);
+    const r1 = retarget(carried);
+    expect(r0.status).toBe(0);
+    expect(r1.status).toBe(0);
+    expect(readFileSync(carried.out).equals(readFileSync(plain.out))).toBe(true);
+    // Every line but CAMERA is the same, paths aside.
+    const rest = (r: Ran, c: Case) => r.stdout.split(c.dir).join('<dir>').split('\n').filter((l) => !l.trim().startsWith('CAMERA '));
+    expect(rest(r1, carried)).toEqual(rest(r0, plain));
+    expect(linesOf(r0, 'CAMERA')).toEqual([]);
+  }, SLOW);
+
+  test('a malformed camera is refused by name, every problem in one run; nothing written', () => {
+    const cam: unknown[] = camera(BASE.n);
+    cam[1] = { s: 0, tx: 0, ty: 0, inliers: 3 };
+    cam[2] = { s: -1.2, tx: 'left', ty: 0, inliers: -1 };
+    cam[3] = { s: 1, tx: 0, inliers: 2.5 };
+    cam[4] = { s: 1, tx: 0, ty: 0, inliers: 5, rot: 0 };
+    cam[5] = [1, 0, 0, 5];
+    const c = setup({ pose: withCamera(cam.slice(0, BASE.n - 1)) });
+    const r = retarget(c);
+    expect(r.status).toBe(1);
+    const p = c.pose;
+    expect(fails(r)).toEqual([
+      `FAIL  POSE_CAMERA: ${p} "camera" has 15 entries and "frames" 16; it must have one per frame`,
+      `FAIL  POSE_CAMERA: ${p} camera[1] "s" is number 0; the scale must be a finite number > 0`,
+      `FAIL  POSE_CAMERA: ${p} camera[2] "s" is number -1.2; the scale must be a finite number > 0`,
+      `FAIL  POSE_CAMERA: ${p} camera[2] "tx" is the string "left"; it must be a finite number of picture px`,
+      `FAIL  POSE_CAMERA: ${p} camera[2] "inliers" is number -1; it must be an integer ≥ 0`,
+      `FAIL  POSE_CAMERA: ${p} camera[3] has no "ty"; a camera entry carries s, tx, ty, inliers`,
+      `FAIL  POSE_CAMERA: ${p} camera[3] "inliers" is number 2.5; it must be an integer ≥ 0`,
+      `FAIL  POSE_CAMERA: ${p} camera[4] has a key this reader does not know: "rot"; the keys it reads are s, tx, ty, inliers`,
+      `FAIL  POSE_CAMERA: ${p} camera[5] is an array; a camera entry is { s, tx, ty, inliers }`,
+    ]);
+    expect(existsSync(c.out)).toBe(false);
+    // Not an array at all.
+    const d = setup({ pose: withCamera({ s: 1 }) });
+    const rd = retarget(d);
+    expect(rd.status).toBe(1);
+    expect(fails(rd)).toEqual([`FAIL  POSE_CAMERA: ${d.pose} "camera" is an object; it must be an array with one { s, tx, ty, inliers } per frame`]);
+  }, SLOW);
+
+  test('the writer round-trips a camera, and writes none when there is none', () => {
+    const text = JSON.stringify(withCamera(camera(BASE.n)));
+    const seq = readPoseSequence(text, 'mem');
+    expect(seq.camera).toEqual(camera(BASE.n));
+    const written = writePoseSequence(seq);
+    expect(readPoseSequence(written, 'mem').camera).toEqual(camera(BASE.n));
+    expect(writePoseSequence(readPoseSequence(written, 'mem'))).toBe(written);
+    expect(Object.keys(JSON.parse(written) as object)).toEqual(['spec', 'space', 'width', 'height', 'source', 'camera', 'frames']);
+    const bare = writePoseSequence(readPoseSequence(JSON.stringify(poseDoc(BASE)), 'mem'));
+    expect(Object.keys(JSON.parse(bare) as object)).toEqual(['spec', 'space', 'width', 'height', 'source', 'frames']);
+  });
+
+  /** Standing still, both legs straight down: --plant-feet has a floor to hold. */
+  const STAND: Motion = { ...BASE, n: 24, dt: 1 / 24, rt: () => -95, rs: () => -97, lt: () => -95, ls: () => -97, hip: () => [0, 0] };
+  test('--plant-feet without a camera says the floor may step with the picture; with one, or without --plant-feet, it does not', () => {
+    const note = 'CAMERA none in the sequence: --plant-feet reads the picture as a fixed camera, so a zoom or a pan in the video moves the floor with it and the floor may step with the picture (tools/scan.py reads the camera, rig-c/pose#63)';
+    const bare = setup({ pose: poseDoc(STAND) });
+    const rb = retarget(bare, ['--plant-feet']);
+    expect(rb.status).toBe(0);
+    expect(linesOf(rb, 'CAMERA')).toEqual([note]);
+    const off = retarget(bare);
+    expect(off.status).toBe(0);
+    expect(linesOf(off, 'CAMERA')).toEqual([]);
+    const carried = setup({ pose: { ...poseDoc(STAND), camera: camera(STAND.n) } });
+    const rc = retarget(carried, ['--plant-feet']);
+    expect(rc.status).toBe(0);
+    expect(linesOf(rc, 'CAMERA')).toHaveLength(1);
+    expect(linesOf(rc, 'CAMERA')[0]).toStartWith('CAMERA the sequence carries the picture\'s camera');
   }, SLOW);
 });
