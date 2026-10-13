@@ -5,12 +5,12 @@
  */
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { readMap, resolveMap } from './map.ts';
 import { convertCoco17, personTrack, readPoseSequence } from './pose.ts';
 import { lineOf, Problems, Refusal, type Problem } from './problems.ts';
 import { bendLine, flipLine, holdLine, retarget, type RetargetOptions } from './retarget.ts';
-import { baseMotionOf, folds, gate, readBuild, resolveRig, restOf } from './rigc.ts';
+import { baseMotionOf, buildInto, folds, gate, readBuild, resolveRig, restOf } from './rigc.ts';
 import { landed, measureLanding, measurePosture, poseFrames, postureLines, ANGLE_TOLERANCE, ORIGIN_TOLERANCE } from './verify.ts';
 
 export interface RetargetArgs extends RetargetOptions {
@@ -109,17 +109,21 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
 
     const dts = r.times.slice(1).map((t, i) => t - r.times[i]!).sort((x, y) => x - y);
     const fps = dts.length === 0 ? 12 : Math.max(1, Math.min(60, Math.round(1 / dts[dts.length >> 1]!)));
-    const f = folds(g1.build, a.name, join(scratch, 'folds'), fps);
-    if (f.meshes === null) say(`  FOLD   rigc render --folds did not read (exit ${f.run.status}); folds not measured`);
+    // A rig that draws nothing (bones only) has nothing to fold, and rigc's render refuses it.
+    const f = doc.slots.length === 0 ? { run: { args: [], status: 0, out: '' }, meshes: [], frames: '' } : folds(g1.build, a.name, join(scratch, 'folds'), fps);
+    if (doc.slots.length === 0) say('  FOLD   the rig has no slots, so it draws nothing to fold; not measured');
+    else if (f.meshes === null) say(`  FOLD   rigc render --folds did not read (exit ${f.run.status}); folds not measured`);
     else if (f.meshes.length === 0) say(`  FOLD   rigc render --folds at ${fps} fps: no mesh folds`);
     else for (const m of f.meshes) say(`  FOLD   mesh "${m.attachment}" (slot "${m.slot}") folds on ${m.times.length} frame(s) at ${fps} fps: t=${spans(m.times, 1 / fps)}`);
 
-    writeFileSync(a.out, `${JSON.stringify(motion, null, 2)}\n`);
     if (a.build !== undefined) {
+      // Built again where it will live, not copied: rigc's page paths are relative to the build (#18).
       rmSync(a.build, { recursive: true, force: true });
-      cpSync(g1.build, a.build, { recursive: true });
+      const kept = buildInto(input.rig, join(scratch, 'with', 'motion.json'), resolve(a.build), a.profile);
+      if (!kept.green) refuse([{ code: 'RIG_GATE', text: `rigc build into --build ${a.build} is red where the same build was green in scratch (exit ${kept.run.status}); nothing written` }, ...kept.fails.map((x) => ({ code: 'RIGC', text: x }))]);
     }
-    if (a.render !== undefined && f.meshes !== null) {
+    writeFileSync(a.out, `${JSON.stringify(motion, null, 2)}\n`);
+    if (a.render !== undefined && f.meshes !== null && f.frames !== '') {
       rmSync(a.render, { recursive: true, force: true });
       cpSync(f.frames, a.render, { recursive: true });
     }

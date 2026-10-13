@@ -100,18 +100,27 @@ export function gate(rig: string, motion: Record<string, unknown>, dir: string, 
   mkdirSync(dir, { recursive: true });
   const motionPath = join(dir, 'motion.json');
   writeFileSync(motionPath, `${JSON.stringify(motion, null, 2)}\n`);
-  const build = join(dir, 'build');
-  // --copy-images: a build's page paths are relative to its directory, and the
-  // gated build is copied out of the scratch directory for `--build`, so its
-  // pages travel with it (rigc refuses to draw a moved build otherwise).
-  const run = runRigc(['build', '--rig', rig, '--motion', motionPath, '--out', build, '--profile', profile, '--copy-images', '--report', join(dir, 'build-report.json')]);
+  return buildInto(rig, motionPath, join(dir, 'build'), profile, join(dir, 'build-report.json'));
+}
+
+/**
+ * `rigc build` of `rig` with the motion spec at `motionPath` into `out`, under
+ * rigc's gate (it writes nothing when red). rigc records each source image's
+ * path relative to `out` (`images[].page` in the model document), so a build is
+ * only right where it was built: the run gates in a scratch directory, and the
+ * build `--build` keeps is built again, by rigc, where it will live (#18) —
+ * never copied out, which would carry a path climbing from the scratch
+ * directory to the filesystem root. --copy-images puts the pages beside it.
+ */
+export function buildInto(rig: string, motionPath: string, out: string, profile: string, report?: string): Gate {
+  const run = runRigc(['build', '--rig', rig, '--motion', motionPath, '--out', out, '--profile', profile, '--copy-images', ...(report === undefined ? [] : ['--report', report])]);
   const lines = run.out.split('\n');
   return {
     run,
     green: run.status === 0,
     summary: lines.find((l) => /assertions: \d+ measured/.test(l))?.replace(/^[\s.]+/, '') ?? null,
     fails: lines.filter((l) => /^\s*FAIL\s/.test(l) || l.startsWith('rigc compile error')).map((l) => l.trim()),
-    build,
+    build: out,
   };
 }
 
