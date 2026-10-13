@@ -31,7 +31,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run lint
-      - run: bun test
+      - run: bun run test
 
   # The job below is @rig-c/parts' `ships` job, copied whole: a landing that
   # changes a packed file under a type release-please hides is refused, with a
