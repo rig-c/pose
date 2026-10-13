@@ -81,6 +81,9 @@ into named failures.
 | `src/rigc.ts` | everything that touches rig-c's CLI or the disk: the gate (`rigc build`), the folds (`rigc render --folds`); the built rig's slots and what moves an attachment |
 | `src/verify.ts` | where the gated build actually put each bone, posed by rig-c's own poser; the posture reading (hip tilt, sway) |
 | `src/run.ts` | `retarget` end to end, in the order: gate the rig as it is, retarget (switches and range clamp included), gate with the animation in, measure, read folds and which no switch covers, write |
+| `src/compare.ts` | the pure `compare` (#38): the reference against the render on one time base, per unit (head, arms, body, legs, cloth); the bars, the finding rule, the fix classes; the hands, cloth-track and retarget-report readers; #34's cloth figures ported from HQ's `metrics.py`; the lines and `rig-pose-compare/1` |
+| `src/sheet.ts` | the compare sheet: reference and render skeletons side by side at each finding's worst frame, drawn with rig-c's plate (no video) |
+| `src/runcompare.ts` | `compare` end to end: read every input (all refusals together), compare, print, write the report and the sheet |
 
 - **The key formula and its assumption.** rig-c's `rotate` key adds to the
   setup rotation, and a child with the `normal` inherit mode turns with its
@@ -92,6 +95,13 @@ into named failures.
   spine-core round trip where `@esotericsoftware/spine-core` resolves (this
   repository's development dependency, as in @rig-c/parts) and rigc's own gate
   where it does not (an install of this package).
+
+- **`compare`'s bars are grading lines.** They were fixed in rig-c/pose#38
+  before any render was measured, and rig-c/exam grades against them. A change
+  to a bar, the finding rule or a figure's definition is a new comment on the
+  issue first, then `src/compare.ts` (`BARS`, `CLOTH`) and the README's
+  "Compare" section together. A finding is not a failure: `compare` exits 0
+  whenever it compared.
 
 ## Conventions
 
