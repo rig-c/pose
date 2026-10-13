@@ -101,7 +101,10 @@ export function gate(rig: string, motion: Record<string, unknown>, dir: string, 
   const motionPath = join(dir, 'motion.json');
   writeFileSync(motionPath, `${JSON.stringify(motion, null, 2)}\n`);
   const build = join(dir, 'build');
-  const run = runRigc(['build', '--rig', rig, '--motion', motionPath, '--out', build, '--profile', profile, '--report', join(dir, 'build-report.json')]);
+  // --copy-images: a build's page paths are relative to its directory, and the
+  // gated build is copied out of the scratch directory for `--build`, so its
+  // pages travel with it (rigc refuses to draw a moved build otherwise).
+  const run = runRigc(['build', '--rig', rig, '--motion', motionPath, '--out', build, '--profile', profile, '--copy-images', '--report', join(dir, 'build-report.json')]);
   const lines = run.out.split('\n');
   return {
     run,

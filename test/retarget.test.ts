@@ -950,3 +950,18 @@ describe('an aim between two points ("eye_r>eye_l") turns the head by its eye li
     expect(fails(r).some((l) => l.includes('MAP_AIM_LENGTH') && l.includes('"eye_r"'))).toBe(true);
   }, SLOW);
 });
+
+// --- the kept build stands on its own ----------------------------------------
+
+describe('--build keeps a build rigc can draw where it was copied', () => {
+  test('rigc render reads the kept build (its pages travel with it)', () => {
+    const c = setup();
+    const r = retarget(c);
+    expect(r.status).toBe(0);
+    const out = join(c.dir, 'render');
+    const rr = spawnSync(process.execPath, [RIGC, 'render', '--candidate', c.build, '--animation', 'dance', '--out', out], { encoding: 'utf8' });
+    expect(`${rr.stdout}${rr.stderr}`).not.toContain('nothing at');
+    expect(rr.status).toBe(0);
+    expect(existsSync(join(out, 'dance', 'contact.png'))).toBe(true);
+  }, SLOW);
+});
