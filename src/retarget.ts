@@ -39,20 +39,39 @@
  * target is aimed later, from posed positions, and is neither held short nor
  * guarded.
  *
+ * Then the switches (rig-c/pose#6, `switch.ts`): with every target known —
+ * reaches included — each alternate set's distance to the pose is read, and the
+ * spans each set shows are chosen. Only then the range clamp: outside the spans
+ * of a set depicting its chain, a bone whose rotate key would leave its
+ * `range` is clamped at the limit (its target becomes the clamped world angle),
+ * in depth order, so a bone below takes the clamped parent into its own key
+ * and still follows the pose; a reach below is aimed again from where the
+ * clamped bones put its origin. Every overflow is listed as `range` demand.
+ * Inside a span nothing is clamped, but a bone with a `drawn` angle is read
+ * against it (`artTurn`, and `artRange` where it leaves its range).
+ *
+ * The lines across the body — hips, shoulders, eyes — are read from the pose
+ * after holds and smoothing, whether the map uses them or not: a line under
+ * `TURN_FRACTION` of its median picture length, or reversed (pointing more
+ * than 90° from the subject's right to left), for ≥ `TURN_SECONDS`, is a `TURN`:
+ * the body or head turned, a pose a flat rig cannot draw. It changes no key.
+ *
  * What this cannot know is held to account afterwards: `verify.ts` poses the
  * gated build with rig-c's poser and measures where each bone landed.
  */
 import { screenToSpineDegrees } from 'rig-c/transform';
 import type { Body18 } from './joints.ts';
 import { isBody18, VIRTUAL } from './joints.ts';
-import type { Chain, JointMap, Rest } from './map.ts';
+import type { Chain, JointMap, Rest, RigSlots } from './map.ts';
 import { aimAngle, rigPoint } from './map.ts';
 import type { Joint } from './pose.ts';
 import { Problems } from './problems.ts';
+import type { ArtRange, SlotTrack, Switch, SwitchOptions } from './switch.ts';
+import { coveredChains, measureArt, overflow, RANGE_SLACK, runsOf, selectSwitches } from './switch.ts';
 
 const DEG = 180 / Math.PI;
 
-export interface RetargetOptions {
+export interface RetargetOptions extends SwitchOptions {
   /** A joint with a score below this is not good on that frame (a joint with no score is). */
   minScore: number;
   /** Savitzky–Golay window over joint positions, in frames: 1 = none, else odd and ≥ 5. */
@@ -145,6 +164,8 @@ export const END_ON_GAP = 1;
 export interface MotionKey {
   t: number;
   v: number[];
+  /** `stepped`: the value holds until the next key (the offsets' translate keys). */
+  ease?: 'stepped';
 }
 export interface MotionTrack {
   bone: string;
@@ -153,8 +174,50 @@ export interface MotionTrack {
 }
 export interface Animation {
   duration: number;
-  tracks: MotionTrack[];
+  /** The bone tracks, then any slot `attachment` tracks the switches add (`switch.ts`). */
+  tracks: Array<MotionTrack | SlotTrack>;
 }
+
+/** A line across the body turned: short in the picture, or reversed, long enough to be a pose (the demand for a turned-body drawing). */
+export interface Turn {
+  /** `hip`, `shoulder` or `eye`. */
+  line: string;
+  /** The subject's right joint, then its left twin. */
+  joints: [string, string];
+  /** First and last frame of the run (merged across a gap of `TURN_GAP` frame). */
+  frames: [number, number];
+  seconds: number;
+  /** The lowest picture length on the run's turned frames, as a fraction of the line's median. */
+  minFraction: number;
+  /** Whether the line points from the right joint to the left more than 90° off the subject's right-to-left on any frame of the run. */
+  reversed: boolean;
+}
+
+/** A bone's rotate key past its range outside every span of a set depicting its chain: clamped there, and the demand for an alternate. */
+export interface RangeDemand {
+  chain: string;
+  bone: string;
+  /** First and last frame of the run (merged across a gap of one frame; a gap frame inside is within range or inside a span). */
+  frames: [number, number];
+  seconds: number;
+  /** Degrees past the range, the most on any frame of the run. */
+  maxOverflow: number;
+  /** The rotate key the pose asked for on that frame, degrees relative to setup, before the clamp. */
+  key: number;
+  /** The bone's range, degrees. */
+  limits: [number, number];
+}
+
+/** The lines across the body a `TURN` is read on: the subject's right joint, then its left twin. */
+export const TURN_LINES: ReadonlyArray<[string, string, string]> = [['hip', 'r_hip', 'l_hip'], ['shoulder', 'r_shoulder', 'l_shoulder'], ['eye', 'r_eye', 'l_eye']];
+/** A line shorter in the picture than this fraction of its median is turned (rig-c/pose#6: between the front-facing dance's floor, 0.81, and a side-on body's 0.17–0.49). */
+export const TURN_FRACTION = 0.5;
+/** A turned run lasting at least this long, in seconds, is listed (as `endOn`). */
+export const TURN_SECONDS = 0.15;
+/** Turned spans this many frames apart or fewer merge into one run. */
+export const TURN_GAP = 1;
+/** Range overflow and art-range spans this many frames apart or fewer merge into one run. */
+export const RANGE_GAP = 1;
 
 export interface Retarget {
   animation: Animation;
@@ -173,6 +236,20 @@ export interface Retarget {
   flips: Flip[];
   /** The figure scale, rig units per picture pixel, and the lengths it came from. */
   scale: { factor: number; pose: number; rig: number } | null;
+  /** The spans each alternate set shows, with their art turn. */
+  switches: Switch[];
+  /** Per switched or hidden slot, what it shows on each frame (null: nothing). */
+  shown: Map<string, Array<string | null>>;
+  /** Per set, its distance to the pose on each frame, degrees. */
+  distances: Map<string, number[]>;
+  /** The lines across the body turned long enough to be a pose. */
+  turns: Turn[];
+  /** The lines across the body that could not be read, and why. */
+  turnsUnread: Array<{ line: string; joints: [string, string]; why: string }>;
+  /** Every run a bone's key was clamped at its range. */
+  range: RangeDemand[];
+  /** Every run a bone inside a span turned from its drawn angle past its range. */
+  artRange: ArtRange[];
 }
 
 type Pt = [number, number];
@@ -286,7 +363,7 @@ const r3 = (v: number) => {
  * good, when a hinge's side cannot be read off a straight rest, and — with
  * `bends: 'refuse'` — when a hinge bends the wrong way.
  */
-export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partial<Record<Body18, Joint>>>, times: readonly number[], opts: RetargetOptions): Retarget {
+export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partial<Record<Body18, Joint>>>, times: readonly number[], opts: RetargetOptions, slots: RigSlots = new Map()): Retarget {
   const p = new Problems();
   const n = frames.length;
   const t0 = times[0]!;
@@ -294,6 +371,9 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   for (let i = 1; i < n; i++) {
     if (keyTimes[i]! <= keyTimes[i - 1]!) p.add('POSE_TIME', `frames ${i - 1} and ${i} are ${keyTimes[i - 1]}s and ${keyTimes[i]}s after rounding to the microsecond; keys must strictly increase`);
   }
+  /** The end of frame i: the next frame's key time; the last frame lasts as long as the one before it. */
+  const endOf = (i: number): number => (i + 1 < n ? keyTimes[i + 1]! : n > 1 ? 2 * keyTimes[i]! - keyTimes[i - 1]! : keyTimes[i]!);
+  const secondsOf = (run: [number, number]): number => Math.round((endOf(run[1]) - keyTimes[run[0]]!) * 1e6) / 1e6;
 
   // Every point the map reads, held where it is not good.
   const needed = new Set<string>();
@@ -305,15 +385,13 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   const series = new Map<string, Pt[]>();
   const good = new Map<string, boolean[]>();
   const holds: Hold[] = [];
-  for (const name of [...needed].sort()) {
+  /** A point held where it is not good, then smoothed; or why it is good on no frame. */
+  const heldOf = (name: string): { at: Pt[]; good: boolean[]; holds: Hold[] } | { never: string } => {
     const raw = frames.map((f) => pointOn(f, name, opts.minScore));
     const firstGood = raw.findIndex((v) => typeof v !== 'string');
-    if (firstGood < 0) {
-      const why = [...new Set(raw as string[])].slice(0, 3).join('; ');
-      p.add('POSE_POINT_NEVER_GOOD', `point "${name}" is good on none of the ${n} frames (${why}); the map needs it, and there is no value to hold`);
-      continue;
-    }
+    if (firstGood < 0) return { never: [...new Set(raw as string[])].slice(0, 3).join('; ') };
     const out: Pt[] = [];
+    const spans: Hold[] = [];
     let last = firstGood;
     let span: Hold | null = null;
     for (let i = 0; i < n; i++) {
@@ -328,13 +406,65 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       if (span !== null && span.source === last && span.why === v) span.to = i;
       else {
         span = { point: name, from: i, to: i, source: last, why: v };
-        holds.push(span);
+        spans.push(span);
       }
     }
-    series.set(name, savitzkyGolay(out, opts.smooth));
-    good.set(name, raw.map((v) => typeof v !== 'string'));
+    return { at: savitzkyGolay(out, opts.smooth), good: raw.map((v) => typeof v !== 'string'), holds: spans };
+  };
+  for (const name of [...needed].sort()) {
+    const h = heldOf(name);
+    if ('never' in h) {
+      p.add('POSE_POINT_NEVER_GOOD', `point "${name}" is good on none of the ${n} frames (${h.never}); the map needs it, and there is no value to hold`);
+      continue;
+    }
+    holds.push(...h.holds);
+    series.set(name, h.at);
+    good.set(name, h.good);
   }
   p.throwIfAny();
+
+  // TURN: the lines across the body, read from the pose (held and smoothed as the
+  // map's points are, whether or not the map uses them). A reading; no key moves.
+  const turns: Turn[] = [];
+  const turnsUnread: Retarget['turnsUnread'] = [];
+  for (const [line, a, b] of TURN_LINES) {
+    const ends: Pt[][] = [];
+    for (const j of [a, b]) {
+      const known = series.get(j);
+      if (known !== undefined) ends.push(known);
+      else {
+        const h = heldOf(j);
+        if ('never' in h) {
+          turnsUnread.push({ line, joints: [a, b], why: `${j} is good on none of the ${n} frames (${h.never})` });
+          break;
+        }
+        ends.push(h.at);
+      }
+    }
+    if (ends.length < 2) continue;
+    const [A, B] = ends as [Pt[], Pt[]];
+    const lengths = A.map((f, i) => Math.hypot(B[i]![0] - f[0], B[i]![1] - f[1]));
+    const med = median(lengths);
+    if (med < 1e-6) {
+      turnsUnread.push({ line, joints: [a, b], why: `its median picture length is ${med}px; a fraction of it is not a measure` });
+      continue;
+    }
+    const fraction = lengths.map((l) => l / med);
+    const reversed = A.map((f, i) => lengths[i]! > 1e-9 && Math.abs(pictureAngle(f, B[i]!)) > 90);
+    const turned = fraction.map((f, i) => f < TURN_FRACTION || reversed[i]!);
+    for (const run of runsOf(turned, TURN_GAP)) {
+      const seconds = secondsOf(run);
+      if (seconds < TURN_SECONDS - 1e-9) continue;
+      let minFraction = Infinity;
+      let rev = false;
+      for (let i = run[0]; i <= run[1]; i++) {
+        if (!turned[i]) continue;
+        minFraction = Math.min(minFraction, fraction[i]!);
+        rev ||= reversed[i]!;
+      }
+      turns.push({ line, joints: [a, b], frames: run, seconds, minFraction, reversed: rev });
+    }
+  }
 
   // The hip: the travel of one point, scaled, in its parent's axes. It comes
   // first, because a reach is aimed from where the hip has put its bone.
@@ -416,8 +546,6 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   const endOn: EndOn[] = [];
   if (opts.short !== 'off') {
     const cutoff = opts.short;
-    /** The end of frame i: the next frame's key time; the last frame lasts as long as the one before it. */
-    const endOf = (i: number): number => (i + 1 < n ? keyTimes[i + 1]! : n > 1 ? 2 * keyTimes[i]! - keyTimes[i - 1]! : keyTimes[i]!);
     for (const c of map.chains) {
       if (c.reach) continue;
       c.bones.forEach((b, k) => {
@@ -474,6 +602,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     return d;
   };
   const reaches = map.chains.filter((c) => c.reach).sort((x, y) => depth(x.bones[0]!) - depth(y.bones[0]!));
+  let aimReach: ((c: Chain) => void) | null = null;
   if (reaches.length > 0 && t !== null && scale !== null) {
     const s = scale.factor;
     const tb = rest.get(t.bone)!;
@@ -495,7 +624,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       const oy = rest.get(b)!.worldY - rest.get(parent)!.worldY;
       return [po[0] + Math.cos(r) * ox - Math.sin(r) * oy, po[1] + Math.sin(r) * ox + Math.cos(r) * oy];
     };
-    for (const c of reaches) {
+    aimReach = (c: Chain): void => {
       const b = c.bones[0]!;
       const anchor = series.get(c.joints[0]!)!;
       const end = series.get(c.joints[1]!)!;
@@ -509,20 +638,56 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       }
       fillLeading(angles, () => p.add('POSE_SEGMENT_ZERO', `chain "${c.name}" — bone "${b}" reaches for ${c.joints[1]}, which the pose puts on the bone's posed origin on every frame; it has no direction`));
       targets.set(b, angles);
-    }
+    };
+    for (const c of reaches) aimReach(c);
   }
   p.throwIfAny();
 
-  // Keys: the bone's turn less the turn of the nearest mapped bone above it.
+  // The switches: with every target known, each set's distance and its spans.
+  const sw = selectSwitches(map, targets, keyTimes, keyTimes[n - 1]!, slots, opts);
+
+  // The range clamp, outside the spans of a set depicting the bone's chain. Parents
+  // first, so a bone below takes its clamped parent into its key; a reach is aimed
+  // again from where the clamped bones above put its origin.
   const mappedAbove = (b: string): string | null => {
     for (let a = rest.get(b)!.parent; a !== null; a = rest.get(a)!.parent) if (targets.has(a)) return a;
     return null;
   };
-  const tracks: MotionTrack[] = [];
+  const turn = (bone: string, i: number) => targets.get(bone)![i]! - restOf.get(bone)!;
+  const covered = coveredChains(sw.switches, n);
+  const range: RangeDemand[] = [];
+  const order = map.chains.flatMap((c) => c.bones.map((b) => ({ c, b }))).filter(({ c, b }) => c.reach || b in c.range);
+  order.sort((x, y) => depth(x.b) - depth(y.b));
+  for (const { c, b } of order) {
+    if (c.reach && aimReach !== null) aimReach(c);
+    const limits = c.range[b];
+    if (limits === undefined) continue;
+    const above = mappedAbove(b);
+    const tg = targets.get(b)!;
+    const cov = covered.get(c.name);
+    const over: number[] = [];
+    const asked: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const key = wrap(turn(b, i) - (above === null ? 0 : turn(above, i)));
+      asked.push(key);
+      const o = cov?.[i] === true ? 0 : overflow(key, limits);
+      over.push(o);
+      if (o > RANGE_SLACK) tg[i] = wrap(tg[i]! + Math.min(Math.max(key, limits[0]), limits[1]) - key);
+    }
+    for (const run of runsOf(over.map((o) => o > RANGE_SLACK), RANGE_GAP)) {
+      let worst = run[0];
+      for (let i = run[0]; i <= run[1]; i++) if (over[i]! > over[worst]!) worst = i;
+      range.push({ chain: c.name, bone: b, frames: run, seconds: secondsOf(run), maxOverflow: r3(over[worst]!), key: r3(asked[worst]!), limits });
+    }
+  }
+  p.throwIfAny();
+  const artRange = measureArt(sw.switches, map, targets, endOf, keyTimes, RANGE_GAP);
+
+  // Keys: the bone's turn less the turn of the nearest mapped bone above it.
+  const tracks: Array<MotionTrack | SlotTrack> = [];
   for (const c of map.chains) {
     for (const b of c.bones) {
       const above = mappedAbove(b);
-      const turn = (bone: string, i: number) => targets.get(bone)![i]! - restOf.get(bone)!;
       let prev = 0;
       const keys: MotionKey[] = [];
       for (let i = 0; i < n; i++) {
@@ -535,8 +700,13 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     }
   }
   if (translateTrack !== null) tracks.push(translateTrack);
+  tracks.push(...sw.offsetTracks, ...sw.slotTracks);
 
-  return { animation: { duration: keyTimes[n - 1]!, tracks }, times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale };
+  return {
+    animation: { duration: keyTimes[n - 1]!, tracks },
+    times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale,
+    switches: sw.switches, shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
+  };
 }
 
 type ShortSpan = Omit<Short, 'chain' | 'bone' | 'joints'>;
@@ -604,6 +774,16 @@ export function shortLine(s: Short, times: readonly number[], cutoff: number): s
       : hi >= times.length ? `held flat at frame ${lo}'s angle (the pose ends short)`
         : `interpolated from frame ${lo}'s angle to frame ${hi}'s, the short way round`;
   return `chain "${s.chain}" bone "${s.bone}" (${s.joints[0]} → ${s.joints[1]}) ${spanOf(s.frames, times)}: picture length down to ${s.minFraction.toFixed(2)} of its median, under ${cutoff}; its direction is not read — ${held}`;
+}
+
+export function turnLine(e: Turn, times: readonly number[]): string {
+  const how = e.reversed ? `reversed (pointing more than 90° from ${e.joints[0]} → ${e.joints[1]}'s own way), picture length down to ${e.minFraction.toFixed(2)} of its median` : `picture length down to ${e.minFraction.toFixed(2)} of its median, under ${TURN_FRACTION}`;
+  return `line "${e.line}" (${e.joints[0]} → ${e.joints[1]}) ${spanOf(e.frames, times)}: ${e.seconds.toFixed(3)}s ${how}, ≥ ${TURN_SECONDS}s — the body or head turned, a pose the rig cannot draw`;
+}
+
+export function rangeLine(e: RangeDemand, times: readonly number[]): string {
+  const sg = (v: number) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}°`;
+  return `chain "${e.chain}" bone "${e.bone}" ${spanOf(e.frames, times)}: ${e.seconds.toFixed(3)}s the pose asks its rotate key past its range [${e.limits[0]}, ${e.limits[1]}] (${sg(e.key)}, up to ${e.maxOverflow.toFixed(1)}° past); clamped at the limit — demand for an alternate`;
 }
 
 export function endOnLine(e: EndOn, times: readonly number[], cutoff: number): string {

@@ -94,6 +94,10 @@ interface RigOpts {
   missingImage?: boolean;
   /** A motion.json to write beside rig.json. */
   motion?: Record<string, unknown>;
+  /** More attachments, by slot then name, beside each slot's setup one. */
+  extra?: Record<string, Record<string, Record<string, unknown>>>;
+  /** More slots, after the limbs' (one with no `attachment` shows nothing at setup). */
+  extraSlots?: Array<Record<string, unknown>>;
 }
 
 /** Write `<dir>/rig/rig.json` and its images; returns the rig directory. */
@@ -124,6 +128,8 @@ function writeRig(dir: string, o: RigOpts = {}): string {
       },
     };
   }
+  slots.push(...(o.extraSlots ?? []));
+  for (const [slot, atts] of Object.entries(o.extra ?? {})) skin[slot] = { ...skin[slot], ...atts };
   if (o.missingImage === true) {
     slots.push({ name: 'ghost', bone: 'chest', attachment: 'ghost' });
     skin.ghost = { ghost: { image: 'ghost.png' } };
@@ -1604,4 +1610,380 @@ describe('the kept skeleton.json names an images directory that holds the parts'
       expect(existsSync(join(images, 'seg.png'))).toBe(true);
     }, SLOW);
   }
+});
+
+// --- alternate sets, ranges and turns (#6) ------------------------------------------
+
+describe('alternates (#6): sets of attachments switched beside the bone keys', () => {
+  /** The right arm away from its key skeleton except on frames `on`, where it is exactly it. */
+  const KEY_RU = 150;
+  const KEY_RF = 170;
+  const armed = (on: (i: number) => boolean): Motion => ({ ...BASE, ru: (i) => (on(i) ? KEY_RU : 30), rf: (i) => (on(i) ? KEY_RF : 50) });
+  /** A key skeleton of the right arm at another scale and place than the pose's. */
+  const keySkeleton = (ru = KEY_RU, rf = KEY_RF): Record<string, Pt> => {
+    const sh: Pt = [1000, 1000];
+    const el = add(sh, dir(ru, 300));
+    return { r_shoulder: sh, r_elbow: el, r_wrist: add(el, dir(rf, 250)) };
+  };
+  /** The rig's alternates: the upper arm drawn raised and drawn out, and a shoulder cap only the raised set shows (an extra slot, empty at setup). */
+  const ALT_RIG: RigOpts = {
+    extra: {
+      sleeve_r0: { seg_up: { image: 'seg.png', x: 30, y: 0, rotation: -90 }, seg_out: { image: 'seg.png', x: 30, y: 0, rotation: 0 } },
+      cap_r: { cap_up: { image: 'seg.png', x: 0, y: 0, rotation: 0 } },
+    },
+    extraSlots: [{ name: 'cap_r', bone: 'sleeve_r0', attachment: null }],
+  };
+  const up = (o: Record<string, unknown> = {}): Record<string, unknown> => ({ name: 'up', slots: { sleeve_r0: 'seg_up', cap_r: 'cap_up' }, hides: ['sleeve_r1'], chains: ['arm_r'], pose: keySkeleton(), ...o });
+  const out = (o: Record<string, unknown> = {}): Record<string, unknown> => ({ name: 'out', slots: { sleeve_r0: 'seg_out' }, chains: ['arm_r'], pose: keySkeleton(60, 80), ...o });
+  const altMap = (...sets: Array<Record<string, unknown>>): Record<string, unknown> => ({ ...baseMap(), alternates: sets });
+  type SlotTrackOut = { slot: string; property: string; keys: Array<{ t: number; v: string | null }> };
+  const slotTracks = (path: string): SlotTrackOut[] => (motionOf(path).animations.dance!.tracks as unknown as SlotTrackOut[]).filter((t) => 'slot' in t);
+  /** What rig-c's own poser shows in a slot on every frame of the gated build. */
+  const shows = (build: string, slot: string, n = BASE.n, dt = BASE.dt): Array<string | null> =>
+    poseRawAnimation(loadBuild(build), 'dance', Array.from({ length: n - 1 }, () => dt)).map((p) => p.slots.find((row) => row[0] === slot)![1]);
+  const each = <T>(f: (i: number) => T, n = BASE.n): T[] => Array.from({ length: n }, (_, i) => f(i));
+  interface ReportOut {
+    options: Record<string, unknown>;
+    switches: Array<Record<string, unknown>>;
+    uncovered: Array<{ slot: string; attachment: string; chains: string[]; times: number[] }> | null;
+    turns: Array<Record<string, unknown>>;
+    range: Array<Record<string, unknown>>;
+    artRange: Array<Record<string, unknown>>;
+    endOn: unknown[];
+  }
+  const reportOf = (path: string): ReportOut => JSON.parse(readFileSync(path, 'utf8')) as ReportOut;
+
+  test('a set shows on the span where the pose is its key skeleton: every slot of it, keyed, gated and read back by rig-c\'s poser', () => {
+    const on = (i: number) => i >= 5 && i <= 10;
+    const c = setup({ rig: ALT_RIG, map: altMap(up(), out()), pose: poseDoc(armed(on)) });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'SWITCH')).toEqual([
+      'SWITCH set "up" — shows "sleeve_r0" = "seg_up", "cap_r" = "cap_up", hides "sleeve_r1"; chains arm_r; frames 5–10 (t=0.625s until 1.375s) — distance max 0.0°, median 0.0°',
+    ]);
+    // Keyed half a frame before the frame each change shows on; back to the setup attachment the model states (nothing, for the cap).
+    expect(slotTracks(c.out)).toEqual([
+      { slot: 'sleeve_r0', property: 'attachment', keys: [{ t: 0.5625, v: 'seg_up' }, { t: 1.3125, v: 'seg' }] },
+      { slot: 'cap_r', property: 'attachment', keys: [{ t: 0.5625, v: 'cap_up' }, { t: 1.3125, v: null }] },
+      { slot: 'sleeve_r1', property: 'attachment', keys: [{ t: 0.5625, v: null }, { t: 1.3125, v: 'seg' }] },
+    ]);
+    const rep = reportOf(report);
+    expect(rep.options.switchTolerance).toBe(25);
+    expect(rep.options.switchMin).toBe(0.25);
+    expect(rep.switches).toEqual([{ set: 'up', chains: ['arm_r'], slots: { sleeve_r0: 'seg_up', cap_r: 'cap_up' }, hides: ['sleeve_r1'], offsets: {}, from: 0.625, to: 1.375, frames: [5, 10], distance: { max: 0, median: 0 }, artTurn: {} }]);
+    // The bones still land: a switch adds tracks, it moves no key.
+    expect(misses(c.build, armed(on))).toEqual([]);
+    expect(shows(c.build, 'sleeve_r0')).toEqual(each((i) => (on(i) ? 'seg_up' : 'seg')));
+    expect(shows(c.build, 'cap_r')).toEqual(each((i) => (on(i) ? 'cap_up' : null)));
+    expect(shows(c.build, 'sleeve_r1')).toEqual(each((i) => (on(i) ? null : 'seg')));
+    // The written motion builds green on its own.
+    const b = spawnSync(process.execPath, [RIGC, 'build', '--rig', join(c.rig, 'rig.json'), '--motion', c.out, '--out', join(c.dir, 'rebuild')], { encoding: 'utf8' });
+    expect(b.status).toBe(0);
+  }, SLOW);
+
+  test('control: a pose never within the tolerance switches nothing and adds no track', () => {
+    const c = setup({ rig: ALT_RIG, map: altMap(up(), out()), pose: poseDoc(armed(() => false)) });
+    const r = retarget(c);
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'SWITCH')).toEqual(['SWITCH none — no set within 25° of the pose for 0.25s']);
+    expect(slotTracks(c.out)).toEqual([]);
+  }, SLOW);
+
+  test('set → set directly: the second set\'s frame puts the first set\'s slots back to setup (its extra slot empty)', () => {
+    const pose = poseDoc({ ...BASE, ru: (i) => (i <= 7 ? KEY_RU : 60), rf: (i) => (i <= 7 ? KEY_RF : 80) });
+    const c = setup({ rig: ALT_RIG, map: altMap(up(), out()), pose });
+    const r = retarget(c);
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'SWITCH').map((l) => l.split(' — ')[0])).toEqual(['SWITCH set "up"', 'SWITCH set "out"']);
+    expect(slotTracks(c.out)).toEqual([
+      { slot: 'sleeve_r0', property: 'attachment', keys: [{ t: 0, v: 'seg_up' }, { t: 0.9375, v: 'seg_out' }] },
+      { slot: 'cap_r', property: 'attachment', keys: [{ t: 0, v: 'cap_up' }, { t: 0.9375, v: null }] },
+      { slot: 'sleeve_r1', property: 'attachment', keys: [{ t: 0, v: null }, { t: 0.9375, v: 'seg' }] },
+    ]);
+    expect(shows(c.build, 'sleeve_r0')).toEqual(each((i) => (i <= 7 ? 'seg_up' : 'seg_out')));
+    expect(shows(c.build, 'cap_r')).toEqual(each((i) => (i <= 7 ? 'cap_up' : null)));
+    expect(shows(c.build, 'sleeve_r1')).toEqual(each((i) => (i <= 7 ? null : 'seg')));
+  }, SLOW);
+
+  test('a run shorter than --switch-min is dropped (the base art shows there); control: under a smaller one it stays', () => {
+    const c = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(armed((i) => i === 5 || (i >= 9 && i <= 10))) });
+    const r = retarget(c);
+    expect(r.status).toBe(0);
+    // Frame 5 alone is 0.125 s; frames 9–10 are 0.25 s, which is the minimum and stays.
+    expect(linesOf(r, 'SWITCH').map((l) => /frames? [\d–]+/.exec(l)![0])).toEqual(['frames 9–10']);
+    expect(slotTracks(c.out)[0]!.keys).toEqual([{ t: 1.0625, v: 'seg_up' }, { t: 1.3125, v: 'seg' }]);
+    const r2 = retarget(c, ['--switch-min', '0.1']);
+    expect(r2.status).toBe(0);
+    expect(linesOf(r2, 'SWITCH').map((l) => /frames? [\d–]+/.exec(l)![0])).toEqual(['frame 5', 'frames 9–10']);
+  }, SLOW);
+
+  test('a gap shorter than --switch-min between two runs of one set is bridged (no one-frame flash of the base art); control: a gap as long as it is not', () => {
+    const c = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(armed((i) => (i >= 3 && i <= 6) || (i >= 8 && i <= 11))) });
+    const r = retarget(c);
+    expect(r.status).toBe(0);
+    // Frame 7 alone is 0.125 s off the key skeleton: bridged, one span 3–11.
+    expect(linesOf(r, 'SWITCH').map((l) => /frames? [\d–]+/.exec(l)![0])).toEqual(['frames 3–11']);
+    expect(shows(c.build, 'sleeve_r0')).toEqual(each((i) => (i >= 3 && i <= 11 ? 'seg_up' : 'seg')));
+    const c2 = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(armed((i) => (i >= 3 && i <= 6) || (i >= 9 && i <= 12))) });
+    const r2 = retarget(c2);
+    expect(r2.status).toBe(0);
+    // Frames 7–8 are 0.25 s, the minimum itself: two spans.
+    expect(linesOf(r2, 'SWITCH').map((l) => /frames? [\d–]+/.exec(l)![0])).toEqual(['frames 3–6', 'frames 9–12']);
+  }, SLOW);
+
+  test('offsets: a stepped translate on the bone, the offset over the span and 0 outside, read back by rig-c\'s poser', () => {
+    const on = (i: number) => i >= 5 && i <= 10;
+    const c = setup({ rig: ALT_RIG, map: altMap(up({ offsets: { sleeve_r1: [3, -2] } })), pose: poseDoc(armed(on)) });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'SWITCH')[0]).toEndWith('; offsets "sleeve_r1" (3, -2)');
+    const tracks = motionOf(c.out).animations.dance!.tracks as unknown as Array<{ bone?: string; slot?: string; property: string; keys: unknown[] }>;
+    expect(tracks.map((t) => `${t.bone ?? t.slot}.${t.property}`).slice(-5)).toEqual(['hip.translate', 'sleeve_r1.translate', 'sleeve_r0.attachment', 'cap_r.attachment', 'sleeve_r1.attachment']);
+    expect(tracks.find((t) => t.bone === 'sleeve_r1' && t.property === 'translate')!.keys).toEqual([
+      { t: 0, v: [0, 0], ease: 'stepped' },
+      { t: 0.5625, v: [3, -2], ease: 'stepped' },
+      { t: 1.3125, v: [0, 0] },
+    ]);
+    // The forearm's origin in its parent's axes: setup (70, 0), plus the offset over the span — on every frame and halfway between.
+    const doc = loadBuild(c.build);
+    const poses = poseRawAnimation(doc, 'dance', Array.from({ length: 2 * (BASE.n - 1) }, () => BASE.dt / 2));
+    const local = poses.map((p) => {
+      const b = byName(p.bones);
+      const pa = b.get('sleeve_r0')!;
+      const ch = b.get('sleeve_r1')!;
+      const dx = ch.worldX - pa.worldX;
+      const dy = ch.worldY - pa.worldY;
+      const det = pa.a * pa.d - pa.b * pa.c;
+      return [Math.round(((pa.d * dx - pa.b * dy) / det) * 1000) / 1000 + 0, Math.round(((-pa.c * dx + pa.a * dy) / det) * 1000) / 1000 + 0];
+    });
+    expect(local).toEqual(Array.from({ length: 2 * BASE.n - 1 }, (_, k) => (k >= 9 && k <= 20 ? [73, -2] : [70, 0])));
+    // An origin moved under an x aim turns nothing: every bone lands.
+    expect(misses(c.build, armed(on))).toEqual([]);
+    expect(reportOf(report).switches[0]!.offsets).toEqual({ sleeve_r1: [3, -2] });
+  }, SLOW);
+
+  /** One planted map per case; the control is the first test above. */
+  const withChain = (name: string, extra: Record<string, unknown>) => ({ ...altMap(up()), chains: baseChains().map((ch) => (ch.name === name ? { ...ch, ...extra } : ch)) });
+  const altCases: Array<{ code: string; map: () => Record<string, unknown>; resolves: boolean; want: string }> = [
+    { code: 'MAP_ALT_SLOT', map: () => altMap(up({ slots: { sleeve_r9: 'seg_up' } })), resolves: true, want: 'MAP_ALT_SLOT: set "up" — slot "sleeve_r9" is not in the rig; its slots are sleeve_r0, sleeve_r1, sleeve_l0, sleeve_l1, leg_r0, leg_r1, leg_l0, leg_l1, cap_r' },
+    { code: 'MAP_ALT_ATTACHMENT', map: () => altMap(up({ slots: { sleeve_r0: 'seg_down', cap_r: 'cap_up' } })), resolves: true, want: 'MAP_ALT_ATTACHMENT: set "up" — slot "sleeve_r0" has no attachment "seg_down" under any skin; it has seg, seg_up, seg_out' },
+    { code: 'MAP_ALT_HIDES', map: () => altMap(up({ hides: ['sleeve_r1', 'cuff_r'] })), resolves: true, want: 'MAP_ALT_HIDES: set "up" hides slot "cuff_r", which is not in the rig; its slots are sleeve_r0, sleeve_r1, sleeve_l0, sleeve_l1, leg_r0, leg_r1, leg_l0, leg_l1, cap_r' },
+    { code: 'MAP_ALT_HIDES', map: () => altMap(up({ hides: ['sleeve_r0'] })), resolves: false, want: 'MAP_ALT_HIDES: set "up" hides slot "sleeve_r0", which "slots" shows "seg_up" in; a slot of a set either shows or hides' },
+    { code: 'MAP_ALT_CHAIN', map: () => altMap(up({ chains: ['arm_x'] })), resolves: false, want: 'MAP_ALT_CHAIN: set "up" names chain "arm_x", which the map does not have; its chains are trunk, arm_r, arm_l, leg_r, leg_l' },
+    { code: 'MAP_ALT_JOINT', map: () => altMap(up({ pose: { r_shoulder: [0, 0], r_elbow: [10, 0] } })), resolves: false, want: 'MAP_ALT_JOINT: set "up" "pose" has no "r_wrist"; chain "arm_r" uses r_shoulder, r_elbow, r_wrist, and every one of them must be in the key skeleton' },
+    { code: 'MAP_ALT_DRAWN', map: () => altMap(up({ drawn: { sleeve_l0: 10 } })), resolves: false, want: 'MAP_ALT_DRAWN: set "up" "drawn" names bone "sleeve_l0", which is not a bone of its chains (arm_r: sleeve_r0, sleeve_r1)' },
+    { code: 'MAP_ALT_OFFSET', map: () => altMap(up({ offsets: { leg_r0: [1, 1] } })), resolves: false, want: 'MAP_ALT_OFFSET: set "up" "offsets" names bone "leg_r0", which is not a bone of its chains (arm_r: sleeve_r0, sleeve_r1)' },
+    { code: 'MAP_ALT_OFFSET', map: () => altMap(up({ offsets: { hip: [1, 1] } })), resolves: false, want: 'MAP_ALT_OFFSET: set "up" "offsets" names bone "hip", which "translate" already keys; a bone carries one translate track' },
+    { code: 'MAP_RANGE', map: () => withChain('arm_r', { range: { sleeve_l0: [-10, 10] } }), resolves: false, want: 'MAP_RANGE: chain "arm_r" "range" names bone "sleeve_l0", which is not a bone of the chain; its bones are sleeve_r0, sleeve_r1' },
+    { code: 'MAP_RANGE', map: () => withChain('arm_r', { range: { sleeve_r0: [10, -10] } }), resolves: false, want: 'MAP_RANGE: chain "arm_r" "range" bone "sleeve_r0" is [10,-10]; it must be [min, max], two finite numbers of degrees with min ≤ max' },
+  ];
+  altCases.forEach((ac, k) => {
+    test(`map: ${ac.code} (${k + 1} of ${altCases.length}) — ${ac.resolves ? 'against the built rig' : 'as read'}`, () => {
+      const c = setup({ rig: ALT_RIG, map: ac.map() });
+      const r = retarget(c);
+      expect(r.status).toBe(1);
+      const f = fails(r);
+      if (ac.resolves) expect(f).toEqual([`FAIL  MAP_RESOLVES: ${c.map} does not resolve against the rig`, `FAIL  ${ac.want}`]);
+      else expect(f).toEqual([`FAIL  ${ac.want}`]);
+      expect(existsSync(c.out)).toBe(false);
+    }, SLOW);
+  });
+
+  describe('range: a rotate key past its range is clamped outside a set\'s span, and listed', () => {
+    /** The chest still at 90°, so the right upper arm's key is its turn from rest (−100°): 10° everywhere, 50° on frames 4–7. */
+    const lifted = (i: number) => i >= 4 && i <= 7;
+    const RANGED: Motion = { ...BASE, trunk: () => 90, ru: (i) => -100 + (lifted(i) ? 50 : 10), rf: (i) => -100 + (lifted(i) ? 50 : 10) + 25 };
+    const rangedMap = (limits: [number, number], ...sets: Array<Record<string, unknown>>) => ({ ...altMap(...sets), chains: baseChains().map((ch) => (ch.name === 'arm_r' ? { ...ch, range: { sleeve_r0: limits } } : ch)) });
+    /** A set painted at the lifted arm (its key skeleton is frames 4–7's pose). */
+    const lift = (o: Record<string, unknown> = {}) => ({ name: 'lift', slots: { sleeve_r0: 'seg_up' }, chains: ['arm_r'], pose: keySkeleton(-50, -25), ...o });
+
+    test('frames 4–7 clamped at +30: the upper arm stops there, the forearm still lands on its pose angle, RANGE listed', () => {
+      const c = setup({ rig: ALT_RIG, map: rangedMap([-30, 30]), pose: poseDoc(RANGED) });
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--report', report]);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      expect(linesOf(r, 'RANGE')).toEqual([
+        'RANGE  chain "arm_r" bone "sleeve_r0" frames 4–7 (t=0.500–0.875s): 0.500s the pose asks its rotate key past its range [-30, 30] (+50.0°, up to 20.0° past); clamped at the limit — demand for an alternate',
+      ]);
+      // Landing is measured against the clamped targets, and holds.
+      expect(linesOf(r, 'LAND')).toHaveLength(10);
+      // Read back by rig-c: the upper arm at −100 + 30 on the clamped frames, every other bone (the forearm below it too) on the pose.
+      expect(misses(c.build, RANGED, (b, i) => (b === 'sleeve_r0' && lifted(i) ? -70 : angleOf(RANGED, b, i)))).toEqual([]);
+      expect(misses(c.build, RANGED).every((m) => m.startsWith('sleeve_r0 '))).toBe(true);
+      expect(reportOf(report).range).toEqual([{ chain: 'arm_r', bone: 'sleeve_r0', frames: [4, 7], seconds: 0.5, maxOverflow: 20, key: 50, limits: [-30, 30] }]);
+    }, SLOW);
+
+    test('control: without a range the same pose is keyed as given, and nothing is listed', () => {
+      const c = setup({ rig: ALT_RIG, map: altMap(), pose: poseDoc(RANGED) });
+      const r = retarget(c);
+      expect(r.status).toBe(0);
+      expect(linesOf(r, 'RANGE')).toEqual([]);
+      expect(misses(c.build, RANGED)).toEqual([]);
+    }, SLOW);
+
+    test('inside a span of a set depicting the chain nothing is clamped; at the drawn angle the bone is posed exactly there (criterion 3)', () => {
+      const c = setup({ rig: ALT_RIG, map: rangedMap([-30, 30], lift({ drawn: { sleeve_r0: -50, sleeve_r1: -25 } })), pose: poseDoc(RANGED) });
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--report', report]);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      expect(linesOf(r, 'SWITCH')).toEqual([
+        'SWITCH set "lift" — shows "sleeve_r0" = "seg_up"; chains arm_r; frames 4–7 (t=0.500s until 1.000s) — distance max 0.0°, median 0.0°; art turn "sleeve_r0" max 0.0°, median 0.0°; "sleeve_r1" max 0.0°, median 0.0°',
+      ]);
+      expect(linesOf(r, 'RANGE')).toEqual([]);
+      expect(linesOf(r, 'ART-RANGE')).toEqual([]);
+      expect(misses(c.build, RANGED)).toEqual([]);
+      // The reference equals `drawn` on the switched frames: rig-c's poser puts each bone at its drawn world angle.
+      const poses = poseRawAnimation(loadBuild(c.build), 'dance', Array.from({ length: BASE.n - 1 }, () => BASE.dt));
+      for (let i = 4; i <= 7; i++) {
+        const b = byName(poses[i]!.bones);
+        expect(Math.abs(wrap(worldAngle(b, 'sleeve_r0') - -50))).toBeLessThanOrEqual(ANGLE_TOL);
+        expect(Math.abs(wrap(worldAngle(b, 'sleeve_r1') - -25))).toBeLessThanOrEqual(ANGLE_TOL);
+      }
+      const rep = reportOf(report);
+      expect(rep.switches[0]!.artTurn).toEqual({ sleeve_r0: { max: 0, median: 0 }, sleeve_r1: { max: 0, median: 0 } });
+      expect(rep.range).toEqual([]);
+    }, SLOW);
+
+    test('ART-RANGE: inside the span the reference sits 30° off drawn, range ±10 — 20° past it, listed, and the bone not clamped', () => {
+      const c = setup({ rig: ALT_RIG, map: rangedMap([-10, 10], lift({ drawn: { sleeve_r0: -80 } })), pose: poseDoc(RANGED) });
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--report', report]);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      expect(linesOf(r, 'ART-RANGE')).toEqual([
+        'ART-RANGE set "lift" chain "arm_r" bone "sleeve_r0" turned +30.0° from drawn (range [-10, 10]) frames 4–7 (t=0.500–0.875s): 0.500s, up to 20.0° past it — demand for another drawing of the set',
+      ]);
+      // Outside the span the key is 10°, at the limit: nothing clamped there either.
+      expect(linesOf(r, 'RANGE')).toEqual([]);
+      expect(misses(c.build, RANGED)).toEqual([]);
+      const rep = reportOf(report);
+      expect(rep.artRange).toEqual([{ set: 'lift', chain: 'arm_r', bone: 'sleeve_r0', frames: [4, 7], seconds: 0.5, maxOverflow: 20, turn: 30, limits: [-10, 10] }]);
+      expect(rep.switches[0]!.artTurn).toEqual({ sleeve_r0: { max: 30, median: 30 } });
+    }, SLOW);
+  });
+
+  describe('TURN: a line across the body short or reversed for ≥ 0.15 s', () => {
+    /** 30 fps, so 6 frames are 0.2 s and 2 are 0.067 s. */
+    const T: Motion = { ...BASE, dt: 1 / 30 };
+    /** The hips moved to `r` and `l` about their midpoint on `len` frames from `from`, each leg moved with its hip (every segment the map aims keeps its angle). */
+    const hips = (from: number, len: number, r: Pt, l: Pt): Record<string, unknown> => poseDoc(T, (i, j) => {
+      if (i < from || i >= from + len) return;
+      const rh = j.r_hip!.at as Pt;
+      const lh = j.l_hip!.at as Pt;
+      const mid: Pt = [(rh[0] + lh[0]) / 2, (rh[1] + lh[1]) / 2];
+      const move = (names: string[], from: Pt, to: Pt) => {
+        for (const nm of names) {
+          const a = j[nm]!.at as Pt;
+          j[nm] = { state: 'observed', at: [a[0] + to[0] - from[0], a[1] + to[1] - from[1]], score: 0.9 };
+        }
+      };
+      move(['r_knee', 'r_ankle', 'r_hip'], rh, add(mid, r));
+      move(['l_knee', 'l_ankle', 'l_hip'], lh, add(mid, l));
+    });
+
+    test('the hip line at 0.3 of its length for 6 frames: TURN, and no key moves', () => {
+      const c = setup({ pose: hips(5, 6, [-4.5, 0], [4.5, 0]) });
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--report', report]);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      expect(linesOf(r, 'TURN')).toEqual([
+        'TURN   line "hip" (r_hip → l_hip) frames 5–10 (t=0.167–0.333s): 0.200s picture length down to 0.30 of its median, under 0.5, ≥ 0.15s — the body or head turned, a pose the rig cannot draw',
+      ]);
+      expect(reportOf(report).turns).toEqual([{ line: 'hip', joints: ['r_hip', 'l_hip'], frames: [5, 10], seconds: 0.2, minFraction: expect.closeTo(0.3, 9), reversed: false }]);
+      expect(misses(c.build, T)).toEqual([]);
+    }, SLOW);
+
+    test('control: 2 frames (0.067 s) is no TURN', () => {
+      const c = setup({ pose: hips(7, 2, [-4.5, 0], [4.5, 0]) });
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--report', report]);
+      expect(r.status).toBe(0);
+      expect(linesOf(r, 'TURN')).toEqual([]);
+      expect(reportOf(report).turns).toEqual([]);
+    }, SLOW);
+
+    test('the hips swapped for 6 frames (full length, pointing the other way): TURN, reversed', () => {
+      const c = setup({ pose: hips(5, 6, [15, 0], [-15, 0]) });
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--report', report]);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      expect(linesOf(r, 'TURN')).toEqual([
+        'TURN   line "hip" (r_hip → l_hip) frames 5–10 (t=0.167–0.333s): 0.200s reversed (pointing more than 90° from r_hip → l_hip\'s own way), picture length down to 1.00 of its median, ≥ 0.15s — the body or head turned, a pose the rig cannot draw',
+      ]);
+      expect(reportOf(report).turns).toEqual([{ line: 'hip', joints: ['r_hip', 'l_hip'], frames: [5, 10], seconds: 0.2, minFraction: expect.closeTo(1, 9), reversed: true }]);
+    }, SLOW);
+
+    test('a line the map does not use is read too: the eye line at 0.3 for 6 frames', () => {
+      const pose = poseDoc(T, (i, j) => {
+        if (i < 5 || i > 10) return;
+        const nose = j.nose!.at as Pt;
+        j.r_eye = { state: 'observed', at: add(nose, [-1.8, -5]), score: 0.9 };
+        j.l_eye = { state: 'observed', at: add(nose, [1.8, -5]), score: 0.9 };
+      });
+      const c = setup({ pose });
+      const r = retarget(c);
+      expect(r.status).toBe(0);
+      expect(linesOf(r, 'TURN')).toEqual([
+        'TURN   line "eye" (r_eye → l_eye) frames 5–10 (t=0.167–0.333s): 0.200s picture length down to 0.30 of its median, under 0.5, ≥ 0.15s — the body or head turned, a pose the rig cannot draw',
+      ]);
+    }, SLOW);
+  });
+
+  describe('uncovered folds', () => {
+    /** The right forearm folded back on frames 6–9, as in the fold test above. */
+    const HARD: Motion = { ...BASE, rf: (i) => (i >= 6 && i <= 9 ? BASE.ru(i) + 170 : BASE.rf(i)) };
+    /** A key skeleton within 10° of frames 6 and 7 only (frame 8 is 12° off, 9 is 20°). */
+    const folded = keySkeleton(172, 342);
+    const MESH_RIG: RigOpts = { mesh: true, extra: { ...ALT_RIG.extra, arm_mesh: { arm_mesh_up: { image: 'seg.png', x: 30, y: 0, rotation: 90 } } }, extraSlots: ALT_RIG.extraSlots };
+    const foldTimes = (r: Ran): number[] => {
+      const l = linesOf(r, 'FOLD').find((x) => x.includes('"arm_mesh"'));
+      return l === undefined ? [] : l.split('t=')[1]!.split(', ').flatMap((s) => {
+        const [a, b] = s.split('–').map(Number);
+        const ts: number[] = [];
+        for (let t = a!; t <= (b ?? a!) + 1e-9; t += 0.125) ts.push(Math.round(t * 1000) / 1000);
+        return ts;
+      });
+    };
+
+    test('control: with no switch the mesh folds on frames 6–9, and every fold is uncovered', () => {
+      const c = setup({ rig: MESH_RIG, pose: poseDoc(HARD) });
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--report', report]);
+      expect(r.status).toBe(0);
+      expect(foldTimes(r)).toEqual([0.75, 0.875, 1, 1.125]);
+      expect(reportOf(report).uncovered).toEqual([{ slot: 'arm_mesh', attachment: 'arm_mesh', chains: ['arm_r'], times: [0.75, 0.875, 1, 1.125] }]);
+      // No map alternates, no UNCOVERED lines.
+      expect(linesOf(r, 'UNCOVERED')).toEqual([]);
+    }, SLOW);
+
+    test('the folding mesh replaced on frames 6–7: rigc reads no fold there, and the folds on 8–9 are uncovered', () => {
+      const set = { name: 'folded', slots: { arm_mesh: 'arm_mesh_up' }, chains: ['arm_r'], pose: folded };
+      const c = setup({ rig: MESH_RIG, map: altMap(set), pose: poseDoc(HARD) });
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--report', report, '--switch-tolerance', '10']);
+      expect(r.status).toBe(0);
+      expect(linesOf(r, 'SWITCH')[0]).toContain('frames 6–7');
+      expect(foldTimes(r)).toEqual([1, 1.125]);
+      expect(reportOf(report).uncovered).toEqual([{ slot: 'arm_mesh', attachment: 'arm_mesh', chains: ['arm_r'], times: [1, 1.125] }]);
+      expect(linesOf(r, 'UNCOVERED')).toEqual(['UNCOVERED mesh "arm_mesh" (slot "arm_mesh"; chains arm_r) folds with no switch covering it on 2 frame(s): t=1.000–1.125']);
+    }, SLOW);
+
+    test('the folding mesh hidden by a set that shows another slot: no fold read on its span either', () => {
+      const c = setup({ rig: MESH_RIG, map: altMap(up({ hides: ['arm_mesh'], pose: folded })), pose: poseDoc(HARD) });
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--report', report, '--switch-tolerance', '10']);
+      expect(r.status).toBe(0);
+      expect(slotTracks(c.out).map((t) => t.slot)).toEqual(['sleeve_r0', 'cap_r', 'arm_mesh']);
+      expect(foldTimes(r)).toEqual([1, 1.125]);
+      expect(reportOf(report).uncovered).toEqual([{ slot: 'arm_mesh', attachment: 'arm_mesh', chains: ['arm_r'], times: [1, 1.125] }]);
+    }, SLOW);
+  });
 });

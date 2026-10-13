@@ -24,7 +24,7 @@ It prints the gate's verdict and where every mapped bone landed, then writes `wa
 rig-pose retarget --rig out/rig --map map.json --pose dance.pose.json --out motion.json --name dance
 ```
 
-For every frame of the pose and every bone the map names, the segment that bone carries (an upper arm: shoulder → elbow) points somewhere in the picture. The bone is turned so its segment points the same way: the picture angle, flipped into rig-c's y-up world, minus the bone's angle at the rig's setup pose (read through rig-c's own poser), less the turn of the mapped bone above it — because a `rotate` key in rig-c adds to the setup rotation and a child turns with its parent. The travel of the pelvis midpoint, scaled by a length measured on both the rig and the pose, moves the hip. The result is one animation in rig-c's motion format (`rigc-motion/1`): a `rotate` track per mapped bone, a `translate` track on the hip, one key per pose frame.
+For every frame of the pose and every bone the map names, the segment that bone carries (an upper arm: shoulder → elbow) points somewhere in the picture. The bone is turned so its segment points the same way: the picture angle, flipped into rig-c's y-up world, minus the bone's angle at the rig's setup pose (read through rig-c's own poser), less the turn of the mapped bone above it — because a `rotate` key in rig-c adds to the setup rotation and a child turns with its parent. The travel of the pelvis midpoint, scaled by a length measured on both the rig and the pose, moves the hip. The result is one animation in rig-c's motion format (`rigc-motion/1`): a `rotate` track per mapped bone, a `translate` track on the hip, one key per pose frame — and, when the map lists alternate drawings, an `attachment` track per slot they switch (and a `translate` track per bone a set offsets).
 
 Nothing is written until every check passes:
 
@@ -45,6 +45,22 @@ and what the run cannot decide for you it lists:
 - `BEND` — with `--bends clamp`, a hinge bent the wrong way is straightened on that frame instead of refusing.
 - `FOLD` — `rigc render --folds` over the new animation: every mesh that folds, and when. A reading, not a gate.
 - `POSTURE` — when the map has a pelvis chain (joints `r_hip`, `l_hip`) and a `translate`: the hip line's tilt range, and the sway — the x-range of mid_hip − mid_shoulder — in rig units and in shoulder widths, the pose's beside the posed rig's. A reading, not a gate.
+- `SWITCH` — with `alternates` in the map ([below](#alternate-drawings-alternates)): each span on which a set of alternate drawings shows, its slots, its frames, how far the pose was from the set's key skeleton, and how far each bone with a `drawn` angle was turned from it.
+- `UNCOVERED` — with `alternates` in the map: every fold on a frame where no switch took the folding mesh off screen. This is the list of poses still to paint.
+- `RANGE` — a chain's `range` ([below](#a-joints-range-range)): a bone whose rotate key the pose asks past its range, outside every span of a set depicting its chain, is clamped at the limit; one line per run, with the frames, the seconds and the largest overflow. The demand for an alternate.
+- `ART-RANGE` — inside a set's span: a bone with both a `drawn` angle in the set and a `range`, turned from its drawn angle past that range. Not clamped; the demand for another drawing of that set.
+- `TURN` — a line across the body (hips, shoulders, eyes) shorter in the picture than 0.5 of its median length, or reversed, for at least 0.15 s: the body or the head turned. A reading of the pose, made whether or not the map uses the line; it changes no key. The demand for a turned-body drawing, as `END-ON` is for a foreshortened limb.
+
+`--report <file>` writes all of it as JSON (`rig-pose-report/1`): `options` (every figure the run used, `switchTolerance` and `switchMin` included), `scale`, `holds`, `short`, `endOn`, `bends`, `flips`, `gate`, `landings`, `posture`, `folds`, and the demand lists:
+
+- `switches: [{ set, chains, slots, hides, offsets, from, to, frames: [first, last], distance: { max, median }, artTurn: { <bone>: { max, median } } }]` — one per span shown; `from` is the first frame's time, `to` the time the base art comes back (the animation's end when the span runs to it), `distance` in degrees over the frames shown, `artTurn` |wrap(target − drawn)| in degrees per bone the set has a `drawn` angle for.
+- `uncovered: [{ slot, attachment, chains, times }]` — every entry of `folds` on the times its slot still shows that mesh, with the map's chains that move it (the deepest: the arm, not the trunk it hangs from). `rigc render --folds` reads only what the pose shows, so a mesh swapped out or hidden by a switch is not read on those frames at all; `uncovered` is the fold times less the switched ones.
+- `endOn` — above, under the short hold.
+- `turns: [{ line, joints, frames, seconds, minFraction, reversed }]` — `line` is `hip`, `shoulder` or `eye`.
+- `range: [{ chain, bone, frames, seconds, maxOverflow, key, limits }]` — `key` is the rotate key the pose asked for on the frame of the largest overflow, before the clamp.
+- `artRange: [{ set, chain, bone, frames, seconds, maxOverflow, turn, limits }]` — `turn` is the signed art turn on that frame.
+
+Runs in `turns`, `range` and `artRange` merge across a gap of one frame, as `endOn` does; `seconds` runs from the first frame's key time to the end of the last frame.
 
 `--smooth <n>` smooths each joint's positions, after its holds, with a Savitzky–Golay filter: at every frame, the least-squares cubic over the *n* frames around it (clipped at the ends), read at that frame. It is centred, so it moves no motion in time, and a cubic keeps the peaks a moving average flattens. `1` (the default) is none; otherwise *n* is odd and at least 5, since a cubic through 3 points passes through all three.
 
@@ -116,6 +132,45 @@ Which bones carry which joints. You write it for your rig:
 - `mid_hip` and `mid_shoulder` are the midpoints of the two hips and the two shoulders.
 - `translate.scale` is one length measured on both: two points on the rig, two points in the pose (its median over the frames where both are good). Pick a long segment that does not foreshorten much.
 
+### A joint's range: `range`
+
+A rig whose limbs are cut at the joints reads well only within some range of each joint's angle. A chain may state it per bone, in rotate-key degrees (the key, relative to the bone's setup rotation and to the turn of the mapped bone above it):
+
+```json
+{ "name": "arm_r", "bones": ["sleeve_r0", "sleeve_r1"], "joints": ["r_shoulder", "r_elbow", "r_wrist"],
+  "range": { "sleeve_r0": [-10, 5], "sleeve_r1": [-10, 10] } }
+```
+
+Outside every span of a set depicting that chain, a key past its range is clamped at the limit: the bone's target becomes the clamped world angle, and the bones below are keyed from it as usual, so they still point where the pose puts them. Bones are clamped parents first, and a `reach` below a clamped bone is aimed again from where the clamped bones put its origin. The landing check measures against the clamped targets. Every overflow is listed as `RANGE` demand. A key on its limit to within 0.001° (the writer's rounding of a key; the rest angles come from rig-c's float32 model) does not count. Inside a set's span the bone is not clamped: the set's art was painted for that pose. Its `drawn` angle, if the set gives one, is read against the range instead (`ART-RANGE`). Each name is refused if it is not a bone of the chain (`MAP_RANGE`), as is a range that is not `[min, max]` with min ≤ max.
+
+### Alternate drawings: `alternates`
+
+Bone rotation cannot carry every pose: an arm behind the head, a forearm toward the camera, hands crossed in front of the body. The answer is a different drawing for that pose, swapped in. One key pose repaints every slot it moves (both arms, and the torso when the pose pulls it), so an alternate is a **set** of slots switched together. The map says which sets the rig has and the pose each was painted from; the run decides when each shows:
+
+```json
+"alternates": [
+  { "name": "K1_hands_behind_head",
+    "slots":   { "upperarm_r_under": "K1_upperarm_r", "forearm_r_back": "K1_forearm_r", "topwear": "K1_topwear" },
+    "hides":   ["upperarm_r", "forearm_r"],
+    "chains":  ["arm_r", "arm_l"],
+    "pose":    { "r_shoulder": [450, 640], "r_elbow": [350, 500], "r_wrist": [510, 480],
+                 "l_shoulder": [610, 640], "l_elbow": [720, 500], "l_wrist": [560, 480] },
+    "drawn":   { "sleeve_r0": 117.8, "sleeve_r1": 30.4 },
+    "offsets": { "sleeve_r1": [4, -2] } } ]
+```
+
+- `slots`: what each slot of the set shows while it shows; each attachment must be in that slot under some skin of the rig, as rig-c built it. `hides`: the slots that are empty while it shows. A slot's place in the draw order is the rig's own, so a drawing that must sit in front of the torso is an attachment in a slot that is: a switch is attachment keys only, and no draw-order key is written.
+- `chains`: the map's chains whose pose the set depicts; it is selected by them. `pose`: the key skeleton the art was painted from, body-18 (or `mid_hip`/`mid_shoulder`) in picture px, y down, any scale and place — only its directions are read; every joint the listed chains use must be in it.
+- `drawn` (optional): each bone's world angle (Spine degrees) as painted. It changes no key: while a set shows, a bone is keyed to the pose as always, and the art turns with it. What it gives is a figure: the art turn, how far each bone is from the angle its art was painted at (`artTurn`, and `ART-RANGE` past the bone's range).
+- `offsets` (optional): a translate per bone, in its parent's axes, held while the set shows and 0 elsewhere (stepped keys), so the joints as painted are the pivots. A bone `translate` already keys (the hip) cannot take one.
+- Each name resolves against the built rig and the map, and a miss is refused by name, listing what exists: `MAP_ALT_SLOT`, `MAP_ALT_ATTACHMENT`, `MAP_ALT_HIDES`, `MAP_ALT_CHAIN`, `MAP_ALT_JOINT`, `MAP_ALT_POSE`, `MAP_ALT_DRAWN` and `MAP_ALT_OFFSET` (a bone that is not a bone of the set's chains).
+
+**When one shows.** Per frame and per set, the distance is the largest difference, in degrees, between a segment of its chains as the retarget asked for it (after holds, smoothing, the short hold, the flip guard and the hinge check; before any range clamp) and the same segment in its key skeleton. On each frame the nearest set within `--switch-tolerance` (default 25°) shows, ties going to the map's order; a run of one set shorter than `--switch-min` (default 0.25 s) is dropped and the base art shows there. Both figures were fixed before a run ([#6](https://github.com/rig-c/pose/issues/6)). Sets compete only with those they share a slot (shown or hidden) or an offset bone with, so a drawing of each arm can show at once; two that compete never overlap.
+
+**What is written.** An `attachment` track per slot whose picture changes: the set's attachment (or `null` for a hidden slot) where a span starts, and the slot's setup attachment, as the compiled model states it, where it ends. A direct switch from one set to another puts the first set's slots back to setup on the second's first frame, so an extra slot that is empty at setup goes empty. A switch onto frame *i* is keyed halfway between frames *i*−1 and *i*: a stepped key on the frame's own time fires a frame late wherever a player's accumulated time lands just below it (rig-c's docs/AUTHORING.md §4.5), and halfway both the pose's times and a renderer's `i / fps` see it on frame *i*. Before the first key a slot shows its setup attachment, so no key is written at 0 unless a span starts there. Offsets are `translate` keys at the same times, `stepped`. rig-c's gate checks these keys like any other.
+
+**TURN.** The cutoff was measured on the three lines across the body before it was fixed ([#6](https://github.com/rig-c/pose/issues/6)): on the 13 s front-facing dance their picture length never drops under 0.81 of its median and none reverses; on a second sequence the hip line falls to 0.17 at frames 465–491 (side-on) and the eye line to 0.22 at 26–58 (head in profile), and 3 frames reverse. 0.5 lies between. A line is reversed when it points more than 90° from the subject's right joint to the left (front-facing, it points at 0°). The lines are read after holds and smoothing, held and smoothed as the map's points are even where the map does not use them; a line whose points are good on no frame is named as not measured.
+
 ## Requirements
 
 [Bun](https://bun.sh) ≥ 1.2 on `PATH` — rig-pose, like rig-c, runs its TypeScript sources directly. `rig-c` comes as a dependency. With `@esotericsoftware/spine-core` installed beside it, rig-c's gate runs the spine-core round trip; without it, rig-c's own gate, and the gate's report says which.
@@ -132,7 +187,7 @@ A flat painting turned by its bones matches each limb's direction, not its depth
 | S4 | 7.7–10.9 | hands crossed in front | which forearm is in front |
 | S5 | 11.1–13.0 | an arm thrust at the camera, then a V sign | foreshortening (0.63) and the shape of the hand; the arm mesh folds |
 
-The answer is a second drawing of the arm for each of those poses, shown in place of the bent mesh while the pose lasts. 0.2 will have rig-pose choose when to show it, key the switch in the motion, and list every fold no drawing covers ([#6](https://github.com/rig-c/pose/issues/6)).
+The answer is a second drawing of the arm for each of those poses, shown in place of the bent mesh while the pose lasts. rig-pose chooses when to show it, keys the switch in the motion, and lists every fold no drawing covers ([#6](https://github.com/rig-c/pose/issues/6), [above](#alternate-drawings-alternates)).
 
 ## What 0.1.0 does not do
 
