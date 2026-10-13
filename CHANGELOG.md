@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/rig-c/pose/compare/v0.7.0...v0.8.0) (2026-10-13)
+
+
+### Features
+
+* **compare:** the reference and the rig's render, measured by the same detector, differences per body unit ([#41](https://github.com/rig-c/pose/issues/41)) ([d94dc58](https://github.com/rig-c/pose/commit/d94dc58fdb9ec275229477b6e4265a7c8e8a1826))
+
 ## [0.7.0](https://github.com/rig-c/pose/compare/v0.6.0...v0.7.0) (2026-10-13)
 
 
