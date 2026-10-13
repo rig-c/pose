@@ -65,8 +65,12 @@ export interface CleanSpike {
 export interface CleanRecord {
   spec: typeof CLEAN_SPEC;
   params: { loop: boolean; legs: number; rest: number };
-  /** Every joint the spike step replaced, by frame (index into `frames`) and joint. */
-  spikes: CleanSpike[];
+  /**
+   * `found`: every joint the spike step replaced, by frame (index into `frames`)
+   * and joint. `untested`: the frames the spike step did not test, because a
+   * clip end cuts their window (none under `loop`).
+   */
+  spikes: { found: CleanSpike[]; untested: number[] };
   /** Mean |second difference| of y, px/f², before and after; null where no joint has three consecutive positions. */
   jitter: { before: number | null; after: number | null };
 }
@@ -215,10 +219,10 @@ function readCamera(p: Problems, where: string, camera: unknown, frames: number 
   return out;
 }
 
-/** `cleaned`: { spec, params: { loop, legs, rest }, spikes: [{ frame, joint }], jitter: { before, after } }. */
+/** `cleaned`: { spec, params: { loop, legs, rest }, spikes: { found: [{ frame, joint }], untested: [frame] }, jitter: { before, after } }. */
 function readCleaned(p: Problems, where: string, c: unknown, frames: number | null): CleanRecord | undefined {
   const cw = `${where} "cleaned"`;
-  const shape = '{ spec, params: { loop, legs, rest }, spikes: [{ frame, joint }], jitter: { before, after } }';
+  const shape = '{ spec, params: { loop, legs, rest }, spikes: { found: [{ frame, joint }], untested: [frame] }, jitter: { before, after } }';
   if (!isObject(c)) {
     p.add('POSE_CLEANED', `${cw} is ${typeName(c)}; it is the record rig-pose clean writes, ${shape}`);
     return undefined;
@@ -237,18 +241,29 @@ function readCleaned(p: Problems, where: string, c: unknown, frames: number | nu
       for (const k of ['legs', 'rest'] as const) if (!window(q[k])) p.add('POSE_CLEANED', `${cw} "params" "${k}" is ${typeName(q[k])}; it must be 1 (none) or an odd whole number ≥ 5`);
     }
   }
+  const frameOk = (v: unknown) => Number.isInteger(v) && (v as number) >= 0 && (frames === null || (v as number) < frames);
+  const frameRange = `[0, ${frames === null ? 'the frame count' : frames - 1}]`;
   if ('spikes' in c) {
-    if (!Array.isArray(c.spikes)) p.add('POSE_CLEANED', `${cw} "spikes" is ${typeName(c.spikes)}; it must be an array of { frame, joint }`);
-    else c.spikes.forEach((s: unknown, i: number) => {
-      const sw = `${cw} spikes[${i}]`;
-      if (!isObject(s)) {
-        p.add('POSE_CLEANED', `${sw} is ${typeName(s)}; a spike is { frame, joint }`);
-        return;
-      }
-      refuseUnknownKeys(p, 'POSE_CLEANED', sw, s, ['frame', 'joint']);
-      if (!(Number.isInteger(s.frame) && (s.frame as number) >= 0 && (frames === null || (s.frame as number) < frames))) p.add('POSE_CLEANED', `${sw} "frame" is ${typeName(s.frame)}; it must be a frame index in [0, ${frames === null ? 'the frame count' : frames - 1}]`);
-      if (typeof s.joint !== 'string' || !isBody18(s.joint)) p.add('POSE_CLEANED', `${sw} "joint" is ${typeName(s.joint)}; it must be a body-18 joint: ${BODY18.join(', ')}`);
-    });
+    const k = c.spikes;
+    if (!isObject(k)) p.add('POSE_CLEANED', `${cw} "spikes" is ${typeName(k)}; it must be { found: [{ frame, joint }], untested: [frame] }`);
+    else {
+      refuseUnknownKeys(p, 'POSE_CLEANED', `${cw} "spikes"`, k, ['found', 'untested']);
+      if (!Array.isArray(k.found)) p.add('POSE_CLEANED', `${cw} "spikes" "found" is ${typeName(k.found)}; it must be an array of { frame, joint }`);
+      else k.found.forEach((s: unknown, i: number) => {
+        const sw = `${cw} spikes.found[${i}]`;
+        if (!isObject(s)) {
+          p.add('POSE_CLEANED', `${sw} is ${typeName(s)}; a spike is { frame, joint }`);
+          return;
+        }
+        refuseUnknownKeys(p, 'POSE_CLEANED', sw, s, ['frame', 'joint']);
+        if (!frameOk(s.frame)) p.add('POSE_CLEANED', `${sw} "frame" is ${typeName(s.frame)}; it must be a frame index in ${frameRange}`);
+        if (typeof s.joint !== 'string' || !isBody18(s.joint)) p.add('POSE_CLEANED', `${sw} "joint" is ${typeName(s.joint)}; it must be a body-18 joint: ${BODY18.join(', ')}`);
+      });
+      if (!Array.isArray(k.untested)) p.add('POSE_CLEANED', `${cw} "spikes" "untested" is ${typeName(k.untested)}; it must be an array of frame indices`);
+      else k.untested.forEach((f: unknown, i: number) => {
+        if (!frameOk(f)) p.add('POSE_CLEANED', `${cw} spikes.untested[${i}] is ${typeName(f)}; it must be a frame index in ${frameRange}`);
+      });
+    }
   }
   if ('jitter' in c) {
     const j = c.jitter;
@@ -267,7 +282,10 @@ function readCleaned(p: Problems, where: string, c: unknown, frames: number | nu
   return {
     spec: CLEAN_SPEC,
     params: { loop: q.loop, legs: q.legs, rest: q.rest },
-    spikes: (c.spikes as Array<{ frame: number; joint: Body18 }>).map((s) => ({ frame: s.frame, joint: s.joint })),
+    spikes: {
+      found: ((c.spikes as { found: Array<{ frame: number; joint: Body18 }> }).found).map((s) => ({ frame: s.frame, joint: s.joint })),
+      untested: [...(c.spikes as { untested: number[] }).untested],
+    },
     jitter: { before: j.before, after: j.after },
   };
 }
@@ -456,6 +474,6 @@ export function writePoseSequence(seq: PoseSequence): string {
   const camera = seq.camera?.map((c) => ({ s: round(c.s, 6), tx: round(c.tx, 3), ty: round(c.ty, 3), inliers: c.inliers }));
   const c = seq.cleaned;
   const jit = (v: number | null) => (v === null ? null : round(v, 4));
-  const cleaned = c === undefined ? undefined : { spec: c.spec, params: { loop: c.params.loop, legs: c.params.legs, rest: c.params.rest }, spikes: c.spikes.map((s) => ({ frame: s.frame, joint: s.joint })), jitter: { before: jit(c.jitter.before), after: jit(c.jitter.after) } };
+  const cleaned = c === undefined ? undefined : { spec: c.spec, params: { loop: c.params.loop, legs: c.params.legs, rest: c.params.rest }, spikes: { found: c.spikes.found.map((s) => ({ frame: s.frame, joint: s.joint })), untested: [...c.spikes.untested] }, jitter: { before: jit(c.jitter.before), after: jit(c.jitter.after) } };
   return `${JSON.stringify({ spec: seq.spec, space: seq.space, width: seq.width, height: seq.height, source: seq.source, ...(seq.cameraSource !== undefined ? { cameraSource: seq.cameraSource } : {}), ...(camera !== undefined ? { camera } : {}), ...(cleaned !== undefined ? { cleaned } : {}), frames }, null, 2)}\n`;
 }

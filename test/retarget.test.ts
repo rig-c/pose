@@ -812,12 +812,14 @@ describe('the short hold (#22): a segment under --short of its median picture le
     expect(rep.endOn).toEqual([{ chain: 'arm_l', bone: 'sleeve_l1', joints: ['l_elbow', 'l_wrist'], frames: [5, 10], seconds: 0.2, minFraction: expect.closeTo(0.1, 9) }]);
   }, SLOW);
 
-  test('a 2-frame shrink (0.067 s, a blur): SHORT, but not END-ON', () => {
-    const c = setup({ pose: shrunk(7, 2) });
+  // Since #67 a 4-frame shrink, still under END-ON's 0.15 s: clean's 5-frame median takes a 2-frame collapse out as a
+  // spike, and on this fixture (the arm moving ~12 px a frame) the last frame of a 3-frame run as well.
+  test('a 4-frame shrink (0.133 s, a blur): SHORT, but not END-ON', () => {
+    const c = setup({ pose: shrunk(7, 4) });
     const r = retarget(c, ['--short', '0.35']);
     expect(r.status).toBe(0);
     expect(linesOf(r, 'SHORT')).toEqual([
-      'SHORT  chain "arm_l" bone "sleeve_l1" (l_elbow → l_wrist) frames 7–8 (t=0.233–0.267s): picture length down to 0.10 of its median, under 0.35; its direction is not read — interpolated from frame 6\'s angle to frame 9\'s, the short way round',
+      'SHORT  chain "arm_l" bone "sleeve_l1" (l_elbow → l_wrist) frames 7–10 (t=0.233–0.333s): picture length down to 0.10 of its median, under 0.35; its direction is not read — interpolated from frame 6\'s angle to frame 11\'s, the short way round',
     ]);
     expect(linesOf(r, 'END-ON')).toEqual([]);
     expect(misses(c.build, STEADY)).toEqual([]);
@@ -864,8 +866,10 @@ describe('the short hold (#22): a segment under --short of its median picture le
   });
 
   test('POSE_SHORT_MEDIAN: a segment of zero length on most frames has no median to measure against', () => {
+    // Since #67 frames 0–9: the collapsed wrist rides the elbow 12 px a frame, so on the run's last frame the
+    // per-coordinate 5-frame median mixes in the far side of the step and clean takes it as a spike; 9 of 16 stay zero.
     const pose = poseDoc(STEADY, (i, j) => {
-      if (i <= 8) j.l_wrist = { ...j.l_elbow! };
+      if (i <= 9) j.l_wrist = { ...j.l_elbow! };
     });
     const c = setup({ pose });
     const r = retarget(c, ['--short', '0.35']);
@@ -1147,7 +1151,7 @@ describe('COCO-17', () => {
     const cl = cli(['clean', '--coco', '--pose', coco, '--out', c.pose, '--legs', '1', '--rest', '1']);
     expect(cl.stderr).toBe('');
     expect(cl.status).toBe(0);
-    expect(linesOf(cl, 'SPIKES')).toEqual(['SPIKES 0 replaced']);
+    expect(linesOf(cl, 'SPIKES')).toEqual(['SPIKES 0 replaced; frames 0, 1, 14, 15 untested (a clip end cuts the 5-frame window)']);
     const r = retarget(c);
     expect(r.stderr).toBe('');
     expect(r.status).toBe(0);
@@ -1174,6 +1178,28 @@ describe('the command line', () => {
     expect(r.status).toBe(2);
     expect(r.stderr).toContain('--rig is required');
   });
+  test('POSE_NOT_CLEANED (#67): a sequence clean did not write is refused by name, with the command to run; control: the cleaned one runs and prints CLEAN', () => {
+    const c = setup();
+    const raw = join(c.dir, 'scan.json');
+    writeFileSync(raw, JSON.stringify(poseDoc(BASE), null, 2));
+    const r = cli(['retarget', '--rig', c.rig, '--map', c.map, '--pose', raw, '--out', c.out, '--build', c.build]);
+    expect(r.status).toBe(1);
+    const cleanOut = join(c.dir, 'scan.clean.json');
+    expect(fails(r)).toEqual([`FAIL  POSE_NOT_CLEANED: ${raw} has no "cleaned" record; retarget reads a sequence rig-pose clean wrote (spikes, occlusion, smoothing; there is no flag to skip it). Run \`rig-pose clean --pose ${raw} --out ${cleanOut}\` (add --loop for one cycle of a gait) and retarget --pose ${cleanOut}`]);
+    expect(existsSync(c.out)).toBe(false);
+    // Running the named command makes the same file pass.
+    expect(cli(['clean', '--pose', raw, '--out', cleanOut]).status).toBe(0);
+    const ran = cli(['retarget', '--rig', c.rig, '--map', c.map, '--pose', cleanOut, '--out', c.out, '--build', c.build]);
+    expect(ran.stderr).toBe('');
+    expect(ran.status).toBe(0);
+    expect(linesOf(ran, 'CLEAN')).toHaveLength(1);
+    expect(linesOf(ran, 'CLEAN')[0]).toStartWith('CLEAN  rig-pose-clean/1: legs 5, rest 7, no loop; no spike, frames 0, 1, 14, 15 untested (a clip end cuts the 5-frame window); jitter (mean |second difference| of y) ');
+    // The fixture's own record (windows of 1) says so on the line.
+    const r1 = retarget(c);
+    expect(r1.status).toBe(0);
+    expect(linesOf(r1, 'CLEAN')).toEqual([expect.stringContaining('CLEAN  rig-pose-clean/1: legs 1, rest 1 — no smoothing, no loop; no spike')]);
+  }, SLOW);
+
   test('--smooth is an alias (#67): it prints so, and --smooth 7 lands byte-identical to --smooth 1', () => {
     const c = setup();
     const r7 = retarget(c, ['--smooth', '7', '--report', join(c.dir, 'r7.json')]);
@@ -1623,7 +1649,12 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
   /** The right arm away from its key skeleton except on frames `on`, where it is exactly it. */
   const KEY_RU = 150;
   const KEY_RF = 170;
-  const armed = (on: (i: number) => boolean): Motion => ({ ...BASE, ru: (i) => (on(i) ? KEY_RU : 30), rf: (i) => (on(i) ? KEY_RF : 50) });
+  /**
+   * Since #67 the trunk stands still here (the hip in place, the chest upright): with BASE's travel the
+   * shoulder moves up to 9 px a frame, and on the first frame of a held pose the per-coordinate 5-frame
+   * median mixes two frames' coordinates far enough (> 0.2 trunk) for clean to take it as a spike.
+   */
+  const armed = (on: (i: number) => boolean): Motion => ({ ...BASE, trunk: () => 90, hip: () => [0, 0], ru: (i) => (on(i) ? KEY_RU : 30), rf: (i) => (on(i) ? KEY_RF : 50) });
   /** A key skeleton of the right arm at another scale and place than the pose's. */
   const keySkeleton = (ru = KEY_RU, rf = KEY_RF): Record<string, Pt> => {
     const sh: Pt = [1000, 1000];
@@ -1715,30 +1746,32 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
     expect(shows(c.build, 'sleeve_r1')).toEqual(each((i) => (i <= 7 ? null : 'seg')));
   }, SLOW);
 
+  // Since #67 every run and gap here is ≥ 3 frames: clean's 5-frame median takes a 1- or 2-frame pose out as a spike,
+  // so the minimum is raised to 0.5 s (4 frames) to keep a run, and a gap, shorter than it.
   test('a run shorter than --switch-min is dropped (the base art shows there); control: under a smaller one it stays', () => {
-    const c = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(armed((i) => i === 5 || (i >= 9 && i <= 10))) });
-    const r = retarget(c);
+    const c = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(armed((i) => (i >= 2 && i <= 4) || (i >= 9 && i <= 12))) });
+    const r = retarget(c, ['--switch-min', '0.5']);
     expect(r.status).toBe(0);
-    // Frame 5 alone is 0.125 s; frames 9–10 are 0.25 s, which is the minimum and stays.
-    expect(linesOf(r, 'SWITCH').map((l) => /frames? [\d–]+/.exec(l)![0])).toEqual(['frames 9–10']);
-    expect(slotTracks(c.out)[0]!.keys).toEqual([{ t: 1.0625, v: 'seg_up' }, { t: 1.3125, v: 'seg' }]);
-    const r2 = retarget(c, ['--switch-min', '0.1']);
+    // Frames 2–4 are 0.375 s; frames 9–12 are 0.5 s, which is the minimum and stays (the gap, 0.5 s, is not bridged).
+    expect(linesOf(r, 'SWITCH').map((l) => /frames? [\d–]+/.exec(l)![0])).toEqual(['frames 9–12']);
+    expect(slotTracks(c.out)[0]!.keys).toEqual([{ t: 1.0625, v: 'seg_up' }, { t: 1.5625, v: 'seg' }]);
+    const r2 = retarget(c, ['--switch-min', '0.25']);
     expect(r2.status).toBe(0);
-    expect(linesOf(r2, 'SWITCH').map((l) => /frames? [\d–]+/.exec(l)![0])).toEqual(['frame 5', 'frames 9–10']);
+    expect(linesOf(r2, 'SWITCH').map((l) => /frames? [\d–]+/.exec(l)![0])).toEqual(['frames 2–4', 'frames 9–12']);
   }, SLOW);
 
-  test('a gap shorter than --switch-min between two runs of one set is bridged (no one-frame flash of the base art); control: a gap as long as it is not', () => {
-    const c = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(armed((i) => (i >= 3 && i <= 6) || (i >= 8 && i <= 11))) });
-    const r = retarget(c);
+  test('a gap shorter than --switch-min between two runs of one set is bridged (no flash of the base art); control: a gap as long as it is not', () => {
+    const c = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(armed((i) => (i >= 2 && i <= 5) || (i >= 9 && i <= 12))) });
+    const r = retarget(c, ['--switch-min', '0.5']);
     expect(r.status).toBe(0);
-    // Frame 7 alone is 0.125 s off the key skeleton: bridged, one span 3–11.
-    expect(linesOf(r, 'SWITCH').map((l) => /frames? [\d–]+/.exec(l)![0])).toEqual(['frames 3–11']);
-    expect(shows(c.build, 'sleeve_r0')).toEqual(each((i) => (i >= 3 && i <= 11 ? 'seg_up' : 'seg')));
-    const c2 = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(armed((i) => (i >= 3 && i <= 6) || (i >= 9 && i <= 12))) });
-    const r2 = retarget(c2);
+    // Frames 6–8 are 0.375 s off the key skeleton: bridged, one span 2–12.
+    expect(linesOf(r, 'SWITCH').map((l) => /frames? [\d–]+/.exec(l)![0])).toEqual(['frames 2–12']);
+    expect(shows(c.build, 'sleeve_r0')).toEqual(each((i) => (i >= 2 && i <= 12 ? 'seg_up' : 'seg')));
+    const c2 = setup({ rig: ALT_RIG, map: altMap(up()), pose: poseDoc(armed((i) => (i >= 2 && i <= 5) || (i >= 10 && i <= 13))) });
+    const r2 = retarget(c2, ['--switch-min', '0.5']);
     expect(r2.status).toBe(0);
-    // Frames 7–8 are 0.25 s, the minimum itself: two spans.
-    expect(linesOf(r2, 'SWITCH').map((l) => /frames? [\d–]+/.exec(l)![0])).toEqual(['frames 3–6', 'frames 9–12']);
+    // Frames 6–9 are 0.5 s, the minimum itself: two spans.
+    expect(linesOf(r2, 'SWITCH').map((l) => /frames? [\d–]+/.exec(l)![0])).toEqual(['frames 2–5', 'frames 10–13']);
   }, SLOW);
 
   test('frames (a stopgap): a set shows only inside its window, and there it is chosen over an equal set without one', () => {
@@ -3090,7 +3123,7 @@ describe('#63: the camera a scan read, carried by the sequence', () => {
       const seq = readPoseSequence(readFileSync(c.pose, 'utf8'), c.pose);
       expect(seq.cameraSource).toBe(source);
       const written = writePoseSequence(seq);
-      expect(Object.keys(JSON.parse(written) as object)).toEqual(['spec', 'space', 'width', 'height', 'source', 'cameraSource', 'camera', 'frames']);
+      expect(Object.keys(JSON.parse(written) as object)).toEqual(['spec', 'space', 'width', 'height', 'source', 'cameraSource', 'camera', 'cleaned', 'frames']);
       expect(readPoseSequence(written, 'mem').cameraSource).toBe(source);
     }
     // Planted: a source with no camera; a source that is not a string; an empty one.

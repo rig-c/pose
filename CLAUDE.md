@@ -73,17 +73,18 @@ into named failures.
 
 | File | What it owns |
 | --- | --- |
-| `src/pose.ts` | `rig-pose-sequence/1` (the reader, the writer) and the COCO-17 conversion |
+| `src/pose.ts` | `rig-pose-sequence/1` (the reader, the writer), its `cleaned` record, and the COCO-17 conversion |
+| `src/clean.ts` | the pure `clean` (#67): spikes (0.2 trunk from a 5-frame median; edge frames untested and named), the occlusion median, the per-joint quadratic Savitzky–Golay (legs, rest; circular under loop), the floor re-pin, jitter, the `cleaned` record |
 | `src/joints.ts` | the vocabulary: body-18, the virtual midpoints, COCO-17 and its mapping |
 | `src/map.ts` | `rig-pose-map/1` and its resolution against the rig's bones and, for `alternates`, its slots and attachments; a chain's `range` |
-| `src/retarget.ts` | the pure retarget: holds, Savitzky–Golay smoothing, hip travel, angles, the TURN reading, the short hold and its end-on runs, the flip guard, the hinge check, reaches, the switches, the range clamp, keys |
+| `src/retarget.ts` | the pure retarget: holds, hip travel, angles, the TURN reading, the short hold and its end-on runs, the flip guard, the hinge check, reaches, the switches, the range clamp, keys |
 | `src/legs.ts` | the legs (#47): leg segments and each side's ankle, the leg scale and its clamp, the legs' path posed through a scaled bone (the keys that land a bone under one), the supports and jumps, the hip from the supporting foot |
 | `src/switch.ts` | the pure attachment switches: each set's distance to the pose, the spans it shows, where each boundary is keyed (where selected, or with `--switch-at peak` the fastest frame of its window that keeps the set within 2 × tolerance, #31), the `attachment` and offset keys, the art turn and its range, the folds no switch covers |
 | `src/idle.ts` | the pure idle reading (#43 item 2): which of the idle's tracks the new animation drops, keys itself (channel by channel), or must leave out because they turn a bone above a mapped one; `--carry-idle`'s loop (seams, holds, setup keys, the cut and its Bézier split); the `rig-pose-tracks/1` fragment `--merge` reads and its conflicts |
 | `src/reduce.ts` | the pure key reduction (#32): each mapped bone's dense rotate keys (and the hip's translate) thinned to linear spans and raw Bézier curves on the pose's frame times, top-down so a bone's world error is its own fit error; the curve evaluated as rig-c's poser does (its 10-piece polyline) |
 | `src/rigc.ts` | everything that touches rig-c's CLI or the disk: the gate (`rigc build`), the folds (`rigc render --folds`); the built rig's slots and what moves an attachment |
 | `src/verify.ts` | where the gated build actually put each bone, posed by rig-c's own poser; the posture reading (hip tilt, sway) |
-| `src/run.ts` | `retarget` end to end, in the order: gate the rig as it is, retarget (switches and range clamp included), reduce the keys, read the idle (and carry it, merge a fragment), gate with the animation in, measure, read folds and which no switch covers, write |
+| `src/run.ts` | `retarget` end to end, in the order: refuse a sequence `clean` did not write (`POSE_NOT_CLEANED`), gate the rig as it is, retarget (switches and range clamp included), reduce the keys, read the idle (and carry it, merge a fragment), gate with the animation in, measure, read folds and which no switch covers, write |
 | `src/compare.ts` | the pure `compare` (#38): the reference against the render on one time base, per unit (head, arms, body, legs, cloth); the bars, the finding rule, the fix classes; the hands, cloth-track and retarget-report readers; #34's cloth figures ported from HQ's `metrics.py`; the lines and `rig-pose-compare/1` |
 | `src/sheet.ts` | the compare sheet: reference and render skeletons side by side at each finding's worst frame, drawn with rig-c's plate (no video) |
 | `src/runcompare.ts` | `compare` end to end: read every input (all refusals together), compare, print, write the report and the sheet |

@@ -12,7 +12,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BODY18 } from '../src/joints.ts';
-import { clean, jitterOf, LEGS, savitzkyGolay, type Series } from '../src/clean.ts';
+import { clean, cleanLine, jitterOf, LEGS, savitzkyGolay, type Series } from '../src/clean.ts';
 import { readPoseSequence, writePoseSequence, type PoseSequence } from '../src/pose.ts';
 
 const ROOT = join(import.meta.dir, '..');
@@ -102,7 +102,7 @@ describe('spikes: a joint more than 0.2 trunk lengths from its 5-frame median ta
     const input = seqOf(doc);
     const c = clean(input, { loop: false, legs: 1, rest: 1 }, undefined, 'mem');
     expect(c.trunk.length).toBeCloseTo(100, 9);
-    expect(c.record.spikes as Array<{ frame: number; joint: string }>).toEqual(PLANTED.map(([frame, joint]) => ({ frame, joint })).sort((a, b) => a.frame - b.frame));
+    expect(c.record.spikes.found as Array<{ frame: number; joint: string }>).toEqual(PLANTED.map(([frame, joint]) => ({ frame, joint })).sort((a, b) => a.frame - b.frame));
     const planted = new Set(PLANTED.map(([f, n]) => `${f}:${n}`));
     let same = 0;
     for (let i = 0; i < 32; i++) {
@@ -126,7 +126,7 @@ describe('spikes: a joint more than 0.2 trunk lengths from its 5-frame median ta
   test('a sequence with no spike reports 0, and windows of 1 return it bit-identical', () => {
     const input = seqOf(seqDoc(32));
     const c = clean(input, { loop: false, legs: 1, rest: 1 }, undefined, 'mem');
-    expect(c.record.spikes).toEqual([]);
+    expect(c.record.spikes).toEqual({ found: [], untested: [0, 1, 30, 31] });
     expect(c.occluded).toEqual([]);
     for (let i = 0; i < 32; i++) for (const name of BODY18) expect(atOf(c.seq, i, name)).toEqual(atOf(input, i, name)!);
     expect(c.record.jitter.after).toBe(c.record.jitter.before);
@@ -145,15 +145,16 @@ describe('spikes: a joint more than 0.2 trunk lengths from its 5-frame median ta
     expect(spikes).toHaveLength(PLANTED.length);
     expect(spikes[1]).toStartWith('SPIKE  joint "l_ankle" frame 11 (t=0.367s): ');
     expect(spikes[1]).toEndWith('px from its 5-frame median, over 20.00 — took the median');
-    expect(linesOf(r, 'SPIKES')).toEqual([`SPIKES ${PLANTED.length} replaced`]);
+    expect(linesOf(r, 'SPIKES')).toEqual([`SPIKES ${PLANTED.length} replaced; frames 0, 1, 30, 31 untested (a clip end cuts the 5-frame window)`]);
     expect(linesOf(r, 'SMOOTH')).toEqual(['SMOOTH quadratic Savitzky–Golay per joint: legs (r_hip, r_knee, r_ankle, l_hip, l_knee, l_ankle) over 1 frame (none), the rest over 1 frame (none); the window cut at the ends']);
-    expect(linesOf(r, 'CLEAN')[0]).toStartWith('CLEAN  rig-pose-clean/1: legs 1, rest 1 — no smoothing, no loop; 5 spike(s) replaced (frame 4 r_wrist, frame 11 l_ankle, frame 12 l_ankle, frame 20 nose, frame 27 r_knee); jitter');
+    expect(linesOf(r, 'CLEAN')[0]).toStartWith('CLEAN  rig-pose-clean/1: legs 1, rest 1 — no smoothing, no loop; 5 spike(s) replaced (frame 4 r_wrist, frame 11 l_ankle, frame 12 l_ankle, frame 20 nose, frame 27 r_knee), frames 0, 1, 30, 31 untested (a clip end cuts the 5-frame window); jitter');
     const doc = JSON.parse(readFileSync(out, 'utf8')) as { cleaned: { spec: string; params: unknown; spikes: unknown } };
     expect(doc.cleaned.spec).toBe('rig-pose-clean/1');
     expect(doc.cleaned.params).toEqual({ loop: false, legs: 1, rest: 1 });
-    expect(doc.cleaned.spikes).toEqual([
-      { frame: 4, joint: 'r_wrist' }, { frame: 11, joint: 'l_ankle' }, { frame: 12, joint: 'l_ankle' }, { frame: 20, joint: 'nose' }, { frame: 27, joint: 'r_knee' },
-    ]);
+    expect(doc.cleaned.spikes).toEqual({
+      found: [{ frame: 4, joint: 'r_wrist' }, { frame: 11, joint: 'l_ankle' }, { frame: 12, joint: 'l_ankle' }, { frame: 20, joint: 'nose' }, { frame: 27, joint: 'r_knee' }],
+      untested: [0, 1, 30, 31],
+    });
     // Determinism: the same input writes the same bytes.
     const first = readFileSync(out);
     rmSync(out);
@@ -161,6 +162,61 @@ describe('spikes: a joint more than 0.2 trunk lengths from its 5-frame median ta
     expect(readFileSync(out).equals(first)).toBe(true);
   });
 });
+
+describe('the edge: a frame whose 5-frame window a clip end cuts is not tested, and is named', () => {
+  /** A wrist sweeping 25 px a frame — over the 20 px limit from a neighbour's value, never a spike. */
+  const FAST: Wave = (k, i) => (k === 4 ? [25 * i, 0] : SMOOTH(k, i));
+
+  test('a joint moving steadily through the first and last frames is not a spike; the four edge frames are recorded untested', () => {
+    const c = clean(seqOf(seqDoc(16, FAST)), { loop: false, legs: 1, rest: 1 }, undefined, 'mem');
+    expect(c.record.spikes).toEqual({ found: [], untested: [0, 1, 14, 15] });
+  });
+
+  test('control: the same sweep with the edge guard removed (a mutant) is flagged at both ends — the flaw the guard is for', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'clean.ts');
+      const from = 'return loop ? n >= size : i - h >= 0 && i + h < n;';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'return loop ? n >= size : n >= 0 && h >= 0;'));
+      const dir = tempDir();
+      const input = join(dir, 'pose.json');
+      const out = join(dir, 'out.json');
+      writeFileSync(input, JSON.stringify(seqDoc(16, FAST)));
+      const r = cli(['clean', '--pose', input, '--out', out, '--legs', '1', '--rest', '1'], join(d, 'cli.ts'));
+      expect(r.status).toBe(0);
+      const found = (JSON.parse(readFileSync(out, 'utf8')) as { cleaned: { spikes: { found: Array<{ frame: number; joint: string }> } } }).cleaned.spikes.found;
+      expect(found).toEqual([{ frame: 0, joint: 'r_wrist' }, { frame: 15, joint: 'r_wrist' }]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  test('a spike planted on an untested frame stays, named as untested on the SPIKES line; one frame in is found', () => {
+    const dir = tempDir();
+    const input = join(dir, 'pose.json');
+    const out = join(dir, 'out.json');
+    writeFileSync(input, JSON.stringify(seqDoc(16, SMOOTH, (i, j) => {
+      if (i === 1 || i === 2) j.nose!.at = [j.nose!.at![0] + 50, j.nose!.at![1]];
+    })));
+    const r = cli(['clean', '--pose', input, '--out', out, '--legs', '1', '--rest', '1']);
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'SPIKES')).toEqual(['SPIKES 1 replaced; frames 0, 1, 14, 15 untested (a clip end cuts the 5-frame window)']);
+    expect(linesOf(r, 'SPIKE')[0]).toStartWith('SPIKE  joint "nose" frame 2 ');
+  });
+
+  test('under --loop there is no edge: every frame is tested', () => {
+    const c = clean(seqOf(seqDoc(16)), { loop: true, legs: 1, rest: 1 }, undefined, 'mem');
+    expect(c.record.spikes.untested).toEqual([]);
+    expect(linesOfClean(c.record)).toContain('every frame tested');
+  });
+});
+const linesOfClean = (r: Parameters<typeof cleanLine>[0]): string => cleanLine(r);
 
 /** Mutants of the spike median: each must make the planted-spike test red. */
 const SPIKE_MUTANTS: Array<{ name: string; from: string; to: string }> = [
@@ -187,7 +243,7 @@ describe('mutants without the 5-frame median make the spike test red', () => {
         writeFileSync(input, JSON.stringify(seqDoc(32, SMOOTH, plant)));
         const r = cli(['clean', '--pose', input, '--out', out, '--legs', '1', '--rest', '1'], join(d, 'cli.ts'));
         expect(r.status).toBe(0);
-        const found = (JSON.parse(readFileSync(out, 'utf8')) as { cleaned: { spikes: Array<{ frame: number; joint: string }> } }).cleaned.spikes;
+        const found = (JSON.parse(readFileSync(out, 'utf8')) as { cleaned: { spikes: { found: Array<{ frame: number; joint: string }> } } }).cleaned.spikes.found;
         const want = PLANTED.map(([frame, joint]) => ({ frame, joint })).sort((a, b) => a.frame - b.frame);
         const red = JSON.stringify(found) !== JSON.stringify(want);
         console.log(`  mutant "${mu.name}": found ${found.length} of ${want.length} planted spikes: ${found.map((s) => `${s.frame} ${s.joint}`).join(', ') || 'none'}`);
@@ -212,7 +268,7 @@ describe('occlusion: a joint not observed, or scored under 0.3, takes its 3-fram
     });
     const input = seqOf(doc);
     const c = clean(input, { loop: false, legs: 1, rest: 1 }, undefined, 'mem');
-    expect(c.record.spikes).toEqual([]);
+    expect(c.record.spikes.found).toEqual([]);
     expect(c.occluded.map((o) => `${o.frame} ${o.joint} ${o.why}`)).toEqual(['5 r_elbow occluded', '7 l_knee score 0.200 < 0.3']);
     const med = (a: number, b: number, x: number) => [a, b, x].sort((p, q) => p - q)[1]!;
     for (const [i, name] of [[5, 'r_elbow'], [7, 'l_knee']] as const) {
@@ -423,7 +479,7 @@ describe('refusals, each beside its control', () => {
     const back = readPoseSequence(written, 'mem');
     expect(back.cleaned).toEqual({ ...good.cleaned!, jitter: { before: Number(good.cleaned!.jitter.before!.toFixed(4)), after: Number(good.cleaned!.jitter.after!.toFixed(4)) } });
     expect(writePoseSequence(back)).toBe(written);
-    const bad = { ...seqDoc(12), cleaned: { spec: 'rig-pose-clean/0', params: { loop: 'yes', legs: 3, rest: 7, extra: 1 }, spikes: [{ frame: 12, joint: 'r_toe' }, 4], jitter: { before: -1 } } };
+    const bad = { ...seqDoc(12), cleaned: { spec: 'rig-pose-clean/0', params: { loop: 'yes', legs: 3, rest: 7, extra: 1 }, spikes: { found: [{ frame: 12, joint: 'r_toe' }, 4], untested: [0, -1] }, jitter: { before: -1 } } };
     let err = '';
     try {
       readPoseSequence(JSON.stringify(bad), 'p.json');
@@ -435,9 +491,10 @@ describe('refusals, each beside its control', () => {
       'POSE_CLEANED: p.json "cleaned" "params" has a key this reader does not know: "extra"; the keys it reads are loop, legs, rest',
       'POSE_CLEANED: p.json "cleaned" "params" "loop" is the string "yes"; it must be true or false',
       'POSE_CLEANED: p.json "cleaned" "params" "legs" is number 3; it must be 1 (none) or an odd whole number ≥ 5',
-      'POSE_CLEANED: p.json "cleaned" spikes[0] "frame" is number 12; it must be a frame index in [0, 11]',
-      'POSE_CLEANED: p.json "cleaned" spikes[0] "joint" is the string "r_toe"; it must be a body-18 joint: nose, neck, r_shoulder, r_elbow, r_wrist, l_shoulder, l_elbow, l_wrist, r_hip, r_knee, r_ankle, l_hip, l_knee, l_ankle, r_eye, l_eye, r_ear, l_ear',
-      'POSE_CLEANED: p.json "cleaned" spikes[1] is number 4; a spike is { frame, joint }',
+      'POSE_CLEANED: p.json "cleaned" spikes.found[0] "frame" is number 12; it must be a frame index in [0, 11]',
+      'POSE_CLEANED: p.json "cleaned" spikes.found[0] "joint" is the string "r_toe"; it must be a body-18 joint: nose, neck, r_shoulder, r_elbow, r_wrist, l_shoulder, l_elbow, l_wrist, r_hip, r_knee, r_ankle, l_hip, l_knee, l_ankle, r_eye, l_eye, r_ear, l_ear',
+      'POSE_CLEANED: p.json "cleaned" spikes.found[1] is number 4; a spike is { frame, joint }',
+      'POSE_CLEANED: p.json "cleaned" spikes.untested[1] is number -1; it must be a frame index in [0, 11]',
       'POSE_CLEANED: p.json "cleaned" "jitter" "before" is number -1; it must be px/f² ≥ 0, or null (not measured)',
       'POSE_CLEANED: p.json "cleaned" "jitter" "after" is undefined undefined; it must be px/f² ≥ 0, or null (not measured)',
     ]);

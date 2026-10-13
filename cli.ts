@@ -8,7 +8,7 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import pkg from './package.json' with { type: 'json' };
-import { clean, cleanLine, LEGS, OCCLUSION_SCORE, OCCLUSION_WINDOW, SPIKE_TRUNKS, SPIKE_WINDOW, windowProblem } from './src/clean.ts';
+import { clean, cleanLine, untestedText, LEGS, OCCLUSION_SCORE, OCCLUSION_WINDOW, SPIKE_TRUNKS, SPIKE_WINDOW, windowProblem } from './src/clean.ts';
 import { convertCoco17, readPoseSequence, writePoseSequence } from './src/pose.ts';
 import { parseWindows } from './src/compare.ts';
 import { lineOf, Refusal } from './src/problems.ts';
@@ -37,7 +37,8 @@ clean (required before retarget; rig-c/pose#67)
 
   In order, each step printed with its figures: (1) spikes — a joint more than 0.2 trunk lengths
   (neck → mid_hip, the median over the clip) from its 5-frame median takes the median, each listed by
-  frame and joint; (2) occlusion — a joint not "observed", or scored under 0.3, takes its 3-frame median;
+  frame and joint; without --loop the first and last two frames, whose window a clip end cuts, are not
+  tested and are listed as untested; (2) occlusion — a joint not "observed", or scored under 0.3, takes its 3-frame median;
   (3) a quadratic Savitzky–Golay per joint, the window cut at the ends (wrapped with --loop); (4) with
   --loop, the figure moved in y so the lowest ankle over the cycle is where it was before smoothing.
   A median is per coordinate over the window's frames where the joint has a position. A joint with no
@@ -357,7 +358,7 @@ function runClean(argv: string[], say: (l: string) => void): void {
   say(`rig-pose clean: ${n} frame(s) of person "${c.person}" from ${input}${f.has('coco') ? ' (COCO-17)' : ''}; legs ${params.legs}, rest ${params.rest}, ${params.loop ? 'loop (every window wraps)' : 'no loop (windows cut at the ends)'}`);
   say(`  TRUNK  neck → mid_hip: median ${fmt(c.trunk.length)} px over ${c.trunk.frames} frame(s); a spike is > ${fmt(SPIKE_TRUNKS * c.trunk.length)} px (${SPIKE_TRUNKS} trunk) from its ${SPIKE_WINDOW}-frame median`);
   for (const s of c.spikes) say(`  SPIKE  joint "${s.joint}" frame ${s.frame} (${tOf(s.frame)}): ${fmt(s.off)} px from its ${SPIKE_WINDOW}-frame median, over ${fmt(SPIKE_TRUNKS * c.trunk.length)} — took the median`);
-  say(`  SPIKES ${c.spikes.length} replaced`);
+  say(`  SPIKES ${c.spikes.length} replaced; ${untestedText(c.untested)}`);
   const byJoint = new Map<string, typeof c.occluded>();
   for (const o of c.occluded) byJoint.set(o.joint, [...(byJoint.get(o.joint) ?? []), o]);
   for (const [joint, os] of byJoint) say(`  OCCLUDED joint "${joint}" on ${os.length} frame(s) (${runsOf(os.map((o) => o.frame))}): not observed or scored under ${OCCLUSION_SCORE}; took its ${OCCLUSION_WINDOW}-frame median, moved up to ${fmt(Math.max(...os.map((o) => o.moved)))} px`);

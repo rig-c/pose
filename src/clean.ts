@@ -10,7 +10,11 @@
  *    `SPIKE_WINDOW`-frame (5) median takes the median. The trunk is neck →
  *    mid_hip (the hips' midpoint), the median of its picture length over the
  *    frames where all three have a position. Every replacement is listed by
- *    frame and joint.
+ *    frame and joint. Without `loop`, a frame whose window a clip end cuts
+ *    (the first and last two) is not tested, and is listed as untested: on a
+ *    cut window the median is a neighbour's value, so a joint moving steadily
+ *    would read as a spike there. Reflecting the window at the end does not
+ *    help — the median of [x2, x1, x0, x1, x2] is still x1.
  * 2. **Occlusion.** A joint whose state is not `observed`, or whose score is
  *    under `OCCLUSION_SCORE` (0.3), takes its `OCCLUSION_WINDOW`-frame (3)
  *    median.
@@ -106,6 +110,8 @@ export interface Cleaned {
   occluded: Occluded[];
   /** Joints without a position on some frames, as runs: left without one. */
   missing: Array<{ joint: Body18; from: number; to: number }>;
+  /** The frames the spike step did not test (a clip end cuts their window). */
+  untested: number[];
   /** With loop, where an ankle exists; else null. */
   floor: Floor | null;
   /** How many (joint, three-frame) runs the jitter was read over: before, after. */
@@ -150,6 +156,12 @@ export function medianAt(xs: Series, i: number, size: number, loop: boolean): Pt
   return [median1(pts.map((p) => p[0])), median1(pts.map((p) => p[1]))];
 }
 
+/** Whether the spike step tests frame i: under loop always; without it, only where no clip end cuts the window. */
+export function testedAt(i: number, n: number, loop: boolean, size = SPIKE_WINDOW): boolean {
+  const h = size >> 1;
+  return loop ? n >= size : i - h >= 0 && i + h < n;
+}
+
 /**
  * Spikes on one joint: every frame where it lies more than `limit` px from its
  * `size`-frame median (read from `xs`, not from a replaced value). Returns the
@@ -158,7 +170,7 @@ export function medianAt(xs: Series, i: number, size: number, loop: boolean): Pt
 export function spikesOf(xs: Series, limit: number, loop: boolean, size = SPIKE_WINDOW): Array<{ frame: number; at: Pt; off: number }> {
   const out: Array<{ frame: number; at: Pt; off: number }> = [];
   xs.forEach((p, i) => {
-    if (p === null) return;
+    if (p === null || !testedAt(i, xs.length, loop, size)) return;
     const m = medianAt(xs, i, size, loop)!;
     const off = Math.hypot(p[0] - m[0], p[1] - m[1]);
     if (off > limit) out.push({ frame: i, at: m, off });
@@ -349,12 +361,13 @@ export function clean(seq: PoseSequence, params: CleanParams, wanted: string | u
     });
   }
 
+  const untested = Array.from({ length: n }, (_, i) => i).filter((i) => !testedAt(i, n, params.loop));
   const before = jitterOf([...raw.values()], params.loop);
   const after = jitterOf([...smoothed.values()], params.loop);
   const record: CleanRecord = {
     spec: CLEAN_SPEC,
     params: { loop: params.loop, legs: params.legs, rest: params.rest },
-    spikes: spikes.map((s) => ({ frame: s.frame, joint: s.joint })),
+    spikes: { found: spikes.map((s) => ({ frame: s.frame, joint: s.joint })), untested },
     jitter: { before: before.value, after: after.value },
   };
   const frames = seq.frames.map((f, i) => {
@@ -376,17 +389,25 @@ export function clean(seq: PoseSequence, params: CleanParams, wanted: string | u
     spikes,
     occluded,
     missing,
+    untested,
     floor,
     triples: before.triples,
   };
+}
+
+/** The untested frames as text: "frames 0, 1, 30, 31 untested (a clip end cuts their window)", or "every frame tested". */
+export function untestedText(frames: readonly number[]): string {
+  if (frames.length === 0) return 'every frame tested';
+  return `frame${frames.length === 1 ? '' : 's'} ${frames.join(', ')} untested (a clip end cuts the ${SPIKE_WINDOW}-frame window)`;
 }
 
 /** The record as one line: retarget's CLEAN line, and clean's own summary. */
 export function cleanLine(r: CleanRecord): string {
   const { loop, legs, rest } = r.params;
   const windows = legs === 1 && rest === 1 ? 'legs 1, rest 1 — no smoothing' : `legs ${legs}, rest ${rest}`;
-  const shown = r.spikes.slice(0, 8).map((s) => `frame ${s.frame} ${s.joint}`).join(', ');
-  const spikes = r.spikes.length === 0 ? 'no spike' : `${r.spikes.length} spike(s) replaced (${shown}${r.spikes.length > 8 ? `, … ${r.spikes.length - 8} more` : ''})`;
+  const found = r.spikes.found;
+  const shown = found.slice(0, 8).map((s) => `frame ${s.frame} ${s.joint}`).join(', ');
+  const spikes = `${found.length === 0 ? 'no spike' : `${found.length} spike(s) replaced (${shown}${found.length > 8 ? `, … ${found.length - 8} more` : ''})`}, ${untestedText(r.spikes.untested)}`;
   const jit = (v: number | null) => (v === null ? 'not measured' : v.toFixed(2));
   return `${r.spec}: ${windows}, ${loop ? 'loop' : 'no loop'}; ${spikes}; jitter (mean |second difference| of y) ${jit(r.jitter.before)} → ${jit(r.jitter.after)} px/f²`;
 }
