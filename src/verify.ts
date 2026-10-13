@@ -8,7 +8,7 @@
  * a guess about which rigs are safe; it is posed, and the distance between the
  * aim each bone reached and the aim the pose asked for is the verdict.
  */
-import { poseRawAnimation, type CompiledDocument, type RawBone } from 'rig-c/core';
+import { poseRawAnimation, poseRawSetup, type CompiledDocument, type RawBone } from 'rig-c/core';
 import type { Body18 } from './joints.ts';
 import { aimAngle, pointAt, type JointMap } from './map.ts';
 import type { Joint } from './pose.ts';
@@ -17,10 +17,13 @@ import { pictureAngle, pointOn, wrap } from './retarget.ts';
 
 export interface Landing {
   bone: string;
-  /** The largest |reached − asked| over the frames, degrees (rotate) or world units (translate). */
+  /** The largest |reached − asked| over the frames: degrees (an aim), world units (an origin, an ankle), or a fraction of the setup length (a scale). */
   worst: number;
   frame: number;
-  kind: 'angle' | 'origin';
+  /** `scale`: the bone's world x axis against its setup length times the leg scale asked (#47); `foot`: the ankle (the leg's last bone's tip) against where the keys put it. */
+  kind: 'angle' | 'origin' | 'scale' | 'foot';
+  /** The tolerance it is held to. */
+  tolerance: number;
 }
 
 /**
@@ -32,6 +35,20 @@ export interface Landing {
  */
 export const ANGLE_TOLERANCE = 0.01;
 export const ORIGIN_TOLERANCE = 0.01;
+/**
+ * A scale key is rounded to 1e-6 and a bone under a scaled bone takes its
+ * parent's rounding too; rig-c stores float32 (≈ 6e-8 relative). 1e-4 sits
+ * two orders above that.
+ */
+export const SCALE_TOLERANCE = 1e-4;
+/**
+ * An ankle sits at the end of a lever as long as the leg: each keyed rotation
+ * on the way (the hip, the thigh, the shin; rounded to 0.001°, ±8.7e-6 rad)
+ * moves it by up to 8.7e-6 × its setup distance from the hip's origin, so three
+ * move it ≤ 2.6e-5 × that. The tolerance is the origin's plus 1e-4 × that
+ * distance, about four times the sum (0.06 units on a 520-unit leg).
+ */
+export const FOOT_TOLERANCE_PER_UNIT = 1e-4;
 
 /** Every bone, world, on every key frame of the animation, by rig-c's poser. */
 export function poseFrames(doc: CompiledDocument, animation: string, times: readonly number[]): Array<Map<string, RawBone>> {
@@ -58,8 +75,24 @@ export function measureLanding(doc: CompiledDocument, animation: string, map: Jo
           frame = i;
         }
       });
-      out.push({ bone: b, worst, frame, kind: 'angle' });
+      out.push({ bone: b, worst, frame, kind: 'angle', tolerance: ANGLE_TOLERANCE });
     });
+  }
+  const setup = new Map(poseRawSetup(doc).bones.map((b) => [b.name, b]));
+  for (const [b, asked] of r.scales) {
+    const s0 = setup.get(b)!;
+    const len0 = Math.hypot(s0.a, s0.c);
+    let worst = -1;
+    let frame = 0;
+    posed.forEach((bones, i) => {
+      const o = bones.get(b)!;
+      const e = Math.abs(Math.hypot(o.a, o.c) / len0 - asked[i]!);
+      if (e > worst) {
+        worst = e;
+        frame = i;
+      }
+    });
+    out.push({ bone: b, worst, frame, kind: 'scale', tolerance: SCALE_TOLERANCE });
   }
   if (r.origin !== null) {
     let worst = -1;
@@ -73,13 +106,132 @@ export function measureLanding(doc: CompiledDocument, animation: string, map: Jo
         frame = i;
       }
     });
-    out.push({ bone: r.origin.bone, worst, frame, kind: 'origin' });
+    out.push({ bone: r.origin.bone, worst, frame, kind: 'origin', tolerance: ORIGIN_TOLERANCE });
+  }
+  if (r.ankles !== null) {
+    const top = r.origin?.bone;
+    for (const side of ['r', 'l'] as const) {
+      const bone = r.ankles.bones[side];
+      const s0 = setup.get(bone)!;
+      const tip0: [number, number] = [s0.worldX + s0.a * (lengths.get(bone) ?? 0), s0.worldY + s0.c * (lengths.get(bone) ?? 0)];
+      const h0 = top === undefined ? null : setup.get(top)!;
+      const lever = h0 === null ? Math.hypot(tip0[0], tip0[1]) : Math.hypot(tip0[0] - h0.worldX, tip0[1] - h0.worldY);
+      let worst = -1;
+      let frame = 0;
+      posed.forEach((bones, i) => {
+        const got = pointAt(bones, lengths, `${bone}:tip`)!;
+        const want = r.ankles!.at[side][i]!;
+        const e = Math.hypot(got[0] - want[0], got[1] - want[1]);
+        if (e > worst) {
+          worst = e;
+          frame = i;
+        }
+      });
+      out.push({ bone: `${bone}:tip`, worst, frame, kind: 'foot', tolerance: ORIGIN_TOLERANCE + FOOT_TOLERANCE_PER_UNIT * lever });
+    }
   }
   return out;
 }
 
 export function landed(l: Landing): boolean {
-  return l.worst <= (l.kind === 'angle' ? ANGLE_TOLERANCE : ORIGIN_TOLERANCE);
+  return l.worst <= l.tolerance;
+}
+
+/**
+ * How a scaled bone, or a bone under one, has its art distorted: the angle
+ * between its world x and y axes less 90° (shear), and each world axis's length
+ * against setup (a foot under a scaled shin is squashed along the shin). A
+ * reading, not a gate: rig-c's `scalex` on a bone reaches every bone below it.
+ */
+export interface Shear {
+  bone: string;
+  /** Worst |angle(x, y) − 90°|, degrees, and its frame. */
+  shear: number;
+  frame: number;
+  /** The world x and y axes' lengths over setup's: lowest and highest over the frames. */
+  x: [number, number];
+  y: [number, number];
+}
+
+export function measureShear(doc: CompiledDocument, posed: Array<Map<string, RawBone>>, scaled: Iterable<string>): Shear[] {
+  const setup = new Map(poseRawSetup(doc).bones.map((b) => [b.name, b]));
+  const under = new Set<string>(scaled);
+  for (const b of doc.bones) if (b.parent !== undefined && b.parent !== null && under.has(b.parent)) under.add(b.name);
+  const out: Shear[] = [];
+  for (const b of doc.bones) {
+    if (!under.has(b.name)) continue;
+    const s0 = setup.get(b.name)!;
+    const x0 = Math.hypot(s0.a, s0.c);
+    const y0 = Math.hypot(s0.b, s0.d);
+    let shear = -1;
+    let frame = 0;
+    const xs: number[] = [];
+    const ys: number[] = [];
+    posed.forEach((bones, i) => {
+      const o = bones.get(b.name)!;
+      const e = Math.abs(wrap((Math.atan2(o.d, o.b) - Math.atan2(o.c, o.a)) * (180 / Math.PI) - 90));
+      if (e > shear) {
+        shear = e;
+        frame = i;
+      }
+      xs.push(Math.hypot(o.a, o.c) / x0);
+      ys.push(Math.hypot(o.b, o.d) / y0);
+    });
+    const rx = rangeOf(xs);
+    const ry = rangeOf(ys);
+    out.push({ bone: b.name, shear, frame, x: [rx.min, rx.max], y: [ry.min, ry.max] });
+  }
+  return out;
+}
+
+/**
+ * The feet on the posed build (#43, #47), outside the jumps read off the
+ * reference: the lowest ankle's vertical range, and per support span, the
+ * supporting ankle's vertical range and horizontal drift — in world units and
+ * in that side's leg length (the median, over the frames, of its thigh's origin
+ * to its ankle).
+ */
+export interface FeetReading {
+  legLength: { r: number; l: number };
+  /** The lowest ankle's world y range over the frames outside jumps. */
+  lowest: { range: number; legs: number; frames: number };
+  /** Per support span: the supporting ankle's ranges outside jumps. */
+  plants: Array<{ side: 'r' | 'l'; frames: [number, number]; vertical: number; horizontal: number; verticalLegs: number; horizontalLegs: number }>;
+}
+
+export function measureFeet(posed: Array<Map<string, RawBone>>, lengths: ReadonlyMap<string, number>, r: Retarget, legs: { r: { root: string; ankle: string }; l: { root: string; ankle: string } }): FeetReading | null {
+  if (r.feet === null) return null;
+  const tip = (bones: Map<string, RawBone>, side: 'r' | 'l') => pointAt(bones, lengths, `${legs[side].ankle}:tip`)!;
+  const legLength = { r: 0, l: 0 };
+  for (const side of ['r', 'l'] as const) {
+    legLength[side] = medianOf(posed.map((bones) => {
+      const a = tip(bones, side);
+      const o = bones.get(legs[side].root)!;
+      return Math.hypot(a[0] - o.worldX, a[1] - o.worldY);
+    }));
+  }
+  const jump = new Set<number>();
+  for (const [a, b] of r.feet.jumps) for (let i = a; i <= b; i++) jump.add(i);
+  const ys: number[] = [];
+  posed.forEach((bones, i) => {
+    if (jump.has(i)) return;
+    ys.push(Math.min(tip(bones, 'r')[1], tip(bones, 'l')[1]));
+  });
+  const lr = rangeOf(ys);
+  const mean = (legLength.r + legLength.l) / 2;
+  const plants = r.feet.supports.map((s) => {
+    const xs: number[] = [];
+    const yy: number[] = [];
+    for (let i = s.frames[0]; i <= s.frames[1]; i++) {
+      const a = tip(posed[i]!, s.side);
+      xs.push(a[0]);
+      yy.push(a[1]);
+    }
+    const v = rangeOf(yy).range;
+    const h = rangeOf(xs).range;
+    return { side: s.side, frames: s.frames, vertical: v, horizontal: h, verticalLegs: v / legLength[s.side], horizontalLegs: h / legLength[s.side] };
+  });
+  return { legLength, lowest: { range: lr.range, legs: lr.range / mean, frames: ys.length }, plants };
 }
 
 export interface Range {

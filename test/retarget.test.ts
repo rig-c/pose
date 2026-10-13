@@ -2219,3 +2219,300 @@ describe('#43: the older pose name, --images, the rigc version, and why a window
     expect((JSON.parse(readFileSync(report, 'utf8')) as { rigc: { version: string } }).rigc.version).toBe(v);
   }, SLOW);
 });
+
+// --- #47: the legs foreshorten, and the hip comes from the supporting foot ---------
+
+describe('#47: --leg-scale and --plant-feet', () => {
+  /** Both legs parallel, thigh at −95° and shin at −97° (Spine degrees), 80 and 70 px straight. */
+  const THIGH = -95;
+  const SHIN = -97;
+  const N = 24;
+  const DT = 1 / 24;
+  /** The knees bend toward the camera: thigh and shin at f of their length in the picture, f 1 → 0.85 → 1. */
+  const bendF = (i: number): number => (i < 6 || i > 18 ? 1 : 1 - 0.15 * Math.sin(((i - 6) / 12) * Math.PI));
+  const STILL: Motion = { ...BASE, n: N, dt: DT, rt: () => THIGH, rs: () => SHIN, lt: () => THIGH, ls: () => SHIN, hip: () => [0, 0] };
+  /** The leg vector hip → ankle in the picture at full length (y down). */
+  const V = add(dir(THIGH, 80), dir(SHIN, 70));
+
+  /**
+   * A pose whose legs are scaled by `f(i)` with both ankles held where they are
+   * at f = 1, plus `lift(i, side)` px up on each ankle (the knee stays); the
+   * rest of the body travels with the hip.
+   */
+  function legsPose(f: (i: number) => number, lift: (i: number, side: 'r' | 'l') => number = () => 0, rise: (i: number) => number = () => 0): Record<string, unknown> {
+    return poseDoc(STILL, (i, j) => {
+      const drop: Pt = [(1 - f(i)) * V[0], (1 - f(i)) * V[1] - rise(i)];
+      for (const [name, at] of Object.entries(j)) {
+        const a = at.at as Pt;
+        if (name.endsWith('_ankle') || name.endsWith('_knee')) continue;
+        j[name] = { ...at, at: [a[0] + drop[0], a[1] + drop[1]] };
+      }
+      for (const s of ['r', 'l'] as const) {
+        const hip = j[`${s}_hip`]!.at as Pt;
+        const knee = add(hip, dir(THIGH, 80 * f(i)));
+        const ankle = add(knee, dir(SHIN, 70 * f(i)));
+        j[`${s}_knee`] = { state: 'observed', at: knee, score: 0.9 };
+        j[`${s}_ankle`] = { state: 'observed', at: [ankle[0], ankle[1] - lift(i, s)], score: 0.9 };
+      }
+    });
+  }
+
+  interface Posed {
+    hip: Pt[];
+    ankle: { r: Pt[]; l: Pt[] };
+    len: { [bone: string]: number[] };
+  }
+  /** The gated build posed by rig-c, read independently: the hip's origin, each shin's tip, each leg bone's world x-axis length over setup. */
+  function posedLegs(build: string): Posed {
+    const doc = loadBuild(build);
+    const poses = poseRawAnimation(doc, 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+    const out: Posed = { hip: [], ankle: { r: [], l: [] }, len: { leg_r0: [], leg_r1: [], leg_l0: [], leg_l1: [] } };
+    for (const p of poses) {
+      const b = byName(p.bones);
+      out.hip.push([b.get('hip')!.worldX, b.get('hip')!.worldY]);
+      for (const s of ['r', 'l'] as const) {
+        const shin = b.get(`leg_${s}1`)!;
+        out.ankle[s].push([shin.worldX + shin.a * 70, shin.worldY + shin.c * 70]);
+      }
+      for (const n of Object.keys(out.len)) out.len[n]!.push(Math.hypot(b.get(n)!.a, b.get(n)!.c));
+    }
+    return out;
+  }
+  const spread = (ps: Pt[]): number => Math.max(...ps.map((p) => Math.hypot(p[0] - ps[0]![0], p[1] - ps[0]![1])));
+  /** A rig leg, hip → ankle at full length, world units. */
+  const LEG = 150;
+
+  test('knees bending toward the camera: the legs shorten, the feet stay within 0.02 leg lengths, and the hip drops by the scaled amount', () => {
+    const c = setup({ pose: legsPose(bendF) });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--leg-scale', '0.8,1.05', '--plant-feet', '--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'LEG-SCALE')).toHaveLength(4);
+    expect(linesOf(r, 'LEG-SCALE')[0]).toContain('chain "leg_r" bone "leg_r0" (r_hip → r_knee): straight length 80.0px');
+    expect(linesOf(r, 'LEG-SCALE')[0]).toContain('none under 0.8; none over 1.05');
+    // Every scale and both ankles land, by the package's own check.
+    const lands = linesOf(r, 'LAND');
+    expect(lands.filter((l) => l.includes(' scale — '))).toHaveLength(4);
+    expect(lands.filter((l) => l.includes(' ankle — '))).toHaveLength(2);
+    const p = posedLegs(c.build);
+    // Independently: each segment's world length is f of setup's …
+    for (let i = 0; i < N; i++) for (const n of Object.keys(p.len)) expect(Math.abs(p.len[n]![i]! - bendF(i))).toBeLessThan(1e-4);
+    // … the feet do not move …
+    expect(spread(p.ankle.r)).toBeLessThan(0.02 * LEG);
+    expect(spread(p.ankle.l)).toBeLessThan(0.02 * LEG);
+    expect(spread(p.ankle.r)).toBeLessThan(0.05);
+    // … and the hip drops by (1 − f) of the rig's leg, along it (80 and 70 units at −95° and −97°).
+    const W: Pt = [80 * Math.cos(THIGH * RAD) + 70 * Math.cos(SHIN * RAD), 80 * Math.sin(THIGH * RAD) + 70 * Math.sin(SHIN * RAD)];
+    for (let i = 0; i < N; i++) {
+      const want: Pt = [p.hip[0]![0] + (1 - bendF(i)) * W[0], p.hip[0]![1] + (1 - bendF(i)) * W[1]];
+      expect(Math.hypot(p.hip[i]![0] - want[0], p.hip[i]![1] - want[1])).toBeLessThan(0.05);
+    }
+    expect(p.hip[0]![1] - Math.min(...p.hip.map((h) => h[1]))).toBeGreaterThan(0.14 * LEG);
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as { options: { legScale: unknown; plantFeet: boolean }; feet: { planted: boolean; supports: unknown[]; jumps: unknown[] }; legScale: Array<{ bone: string; low: unknown[] }> };
+    expect(rep.options.legScale).toEqual([0.8, 1.05]);
+    expect(rep.options.plantFeet).toBe(true);
+    expect(rep.feet.planted).toBe(true);
+    expect(rep.feet.jumps).toEqual([]);
+    expect(rep.legScale.map((l) => l.bone)).toEqual(['leg_r0', 'leg_r1', 'leg_l0', 'leg_l1']);
+  }, SLOW);
+
+  test('control: without the two flags the same pose keys no scale, and the hip follows the pose\'s travel with the feet sliding', () => {
+    const c = setup({ pose: legsPose(bendF) });
+    const r = retarget(c);
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'LEG-SCALE')).toEqual([]);
+    expect(motionOf(c.out).animations.dance!.tracks.map((t) => t.property)).not.toContain('scalex');
+    const p = posedLegs(c.build);
+    // The figure's legs are 1.5× the pose's (the scale is set by the trunk), and rigid: the ankles drop with the hip.
+    expect(spread(p.ankle.r)).toBeGreaterThan(0.1 * LEG);
+  }, SLOW);
+
+  test('the scale is clamped at the declared limits, and the frames clamped are listed', () => {
+    const c = setup({ pose: legsPose(bendF) });
+    const r = retarget(c, ['--leg-scale', '0.9,1.05']);
+    expect(r.status).toBe(0);
+    const clamped = Array.from({ length: N }, (_, i) => i).filter((i) => bendF(i) < 0.9);
+    const line = linesOf(r, 'LEG-SCALE')[0]!;
+    expect(line).toContain(`${clamped.length} frame(s) under 0.9, clamped (frames ${clamped[0]}–${clamped[clamped.length - 1]})`);
+    const p = posedLegs(c.build);
+    for (const i of clamped) expect(Math.abs(p.len.leg_r0![i]! - 0.9)).toBeLessThan(1e-4);
+  }, SLOW);
+
+  test('mutant: the shin keyed by the unit-scale formula under a scaled thigh misses, and POSE_LANDS names it', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const from = 'const solvedKey = (b: string, i: number) => legPoses?.[i]!.solved.get(b);';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'const solvedKey = (_b: string, _i: number): { rotate: number; scale: number } | undefined => undefined;'));
+      // Knees bent in the picture (the shin 20° off the thigh), so the thigh's scale turns the shin.
+      const bent: Motion = { ...STILL, rs: () => THIGH - 20 };
+      const c = setup({ pose: poseDoc(bent, (i, j) => {
+        for (const s of ['r', 'l'] as const) {
+          const hip = j[`${s}_hip`]!.at as Pt;
+          const knee = add(hip, dir(THIGH, 80 * bendF(i)));
+          j[`${s}_knee`] = { state: 'observed', at: knee, score: 0.9 };
+          j[`${s}_ankle`] = { state: 'observed', at: add(knee, dir(s === 'r' ? THIGH - 20 : SHIN, 70 * bendF(i))), score: 0.9 };
+        }
+      }) });
+      const r = retarget(c, ['--leg-scale', '0.8,1.05'], join(d, 'cli.ts'));
+      expect(r.status).toBe(1);
+      expect(fails(r).some((l) => l.startsWith('FAIL  POSE_LANDS: bone "leg_r1" aim'))).toBe(true);
+      expect(fails(r).some((l) => l.startsWith('FAIL  POSE_LANDS: bone "leg_r1" scale'))).toBe(true);
+      // Control: the package itself lands the same pose.
+      const ok = retarget(c, ['--leg-scale', '0.8,1.05']);
+      expect(ok.stderr).toBe('');
+      expect(ok.status).toBe(0);
+      expect(linesOf(ok, 'SHEAR').find((l) => l.startsWith('SHEAR  bone "leg_r1"'))).toMatch(/art sheared up to [1-9]/);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+
+  test('a jump (both ankles up) releases the plant: the hip follows the pose\'s travel, and re-plants on landing', () => {
+    /** Frames 10–13: the whole figure 20 px up (0.13 of its 150 px legs). */
+    const rise = (i: number): number => (i >= 10 && i <= 13 ? 20 : 0);
+    const c = setup({ pose: legsPose(() => 1, () => 0, rise) });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--plant-feet', '--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'FEET')).toContain('FEET   jumps (both ankles and mid_hip > 0.05 leg lengths above their rolling floor, ≥ 2 frames): 10–13');
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as { feet: { jumps: unknown; changes: Array<{ frame: number; from: string | null; to: string }> } };
+    expect(rep.feet.jumps).toEqual([[10, 13]]);
+    // Landing on frame 14 moves both ankles 20 px (a step's speed), so the plant is taken on 15, the first still frame.
+    expect(rep.feet.changes.map((x) => x.frame)).toEqual([0, 15]);
+    const p = posedLegs(c.build);
+    // In the air the hip rises by the pose's 20 px × the figure scale 1.5; on the ground, before and after, the feet hold.
+    expect(p.hip[11]![1] - p.hip[9]![1]).toBeCloseTo(30, 2);
+    expect(spread(p.ankle.r.slice(0, 10))).toBeLessThan(0.01);
+    expect(spread(p.ankle.r.slice(14))).toBeLessThan(0.01);
+    expect(p.ankle.r[11]![1] - p.ankle.r[9]![1]).toBeCloseTo(30, 2);
+    // Control: the same lift on one frame is under the 2 frames a jump lasts.
+    const blip = setup({ pose: legsPose(() => 1, () => 0, (i) => (i === 10 ? 20 : 0)) });
+    const rb = retarget(blip, ['--plant-feet']);
+    expect(rb.status).toBe(0);
+    expect(linesOf(rb, 'FEET')).toContain('FEET   jumps (both ankles and mid_hip > 0.05 leg lengths above their rolling floor, ≥ 2 frames): none');
+  }, SLOW);
+
+  test('standing while the ankles drift up the picture with depth (the hip does not lift) is not a jump', () => {
+    /** Both ankles 20 px up by the last frame (0.13 leg lengths over a floor-wide rule's 0.05), 0.9 px a frame; the hip stays. */
+    const depth = (i: number): number => (20 * i) / (N - 1);
+    const c = setup({ pose: legsPose(() => 1, (i) => depth(i)) });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--plant-feet', '--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    // The ankles alone are above any floor taken over the sequence by more than 0.05 leg lengths on the late frames …
+    expect(depth(N - 1)).toBeGreaterThan(0.05 * 150 * 2);
+    // … but the body does not lift, so no jump, and no step: one support throughout.
+    expect(linesOf(r, 'FEET')).toContain('FEET   jumps (both ankles and mid_hip > 0.05 leg lengths above their rolling floor, ≥ 2 frames): none');
+    expect(linesOf(r, 'FEET')).toContain('FEET   supports: r 0–23');
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as { feet: { jumps: unknown; steps: unknown } };
+    expect(rep.feet.jumps).toEqual([]);
+    expect(rep.feet.steps).toEqual([]);
+  }, SLOW);
+
+  test('a step: the supporting ankle moving > 0.03 leg lengths a frame is released, the other foot takes support, and it re-plants once still', () => {
+    /** The right ankle (supporting: the left is 6 px up) slides 10 px left a frame on frames 8–10 (0.067 leg lengths a frame; its knee bends the way it bends at rest), then stays. */
+    const slide = (i: number): number => -10 * Math.min(3, Math.max(0, i - 7));
+    const stepPose = (both: boolean) => {
+      const doc = legsPose(() => 1, (_, s) => (s === 'l' ? 6 : 0));
+      const frames = doc.frames as Array<{ people: Array<{ joints: JointsDoc }> }>;
+      frames.forEach((f, i) => {
+        const j = f.people[0]!.joints;
+        for (const s of both ? ['r', 'l'] : ['r']) {
+          const a = j[`${s}_ankle`]!.at as Pt;
+          j[`${s}_ankle`] = { ...j[`${s}_ankle`], at: [a[0] + slide(i), a[1]] };
+        }
+      });
+      return doc;
+    };
+    const c = setup({ pose: stepPose(false) });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--plant-feet', '--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    // Still on frames 11 and 12 (< 0.01): re-planted at 12; lower again, it takes support back after 0.1 s (frames 12–14).
+    expect(linesOf(r, 'FEET')).toContain('FEET   steps (the supporting ankle > 0.03 leg lengths a frame; re-planted after 2 frames < 0.01): r 8–11 → l supports, re-planted at 12');
+    expect(linesOf(r, 'FEET')).toContain('FEET   supports: r 0–7, l 8–13, r 14–23');
+    const p = posedLegs(c.build);
+    expect(spread(p.ankle.r.slice(0, 8))).toBeLessThan(0.01);
+    expect(spread(p.ankle.l.slice(11, 14))).toBeLessThan(0.01);
+    // Re-planted where it stepped to: held from the end of the blend on, well left of where it was (the rigid 70-unit
+    // shin turned toward the 30 px the ankle slid; measured 15.9 units), not dragged back to its old anchor.
+    expect(spread(p.ankle.r.slice(17))).toBeLessThan(0.01);
+    expect(p.ankle.r[0]![0] - p.ankle.r[17]![0]).toBeGreaterThan(10);
+    // Both feet stepping at once: nothing is planted, so the hip follows the pose's travel.
+    const both = setup({ pose: stepPose(true) });
+    const rb = retarget(both, ['--plant-feet']);
+    expect(rb.status).toBe(0);
+    expect(linesOf(rb, 'FEET').find((l) => l.startsWith('FEET   steps'))).toContain('r 8–11 → the pose\'s travel, re-planted at 12');
+  }, SLOW);
+
+  test('a change of support: the other ankle lower for 0.1 s takes over, the hip blends over 3 frames, and each foot holds while it supports', () => {
+    /** The left foot 6 px up (0.04 leg lengths) until frame 7, then the right one — 3 px a frame (0.02 leg lengths: not a step). */
+    const lift = (i: number, s: 'r' | 'l'): number => {
+      const l = i < 8 ? 6 : i === 8 ? 3 : 0;
+      return s === 'l' ? l : 6 - l;
+    };
+    const c = setup({ pose: legsPose(() => 1, lift) });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--plant-feet', '--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    // Lower (by 6 px) from frame 9; 0.1 s is reached on frame 11 (frames 9–11 last 0.125 s, 9–10 0.083 s).
+    expect(linesOf(r, 'FEET')).toContain('FEET   supports: r 0–10, l 11–23');
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as { feet: { changes: unknown; steps: unknown } };
+    expect(rep.feet.changes).toEqual([{ frame: 0, from: null, to: 'r' }, { frame: 11, from: 'r', to: 'l' }]);
+    expect(rep.feet.steps).toEqual([]);
+    const p = posedLegs(c.build);
+    expect(spread(p.ankle.r.slice(0, 11))).toBeLessThan(0.01);
+    expect(spread(p.ankle.l.slice(14))).toBeLessThan(0.01);
+    // The blend: on frames 11–13 the left foot is on its way to held, not snapped — it ends where it is held.
+    const held = p.ankle.l[14]!;
+    expect(Math.hypot(p.ankle.l[13]![0] - held[0], p.ankle.l[13]![1] - held[1])).toBeLessThan(Math.hypot(p.ankle.l[11]![0] - held[0], p.ankle.l[11]![1] - held[1]) + 1e-9);
+    // Control: lower on one frame only (9), short of 0.1 s, changes nothing.
+    const once = (i: number): number => (i < 8 || i > 10 ? 6 : i === 9 ? 0 : 3);
+    const short = setup({ pose: legsPose(() => 1, (i, s) => (s === 'l' ? once(i) : 6 - once(i))) });
+    const rs = retarget(short, ['--plant-feet']);
+    expect(rs.status).toBe(0);
+    expect(linesOf(rs, 'FEET')).toContain('FEET   supports: r 0–23');
+  }, SLOW);
+
+  test('PIVOT: the hip\'s origin against its thigh roots\' midpoint, in units and hip widths', () => {
+    const c = setup();
+    const r = retarget(c);
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'PIVOT')[0]).toStartWith('PIVOT  bone "hip"\'s origin is 0.00 units (0.000 hip widths) from its thigh roots\' midpoint (leg_r0 + leg_l0)');
+    const off = setup({ rig: { bones: (bs) => bs.map((b) => (b.name.startsWith('leg_') && b.name.endsWith('0') ? { ...b, y: -10 } : b)) } });
+    const ro = retarget(off);
+    expect(ro.status).toBe(0);
+    expect(linesOf(ro, 'PIVOT')[0]).toContain('is 10.00 units (0.333 hip widths)');
+  }, SLOW);
+
+  test('--leg-scale takes off or min,max with 0 < min ≤ 1 ≤ max; anything else is exit 2', () => {
+    const c = setup();
+    for (const v of ['0.8', '1.1,1.2', '0,1', '0.8,0.9', 'a,b']) {
+      const r = retarget(c, ['--leg-scale', v]);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain(`--leg-scale is "${v}"`);
+    }
+  }, SLOW);
+
+  test('LEGS_MAP: --plant-feet with no chain ending at an ankle is refused by name', () => {
+    const map = { ...baseMap(), chains: baseChains().filter((x) => x.name !== 'leg_l') };
+    const c = setup({ map });
+    const r = retarget(c, ['--plant-feet']);
+    expect(r.status).toBe(1);
+    expect(fails(r)).toContain('FAIL  LEGS_MAP: --plant-feet needs one chain ending at "l_ankle" (its last bone\'s x axis ends at the ankle); the map has none');
+    // Control: the same map reads, without the flag.
+    expect(retarget(c).status).toBe(0);
+  }, SLOW);
+});

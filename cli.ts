@@ -51,6 +51,19 @@ retarget
   --bends refuse|clamp  a hinge (elbow, knee: any joint inside a chain) bent the wrong way refuses
                         the run (default), or is straightened on that frame and listed
   --bend-tolerance <d>  degrees past straight a hinge may bend the wrong way before it counts (default: 0)
+  --leg-scale <min,max>|off
+                        each leg segment (two of one side's hip, knee, ankle) is scaled along its own x axis
+                        (a scalex key) by its picture length over its straight length — the 95th percentile of
+                        its picture length — clamped to [min, max], listed as LEG-SCALE with the frames clamped;
+                        a bone under a scaled one is keyed through its parent's scale (default: off; 0.8,1.05
+                        is the card's range, rig-c/pose#47)
+  --plant-feet          the hip is placed so the supporting foot stays where it took support: the lower ankle
+                        in the picture, changing after the other has been 0.02 leg lengths lower for 0.1 s,
+                        blended over 3 frames; a jump (both ankles and mid_hip 0.05 leg lengths above their
+                        rolling floor — the 95th-percentile y over ±1 s — for ≥ 2 frames) follows the pose's
+                        travel and re-plants on landing; a supporting ankle moving > 0.03 leg lengths a frame
+                        releases its plant to the other foot, or to the pose's travel, until it is still
+                        (< 0.01 for 2 frames) (FEET lines)
   --switch-tolerance <d>  a set of alternate drawings (the map's "alternates") may show on a frame where
                         every segment of its chains is within d degrees of its key skeleton (default: 25)
   --switch-min <s>      a run of one set shorter than s seconds is dropped (default: 0.25)
@@ -155,8 +168,18 @@ function shortOf(f: Map<string, string>): number | 'off' {
   return num(f, 'short', 0.35, (v) => v > 0 && v < 1, 'off, or a fraction in (0, 1) of the segment\'s median picture length');
 }
 
+function legScaleOf(f: Map<string, string>): [number, number] | 'off' {
+  const v = f.get('leg-scale');
+  if (v === undefined || v === 'off') return 'off';
+  const parts = v.split(',').map((x) => (x.trim() === '' ? NaN : Number(x)));
+  if (parts.length !== 2 || !parts.every((x) => Number.isFinite(x)) || !(parts[0]! > 0) || parts[0]! > 1 || parts[1]! < 1) {
+    throw new Usage(`--leg-scale is "${v}"; it must be off, or min,max with 0 < min ≤ 1 ≤ max (the scale of a leg segment against its straight length, e.g. 0.8,1.05)`);
+  }
+  return [parts[0]!, parts[1]!];
+}
+
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report'], ['coco']);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report', 'leg-scale'], ['coco', 'plant-feet']);
   const bends = f.get('bends') ?? 'refuse';
   if (bends !== 'refuse' && bends !== 'clamp') throw new Usage(`--bends is "${bends}"; it must be refuse or clamp`);
   const switchAt = f.get('switch-at') ?? 'first';
@@ -179,6 +202,8 @@ function retargetArgs(argv: string[]): RetargetArgs {
     smooth: smoothOf(f),
     flip: flipOf(f),
     short: shortOf(f),
+    legScale: legScaleOf(f),
+    plantFeet: f.has('plant-feet'),
     bends,
     bendTolerance: num(f, 'bend-tolerance', 0, (n) => n >= 0 && n < 180, 'degrees in [0, 180)'),
     switchTolerance: num(f, 'switch-tolerance', 25, (n) => n >= 0 && n < 180, 'degrees in [0, 180)'),

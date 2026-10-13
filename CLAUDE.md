@@ -77,6 +77,7 @@ into named failures.
 | `src/joints.ts` | the vocabulary: body-18, the virtual midpoints, COCO-17 and its mapping |
 | `src/map.ts` | `rig-pose-map/1` and its resolution against the rig's bones and, for `alternates`, its slots and attachments; a chain's `range` |
 | `src/retarget.ts` | the pure retarget: holds, Savitzky–Golay smoothing, hip travel, angles, the TURN reading, the short hold and its end-on runs, the flip guard, the hinge check, reaches, the switches, the range clamp, keys |
+| `src/legs.ts` | the legs (#47): leg segments and each side's ankle, the leg scale and its clamp, the legs' path posed through a scaled bone (the keys that land a bone under one), the supports and jumps, the hip from the supporting foot |
 | `src/switch.ts` | the pure attachment switches: each set's distance to the pose, the spans it shows, where each boundary is keyed (where selected, or with `--switch-at peak` the fastest frame of its window that keeps the set within 2 × tolerance, #31), the `attachment` and offset keys, the art turn and its range, the folds no switch covers |
 | `src/rigc.ts` | everything that touches rig-c's CLI or the disk: the gate (`rigc build`), the folds (`rigc render --folds`); the built rig's slots and what moves an attachment |
 | `src/verify.ts` | where the gated build actually put each bone, posed by rig-c's own poser; the posture reading (hip tilt, sway) |
@@ -90,7 +91,10 @@ into named failures.
   parent, so `key = turn(bone) − turn(nearest mapped bone above)`. That holds
   for unit-scale, unsheared bones with no constraint pulling them; a rig outside
   it is not refused by a guess — `verify.ts` measures the landing and
-  `POSE_LANDS` names the bone that missed.
+  `POSE_LANDS` names the bone that missed. `--leg-scale` breaks the assumption
+  on purpose: a bone under a scaled leg segment is keyed through its parent's
+  posed matrix instead (`legs.ts`, `posePath`), and the landing check holds it
+  to its target and its scale like any other.
 - **rig-c's gate runs through its launcher** (`rig-c/bin/rigc`), which picks the
   spine-core round trip where `@esotericsoftware/spine-core` resolves (this
   repository's development dependency, as in @rig-c/parts) and rigc's own gate
