@@ -11,9 +11,9 @@ motion from a pose onto a rig. Its input is a rig that
 `skeleton.model.json`, or the `rig.json` it was built from), a joint map naming
 which bones carry which body joints, and a pose sequence — body-18 joint
 positions over time, in picture pixels, y down. Its output is one named
-animation in rig-c's motion format: `rotate` keys on the mapped bones and
-`translate` keys on the hip, checked through rig-c's gate before anything is
-written.
+animation in rig-c's motion format: `rotate` keys on the mapped bones,
+`translate` keys on the hip, and `attachment` keys where the map's alternate
+drawings switch in, checked through rig-c's gate before anything is written.
 
 **0.x is the prototype.** 0.1.0 is the first release and promises nothing about
 stability; the format, the command and the output may change in any 0.x release.
@@ -41,16 +41,19 @@ into named failures.
   naming a bone the rig does not have, a joint body-18 does not have, a chain
   whose bones are not parent and child — each is refused naming both sides.
 - **Never invent a value.** No defaults guessed from the pose, no "reasonable"
-  fallback for a missing field. Three substitutions are stated. The card's: a
+  fallback for a missing field. Four substitutions are stated. The card's: a
   missing or low-score joint holds the last good value (before its first good
   frame, that first good value), and the run prints a `HOLD` line for every
   span it held, joint by joint. A joint the map needs that is good on no frame
   is a refusal. #22's short hold: a segment shorter in the picture than
   `--short` of its median length has its angle interpolated from the frames
   either side, and the run prints a `SHORT` line for every span (and `END-ON`
-  for a run lasting ≥ 0.15 s). And #15's flip guard: a segment turning more
+  for a run lasting ≥ 0.15 s). #15's flip guard: a segment turning more
   than `--flip` degrees in one frame is spread over the frames around the jump,
-  and the run prints a `FLIP` line for every spread.
+  and the run prints a `FLIP` line for every spread. And #6's range clamp: a
+  bone whose rotate key leaves its chain's `range`, outside the spans of a set
+  depicting that chain, is clamped at the limit, and the run prints a `RANGE`
+  line for every run.
 - **The rest pose is rig-c's.** Bone world transforms come from rig-c's own
   poser; this package never re-derives a setup pose, a world matrix or the
   y flip.
@@ -72,11 +75,12 @@ into named failures.
 | --- | --- |
 | `src/pose.ts` | `rig-pose-sequence/1` (the reader, the writer) and the COCO-17 conversion |
 | `src/joints.ts` | the vocabulary: body-18, the virtual midpoints, COCO-17 and its mapping |
-| `src/map.ts` | `rig-pose-map/1` and its resolution against the rig's bones |
-| `src/retarget.ts` | the pure retarget: holds, Savitzky–Golay smoothing, hip travel, angles, the short hold and its end-on runs, the flip guard, the hinge check, reaches, keys |
-| `src/rigc.ts` | everything that touches rig-c's CLI or the disk: the gate (`rigc build`), the folds (`rigc render --folds`) |
+| `src/map.ts` | `rig-pose-map/1` and its resolution against the rig's bones and, for `alternates`, its slots and attachments; a chain's `range` |
+| `src/retarget.ts` | the pure retarget: holds, Savitzky–Golay smoothing, hip travel, angles, the TURN reading, the short hold and its end-on runs, the flip guard, the hinge check, reaches, the switches, the range clamp, keys |
+| `src/switch.ts` | the pure attachment switches: each set's distance to the pose, the spans it shows, the `attachment` and offset keys, the art turn and its range, the folds no switch covers |
+| `src/rigc.ts` | everything that touches rig-c's CLI or the disk: the gate (`rigc build`), the folds (`rigc render --folds`); the built rig's slots and what moves an attachment |
 | `src/verify.ts` | where the gated build actually put each bone, posed by rig-c's own poser; the posture reading (hip tilt, sway) |
-| `src/run.ts` | `retarget` end to end, in the order: gate the rig as it is, retarget, gate with the animation in, measure, read folds, write |
+| `src/run.ts` | `retarget` end to end, in the order: gate the rig as it is, retarget (switches and range clamp included), gate with the animation in, measure, read folds and which no switch covers, write |
 
 - **The key formula and its assumption.** rig-c's `rotate` key adds to the
   setup rotation, and a child with the `normal` inherit mode turns with its

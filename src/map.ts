@@ -37,6 +37,20 @@
  * a length measured on the rig (between two points: a bone's origin, `name:tip`
  * the end of a bone's x axis, or `a+b`) to the same length measured in the pose
  * (its median over the frames where both points are good).
+ *
+ * A chain may carry `range: { "<bone>": [min, max] }`: the rotate key, degrees
+ * relative to the bone's setup rotation, within which its cut art still reads
+ * well. Outside a set's span the retarget clamps the key there, and lists the
+ * overflow as demand (`RANGE`).
+ *
+ * `alternates` lists the rig's alternate drawings as sets: `{ name, slots,
+ * hides, chains, pose, drawn?, offsets? }`. While a set shows, every slot in
+ * `slots` shows its attachment and every slot in `hides` is empty; `pose` is the
+ * key skeleton it is selected by (picture px, y down, any scale — only its
+ * directions are read), holding every joint its `chains` use; `drawn` is each
+ * bone's world angle as painted (a reading: `artTurn`); `offsets` is a
+ * translate per bone, in its parent's axes, held while the set shows.
+ * `switch.ts` decides when each one shows.
  */
 import type { RawBone } from 'rig-c/core';
 import { POINT_NAMES } from './joints.ts';
@@ -54,16 +68,42 @@ export interface Chain {
   bend: Bend;
   /** Aim from the bone's posed origin at the pose's end point, anchored at the translated bone. */
   reach: boolean;
+  /** Per bone of the chain: the rotate key's range, degrees relative to setup, [min, max]. */
+  range: Record<string, [number, number]>;
 }
 export interface Translate {
   bone: string;
   joint: string;
   scale: { pose: [string, string]; rig: [string, string] };
 }
+/** An alternate drawing: a set of slots switched together, and the key skeleton it is selected by. */
+export interface AlternateSet {
+  name: string;
+  /** Slot → the attachment it shows while the set shows. */
+  slots: Record<string, string>;
+  /** Slots that are empty while the set shows. */
+  hides: string[];
+  /** Names of the map's chains whose pose the drawing depicts. */
+  chains: string[];
+  /** The key skeleton the drawing was painted from: picture px, y down, any scale. */
+  pose: Record<string, [number, number]>;
+  /** Bone → its world angle as painted, Spine degrees. */
+  drawn: Record<string, number>;
+  /** Bone → a translate, in its parent's axes, held while the set shows. */
+  offsets: Record<string, [number, number]>;
+}
 export interface JointMap {
   chains: Chain[];
   translate: Translate | null;
+  alternates: AlternateSet[];
 }
+
+/** What a slot of the built rig shows at setup, and every attachment any skin gives it. */
+export interface RigSlot {
+  setup: string | null;
+  attachments: ReadonlySet<string>;
+}
+export type RigSlots = ReadonlyMap<string, RigSlot>;
 
 /** The rig as the map is resolved against it: each bone's setup pose, by rig-c's poser. */
 export interface RestBone extends RawBone {
@@ -80,7 +120,7 @@ export function readMap(text: string, where: string): JointMap {
     p.throwIfAny();
     throw new Error('unreachable');
   }
-  refuseUnknownKeys(p, 'MAP_KEYS', where, doc, ['spec', 'note', 'chains', 'translate']);
+  refuseUnknownKeys(p, 'MAP_KEYS', where, doc, ['spec', 'note', 'chains', 'translate', 'alternates']);
   if (doc.spec !== MAP_SPEC) p.add('MAP_SPEC', `${where} "spec" is ${typeName(doc.spec)}; this reader reads "${MAP_SPEC}"`);
   const chains: Chain[] = [];
   if (!Array.isArray(doc.chains) || doc.chains.length === 0) {
@@ -90,10 +130,10 @@ export function readMap(text: string, where: string): JointMap {
     doc.chains.forEach((c: unknown, i: number) => {
       const cw = `${where} chains[${i}]`;
       if (!isObject(c)) {
-        p.add('MAP_CHAIN_SHAPE', `${cw} is ${typeName(c)}; a chain is { name, bones, joints, aim?, bend?, reach? }`);
+        p.add('MAP_CHAIN_SHAPE', `${cw} is ${typeName(c)}; a chain is { name, bones, joints, aim?, bend?, reach?, range? }`);
         return;
       }
-      refuseUnknownKeys(p, 'MAP_KEYS', cw, c, ['name', 'bones', 'joints', 'aim', 'bend', 'reach']);
+      refuseUnknownKeys(p, 'MAP_KEYS', cw, c, ['name', 'bones', 'joints', 'aim', 'bend', 'reach', 'range']);
       const name = typeof c.name === 'string' && c.name !== '' ? c.name : null;
       if (name === null) p.add('MAP_CHAIN_NAME', `${cw} "name" is ${typeName(c.name)}; it must be a non-empty string`);
       else if (names.has(name)) p.add('MAP_CHAIN_NAME', `${cw} "name" "${name}" names two chains`);
@@ -128,7 +168,19 @@ export function readMap(text: string, where: string): JointMap {
         if (typeof c.reach !== 'boolean') p.add('MAP_REACH', `${label} "reach" is ${typeName(c.reach)}; it must be true or false`);
         else reach = c.reach;
       }
-      chains.push({ name: name ?? cw, bones: bones ?? [], joints: joints ?? [], aim, bend, reach });
+      const range: Record<string, [number, number]> = {};
+      if ('range' in c) {
+        if (!isObject(c.range)) p.add('MAP_RANGE', `${label} "range" is ${typeName(c.range)}; it is { "<bone>": [min, max] }, the rotate key's range in degrees relative to setup, per bone of the chain`);
+        else {
+          for (const [b, v] of Object.entries(c.range)) {
+            if (bones !== null && !bones.includes(b)) p.add('MAP_RANGE', `${label} "range" names bone "${b}", which is not a bone of the chain; its bones are ${bones.join(', ')}`);
+            else if (!Array.isArray(v) || v.length !== 2 || !v.every((x) => typeof x === 'number' && Number.isFinite(x)) || (v[0] as number) > (v[1] as number)) {
+              p.add('MAP_RANGE', `${label} "range" bone "${b}" is ${JSON.stringify(v)}; it must be [min, max], two finite numbers of degrees with min ≤ max`);
+            } else range[b] = [v[0] as number, v[1] as number];
+          }
+        }
+      }
+      chains.push({ name: name ?? cw, bones: bones ?? [], joints: joints ?? [], aim, bend, reach, range });
     });
   }
   let translate: Translate | null = null;
@@ -167,8 +219,121 @@ export function readMap(text: string, where: string): JointMap {
       p.add('MAP_REACH', `${label} has "reach" and starts at joint "${c.joints[0]}"; the reach is measured from the translated joint, so its first joint must be "${translate.joint}"`);
     }
   }
+  const alternates = 'alternates' in doc ? readAlternates(p, where, doc.alternates, chains, translate) : [];
   p.throwIfAny();
-  return { chains, translate };
+  return { chains, translate, alternates };
+}
+
+const SET_SHAPE = '{ name, slots: { "<slot>": "<attachment>" }, hides?: [slot], chains: [chain], pose: { "<joint>": [x, y] }, drawn?: { "<bone>": deg }, offsets?: { "<bone>": [dx, dy] } }';
+
+/** `alternates`: each set's shape, its chains against the map's, its key skeleton against those chains' joints, and its bones against those chains' bones. */
+function readAlternates(p: Problems, where: string, raw: unknown, chains: readonly Chain[], translate: Translate | null): AlternateSet[] {
+  const out: AlternateSet[] = [];
+  if (!Array.isArray(raw)) {
+    p.add('MAP_ALT_SHAPE', `${where} "alternates" is ${typeName(raw)}; it is an array of sets, ${SET_SHAPE}`);
+    return out;
+  }
+  const names = new Set<string>();
+  const chainNames = chains.map((c) => c.name);
+  raw.forEach((a: unknown, i: number) => {
+    const aw = `${where} alternates[${i}]`;
+    if (!isObject(a)) {
+      p.add('MAP_ALT_SHAPE', `${aw} is ${typeName(a)}; a set is ${SET_SHAPE}`);
+      return;
+    }
+    refuseUnknownKeys(p, 'MAP_KEYS', aw, a, ['name', 'note', 'slots', 'hides', 'chains', 'pose', 'drawn', 'offsets']);
+    const name = typeof a.name === 'string' && a.name !== '' ? a.name : null;
+    if (name === null) p.add('MAP_ALT_NAME', `${aw} "name" is ${typeName(a.name)}; it must be a non-empty string`);
+    else if (names.has(name)) p.add('MAP_ALT_NAME', `${aw} "name" "${name}" names two sets`);
+    if (name !== null) names.add(name);
+    const label = name === null ? aw : `set "${name}"`;
+    let ok = name !== null;
+
+    const slots: Record<string, string> = {};
+    if (!isObject(a.slots)) {
+      p.add('MAP_ALT_SLOT', `${label} "slots" is ${typeName(a.slots)}; it is { "<slot>": "<attachment>" }, what each slot of the set shows while it shows`);
+      ok = false;
+    } else {
+      for (const [s, att] of Object.entries(a.slots)) {
+        if (typeof att !== 'string' || att === '') {
+          p.add('MAP_ALT_ATTACHMENT', `${label} "slots" slot "${s}" is ${typeName(att)}; it must name an attachment of that slot`);
+          ok = false;
+        } else slots[s] = att;
+      }
+    }
+    let hides: string[] = [];
+    if ('hides' in a) {
+      const h = strings(a.hides);
+      if (h === null) {
+        p.add('MAP_ALT_HIDES', `${label} "hides" is ${typeName(a.hides)}; it must be an array of slot names`);
+        ok = false;
+      } else hides = h;
+    }
+    for (const h of hides) if (h in slots) p.add('MAP_ALT_HIDES', `${label} hides slot "${h}", which "slots" shows "${slots[h]}" in; a slot of a set either shows or hides`);
+    if (isObject(a.slots) && Object.keys(slots).length + hides.length === 0) p.add('MAP_ALT_SLOT', `${label} shows no slot and hides none; a set switches at least one slot`);
+
+    const cs = strings(a.chains);
+    if (cs === null || cs.length === 0) {
+      p.add('MAP_ALT_CHAIN', `${label} "chains" is ${typeName(a.chains)}; it must be a non-empty array of the map's chain names (${chainNames.join(', ')})`);
+      ok = false;
+    }
+    for (const c of cs ?? []) {
+      if (!chainNames.includes(c)) p.add('MAP_ALT_CHAIN', `${label} names chain "${c}", which the map does not have; its chains are ${chainNames.join(', ')}`);
+    }
+    if (cs !== null && new Set(cs).size !== cs.length) p.add('MAP_ALT_CHAIN', `${label} "chains" names a chain twice: ${cs.join(', ')}`);
+    const own = chains.filter((c) => (cs ?? []).includes(c.name));
+    const ownBones = own.flatMap((c) => c.bones);
+    const ownList = own.length === 0 ? 'none' : own.map((c) => `${c.name}: ${c.bones.join(', ')}`).join('; ');
+
+    const pose: Record<string, [number, number]> = {};
+    if (!isObject(a.pose)) {
+      p.add('MAP_ALT_POSE', `${label} "pose" is ${typeName(a.pose)}; it is the key skeleton the set was painted from, { "<joint>": [x, y], … } in picture px, y down`);
+      ok = false;
+    } else {
+      for (const [j, at] of Object.entries(a.pose)) {
+        if (!POINT_NAMES.includes(j)) p.add('MAP_ALT_JOINT', `${label} "pose" names joint "${j}", which is not a point this package reads; they are ${POINT_NAMES.join(', ')}`);
+        else if (!Array.isArray(at) || at.length !== 2 || !at.every((v) => typeof v === 'number' && Number.isFinite(v))) p.add('MAP_ALT_POSE', `${label} "pose" joint "${j}" is ${JSON.stringify(at)}; it must be [x, y], two finite numbers`);
+        else pose[j] = [at[0] as number, at[1] as number];
+      }
+      for (const c of own) {
+        const missing = c.joints.filter((j) => !(j in (a.pose as Record<string, unknown>)));
+        if (missing.length > 0) p.add('MAP_ALT_JOINT', `${label} "pose" has no ${missing.map((j) => `"${j}"`).join(', ')}; chain "${c.name}" uses ${c.joints.join(', ')}, and every one of them must be in the key skeleton`);
+        else {
+          c.bones.forEach((_, k) => {
+            const f = pose[c.joints[k]!];
+            const t = pose[c.joints[k + 1]!];
+            if (f !== undefined && t !== undefined && Math.hypot(t[0] - f[0], t[1] - f[1]) < 1e-9) p.add('MAP_ALT_POSE', `${label} "pose" puts ${c.joints[k]} and ${c.joints[k + 1]} at the same point; chain "${c.name}"'s segment between them has no direction`);
+          });
+        }
+      }
+    }
+
+    const drawn: Record<string, number> = {};
+    if ('drawn' in a) {
+      if (!isObject(a.drawn)) p.add('MAP_ALT_DRAWN', `${label} "drawn" is ${typeName(a.drawn)}; it is { "<bone>": degrees }, each bone's world angle as painted`);
+      else {
+        for (const [b, v] of Object.entries(a.drawn)) {
+          if (!ownBones.includes(b)) p.add('MAP_ALT_DRAWN', `${label} "drawn" names bone "${b}", which is not a bone of its chains (${ownList})`);
+          else if (typeof v !== 'number' || !Number.isFinite(v)) p.add('MAP_ALT_DRAWN', `${label} "drawn" bone "${b}" is ${typeName(v)}; it must be a finite number of degrees`);
+          else drawn[b] = v;
+        }
+      }
+    }
+    const offsets: Record<string, [number, number]> = {};
+    if ('offsets' in a) {
+      if (!isObject(a.offsets)) p.add('MAP_ALT_OFFSET', `${label} "offsets" is ${typeName(a.offsets)}; it is { "<bone>": [dx, dy] }, a translate in the bone's parent's axes`);
+      else {
+        for (const [b, v] of Object.entries(a.offsets)) {
+          if (translate !== null && b === translate.bone) p.add('MAP_ALT_OFFSET', `${label} "offsets" names bone "${b}", which "translate" already keys; a bone carries one translate track`);
+          else if (!ownBones.includes(b)) p.add('MAP_ALT_OFFSET', `${label} "offsets" names bone "${b}", which is not a bone of its chains (${ownList})`);
+          else if (!Array.isArray(v) || v.length !== 2 || !v.every((x) => typeof x === 'number' && Number.isFinite(x))) p.add('MAP_ALT_OFFSET', `${label} "offsets" bone "${b}" is ${JSON.stringify(v)}; it must be [dx, dy], two finite numbers`);
+          else offsets[b] = [v[0] as number, v[1] as number];
+        }
+      }
+    }
+    if (ok && name !== null && cs !== null) out.push({ name, slots, hides, chains: cs, pose, drawn, offsets });
+  });
+  return out;
 }
 
 /** A rig point as the map spells it: `name`, `name:tip`, or `a+b`, the midpoint of two such. */
@@ -253,7 +418,7 @@ export function rigPoint(rest: Rest, spec: string): [number, number] | null {
 }
 
 /** Check every name the map gives against the rig; every miss is named. */
-export function resolveMap(map: JointMap, rest: Rest, where: string): void {
+export function resolveMap(map: JointMap, rest: Rest, where: string, slots: RigSlots = new Map()): void {
   const p = new Problems();
   const all = [...rest.keys()];
   const listed = all.length <= 40 ? all.join(', ') : `${all.slice(0, 40).join(', ')} … (${all.length} in all)`;
@@ -320,6 +485,29 @@ export function resolveMap(map: JointMap, rest: Rest, where: string): void {
       p.add('MAP_REACH', `chain "${c.name}" — bone "${b}" reaches from its posed origin, but it does not descend from the translated bone "${t.bone}"; its origin would not travel with the anchor`);
     }
   }
+  resolveAlternates(p, map.alternates, slots);
   if (p.any) p.list.unshift({ code: 'MAP_RESOLVES', text: `${where} does not resolve against the rig` });
   p.throwIfAny();
+}
+
+/** Every slot and attachment a set names, against the built rig: each slot exists, each attachment is in its slot under some skin, each hidden slot exists, once. */
+function resolveAlternates(p: Problems, alternates: readonly AlternateSet[], slots: RigSlots): void {
+  const all = [...slots.keys()];
+  const listed = all.length === 0 ? 'none' : all.length <= 40 ? all.join(', ') : `${all.slice(0, 40).join(', ')} … (${all.length} in all)`;
+  for (const a of alternates) {
+    for (const [slot, att] of Object.entries(a.slots)) {
+      const s = slots.get(slot);
+      if (s === undefined) p.add('MAP_ALT_SLOT', `set "${a.name}" — slot "${slot}" is not in the rig; its slots are ${listed}`);
+      else if (!s.attachments.has(att)) {
+        const has = [...s.attachments];
+        p.add('MAP_ALT_ATTACHMENT', `set "${a.name}" — slot "${slot}" has no attachment "${att}" under any skin; it has ${has.length === 0 ? 'none' : has.join(', ')}`);
+      }
+    }
+    const seen = new Set<string>();
+    for (const h of a.hides) {
+      if (!slots.has(h)) p.add('MAP_ALT_HIDES', `set "${a.name}" hides slot "${h}", which is not in the rig; its slots are ${listed}`);
+      else if (seen.has(h)) p.add('MAP_ALT_HIDES', `set "${a.name}" hides slot "${h}" twice`);
+      seen.add(h);
+    }
+  }
 }

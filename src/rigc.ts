@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { poseRawSetup, readModel, type CompiledDocument } from 'rig-c/core';
-import type { Rest, RestBone } from './map.ts';
+import type { Rest, RestBone, RigSlot, RigSlots } from './map.ts';
 import { isObject, parseJson, Problems, Refusal, typeName } from './problems.ts';
 
 export interface RigInput {
@@ -135,6 +135,41 @@ export function restOf(doc: CompiledDocument): Rest {
   const out = new Map<string, RestBone>();
   for (const b of poseRawSetup(doc).bones) out.set(b.name, { ...b, length: lengths.get(b.name) ?? 0 });
   return out;
+}
+
+/** Every slot of the build: what it shows at setup, as the compiled model states it, and every attachment any skin gives it. */
+export function slotsOf(doc: CompiledDocument): RigSlots {
+  const out = new Map<string, RigSlot>();
+  for (const s of doc.slots) {
+    const attachments = new Set<string>();
+    for (const k of doc.skins) for (const name of Object.keys(k.attachments[s.name] ?? {})) attachments.add(name);
+    out.set(s.name, { setup: s.setup, attachments });
+  }
+  return out;
+}
+
+/**
+ * The bones that move an attachment: a weighted mesh's bindings (a linked mesh
+ * its source's), or the slot's bone for anything else — what an uncovered fold
+ * names its chains by.
+ */
+export function attachmentBones(doc: CompiledDocument, slot: string, attachment: string): string[] {
+  const slotBone = doc.slots.find((s) => s.name === slot)?.bone;
+  const find = (sl: string, name: string) => {
+    for (const k of doc.skins) {
+      const g = k.attachments[sl]?.[name]?.geometry;
+      if (g !== undefined) return g;
+    }
+    return undefined;
+  };
+  let g = find(slot, attachment);
+  if (g?.kind === 'linkedmesh') g = find(g.slot, g.source);
+  if (g !== undefined && 'vertices' in g && g.vertices.weighted) {
+    const bones = new Set<string>();
+    for (const v of g.vertices.bindings) for (const b of v) bones.add(b.bone);
+    return [...bones];
+  }
+  return slotBone === undefined ? [] : [slotBone];
 }
 
 export interface MeshFolds {

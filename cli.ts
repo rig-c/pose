@@ -46,14 +46,23 @@ retarget
   --bends refuse|clamp  a hinge (elbow, knee: any joint inside a chain) bent the wrong way refuses
                         the run (default), or is straightened on that frame and listed
   --bend-tolerance <d>  degrees past straight a hinge may bend the wrong way before it counts (default: 0)
+  --switch-tolerance <d>  a set of alternate drawings (the map's "alternates") may show on a frame where
+                        every segment of its chains is within d degrees of its key skeleton (default: 25)
+  --switch-min <s>      a run of one set shorter than s seconds is dropped (default: 0.25)
   --profile spine|spine-html  rigc's gate profile (default: spine, rigc's own default)
   --build <dir>         keep the gated build (skeleton.json, .atlas, .model.json) here
   --render <dir>        keep rigc's render of the animation (frames, contact.png, folds.json) here
-  --report <file>       write the run's measurements (holds, short, endOn, flips, bends, landings, folds) as JSON
+  --report <file>       write the run's measurements (holds, short, endOn, flips, bends, landings, folds,
+                        switches, uncovered, turns, range, artRange) as JSON
 
   It writes nothing until rigc's gate is green with the animation in, every mapped bone lands on
   the angle the pose asks for (posed by rig-c's own poser), and no hinge bends the wrong way.
   \`rigc render --folds\` is a reading: the run lists every mesh that folds, and still writes.
+  With "alternates" in the map, it keys attachment switches beside the bone keys (SWITCH lines)
+  and lists every fold no switch covers (UNCOVERED lines). A chain's "range" clamps a rotate key
+  outside the spans of a set depicting it (RANGE lines); inside one, a bone with a "drawn" angle
+  turned past its range is listed (ART-RANGE). A line across the body (hips, shoulders, eyes)
+  under 0.5 of its median picture length, or reversed, for ≥ 0.15 s is listed (TURN).
 
 convert
   --coco <file>         coco17-sequence/1: { format, width, height, source, frames: [{ t, keypoints }] },
@@ -115,7 +124,7 @@ function shortOf(f: Map<string, string>): number | 'off' {
 }
 
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'profile', 'build', 'render', 'report'], ['coco']);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'profile', 'build', 'render', 'report'], ['coco']);
   const bends = f.get('bends') ?? 'refuse';
   if (bends !== 'refuse' && bends !== 'clamp') throw new Usage(`--bends is "${bends}"; it must be refuse or clamp`);
   const profile = f.get('profile') ?? 'spine';
@@ -137,6 +146,8 @@ function retargetArgs(argv: string[]): RetargetArgs {
     short: shortOf(f),
     bends,
     bendTolerance: num(f, 'bend-tolerance', 0, (n) => n >= 0 && n < 180, 'degrees in [0, 180)'),
+    switchTolerance: num(f, 'switch-tolerance', 25, (n) => n >= 0 && n < 180, 'degrees in [0, 180)'),
+    switchMin: num(f, 'switch-min', 0.25, (n) => n >= 0, 'seconds ≥ 0'),
     profile,
     build: f.get('build'),
     render: f.get('render'),

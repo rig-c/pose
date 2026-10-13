@@ -1,7 +1,8 @@
 /**
- * `rig-pose retarget`, end to end: read, gate the rig as it is, retarget, gate
- * it with the animation in, measure where the rig landed, read the folds, and
- * write — only when every check passed.
+ * `rig-pose retarget`, end to end: read, gate the rig as it is, retarget (the
+ * switches and the range clamp included), gate it with the animation in,
+ * measure where the rig landed, read the folds (and which no switch covers),
+ * and write — only when every check passed.
  */
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -9,8 +10,9 @@ import { dirname, join, resolve } from 'node:path';
 import { readMap, resolveMap } from './map.ts';
 import { convertCoco17, personTrack, readPoseSequence } from './pose.ts';
 import { lineOf, Problems, Refusal, type Problem } from './problems.ts';
-import { bendLine, endOnLine, flipLine, holdLine, retarget, shortLine, type RetargetOptions } from './retarget.ts';
-import { baseMotionOf, buildInto, folds, gate, readBuild, resolveRig, restOf } from './rigc.ts';
+import { bendLine, endOnLine, flipLine, holdLine, rangeLine, retarget, shortLine, turnLine, type RetargetOptions } from './retarget.ts';
+import { attachmentBones, baseMotionOf, buildInto, folds, gate, readBuild, resolveRig, restOf, slotsOf } from './rigc.ts';
+import { artRangeLine, chainsMoving, switchLine, uncoveredFolds } from './switch.ts';
 import { landed, measureLanding, measurePosture, poseFrames, postureLines, ANGLE_TOLERANCE, ORIGIN_TOLERANCE } from './verify.ts';
 
 export interface RetargetArgs extends RetargetOptions {
@@ -74,10 +76,12 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     if (!g0.green) {
       refuse([{ code: 'RIG_GATE_BASE', text: `${input.rig} with ${input.motion ?? 'no motion spec'} is red under rigc build --profile ${a.profile} before any animation is added (exit ${g0.run.status})` }, ...g0.fails.map((f) => ({ code: 'RIGC', text: f }))]);
     }
-    const rest = restOf(readBuild(g0.build));
-    resolveMap(map, rest, a.map);
+    const doc0 = readBuild(g0.build);
+    const rest = restOf(doc0);
+    const slots = slotsOf(doc0);
+    resolveMap(map, rest, a.map, slots);
 
-    const r = retarget(rest, map, frames, times, a);
+    const r = retarget(rest, map, frames, times, a, slots);
     say(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, smooth ${a.smooth}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)`);
     if (r.scale !== null) say(`  SCALE  ${r.scale.factor.toFixed(5)} rig units per picture px (rig ${r.scale.rig.toFixed(2)} / pose median ${r.scale.pose.toFixed(2)})`);
     for (const h of r.holds) say(`  HOLD   ${holdLine(h, r.times)}`);
@@ -87,6 +91,14 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     }
     if (a.flip !== 'off') for (const fl of r.flips) say(`  FLIP   ${flipLine(fl, r.times, a.flip)}`);
     for (const e of r.bends) say(`  BEND   ${bendLine(e)} — clamped straight`);
+    for (const e of r.turns) say(`  TURN   ${turnLine(e, r.times)}`);
+    for (const u of r.turnsUnread) say(`  TURN   line "${u.line}" (${u.joints[0]} → ${u.joints[1]}) not measured: ${u.why}`);
+    if (map.alternates.length > 0) {
+      if (r.switches.length === 0) say(`  SWITCH none — no set within ${a.switchTolerance}° of the pose for ${a.switchMin}s`);
+      for (const s of r.switches) say(`  SWITCH ${switchLine(s, r.times)}`);
+    }
+    for (const e of r.range) say(`  RANGE  ${rangeLine(e, r.times)}`);
+    for (const e of r.artRange) say(`  ART-RANGE ${artRangeLine(e, r.times)}`);
 
     const motion = { ...base, animations: { ...animations, [a.name]: r.animation } };
     const g1 = gate(input.rig, motion, join(scratch, 'with'), a.profile);
@@ -119,6 +131,10 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     else if (f.meshes === null) say(`  FOLD   rigc render --folds did not read (exit ${f.run.status}); folds not measured`);
     else if (f.meshes.length === 0) say(`  FOLD   rigc render --folds at ${fps} fps: no mesh folds`);
     else for (const m of f.meshes) say(`  FOLD   mesh "${m.attachment}" (slot "${m.slot}") folds on ${m.times.length} frame(s) at ${fps} fps: t=${spans(m.times, 1 / fps)}`);
+    const uncovered = f.meshes === null ? null : uncoveredFolds(f.meshes, r.shown, r.times, slots, (slot, att) => chainsMoving(attachmentBones(doc, slot, att), rest, map));
+    if (uncovered !== null && map.alternates.length > 0) {
+      for (const u of uncovered) say(`  UNCOVERED mesh "${u.attachment}" (slot "${u.slot}"; chains ${u.chains.length === 0 ? 'none' : u.chains.join(', ')}) folds with no switch covering it on ${u.times.length} frame(s): t=${spans(u.times, 1 / fps)}`);
+    }
 
     if (a.build !== undefined) {
       // Built again where it will live, not copied: rigc's page paths are relative to the build (#18).
@@ -138,7 +154,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         animation: a.name,
         frames: seq.frames.length,
         duration: r.animation.duration,
-        options: { minScore: a.minScore, smooth: a.smooth, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, profile: a.profile },
+        options: { minScore: a.minScore, smooth: a.smooth, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, profile: a.profile },
         scale: r.scale,
         holds: r.holds,
         short: r.short,
@@ -149,6 +165,11 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         landings,
         posture,
         folds: f.meshes,
+        switches: r.switches,
+        uncovered,
+        turns: r.turns,
+        range: r.range,
+        artRange: r.artRange,
       }, null, 2)}\n`);
     }
     say(`  wrote ${a.out} — animations: ${Object.keys(motion.animations).join(', ')}`);
