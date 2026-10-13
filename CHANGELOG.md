@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/rig-c/pose/compare/v0.3.0...v0.4.0) (2026-10-13)
+
+
+### Features
+
+* **retarget:** alternate sets switched by attachment keys, range clamps, and the demand lists ([#28](https://github.com/rig-c/pose/issues/28)) ([c149822](https://github.com/rig-c/pose/commit/c14982266a592617f5cd58abaf1db28bf6db2036))
+
 ## [0.3.0](https://github.com/rig-c/pose/compare/v0.2.1...v0.3.0) (2026-10-13)
 
 
