@@ -33,7 +33,8 @@
   ],
   "files": [
     "bin/rig-pose.cjs",
-    "cli.ts"
+    "cli.ts",
+    "src"
   ],
   "publishConfig": {
     "access": "public"
@@ -48,6 +49,7 @@
     "rig-c": "^2.47.1"
   },
   "devDependencies": {
+    "@esotericsoftware/spine-core": "4.3.13",
     "@types/bun": "^1.4.2",
     "eslint": "^10.11.0",
     "typescript": "^5.9.3",
