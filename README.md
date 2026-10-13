@@ -182,7 +182,7 @@ A rig's motion spec usually has an `idle` — a blink, a breath, hair and hem sw
 
 Every bone still has to land with the carried tracks in. A carried translate above the translated bone moves its origin off the pose's travel, and the run refuses with `POSE_LANDS`, naming the carried tracks above the bone that missed.
 
-On HQ's dancer (`--flip 90 --short 0.35 --bends clamp --carry-idle`) the idle has 26 tracks. Kept out: the four arm rotates, which the dance keys, and `chest_ctl` scalex, `neck` rotate and `head_ctl` rotate, which sit above the mapped chest, head and arms — carried, they missed the chest, the head and the arms by 0.16°–1.37°. Carried: the other 19, the blink (`group "eyes"` scaley) and the breath (`bone "chest_ctl"` translatey) among them. The gate is green, every bone lands (worst 0.00167°), and rig-c's poser shows the blink at every cycle (scaleY 0.12 at 2.37 s, 5.70 s, 9.08 s and 12.41 s, against the idle's at t mod 3.333 s within 8.9e-6) and the breath's chest_ctl offset (5.02 at 0.833, 4.167, 7.5, 10.833 s; 0 at 2.5, 5.833, 9.167, 12.5 s; 1.035 at the cut, 13 s).
+On HQ's dancer (`--flip 90 --short 0.35 --bends clamp --carry-idle`) the idle has 26 tracks. Kept out: the four arm rotates, which the dance keys, and a control bone's scalex above the chest, the neck's rotate and a head control's rotate, which sit above the mapped chest, head and arms — carried, they missed the chest, the head and the arms by 0.16°–1.37°. Carried: the other 19, the blink (an eyes group's scaley) and the breath (the chest control's translatey) among them. The gate is green, every bone lands (worst 0.00167°), and rig-c's poser shows the blink at every cycle (scaleY 0.12 at 2.37 s, 5.70 s, 9.08 s and 12.41 s, against the idle's at t mod 3.333 s within 8.9e-6) and the breath's offset (5.02 at 0.833, 4.167, 7.5, 10.833 s; 0 at 2.5, 5.833, 9.167, 12.5 s; 1.035 at the cut, 13 s).
 
 **`--merge <file>`** merges a timed track fragment into the new animation, at absolute times from its start — blinks read off the video, for example:
 
@@ -273,15 +273,17 @@ Bone rotation cannot carry every pose: an arm behind the head, a forearm toward 
 
 ```json
 "alternates": [
-  { "name": "K1_hands_behind_head",
-    "slots":   { "upperarm_r_under": "K1_upperarm_r", "forearm_r_back": "K1_forearm_r", "topwear": "K1_topwear" },
+  { "name": "raised_arms",
+    "slots":   { "upperarm_r_raised": "raised/upperarm_r", "forearm_r_raised": "raised/forearm_r", "torso": "raised/torso" },
     "hides":   ["upperarm_r", "forearm_r"],
     "chains":  ["arm_r", "arm_l"],
-    "pose":    { "r_shoulder": [450, 640], "r_elbow": [350, 500], "r_wrist": [510, 480],
-                 "l_shoulder": [610, 640], "l_elbow": [720, 500], "l_wrist": [560, 480] },
-    "drawn":   { "sleeve_r0": 117.8, "sleeve_r1": 30.4 },
+    "pose":    { "r_shoulder": [400, 600], "r_elbow": [300, 450], "r_wrist": [450, 400],
+                 "l_shoulder": [600, 600], "l_elbow": [700, 450], "l_wrist": [550, 400] },
+    "drawn":   { "sleeve_r0": 120, "sleeve_r1": 30 },
     "offsets": { "sleeve_r1": [4, -2] } } ]
 ```
+
+(The names, coordinates and angles above are illustrative.)
 
 - `slots`: what each slot of the set shows while it shows; each attachment must be in that slot under some skin of the rig, as rig-c built it. `hides`: the slots that are empty while it shows. A slot's place in the draw order is the rig's own, so a drawing that must sit in front of the torso is an attachment in a slot that is: a switch is attachment keys only, and no draw-order key is written.
 - `chains`: the map's chains whose pose the set depicts; it is selected by them. `pose`: the key skeleton the art was painted from, body-18 (or `mid_hip`/`mid_shoulder`) in picture px, y down, any scale and place — only its directions are read; every joint the listed chains use must be in it.
