@@ -35,13 +35,16 @@ retarget
   --smooth <n>          Savitzky–Golay over n frames of joint positions: a centred least-squares cubic,
                         read at each frame (default: 1, none); n is odd and ≥ 5 — a cubic through 3
                         points passes through all three, so 3 would change nothing
+  --flip <deg>|off      a segment that turns more than <deg> degrees in one frame of the pose is
+                        spread over the frames around the jump, centred on it, and listed as FLIP
+                        (default: off, every turn kept as the pose gives it; 90 is the measured setting)
   --bends refuse|clamp  a hinge (elbow, knee: any joint inside a chain) bent the wrong way refuses
                         the run (default), or is straightened on that frame and listed
   --bend-tolerance <d>  degrees past straight a hinge may bend the wrong way before it counts (default: 0)
   --profile spine|spine-html  rigc's gate profile (default: spine, rigc's own default)
   --build <dir>         keep the gated build (skeleton.json, .atlas, .model.json) here
   --render <dir>        keep rigc's render of the animation (frames, contact.png, folds.json) here
-  --report <file>       write the run's measurements (holds, bends, landings, folds) as JSON
+  --report <file>       write the run's measurements (holds, flips, bends, landings, folds) as JSON
 
   It writes nothing until rigc's gate is green with the animation in, every mapped bone lands on
   the angle the pose asks for (posed by rig-c's own poser), and no hinge bends the wrong way.
@@ -96,8 +99,13 @@ function smoothOf(f: Map<string, string>): number {
   return n;
 }
 
+function flipOf(f: Map<string, string>): number | 'off' {
+  if (!f.has('flip') || f.get('flip') === 'off') return 'off';
+  return num(f, 'flip', 90, (v) => v > 0 && v < 180, 'off, or degrees in (0, 180) — a one-frame turn is never more than 180°');
+}
+
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'min-score', 'smooth', 'bends', 'bend-tolerance', 'profile', 'build', 'render', 'report'], ['coco']);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'min-score', 'smooth', 'flip', 'bends', 'bend-tolerance', 'profile', 'build', 'render', 'report'], ['coco']);
   const bends = f.get('bends') ?? 'refuse';
   if (bends !== 'refuse' && bends !== 'clamp') throw new Usage(`--bends is "${bends}"; it must be refuse or clamp`);
   const profile = f.get('profile') ?? 'spine';
@@ -115,6 +123,7 @@ function retargetArgs(argv: string[]): RetargetArgs {
     baseMotion: f.get('base-motion'),
     minScore: num(f, 'min-score', 0.3, (n) => n >= 0, 'a number ≥ 0'),
     smooth: smoothOf(f),
+    flip: flipOf(f),
     bends,
     bendTolerance: num(f, 'bend-tolerance', 0, (n) => n >= 0 && n < 180, 'degrees in [0, 180)'),
     profile,

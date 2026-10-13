@@ -1,7 +1,8 @@
 /**
  * The smoothing measurement for rig-c/pose#8 (round 1) and rig-c/pose#11
- * (round 2): which filter, and at which window, takes the jitter out of the rig
- * without moving the motion in time or clipping its peaks. Not shipped.
+ * (round 2; re-run with the flip guard for #15): which filter, and at which
+ * window, takes the jitter out of the rig without moving the motion in time or
+ * clipping its peaks. Not shipped.
  *
  *   bun tools/smooth_eval.ts --rig <rig dir> --map <map.json> --pose <pose.json> --out <dir> \
  *     [--points "sleeve_r1:tip,sleeve_l1:tip,leg_r1:tip,leg_l1:tip,hip"] [--min-score 0.3] \
@@ -313,10 +314,14 @@ const candidates: Candidate[] = [
 
 interface Report {
   scale: { factor: number };
+  /** Absent before rig-c/pose#15. */
+  options: { flip?: number | 'off' };
 }
 
 const series = new Map<string, Map<string, Pt[]>>();
 let scaleFactor = 0;
+/** The flip guard the runs had (#15): the baseline's, from its report; every run takes the same extra flags. */
+let flip: number | 'off' | undefined;
 mkdirSync(out, { recursive: true });
 for (const c of candidates) {
   const dir = join(out, c.name);
@@ -334,7 +339,10 @@ for (const c of candidates) {
     process.exit(1);
   }
   const report = JSON.parse(readFileSync(join(dir, 'report.json'), 'utf8')) as Report;
-  if (c.kind === 'baseline') scaleFactor = report.scale.factor;
+  if (c.kind === 'baseline') {
+    scaleFactor = report.scale.factor;
+    flip = report.options.flip;
+  }
   const path = join(dir, 'build', 'skeleton.model.json');
   const doc = readModel(readFileSync(path, 'utf8'), path);
   const lengths = new Map(doc.bones.map((b) => [b.name, b.length ?? 0]));
@@ -444,7 +452,7 @@ const chosen = results.find((r) => r.kind === 'sg' && r.failed.length === 0) ?? 
 const f = (x: number, d = 3) => x.toFixed(d);
 const md: string[] = [];
 md.push(`# Smoothing, measured on the rig (rig-c/pose#11, round 2; round 1 was #8)`, '');
-md.push(`Pose: ${posePath} (${n} frames). Rig: ${rig}. Map: ${mapPath}. Extra flags: ${extra.join(' ') || '(none)'}.`);
+md.push(`Pose: ${posePath} (${n} frames). Rig: ${rig}. Map: ${mapPath}. Extra flags: ${extra.join(' ') || '(none)'}. Flip guard (#15): ${flip === undefined ? 'none (before #15)' : flip === 'off' ? 'off' : `on, ${flip}°`}, the baseline included.`);
 md.push(`Units: reference shoulder widths, 1 sw = scale ${f(scaleFactor, 5)} × median shoulder width ${f(swPx, 1)} px = ${f(sw, 2)} rig units.`, '');
 md.push(`Band power: per axis, mean and least-squares trend removed, symmetric Hann window, ${NFFT}-point FFT at ${FPS} fps, Σ|X(f)|² over ${BAND_LO_HZ} Hz ≤ f ≤ ${BAND_HI_HZ} Hz; a point's figure is x's plus y's. Its check, run before this measurement:`, '');
 for (const l of check.lines) md.push(`    ${l}`);
@@ -464,5 +472,5 @@ for (const r of results) {
   md.push(`- ${r.label}${record}: ${r.failed.length === 0 ? 'meets all three' : `fails ${r.failed.join('; ')}`}${r === chosen ? ' — chosen' : r.kind === 'sg' && r.failed.length === 0 ? ' — meets all three, but a smaller window does too' : ''}. Round 1's jitter criterion: ${r.round1Jitter}.`);
 }
 writeFileSync(join(out, 'smooth_eval.md'), `${md.join('\n')}\n`);
-writeFileSync(join(out, 'smooth_eval.json'), `${JSON.stringify({ pose: posePath, rig, map: mapPath, extra, frames: n, scale: scaleFactor, shoulderWidthPx: swPx, swUnits: sw, band: { fps: FPS, nfft: NFFT, loHz: BAND_LO_HZ, hiHz: BAND_HI_HZ, window: 'hann-symmetric', detrend: 'mean+linear', check: check.lines }, points, results, chosen: chosen?.name ?? null }, null, 2)}\n`);
+writeFileSync(join(out, 'smooth_eval.json'), `${JSON.stringify({ pose: posePath, rig, map: mapPath, extra, flip: flip ?? null, frames: n, scale: scaleFactor, shoulderWidthPx: swPx, swUnits: sw, band: { fps: FPS, nfft: NFFT, loHz: BAND_LO_HZ, hiHz: BAND_HI_HZ, window: 'hann-symmetric', detrend: 'mean+linear', check: check.lines }, points, results, chosen: chosen?.name ?? null }, null, 2)}\n`);
 process.stdout.write(`${md.join('\n')}\n`);
