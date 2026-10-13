@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/rig-c/pose/compare/v0.13.0...v0.14.0) (2026-10-13)
+
+
+### Features
+
+* **clean:** rig-pose clean, and retarget requires a cleaned sequence ([#69](https://github.com/rig-c/pose/issues/69)) ([7bbd921](https://github.com/rig-c/pose/commit/7bbd921f25569cb61ff4451bb0863d0468f0a010))
+
 ## [0.13.0](https://github.com/rig-c/pose/compare/v0.12.0...v0.13.0) (2026-10-13)
 
 
