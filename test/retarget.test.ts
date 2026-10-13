@@ -1736,13 +1736,13 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
   test('frames (a stopgap): a set shows only inside its window, and there it is chosen over an equal set without one', () => {
     const on = (i: number) => i >= 2 && i <= 12;
     const twin = (o: Record<string, unknown> = {}) => ({ ...up(), name: 'twin', slots: { sleeve_r0: 'seg_out' }, ...o });
-    const c = setup({ rig: ALT_RIG, map: altMap(up(), twin({ frames: [4, 7] })), pose: poseDoc(armed(on)) });
+    const c = setup({ rig: ALT_RIG, map: altMap(up(), twin({ frames: [[4, 5], [6, 7]] })), pose: poseDoc(armed(on)) });
     const r = retarget(c);
     expect(r.status).toBe(0);
     // Both sets match frames 2–12 exactly: "twin" takes its window 4–7, "up" the rest.
     expect(linesOf(r, 'SWITCH').map((l) => /set "(\w+)".*frames? ([\d–]+)/.exec(l)!.slice(1).join(' '))).toEqual(['up 2–3', 'twin 4–7', 'up 8–12']);
     expect(shows(c.build, 'sleeve_r0')).toEqual(each((i) => (i >= 4 && i <= 7 ? 'seg_out' : on(i) ? 'seg_up' : 'seg')));
-    const bad = setup({ rig: ALT_RIG, map: altMap(up(), twin({ frames: [7, 4] })), pose: poseDoc(armed(on)) });
+    const bad = setup({ rig: ALT_RIG, map: altMap(up(), twin({ frames: [[7, 4]] })), pose: poseDoc(armed(on)) });
     const rb = retarget(bad);
     expect(rb.status).toBe(1);
     expect(fails(rb).some((l) => l.includes('MAP_ALT_FRAMES'))).toBe(true);

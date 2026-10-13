@@ -192,7 +192,7 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
       let bestD = Infinity;
       let bestWindowed = false;
       for (const a of group) {
-        if (a.frames !== null && (i < a.frames[0] || i > a.frames[1])) continue;
+        if (a.frames !== null && !a.frames.some(([f, l]) => i >= f && i <= l)) continue;
         const d = distances.get(a.name)![i]!;
         if (d > opts.switchTolerance) continue;
         const windowed = a.frames !== null;

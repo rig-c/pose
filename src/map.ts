@@ -93,8 +93,8 @@ export interface AlternateSet {
   offsets: Record<string, [number, number]>;
   /** Bone → how far its art may turn from `drawn` while the set shows, [min, max] degrees: the bone is clamped there, and the overflow is ART-RANGE demand. */
   turn: Record<string, [number, number]>;
-  /** A stopgap: the only frames the set may show on, [first, last]; on them it is chosen over any set without a window. Null: any frame. */
-  frames: [number, number] | null;
+  /** A stopgap: the only frames the set may show on, a list of [first, last] windows; on them it is chosen over any set without windows. Null: any frame. */
+  frames: Array<[number, number]> | null;
 }
 export interface JointMap {
   chains: Chain[];
@@ -228,7 +228,7 @@ export function readMap(text: string, where: string): JointMap {
   return { chains, translate, alternates };
 }
 
-const SET_SHAPE = '{ name, slots: { "<slot>": "<attachment>" }, hides?: [slot], chains: [chain], pose: { "<joint>": [x, y] }, drawn?: { "<bone>": deg }, offsets?: { "<bone>": [dx, dy] }, turn?: { "<bone>": [min, max] }, frames?: [first, last] }';
+const SET_SHAPE = '{ name, slots: { "<slot>": "<attachment>" }, hides?: [slot], chains: [chain], pose: { "<joint>": [x, y] }, drawn?: { "<bone>": deg }, offsets?: { "<bone>": [dx, dy] }, turn?: { "<bone>": [min, max] }, frames?: [[first, last], …] }';
 
 /** `alternates`: each set's shape, its chains against the map's, its key skeleton against those chains' joints, and its bones against those chains' bones. */
 function readAlternates(p: Problems, where: string, raw: unknown, chains: readonly Chain[], translate: Translate | null): AlternateSet[] {
@@ -346,12 +346,13 @@ function readAlternates(p: Problems, where: string, raw: unknown, chains: readon
         }
       }
     }
-    let frames: [number, number] | null = null;
+    let frames: Array<[number, number]> | null = null;
     if ('frames' in a) {
       const f = a.frames;
-      if (!Array.isArray(f) || f.length !== 2 || !f.every((x) => Number.isInteger(x) && (x as number) >= 0) || (f[0] as number) > (f[1] as number)) {
-        p.add('MAP_ALT_FRAMES', `${label} "frames" is ${JSON.stringify(f)}; it must be [first, last], two whole frame numbers ≥ 0 with first ≤ last`);
-      } else frames = [f[0] as number, f[1] as number];
+      const pair = (w: unknown): w is [number, number] => Array.isArray(w) && w.length === 2 && w.every((x) => Number.isInteger(x) && (x as number) >= 0) && (w[0] as number) <= (w[1] as number);
+      if (!Array.isArray(f) || f.length === 0 || !f.every(pair)) {
+        p.add('MAP_ALT_FRAMES', `${label} "frames" is ${JSON.stringify(f)}; it must be a non-empty list of windows [[first, last], …], whole frame numbers ≥ 0 with first ≤ last`);
+      } else frames = (f as Array<[number, number]>).map((w) => [w[0], w[1]]);
     }
     if (ok && name !== null && cs !== null) out.push({ name, slots, hides, chains: cs, pose, drawn, offsets, turn, frames });
   });
