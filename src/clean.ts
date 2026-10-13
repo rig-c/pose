@@ -62,8 +62,10 @@ import type { CleanRecord, CleanSpike, Joint, PoseSequence } from './pose.ts';
 import { CLEAN_SPEC, personTrack, sortedJoints } from './pose.ts';
 import { Problems } from './problems.ts';
 
-/** A spike is a joint this many trunk lengths or more from its median. */
+/** The spike test's floor: below this many trunk lengths from its median, no joint is a spike. */
 export const SPIKE_TRUNKS = 0.2;
+/** A spike is a joint more than this many of its own local steps from its median (#73; fixed, not tuned). */
+export const SPIKE_STEPS = 3;
 /** The spike median's window, in frames. */
 export const SPIKE_WINDOW = 5;
 /** The occlusion median's window, in frames. */
@@ -185,19 +187,48 @@ export function testedAt(i: number, n: number, loop: boolean, size = SPIKE_WINDO
 }
 
 /**
- * Spikes on one joint: every frame where it lies more than `limit` px from its
- * `size`-frame vector median, `medianAt` (read from `xs`, not from a replaced
- * value). The test is #67's, distance to the median over the limit; since #71
- * the median it measures against is the vector median, not one per coordinate. Returns the
- * frames, each with its median and distance; `xs` is not changed.
+ * The joint's local step at frame i (#73): the median (an even count, the mean
+ * of the middle two) of |p[k+1] − p[k]| over the consecutive pairs of the
+ * `size`-frame window around i (wrapping with loop, cut at the ends without)
+ * that do not include frame i and on which both frames have a position. Null
+ * when no such pair is there.
  */
-export function spikesOf(xs: Series, limit: number, loop: boolean, size = SPIKE_WINDOW): Array<{ frame: number; at: Pt; off: number }> {
-  const out: Array<{ frame: number; at: Pt; off: number }> = [];
+export function stepAt(xs: Series, i: number, size: number, loop: boolean): number | null {
+  const frames = windowAt(i, xs.length, size, loop);
+  const steps: number[] = [];
+  for (let k = 0; k + 1 < frames.length; k++) {
+    const a = frames[k]!;
+    const b = frames[k + 1]!;
+    if (a === i || b === i) continue;
+    const p = xs[a];
+    const q = xs[b];
+    if (p === null || p === undefined || q === null || q === undefined) continue;
+    steps.push(Math.hypot(q[0] - p[0], q[1] - p[1]));
+  }
+  return steps.length === 0 ? null : median1(steps);
+}
+
+/**
+ * Spikes on one joint (#73): every tested frame i where its distance d to the
+ * `size`-frame vector median, `medianAt`, is over max(`floor`, `SPIKE_STEPS` × s),
+ * s being the joint's local step there, `stepAt` (both read from `xs`, never
+ * from a replaced value). A spike is a one-frame excursion that leaves the
+ * joint's own path and returns, so it is measured against the joint's own
+ * motion; the floor (0.2 trunk) keeps detector noise on a still joint from
+ * reading as one. Where no step is measured (no pair of the window outside
+ * frame i has both positions) the relative term is absent and the floor alone
+ * is the limit, as before #73. Returns the frames, each with its median,
+ * distance and the limit it was over; `xs` is not changed.
+ */
+export function spikesOf(xs: Series, floor: number, loop: boolean, size = SPIKE_WINDOW): Array<{ frame: number; at: Pt; off: number; limit: number }> {
+  const out: Array<{ frame: number; at: Pt; off: number; limit: number }> = [];
   xs.forEach((p, i) => {
     if (p === null || !testedAt(i, xs.length, loop, size)) return;
     const m = medianAt(xs, i, size, loop)!;
     const off = Math.hypot(p[0] - m[0], p[1] - m[1]);
-    if (off > limit) out.push({ frame: i, at: m, off });
+    const s = stepAt(xs, i, size, loop);
+    const limit = s === null ? floor : Math.max(floor, SPIKE_STEPS * s);
+    if (off > limit) out.push({ frame: i, at: m, off, limit });
   });
   return out;
 }

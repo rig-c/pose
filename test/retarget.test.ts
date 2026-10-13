@@ -812,16 +812,14 @@ describe('the short hold (#22): a segment under --short of its median picture le
     expect(rep.endOn).toEqual([{ chain: 'arm_l', bone: 'sleeve_l1', joints: ['l_elbow', 'l_wrist'], frames: [5, 10], seconds: 0.2, minFraction: expect.closeTo(0.1, 9) }]);
   }, SLOW);
 
-  // Since #67 a 4-frame shrink, still under END-ON's 0.15 s: clean's 5-frame median takes a 2-frame collapse out as a
-  // spike, and on this fixture (the arm moving ~12 px a frame) the last frame of a 3-frame run as well. #71 tried the
-  // 2-frame shrink again under the vector median: frames 7 and 8 are still spikes (32.1 and 44.4 px over 20), and a
-  // 3-frame run still loses frame 9 (21.6 px) — a run of 2 in a 5-frame window is the minority whatever the median.
-  test('a 4-frame shrink (0.133 s, a blur): SHORT, but not END-ON', () => {
-    const c = setup({ pose: shrunk(7, 4) });
+  // As planted before #67, restored by #73: clean's spike test is relative to the joint's own step, so a 2-frame
+  // collapse on an arm moving ~12 px a frame is not a one-frame excursion and stays for --short to read.
+  test('a 2-frame shrink (0.067 s, a blur): SHORT, but not END-ON', () => {
+    const c = setup({ pose: shrunk(7, 2) });
     const r = retarget(c, ['--short', '0.35']);
     expect(r.status).toBe(0);
     expect(linesOf(r, 'SHORT')).toEqual([
-      'SHORT  chain "arm_l" bone "sleeve_l1" (l_elbow → l_wrist) frames 7–10 (t=0.233–0.333s): picture length down to 0.10 of its median, under 0.35; its direction is not read — interpolated from frame 6\'s angle to frame 11\'s, the short way round',
+      'SHORT  chain "arm_l" bone "sleeve_l1" (l_elbow → l_wrist) frames 7–8 (t=0.233–0.267s): picture length down to 0.10 of its median, under 0.35; its direction is not read — interpolated from frame 6\'s angle to frame 9\'s, the short way round',
     ]);
     expect(linesOf(r, 'END-ON')).toEqual([]);
     expect(misses(c.build, STEADY)).toEqual([]);
@@ -868,11 +866,8 @@ describe('the short hold (#22): a segment under --short of its median picture le
   });
 
   test('POSE_SHORT_MEDIAN: a segment of zero length on most frames has no median to measure against', () => {
-    // Since #67 frames 0–9: the collapsed wrist rides the elbow 12 px a frame, so on the run's last frame the 5-frame
-    // median is too far back and clean takes it as a spike; 9 of 16 stay zero. Under #71's vector median too: at frame 8
-    // of a 0–8 run the window's sample nearest the rest is frame 6, 23.7 px back (over 20), so 0–9 stays.
     const pose = poseDoc(STEADY, (i, j) => {
-      if (i <= 9) j.l_wrist = { ...j.l_elbow! };
+      if (i <= 8) j.l_wrist = { ...j.l_elbow! };
     });
     const c = setup({ pose });
     const r = retarget(c, ['--short', '0.35']);
