@@ -1,0 +1,114 @@
+# Release: the cut is one click, and no credential exists to leak.
+#
+# Every push to main hands the commits to release-please, which keeps a
+# "release: vX.Y.Z" pull request open. Merging it is the release: the resulting
+# push runs this workflow again, release-please tags vX.Y.Z and cuts the GitHub
+# release, and the same run publishes to npm over OIDC (trusted publishing) —
+# no npm token, no OTP. The very first version is published by hand, because
+# npm's trusted publisher is configured on a package that already exists
+# (RELEASING.md).
+#
+# Two constraints are load-bearing:
+#   - The publish must stay in THIS file: npm's trusted publisher is pinned to
+#     the workflow filename `release.yml`.
+#   - It must stay on a GitHub-hosted runner: npm does not support OIDC from
+#     self-hosted runners.
+name: release
+
+on:
+  push:
+    branches: [main]
+  # Re-run a confirmation that ran out of wait, without publishing anything:
+  # the `release` job runs only on a push.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The published version to confirm, without the leading v (e.g. 0.1.1)
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # release commit, tag, GitHub release
+      pull-requests: write # open and update the release PR
+      issues: write # release-please labels
+      id-token: write # OIDC token for npm trusted publishing
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      - uses: actions/checkout@v4
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        with:
+          ref: ${{ steps.release.outputs.tag_name }}
+
+      - uses: oven-sh/setup-bun@v2
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+
+      - uses: actions/setup-node@v4
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # Node 22 ships npm 10; the OIDC exchange landed in npm 11.5.1.
+      - name: Use an npm that speaks OIDC
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - name: Install dependencies
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        run: bun install --frozen-lockfile
+
+      # Nothing to build — the package ships TypeScript sources and bun runs
+      # them. prepublishOnly runs typecheck, lint and the tests against the
+      # tagged tree, so a broken gate fails the publish rather than shipping.
+      # A version with a hyphen goes out under the `rc` dist-tag.
+      - name: Publish to npm
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        run: |
+          set -euo pipefail
+          tag=""
+          case "$(node -p "require('./package.json').version")" in *-*) tag="--tag rc";; esac
+          npm publish --provenance --access public $tag
+
+      - name: Confirm the published package installs and runs
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        env:
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+        run: bash scripts/confirm_registry.sh "${TAG_NAME#v}" 15
+
+  confirm:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Confirm the published package installs and runs
+        env:
+          VERSION: ${{ inputs.version }}
+        run: bash scripts/confirm_registry.sh "$VERSION" 15

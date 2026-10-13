@@ -1,0 +1,56 @@
+{
+  "name": "@rig-c/pose",
+  "version": "0.0.0",
+  "description": "Puts motion from a body-18 pose sequence onto a rig built with rig-c: bone keys in rig-c's motion format, checked through rig-c's gate before anything is written. A CLI for agents that cannot see the rig.",
+  "type": "module",
+  "bin": {
+    "rig-pose": "./bin/rig-pose.cjs"
+  },
+  "engines": {
+    "bun": ">=1.2.0"
+  },
+  "license": "MIT",
+  "author": "firejune",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rig-c/pose.git"
+  },
+  "homepage": "https://github.com/rig-c/pose#readme",
+  "bugs": "https://github.com/rig-c/pose/issues",
+  "keywords": [
+    "rigc",
+    "rig-c",
+    "pose",
+    "retarget",
+    "motion-retargeting",
+    "keypoints",
+    "body-18",
+    "coco",
+    "skeletal-animation",
+    "2d",
+    "ai-agents",
+    "cli"
+  ],
+  "files": [
+    "bin/rig-pose.cjs",
+    "cli.ts"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit",
+    "lint": "bunx eslint .",
+    "prepublishOnly": "bun run typecheck && bun run lint && bun test"
+  },
+  "dependencies": {
+    "rig-c": "^2.47.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "eslint": "^10.11.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.70.1"
+  }
+}
