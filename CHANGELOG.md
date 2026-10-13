@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/rig-c/pose/compare/v0.1.1...v0.2.0) (2026-10-13)
+
+
+### Features
+
+* **retarget:** --flip spreads a limb's one-frame step over the frames around it ([#16](https://github.com/rig-c/pose/issues/16)) ([e21952d](https://github.com/rig-c/pose/commit/e21952d5c3b883b33207ab50cecf131466c38eb7))
+
 ## [0.1.1](https://github.com/rig-c/pose/compare/v0.1.0...v0.1.1) (2026-10-13)
 
 
