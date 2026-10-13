@@ -9,7 +9,7 @@ import { dirname, join, resolve } from 'node:path';
 import { readMap, resolveMap } from './map.ts';
 import { convertCoco17, personTrack, readPoseSequence } from './pose.ts';
 import { lineOf, Problems, Refusal, type Problem } from './problems.ts';
-import { bendLine, flipLine, holdLine, retarget, type RetargetOptions } from './retarget.ts';
+import { bendLine, endOnLine, flipLine, holdLine, retarget, shortLine, type RetargetOptions } from './retarget.ts';
 import { baseMotionOf, buildInto, folds, gate, readBuild, resolveRig, restOf } from './rigc.ts';
 import { landed, measureLanding, measurePosture, poseFrames, postureLines, ANGLE_TOLERANCE, ORIGIN_TOLERANCE } from './verify.ts';
 
@@ -78,9 +78,13 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     resolveMap(map, rest, a.map);
 
     const r = retarget(rest, map, frames, times, a);
-    say(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, smooth ${a.smooth}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, bends ${a.bends} (tolerance ${a.bendTolerance}°)`);
+    say(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, smooth ${a.smooth}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)`);
     if (r.scale !== null) say(`  SCALE  ${r.scale.factor.toFixed(5)} rig units per picture px (rig ${r.scale.rig.toFixed(2)} / pose median ${r.scale.pose.toFixed(2)})`);
     for (const h of r.holds) say(`  HOLD   ${holdLine(h, r.times)}`);
+    if (a.short !== 'off') {
+      for (const s of r.short) say(`  SHORT  ${shortLine(s, r.times, a.short)}`);
+      for (const e of r.endOn) say(`  END-ON ${endOnLine(e, r.times, a.short)}`);
+    }
     if (a.flip !== 'off') for (const fl of r.flips) say(`  FLIP   ${flipLine(fl, r.times, a.flip)}`);
     for (const e of r.bends) say(`  BEND   ${bendLine(e)} — clamped straight`);
 
@@ -134,9 +138,11 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         animation: a.name,
         frames: seq.frames.length,
         duration: r.animation.duration,
-        options: { minScore: a.minScore, smooth: a.smooth, flip: a.flip, bends: a.bends, bendTolerance: a.bendTolerance, profile: a.profile },
+        options: { minScore: a.minScore, smooth: a.smooth, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, profile: a.profile },
         scale: r.scale,
         holds: r.holds,
+        short: r.short,
+        endOn: r.endOn,
         bends: r.bends,
         flips: r.flips,
         gate: g1.summary,

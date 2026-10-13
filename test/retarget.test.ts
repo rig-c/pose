@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { poseRawAnimation, poseRawSetup, readModel, type CompiledDocument, type RawBone } from 'rig-c/core';
 import { Plate } from 'rig-c/plate';
-import { savitzkyGolay, spreadFlips } from '../src/retarget.ts';
+import { holdShort, isAcross, mergeRuns, savitzkyGolay, spreadFlips } from '../src/retarget.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const CLI = join(ROOT, 'cli.ts');
@@ -736,6 +736,134 @@ describe('the flip guard (#15): a segment that turns more than --flip degrees in
 
 // ===========================================================================
 
+describe('the short hold (#22): a segment under --short of its median picture length has its angle interpolated', () => {
+  /** 30 fps; the left upper arm still at −60°, its forearm turning steadily 130° → 175°, on the elbow's rest side throughout. */
+  const STEADY: Motion = { ...BASE, dt: 1 / 30, lu: () => -60, lf: (i) => 130 + 3 * i };
+  /** Where the shrunken forearm points in the picture: noise, every value on the elbow's rest side (inner angle in (−180°, 0°)). */
+  const NOISE = [200, 290, 130, 250, 170, 280];
+  /** The forearm shrunk to 5 px of its 50 (0.1) on `len` frames from `from`, pointing NOISE's way. */
+  const shrunk = (from: number, len: number): Record<string, unknown> => poseDoc(STEADY, (i, j) => {
+    if (i < from || i >= from + len) return;
+    j.l_wrist = { state: 'observed', at: add(j.l_elbow!.at as Pt, dir(NOISE[i - from]!, 5)), score: 0.9 };
+  });
+  /** The angles the pose gives: NOISE on the shrunken frames. */
+  const asGiven = (from: number, len: number) => (b: string, i: number): number => (b === 'sleeve_l1' && i >= from && i < from + len ? NOISE[i - from]! : angleOf(STEADY, b, i));
+  interface Report { options: { short: unknown }; short: unknown[]; endOn: unknown[] }
+
+  test('a forearm at 0.1 of its length for 6 frames (0.2 s): SHORT and END-ON, and the rig follows the interpolated angle', () => {
+    const c = setup({ pose: shrunk(5, 6) });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--short', '0.35', '--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('short 0.35');
+    expect(linesOf(r, 'SHORT')).toEqual([
+      'SHORT  chain "arm_l" bone "sleeve_l1" (l_elbow → l_wrist) frames 5–10 (t=0.167–0.333s): picture length down to 0.10 of its median, under 0.35; its direction is not read — interpolated from frame 4\'s angle to frame 11\'s, the short way round',
+    ]);
+    expect(linesOf(r, 'END-ON')).toEqual([
+      'END-ON chain "arm_l" bone "sleeve_l1" (l_elbow → l_wrist) frames 5–10 (t=0.167–0.333s): 0.200s under 0.35 of its median picture length (down to 0.10), ≥ 0.15s — seen end-on, a pose the rig cannot draw',
+    ]);
+    expect(linesOf(r, 'LAND')).toHaveLength(10);
+    // Read back by rig-c: the forearm is linear in the pose, so the line from frame 4 to 11 is its true angle.
+    expect(misses(c.build, STEADY)).toEqual([]);
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as Report;
+    expect(rep.options.short).toBe(0.35);
+    expect(rep.short).toEqual([{ chain: 'arm_l', bone: 'sleeve_l1', joints: ['l_elbow', 'l_wrist'], frames: [5, 10], minFraction: expect.closeTo(0.1, 9) }]);
+    expect(rep.endOn).toEqual([{ chain: 'arm_l', bone: 'sleeve_l1', joints: ['l_elbow', 'l_wrist'], frames: [5, 10], seconds: 0.2, minFraction: expect.closeTo(0.1, 9) }]);
+  }, SLOW);
+
+  test('a 2-frame shrink (0.067 s, a blur): SHORT, but not END-ON', () => {
+    const c = setup({ pose: shrunk(7, 2) });
+    const r = retarget(c, ['--short', '0.35']);
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'SHORT')).toEqual([
+      'SHORT  chain "arm_l" bone "sleeve_l1" (l_elbow → l_wrist) frames 7–8 (t=0.233–0.267s): picture length down to 0.10 of its median, under 0.35; its direction is not read — interpolated from frame 6\'s angle to frame 9\'s, the short way round',
+    ]);
+    expect(linesOf(r, 'END-ON')).toEqual([]);
+    expect(misses(c.build, STEADY)).toEqual([]);
+  }, SLOW);
+
+  test('control: without --short the same pose is keyed as given, and nothing is listed', () => {
+    const c = setup({ pose: shrunk(5, 6) });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--report', report]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('short off');
+    expect(linesOf(r, 'SHORT')).toEqual([]);
+    expect(linesOf(r, 'END-ON')).toEqual([]);
+    expect(misses(c.build, STEADY, asGiven(5, 6))).toEqual([]);
+    expect(misses(c.build, STEADY).some((m) => m.startsWith('sleeve_l1 frame 5'))).toBe(true);
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as Report;
+    expect(rep.options.short).toBe('off');
+    expect(rep.short).toEqual([]);
+    expect(rep.endOn).toEqual([]);
+  }, SLOW);
+
+  test('with --flip 90 as well, the held span is not also a FLIP; control: --flip 90 alone spreads its jumps', () => {
+    const c = setup({ pose: shrunk(5, 6) });
+    const both = retarget(c, ['--short', '0.35', '--flip', '90']);
+    expect(both.status).toBe(0);
+    expect(linesOf(both, 'SHORT')).toHaveLength(1);
+    expect(linesOf(both, 'FLIP')).toEqual([]);
+    expect(misses(c.build, STEADY)).toEqual([]);
+    const flipOnly = retarget(c, ['--flip', '90', '--bends', 'clamp']);
+    expect(flipOnly.status).toBe(0);
+    expect(linesOf(flipOnly, 'SHORT')).toEqual([]);
+    expect(linesOf(flipOnly, 'FLIP').length).toBeGreaterThan(0);
+    expect(linesOf(flipOnly, 'FLIP').every((l) => l.includes('bone "sleeve_l1"'))).toBe(true);
+  }, SLOW);
+
+  test('--short takes off or a fraction in (0, 1); anything else is exit 2', () => {
+    const c = setup();
+    for (const v of ['0', '1', '1.5', '-0.2', 'none']) {
+      const r = retarget(c, ['--short', v]);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain(`--short is "${v}"; it must be off, or a fraction in (0, 1)`);
+    }
+    expect(existsSync(c.out)).toBe(false);
+  });
+
+  test('POSE_SHORT_MEDIAN: a segment of zero length on most frames has no median to measure against', () => {
+    const pose = poseDoc(STEADY, (i, j) => {
+      if (i <= 8) j.l_wrist = { ...j.l_elbow! };
+    });
+    const c = setup({ pose });
+    const r = retarget(c, ['--short', '0.35']);
+    expect(r.status).toBe(1);
+    expect(fails(r)).toEqual([
+      'FAIL  POSE_SHORT_MEDIAN: chain "arm_l" — bone "sleeve_l1"\'s segment l_elbow → l_wrist has median picture length 0px over the 16 frames; --short measures a frame\'s length against that median, and there is none to measure against',
+    ]);
+    expect(existsSync(c.out)).toBe(false);
+    // Control: without --short the same pose writes.
+    expect(retarget(c, ['--bends', 'clamp']).status).toBe(0);
+  }, SLOW);
+
+  test('holdShort: the short way round between the reliable ends; flat at either end; a series above the cutoff untouched', () => {
+    const a = [170, 175, 0, 90, -175, -170];
+    expect(holdShort(a, [1, 1, 0.1, 0.2, 1, 1], 0.35)).toEqual([{ frames: [2, 3], minFraction: 0.1 }]);
+    // 175° → −175° is +10° the short way, over three steps.
+    expect(a.map((x) => Math.round(x * 1000) / 1000)).toEqual([170, 175, 178.333, -178.333, -175, -170]);
+    const start = [5, 99, 30, 40];
+    expect(holdShort(start, [0.1, 0.3, 1, 1], 0.35)).toEqual([{ frames: [0, 1], minFraction: 0.1 }]);
+    expect(start).toEqual([30, 30, 30, 40]);
+    const end = [10, 20, 99, 5];
+    expect(holdShort(end, [1, 1, 0.2, 0.3], 0.35)).toEqual([{ frames: [2, 3], minFraction: 0.2 }]);
+    expect(end).toEqual([10, 20, 20, 20]);
+    const fine = [1, 2, 3];
+    expect(holdShort(fine, [0.35, 1, 0.9], 0.35)).toEqual([]);
+    expect(fine).toEqual([1, 2, 3]);
+  });
+
+  test('mergeRuns: spans one frame apart merge, two apart do not', () => {
+    expect(mergeRuns([{ frames: [2, 3], minFraction: 0.3 }, { frames: [5, 5], minFraction: 0.1 }, { frames: [8, 8], minFraction: 0.2 }], 1)).toEqual([
+      { frames: [2, 5], minFraction: 0.1 },
+      { frames: [8, 8], minFraction: 0.2 },
+    ]);
+  });
+});
+
+// ===========================================================================
+
 describe('readers', () => {
   test('pose: every problem named in one run', () => {
     const pose = poseDoc(BASE, (i, j) => {
@@ -1444,4 +1572,13 @@ describe('examples/wave runs as the README says', () => {
     expect(linesOf(r, 'FOLD')).toEqual(['FOLD   the rig has no slots, so it draws nothing to fold; not measured']);
     expect(existsSync(out)).toBe(true);
   }, SLOW);
+});
+
+describe('--short leaves a line across the body alone (the hip line, the eye line)', () => {
+  test('isAcross: a left joint and its right twin, either way round, and nothing else', () => {
+    expect(isAcross('r_hip', 'l_hip')).toBe(true);
+    expect(isAcross('l_eye', 'r_eye')).toBe(true);
+    expect(isAcross('r_hip', 'r_knee')).toBe(false);
+    expect(isAcross('mid_hip', 'neck')).toBe(false);
+  });
 });

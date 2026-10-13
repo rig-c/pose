@@ -41,13 +41,16 @@ into named failures.
   naming a bone the rig does not have, a joint body-18 does not have, a chain
   whose bones are not parent and child — each is refused naming both sides.
 - **Never invent a value.** No defaults guessed from the pose, no "reasonable"
-  fallback for a missing field. Two substitutions are stated. The card's: a
+  fallback for a missing field. Three substitutions are stated. The card's: a
   missing or low-score joint holds the last good value (before its first good
   frame, that first good value), and the run prints a `HOLD` line for every
   span it held, joint by joint. A joint the map needs that is good on no frame
-  is a refusal. And #15's flip guard: a segment turning more than
-  `--flip` degrees in one frame is spread over the frames around the jump, and
-  the run prints a `FLIP` line for every spread.
+  is a refusal. #22's short hold: a segment shorter in the picture than
+  `--short` of its median length has its angle interpolated from the frames
+  either side, and the run prints a `SHORT` line for every span (and `END-ON`
+  for a run lasting ≥ 0.15 s). And #15's flip guard: a segment turning more
+  than `--flip` degrees in one frame is spread over the frames around the jump,
+  and the run prints a `FLIP` line for every spread.
 - **The rest pose is rig-c's.** Bone world transforms come from rig-c's own
   poser; this package never re-derives a setup pose, a world matrix or the
   y flip.
@@ -70,7 +73,7 @@ into named failures.
 | `src/pose.ts` | `rig-pose-sequence/1` (the reader, the writer) and the COCO-17 conversion |
 | `src/joints.ts` | the vocabulary: body-18, the virtual midpoints, COCO-17 and its mapping |
 | `src/map.ts` | `rig-pose-map/1` and its resolution against the rig's bones |
-| `src/retarget.ts` | the pure retarget: holds, Savitzky–Golay smoothing, hip travel, angles, the flip guard, the hinge check, reaches, keys |
+| `src/retarget.ts` | the pure retarget: holds, Savitzky–Golay smoothing, hip travel, angles, the short hold and its end-on runs, the flip guard, the hinge check, reaches, keys |
 | `src/rigc.ts` | everything that touches rig-c's CLI or the disk: the gate (`rigc build`), the folds (`rigc render --folds`) |
 | `src/verify.ts` | where the gated build actually put each bone, posed by rig-c's own poser; the posture reading (hip tilt, sway) |
 | `src/run.ts` | `retarget` end to end, in the order: gate the rig as it is, retarget, gate with the animation in, measure, read folds, write |

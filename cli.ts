@@ -38,13 +38,18 @@ retarget
   --flip <deg>|off      a segment that turns more than <deg> degrees in one frame of the pose is
                         spread over the frames around the jump, centred on it, and listed as FLIP
                         (default: off, every turn kept as the pose gives it; 90 is the measured setting)
+  --short <f>|off       a segment whose picture length on a frame is under <f> of its median length
+                        (seen end-on, or collapsed by blur) has its angle there interpolated from the
+                        frames either side, before the flip guard, and listed as SHORT; a run under <f>
+                        lasting ≥ 0.15 s is also listed as END-ON (default: off; 0.35 is the measured
+                        setting, f in (0, 1))
   --bends refuse|clamp  a hinge (elbow, knee: any joint inside a chain) bent the wrong way refuses
                         the run (default), or is straightened on that frame and listed
   --bend-tolerance <d>  degrees past straight a hinge may bend the wrong way before it counts (default: 0)
   --profile spine|spine-html  rigc's gate profile (default: spine, rigc's own default)
   --build <dir>         keep the gated build (skeleton.json, .atlas, .model.json) here
   --render <dir>        keep rigc's render of the animation (frames, contact.png, folds.json) here
-  --report <file>       write the run's measurements (holds, flips, bends, landings, folds) as JSON
+  --report <file>       write the run's measurements (holds, short, endOn, flips, bends, landings, folds) as JSON
 
   It writes nothing until rigc's gate is green with the animation in, every mapped bone lands on
   the angle the pose asks for (posed by rig-c's own poser), and no hinge bends the wrong way.
@@ -104,8 +109,13 @@ function flipOf(f: Map<string, string>): number | 'off' {
   return num(f, 'flip', 90, (v) => v > 0 && v < 180, 'off, or degrees in (0, 180) — a one-frame turn is never more than 180°');
 }
 
+function shortOf(f: Map<string, string>): number | 'off' {
+  if (!f.has('short') || f.get('short') === 'off') return 'off';
+  return num(f, 'short', 0.35, (v) => v > 0 && v < 1, 'off, or a fraction in (0, 1) of the segment\'s median picture length');
+}
+
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'min-score', 'smooth', 'flip', 'bends', 'bend-tolerance', 'profile', 'build', 'render', 'report'], ['coco']);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'profile', 'build', 'render', 'report'], ['coco']);
   const bends = f.get('bends') ?? 'refuse';
   if (bends !== 'refuse' && bends !== 'clamp') throw new Usage(`--bends is "${bends}"; it must be refuse or clamp`);
   const profile = f.get('profile') ?? 'spine';
@@ -124,6 +134,7 @@ function retargetArgs(argv: string[]): RetargetArgs {
     minScore: num(f, 'min-score', 0.3, (n) => n >= 0, 'a number ≥ 0'),
     smooth: smoothOf(f),
     flip: flipOf(f),
+    short: shortOf(f),
     bends,
     bendTolerance: num(f, 'bend-tolerance', 0, (n) => n >= 0 && n < 180, 'degrees in [0, 180)'),
     profile,
