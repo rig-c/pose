@@ -75,6 +75,15 @@ retarget
                         "tracks": [ <rigc-motion track> … ] } at absolute times from its start (blinks read
                         off the video); a track on a target and property it already keys is refused
                         (MERGE_CONFLICT), and so is a key past its duration (MERGE_TIME)
+  --reduce <deg>        thin each mapped bone's rotate keys to few keys with curves (linear, or one raw
+                        Bezier per span with handles at its thirds), on the pose's own frame times, so every
+                        bone's world aim stays within deg of the dense keys on every frame; fitted top-down,
+                        each bone against its parent's reduced error, so errors do not pile up down a chain.
+                        Kept regardless: the first and last frame, the frames either side of a switch boundary
+                        on the chains it changes, and the edges of every FLIP spread, SHORT span and RANGE run
+                        (REDUCE lines; default: off). Not with --leg-scale or --plant-feet (rig-c/pose#32)
+  --reduce-hip <units>  with --reduce, thin the hip's translate keys too, its world origin within units
+                        of the dense keys (default: the hip stays dense)
   --switch-tolerance <d>  a set of alternate drawings (the map's "alternates") may show on a frame where
                         every segment of its chains is within d degrees of its key skeleton (default: 25)
   --switch-min <s>      a run of one set shorter than s seconds is dropped (default: 0.25)
@@ -87,7 +96,7 @@ retarget
   --render <dir>        keep rigc's render of the animation (frames, contact.png, folds.json) here
   --report <file>       write the run's measurements (holds, short, endOn, flips, bends, landings, folds,
                         switches, uncovered, turns, range, artRange,
-                        idleDropped, idleKeptOut, merged) as JSON
+                        idleDropped, idleKeptOut, merged, reduce) as JSON
 
   It writes nothing until rigc's gate is green with the animation in, every mapped bone lands on
   the angle the pose asks for (posed by rig-c's own poser), and no hinge bends the wrong way.
@@ -191,7 +200,7 @@ function legScaleOf(f: Map<string, string>): [number, number] | 'off' {
 }
 
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report', 'leg-scale', 'idle', 'merge'], ['coco', 'plant-feet', 'carry-idle']);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip'], ['coco', 'plant-feet', 'carry-idle']);
   const bends = f.get('bends') ?? 'refuse';
   if (bends !== 'refuse' && bends !== 'clamp') throw new Usage(`--bends is "${bends}"; it must be refuse or clamp`);
   const switchAt = f.get('switch-at') ?? 'first';
@@ -228,7 +237,21 @@ function retargetArgs(argv: string[]): RetargetArgs {
     idle: f.get('idle'),
     carryIdle: f.has('carry-idle'),
     merge: f.get('merge'),
+    ...reduceOf(f),
   };
+}
+
+/** --reduce and --reduce-hip (rig-c/pose#32): off unless given; the hip only with the bones. */
+function reduceOf(f: Map<string, string>): { reduce?: number; reduceHip?: number } {
+  if (!f.has('reduce')) {
+    if (f.has('reduce-hip')) throw new Usage('--reduce-hip is given without --reduce; the hip is thinned with the bones, not alone');
+    return {};
+  }
+  const reduce = num(f, 'reduce', 0, (n) => n > 0 && n < 180, 'degrees in (0, 180)');
+  for (const other of ['leg-scale', 'plant-feet'] as const) {
+    if (f.has(other) && f.get(other) !== 'off') throw new Usage(`--reduce is given with --${other}; their keys land a bone through a scaled parent or an ankle's lever, which the reduction's tolerance does not bound (rig-c/pose#32 round 1)`);
+  }
+  return f.has('reduce-hip') ? { reduce, reduceHip: num(f, 'reduce-hip', 0, (n) => n > 0, 'rig units > 0') } : { reduce };
 }
 
 function compareArgs(argv: string[]): CompareArgs {

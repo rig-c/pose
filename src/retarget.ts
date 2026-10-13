@@ -173,6 +173,8 @@ export interface MotionKey {
   v: number[];
   /** `stepped`: the value holds until the next key (the offsets' translate keys). */
   ease?: 'stepped';
+  /** A raw Bézier to the next key: four absolute (time, value) numbers per channel (`--reduce`, #32). */
+  curve?: number[];
 }
 export interface MotionTrack {
   bone: string;
