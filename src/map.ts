@@ -91,6 +91,8 @@ export interface AlternateSet {
   drawn: Record<string, number>;
   /** Bone → a translate, in its parent's axes, held while the set shows. */
   offsets: Record<string, [number, number]>;
+  /** Bone → how far its art may turn from `drawn` while the set shows, [min, max] degrees: the bone is clamped there, and the overflow is ART-RANGE demand. */
+  turn: Record<string, [number, number]>;
 }
 export interface JointMap {
   chains: Chain[];
@@ -224,7 +226,7 @@ export function readMap(text: string, where: string): JointMap {
   return { chains, translate, alternates };
 }
 
-const SET_SHAPE = '{ name, slots: { "<slot>": "<attachment>" }, hides?: [slot], chains: [chain], pose: { "<joint>": [x, y] }, drawn?: { "<bone>": deg }, offsets?: { "<bone>": [dx, dy] } }';
+const SET_SHAPE = '{ name, slots: { "<slot>": "<attachment>" }, hides?: [slot], chains: [chain], pose: { "<joint>": [x, y] }, drawn?: { "<bone>": deg }, offsets?: { "<bone>": [dx, dy] }, turn?: { "<bone>": [min, max] } }';
 
 /** `alternates`: each set's shape, its chains against the map's, its key skeleton against those chains' joints, and its bones against those chains' bones. */
 function readAlternates(p: Problems, where: string, raw: unknown, chains: readonly Chain[], translate: Translate | null): AlternateSet[] {
@@ -241,7 +243,7 @@ function readAlternates(p: Problems, where: string, raw: unknown, chains: readon
       p.add('MAP_ALT_SHAPE', `${aw} is ${typeName(a)}; a set is ${SET_SHAPE}`);
       return;
     }
-    refuseUnknownKeys(p, 'MAP_KEYS', aw, a, ['name', 'note', 'slots', 'hides', 'chains', 'pose', 'drawn', 'offsets']);
+    refuseUnknownKeys(p, 'MAP_KEYS', aw, a, ['name', 'note', 'slots', 'hides', 'chains', 'pose', 'drawn', 'offsets', 'turn']);
     const name = typeof a.name === 'string' && a.name !== '' ? a.name : null;
     if (name === null) p.add('MAP_ALT_NAME', `${aw} "name" is ${typeName(a.name)}; it must be a non-empty string`);
     else if (names.has(name)) p.add('MAP_ALT_NAME', `${aw} "name" "${name}" names two sets`);
@@ -331,7 +333,18 @@ function readAlternates(p: Problems, where: string, raw: unknown, chains: readon
         }
       }
     }
-    if (ok && name !== null && cs !== null) out.push({ name, slots, hides, chains: cs, pose, drawn, offsets });
+    const turn: Record<string, [number, number]> = {};
+    if ('turn' in a) {
+      if (!isObject(a.turn)) p.add('MAP_ALT_TURN', `${label} "turn" is ${typeName(a.turn)}; it is { "<bone>": [min, max] }, how far each bone's art may turn from its drawn angle, degrees`);
+      else {
+        for (const [b, v] of Object.entries(a.turn)) {
+          if (!(b in drawn)) p.add('MAP_ALT_TURN', `${label} "turn" names bone "${b}", which has no "drawn" angle in the set; a turn is measured from the drawn angle (the set draws ${Object.keys(drawn).join(', ') || 'none'})`);
+          else if (!Array.isArray(v) || v.length !== 2 || !v.every((x) => typeof x === 'number' && Number.isFinite(x)) || (v[0] as number) > (v[1] as number)) p.add('MAP_ALT_TURN', `${label} "turn" bone "${b}" is ${JSON.stringify(v)}; it must be [min, max], two finite numbers of degrees with min ≤ max`);
+          else turn[b] = [v[0] as number, v[1] as number];
+        }
+      }
+    }
+    if (ok && name !== null && cs !== null) out.push({ name, slots, hides, chains: cs, pose, drawn, offsets, turn });
   });
   return out;
 }

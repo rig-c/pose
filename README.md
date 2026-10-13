@@ -48,7 +48,7 @@ and what the run cannot decide for you it lists:
 - `SWITCH` — with `alternates` in the map ([below](#alternate-drawings-alternates)): each span on which a set of alternate drawings shows, its slots, its frames, how far the pose was from the set's key skeleton, and how far each bone with a `drawn` angle was turned from it.
 - `UNCOVERED` — with `alternates` in the map: every fold on a frame where no switch took the folding mesh off screen. This is the list of poses still to paint.
 - `RANGE` — a chain's `range` ([below](#a-joints-range-range)): a bone whose rotate key the pose asks past its range, outside every span of a set depicting its chain, is clamped at the limit; one line per run, with the frames, the seconds and the largest overflow. The demand for an alternate.
-- `ART-RANGE` — inside a set's span: a bone with both a `drawn` angle in the set and a `range`, turned from its drawn angle past that range. Not clamped; the demand for another drawing of that set.
+- `ART-RANGE` — inside a set's span: a bone with a `drawn` angle in the set, turned from it past its limits — the set's `turn` for that bone (held at the limit) or, without one, its chain's `range` (the bone follows the pose). Listed as the pose asked it either way: the demand for another drawing of that set.
 - `TURN` — a line across the body (hips, shoulders, eyes) shorter in the picture than 0.5 of its median length, or reversed, for at least 0.15 s: the body or the head turned. A reading of the pose, made whether or not the map uses the line; it changes no key. The demand for a turned-body drawing, as `END-ON` is for a foreshortened limb.
 
 `--report <file>` writes all of it as JSON (`rig-pose-report/1`): `options` (every figure the run used, `switchTolerance` and `switchMin` included), `scale`, `holds`, `short`, `endOn`, `bends`, `flips`, `gate`, `landings`, `posture`, `folds`, and the demand lists:
@@ -58,7 +58,7 @@ and what the run cannot decide for you it lists:
 - `endOn` — above, under the short hold.
 - `turns: [{ line, joints, frames, seconds, minFraction, reversed }]` — `line` is `hip`, `shoulder` or `eye`.
 - `range: [{ chain, bone, frames, seconds, maxOverflow, key, limits }]` — `key` is the rotate key the pose asked for on the frame of the largest overflow, before the clamp.
-- `artRange: [{ set, chain, bone, frames, seconds, maxOverflow, turn, limits }]` — `turn` is the signed art turn on that frame.
+- `artRange: [{ set, chain, bone, frames, seconds, maxOverflow, turn, limits, clamped }]` — `turn` is the signed art turn the pose asked on that frame; `clamped` says whether the set's `turn` held the bone there.
 
 Runs in `turns`, `range` and `artRange` merge across a gap of one frame, as `endOn` does; `seconds` runs from the first frame's key time to the end of the last frame.
 
@@ -171,6 +171,8 @@ Bone rotation cannot carry every pose: an arm behind the head, a forearm toward 
 
 **TURN.** The cutoff was measured on the three lines across the body before it was fixed ([#6](https://github.com/rig-c/pose/issues/6)): on the 13 s front-facing dance their picture length never drops under 0.81 of its median and none reverses; on a second sequence the hip line falls to 0.17 at frames 465–491 (side-on) and the eye line to 0.22 at 26–58 (head in profile), and 3 frames reverse. 0.5 lies between. A line is reversed when it points more than 90° from the subject's right joint to the left (front-facing, it points at 0°). The lines are read after holds and smoothing, held and smoothed as the map's points are even where the map does not use them; a line whose points are good on no frame is named as not measured.
 
+
+**How far a set's art may turn: `turn`.** A drawing reads right only near the angle it was painted at. A set may state, per bone with a `drawn` angle, how far its art may turn from it, `"turn": { "sleeve_r0": [-20, 20] }`. While the set shows, the bone is held within it: its target becomes drawn + clamp(wrap(target − drawn), min, max), each bone on its own world angle, so a forearm under a held upper arm keeps its own target. The landing check measures against the held angle. The overflow the pose asked for is listed as `ART-RANGE`. A `turn` on a bone the set has no `drawn` angle for is refused (`MAP_ALT_TURN`).
 ## Requirements
 
 [Bun](https://bun.sh) ≥ 1.2 on `PATH` — rig-pose, like rig-c, runs its TypeScript sources directly. `rig-c` comes as a dependency. With `@esotericsoftware/spine-core` installed beside it, rig-c's gate runs the spine-core round trip; without it, rig-c's own gate, and the gate's report says which.

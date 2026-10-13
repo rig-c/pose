@@ -67,7 +67,7 @@ import { aimAngle, rigPoint } from './map.ts';
 import type { Joint } from './pose.ts';
 import { Problems } from './problems.ts';
 import type { ArtRange, SlotTrack, Switch, SwitchOptions } from './switch.ts';
-import { coveredChains, measureArt, overflow, RANGE_SLACK, runsOf, selectSwitches } from './switch.ts';
+import { clampArt, coveredChains, measureArt, overflow, RANGE_SLACK, runsOf, selectSwitches } from './switch.ts';
 
 const DEG = 180 / Math.PI;
 
@@ -682,6 +682,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   }
   p.throwIfAny();
   const artRange = measureArt(sw.switches, map, targets, endOf, keyTimes, RANGE_GAP);
+  clampArt(sw.switches, map, targets);
 
   // Keys: the bone's turn less the turn of the nearest mapped bone above it.
   const tracks: Array<MotionTrack | SlotTrack> = [];
