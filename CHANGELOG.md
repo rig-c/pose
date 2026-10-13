@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/rig-c/pose/compare/v0.6.0...v0.7.0) (2026-10-13)
+
+
+### Features
+
+* **switch:** --switch-at peak keys a set switch at its handoff's speed peak, bounded; first stays the default ([#39](https://github.com/rig-c/pose/issues/39)) ([2598a17](https://github.com/rig-c/pose/commit/2598a1749ebff6ae272ecf67071e2664d2bb58f3))
+
 ## [0.6.0](https://github.com/rig-c/pose/compare/v0.5.0...v0.6.0) (2026-10-13)
 
 
