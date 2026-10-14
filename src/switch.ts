@@ -603,3 +603,70 @@ export function clampArt(switches: readonly Switch[], map: JointMap, targets: Ma
     }
   }
 }
+
+/**
+ * A set's arm is raised (rig-c/pose#62) when its `drawn` world angle on the
+ * chain's first bone (the upper arm) is within this many degrees of straight up.
+ */
+export const RAISED_WITHIN = 30;
+
+/** Whether a drawn world angle, Spine degrees, is within `RAISED_WITHIN` of straight up (90°). */
+export const isRaised = (drawn: number): boolean => Math.abs(wrap(drawn - 90)) <= RAISED_WITHIN;
+
+type P2 = [number, number];
+
+/**
+ * A two-bone solve in the world (y up): the directions, degrees, of the vector
+ * from the shoulder to the elbow (`upper`) and from the elbow to the wrist
+ * (`fore`) that put the wrist on `target`, for bones of lengths `l0` and `l1`.
+ * `side` is the elbow's bend: +1 when the forearm turns counter-clockwise from
+ * the upper arm, −1 clockwise. Out of reach (farther than l0 + l1, nearer than
+ * |l0 − l1|, or on the shoulder) both point straight at the target and
+ * `reached` is false; on the shoulder, where there is no direction, `upper` is
+ * null.
+ */
+export function twoBone(shoulder: P2, target: P2, l0: number, l1: number, side: 1 | -1): { upper: number; fore: number; reached: boolean } | { upper: null; reached: false } {
+  const dx = target[0] - shoulder[0];
+  const dy = target[1] - shoulder[1];
+  const d = Math.hypot(dx, dy);
+  if (d < 1e-9) return { upper: null, reached: false };
+  const theta = Math.atan2(dy, dx) * (180 / Math.PI);
+  const eps = 1e-9 * Math.max(1, l0 + l1);
+  if (d > l0 + l1 + eps || d < Math.abs(l0 - l1) - eps) return { upper: theta, fore: theta, reached: false };
+  const cos = Math.min(1, Math.max(-1, (l0 * l0 + d * d - l1 * l1) / (2 * l0 * d)));
+  const upper = theta - side * Math.acos(cos) * (180 / Math.PI);
+  const r = upper * (Math.PI / 180);
+  const ex = shoulder[0] + l0 * Math.cos(r);
+  const ey = shoulder[1] + l0 * Math.sin(r);
+  return { upper: wrap(upper), fore: Math.atan2(target[1] - ey, target[0] - ex) * (180 / Math.PI), reached: true };
+}
+
+/** One span of a raised set on one chain: its wrist placed against the head (rig-c/pose#62). */
+export interface Raised {
+  set: string;
+  chain: string;
+  frames: [number, number];
+  seconds: number;
+  /** The eye distance over the span, least and most: the rig's in world units, the reference's in picture px. */
+  eyes: { rig: [number, number]; reference: [number, number] };
+  /** Per frame of the span, the wrist's offset from the head centre in eye distances (x right, y up): the reference's, the rig's on the pose's angles, and the rig's as keyed (after the solve and the set's `turn`). */
+  reference: P2[];
+  before: P2[];
+  after: P2[];
+  /** The largest |rig − reference| over the span, x and y, before and after. */
+  worst: { before: P2; after: P2 };
+  /** The frames whose target was out of the arm's reach: the arm points straight at it. */
+  unreachable: number[];
+  /** The arm's reach (the two bones' lengths, world units) and the farthest target from the shoulder over the span. */
+  reach: { arm: number; farthest: number };
+}
+
+export function raisedLine(e: Raised, times: readonly number[]): string {
+  const xy = (v: P2) => `(${v[0].toFixed(2)}, ${v[1].toFixed(2)})`;
+  const med = (vs: readonly P2[]): P2 => [median(vs.map((v) => v[0])), median(vs.map((v) => v[1]))];
+  const range = (r: [number, number], d: number) => (r[0].toFixed(d) === r[1].toFixed(d) ? r[0].toFixed(d) : `${r[0].toFixed(d)}–${r[1].toFixed(d)}`);
+  const flag = Array.from({ length: e.frames[1] + 1 }, (_, i) => e.unreachable.includes(i));
+  const runs = runsOf(flag, 0).map(([a, b]) => (a === b ? `${a}` : `${a}–${b}`));
+  const reach = e.unreachable.length === 0 ? 'every target in reach' : `out of reach on ${e.unreachable.length} frame(s) (${runs.join(', ')}): the target up to ${e.reach.farthest.toFixed(1)} units from the shoulder, the arm ${e.reach.arm.toFixed(1)} long; pointed straight at it`;
+  return `set "${e.set}" chain "${e.chain}" ${spanOf(e.frames, times)}: the wrist placed against the head; eye distance rig ${range(e.eyes.rig, 2)} units, reference ${range(e.eyes.reference, 2)} px; wrist − head centre in eye distances (x right, y up), median reference ${xy(med(e.reference))}, before ${xy(med(e.before))}, after ${xy(med(e.after))}; worst |rig − reference| before ${xy(e.worst.before)}, after ${xy(e.worst.after)}; ${reach}`;
+}

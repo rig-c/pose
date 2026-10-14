@@ -3224,3 +3224,208 @@ describe('#63: the camera a scan read, carried by the sequence', () => {
     expect(linesOf(rc, 'CAMERA')[0]).toStartWith('CAMERA (source not stated): the sequence carries the picture\'s camera');
   }, SLOW);
 });
+
+// ===========================================================================
+
+describe('--raised-by-head (#62): a raised arm\'s wrist placed against the head, in eye distances', () => {
+  /** The stick rig with a head and two eye points 12 units apart, 30 above the neck; its right shoulder 10 below the neck and 30 out. */
+  const headBones = (b: BoneSpec[]): BoneSpec[] => [
+    ...b,
+    { name: 'head', parent: 'neck', x: 0, y: 20 },
+    { name: 'eye_r', parent: 'head', x: -6, y: 10 },
+    { name: 'eye_l', parent: 'head', x: 6, y: 10 },
+  ];
+  const RIG: RigOpts = { bones: headBones, extra: { sleeve_r0: { seg_up: { image: 'seg.png', x: 30, y: 0, rotation: -90 } } } };
+  /**
+   * The pose's proportions are not the rig's: its eyes are 12 px apart 35 px above the neck and its shoulder 20 px out
+   * level with it (1.67, 2.92 eye distances from the shoulder to the head centre), where the rig's is (2.5, 3.33).
+   * The right arm is raised on frames 4–11 (the set's key skeleton) and low elsewhere; the trunk stands still.
+   */
+  const ON = (i: number) => i >= 4 && i <= 11;
+  const RAISED: Motion = { ...BASE, trunk: () => 90, hip: () => [0, 0], ru: (i) => (ON(i) ? 110 + i : 30), rf: (i) => (ON(i) ? 70 - i : 50) };
+  /** The eyes `half` px either side of their midpoint (6 is the pose as positions() writes it). */
+  const eyesApart = (half: number) => (_i: number, j: JointsDoc): void => {
+    const r = j.r_eye!.at as Pt;
+    const l = j.l_eye!.at as Pt;
+    const mid: Pt = [(r[0] + l[0]) / 2, (r[1] + l[1]) / 2];
+    j.r_eye = { state: 'observed', at: [mid[0] - half, mid[1]], score: 0.9 };
+    j.l_eye = { state: 'observed', at: [mid[0] + half, mid[1]], score: 0.9 };
+  };
+  const keySkeleton = (): Record<string, Pt> => {
+    const sh: Pt = [1000, 1000];
+    const el = add(sh, dir(117.5, 300));
+    return { r_shoulder: sh, r_elbow: el, r_wrist: add(el, dir(62.5, 250)) };
+  };
+  const set = (o: Record<string, unknown> = {}): Record<string, unknown> => ({ name: 'up', slots: { sleeve_r0: 'seg_up' }, chains: ['arm_r'], pose: keySkeleton(), drawn: { sleeve_r0: 100, sleeve_r1: 60 }, turn: { sleeve_r0: [-90, 90], sleeve_r1: [-90, 90] }, ...o });
+  const headChain = (aim = 'eye_r>eye_l'): ChainSpec => ({ name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: [aim] });
+  const mapOf = (o: { sets?: Array<Record<string, unknown>>; head?: ChainSpec | null } = {}): Record<string, unknown> => ({
+    ...baseMap(),
+    // The right elbow bends the other way from the stick rig's rest, as a V sign does: "free", as HQ's map states it.
+    chains: [...baseChains().map((c) => (c.name === 'arm_r' ? { ...c, bend: 'free' } : c)), ...(o.head === null ? [] : [o.head ?? headChain()])],
+    alternates: o.sets ?? [set()],
+  });
+  /** Wrist − head centre in eye distances, x right, y up. */
+  const inEyes = (w: Pt, a: Pt, b: Pt): Pt => {
+    const d = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    return [(w[0] - (a[0] + b[0]) / 2) / d, (w[1] - (a[1] + b[1]) / 2) / d];
+  };
+  /** The reference's, from the synthetic positions (picture y down, turned up). */
+  const refOffset = (m: Motion, i: number, half = 6): Pt => {
+    const p = positions(m, i);
+    const flip = (v: Pt): Pt => [v[0], -v[1]];
+    const mid: Pt = [(p.r_eye![0] + p.l_eye![0]) / 2, p.r_eye![1]];
+    return inEyes(flip(p.r_wrist!), flip([mid[0] - half, mid[1]]), flip([mid[0] + half, mid[1]]));
+  };
+  /** The rig's, posed by rig-c from the gated build: the forearm's tip against the eye bones. */
+  const rigOffsets = (build: string, m: Motion): Pt[] =>
+    poseRawAnimation(loadBuild(build), 'dance', Array.from({ length: m.n - 1 }, () => m.dt)).map((p) => {
+      const b = byName(p.bones);
+      const f = b.get('sleeve_r1')!;
+      const er = b.get('eye_r')!;
+      const el = b.get('eye_l')!;
+      return inEyes([f.worldX + f.a * 60, f.worldY + f.c * 60], [er.worldX, er.worldY], [el.worldX, el.worldY]);
+    });
+  /** Every frame of the span where the rig's wrist is more than `tol` eye distances off the reference's, in x or y. */
+  const offBy = (build: string, m: Motion, tol: number, half = 6): string[] => {
+    const rig = rigOffsets(build, m);
+    const out: string[] = [];
+    for (let i = 0; i < m.n; i++) {
+      if (!ON(i)) continue;
+      const r = refOffset(m, i, half);
+      const e: Pt = [Math.abs(rig[i]![0] - r[0]), Math.abs(rig[i]![1] - r[1])];
+      if (!(e[0] <= tol && e[1] <= tol)) out.push(`frame ${i}: rig (${rig[i]![0].toFixed(3)}, ${rig[i]![1].toFixed(3)}) reference (${r[0].toFixed(3)}, ${r[1].toFixed(3)})`);
+    }
+    return out;
+  };
+  const rotateKeys = (path: string): Map<string, string[]> => new Map(motionOf(path).animations.dance!.tracks.map((t) => [`${t.bone}.${t.property}`, t.keys.map((k) => JSON.stringify(k))]));
+
+  /** The card's test for #62, against a given CLI: written, and the wrist within 0.05 eye distances of the reference's on every frame of the span. */
+  function raisedTest(cliPath = CLI): { ran: Ran; off: string[]; c: Case } {
+    const c = setup({ rig: RIG, map: mapOf(), pose: poseDoc(RAISED) });
+    const ran = retarget(c, ['--raised-by-head', '--report', join(c.dir, 'report.json')], cliPath);
+    return { ran, off: ran.status === 0 ? offBy(c.build, RAISED, 0.05) : [], c };
+  }
+
+  test('the wrist lands on the reference\'s offset from the head within 0.05 eye distances; every other key is the run without the flag\'s', () => {
+    const { ran, off, c } = raisedTest();
+    expect(ran.stderr).toBe('');
+    expect(ran.status).toBe(0);
+    expect(off).toEqual([]);
+    expect(linesOf(ran, 'SWITCH')[0]).toContain('frames 4–11');
+    const line = linesOf(ran, 'RAISED');
+    expect(line).toHaveLength(1);
+    expect(line[0]).toStartWith('RAISED set "up" chain "arm_r" frames 4–11 (t=0.500–1.375s): the wrist placed against the head; eye distance rig 12.00 units, reference 12.00 px;');
+    expect(line[0]).toEndWith('every target in reach');
+    expect(linesOf(ran, 'LAND').some((l) => l.includes('POSE_LANDS'))).toBe(false);
+    const rep = JSON.parse(readFileSync(join(c.dir, 'report.json'), 'utf8')) as { options: Record<string, unknown>; raised: Array<{ worst: { before: Pt; after: Pt }; unreachable: number[] }> };
+    expect(rep.options.raisedByHead).toBe(true);
+    expect(rep.raised).toHaveLength(1);
+    expect(Math.max(...rep.raised[0]!.worst.after)).toBeLessThanOrEqual(0.05);
+    expect(rep.raised[0]!.unreachable).toEqual([]);
+    // Control: the pose's own angles, on these proportions, miss by more than the bar (what the flag is for).
+    const plain = setup({ rig: RIG, map: mapOf(), pose: poseDoc(RAISED) });
+    expect(retarget(plain).status).toBe(0);
+    expect(Math.max(...rep.raised[0]!.worst.before)).toBeGreaterThan(0.5);
+    expect(offBy(plain.build, RAISED, 0.05).length).toBe(8);
+    // Outside the span, and on every other bone, the keys are the run without the flag's, byte for byte.
+    const a = rotateKeys(plain.out);
+    const b = rotateKeys(c.out);
+    expect([...b.keys()]).toEqual([...a.keys()]);
+    for (const [track, keys] of a) {
+      keys.forEach((k, i) => {
+        const moved = (track === 'sleeve_r0.rotate' || track === 'sleeve_r1.rotate') && ON(i);
+        if (!moved) expect(`${track} ${i} ${b.get(track)![i]}`).toBe(`${track} ${i} ${k}`);
+      });
+    }
+  }, SLOW);
+
+  test('mutant: a solve that keeps the pose\'s angles fails the 0.05 bar', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const from = 'if (sol.upper === null) continue;';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'continue;'));
+      const { ran, off } = raisedTest(join(d, 'cli.ts'));
+      expect(ran.status).toBe(0);
+      expect(off.length).toBe(8);
+      console.log(`  mutant "the solve keeps the pose's angles": exit ${ran.status}, ${off.length} frame(s) off, first: ${off[0]}`);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+
+  test('the set\'s turn holds the solved arm at its limit, and ART-RANGE lists what lies past it', () => {
+    const c = setup({ rig: RIG, map: mapOf({ sets: [set({ drawn: { sleeve_r0: 70, sleeve_r1: 30 }, turn: { sleeve_r0: [-5, 5], sleeve_r1: [-5, 5] } })] }), pose: poseDoc(RAISED) });
+    const r = retarget(c, ['--raised-by-head']);
+    expect(r.status).toBe(0);
+    const art = linesOf(r, 'ART-RANGE');
+    expect(art.some((l) => l.startsWith('ART-RANGE set "up" chain "arm_r" bone "sleeve_r0"') && l.includes('frames 4–11') && l.includes('held at the limit'))).toBe(true);
+    expect(art.some((l) => l.startsWith('ART-RANGE set "up" chain "arm_r" bone "sleeve_r1"') && l.includes('held at the limit'))).toBe(true);
+    const poses = poseRawAnimation(loadBuild(c.build), 'dance', Array.from({ length: RAISED.n - 1 }, () => RAISED.dt));
+    const out: string[] = [];
+    poses.forEach((p, i) => {
+      if (!ON(i)) return;
+      const b = byName(p.bones);
+      for (const [bone, drawn] of [['sleeve_r0', 70], ['sleeve_r1', 30]] as const) {
+        const turn = wrap(worldAngle(b, bone) - drawn);
+        if (Math.abs(turn) > 5 + ANGLE_TOL) out.push(`${bone} frame ${i}: ${turn.toFixed(3)}° from drawn`);
+      }
+    });
+    expect(out).toEqual([]);
+    // The clamp is the limit, not a miss of the solve: the RAISED line still reads the wrist as keyed.
+    expect(linesOf(r, 'RAISED')).toHaveLength(1);
+  }, SLOW);
+
+  test('a target out of the arm\'s reach: pointed straight at, and every frame reported', () => {
+    // Eyes 6 px apart in the pose: the same wrist is twice as many eye distances from the head, past the rig's 130 units of arm.
+    const c = setup({ rig: RIG, map: mapOf(), pose: poseDoc(RAISED, eyesApart(3)) });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--raised-by-head', '--report', report]);
+    expect(r.status).toBe(0);
+    const line = linesOf(r, 'RAISED')[0]!;
+    expect(line).toContain('reference 6.00 px');
+    expect(line).toMatch(/out of reach on 8 frame\(s\) \(4–11\): the target up to [0-9.]+ units from the shoulder, the arm 130\.0 long; pointed straight at it$/);
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as { raised: Array<{ unreachable: number[]; reach: { arm: number; farthest: number } }> };
+    expect(rep.raised[0]!.unreachable).toEqual([4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(rep.raised[0]!.reach.farthest).toBeGreaterThan(130);
+    // Straight at it: the upper arm and the forearm on one line, the shoulder → target direction.
+    const poses = poseRawAnimation(loadBuild(c.build), 'dance', Array.from({ length: RAISED.n - 1 }, () => RAISED.dt));
+    for (const i of rep.raised[0]!.unreachable) {
+      const b = byName(poses[i]!.bones);
+      expect(Math.abs(wrap(worldAngle(b, 'sleeve_r0') - worldAngle(b, 'sleeve_r1')))).toBeLessThanOrEqual(ANGLE_TOL);
+    }
+  }, SLOW);
+
+  test('RAISED_HEAD: the flag is refused without a head chain, and with one not aimed "a>b"; nothing written', () => {
+    for (const [head, says] of [[null, 'no chain of the map carries the eye line'], [headChain('x'), 'chain "head" carries r_eye → l_eye on bone "head", and aims it "x"']] as const) {
+      const c = setup({ rig: RIG, map: mapOf({ head }), pose: poseDoc(RAISED) });
+      const r = retarget(c, ['--raised-by-head']);
+      expect(r.status).toBe(1);
+      expect(fails(r)).toHaveLength(1);
+      expect(fails(r)[0]).toStartWith('FAIL  RAISED_HEAD: --raised-by-head places a raised arm\'s wrist against the head in eye distances');
+      expect(fails(r)[0]).toContain(says);
+      expect(existsSync(c.out)).toBe(false);
+      // Control: the same map without the flag runs.
+      expect(retarget(c).status).toBe(0);
+    }
+  }, SLOW);
+
+  test('a map whose sets draw no arm raised: the flag writes the same bytes as without it', () => {
+    const low = set({ drawn: { sleeve_r0: 30, sleeve_r1: 60 } });
+    const a = setup({ rig: RIG, map: mapOf({ sets: [low] }), pose: poseDoc(RAISED) });
+    expect(retarget(a).status).toBe(0);
+    const first = readFileSync(a.out);
+    rmSync(a.out);
+    const r = retarget(a, ['--raised-by-head']);
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'SWITCH')[0]).toContain('frames 4–11');
+    expect(linesOf(r, 'RAISED')).toEqual(['RAISED none — no set drawing an arm within 30° of straight up showed; no key moved']);
+    expect(readFileSync(a.out).equals(first)).toBe(true);
+  }, SLOW);
+});

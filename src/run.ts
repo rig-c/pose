@@ -14,7 +14,7 @@ import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './
 import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, readIdle, targetOf, trackLabel, type IdleReading, type RigcTrack, type Target } from './idle.ts';
 import { bendLine, endOnLine, flipLine, holdLine, rangeLine, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions } from './retarget.ts';
 import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, readBuild, resolveRig, restOf, slotsOf } from './rigc.ts';
-import { artRangeLine, chainsMoving, switchLine, uncoveredFolds } from './switch.ts';
+import { artRangeLine, chainsMoving, raisedLine, RAISED_WITHIN, switchLine, uncoveredFolds } from './switch.ts';
 import { landed, measureFeet, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
 import { legsOf } from './legs.ts';
 import { reduceKeys, type ReduceBone, type Reduced } from './reduce.ts';
@@ -108,7 +108,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     resolveMap(map, rest, a.map, slots);
 
     const r = retarget(rest, map, frames, times, a, slots);
-    say(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)${a.legScale !== undefined && a.legScale !== 'off' ? `, leg-scale ${a.legScale[0]}–${a.legScale[1]}` : ''}${a.plantFeet === true ? ', plant-feet' : ''}${a.stance !== undefined && a.stance !== 'off' ? `, stance ${a.stance}` : ''}${a.carryIdle === true ? ', carry-idle' : ''}${a.merge !== undefined ? `, merge ${a.merge}` : ''}${a.reduce !== undefined ? `, reduce ${a.reduce}°${a.reduceHip !== undefined ? ` (hip ${a.reduceHip} units)` : ''}` : ''}`);
+    say(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)${a.legScale !== undefined && a.legScale !== 'off' ? `, leg-scale ${a.legScale[0]}–${a.legScale[1]}` : ''}${a.plantFeet === true ? ', plant-feet' : ''}${a.stance !== undefined && a.stance !== 'off' ? `, stance ${a.stance}` : ''}${a.raisedByHead === true ? ', raised-by-head' : ''}${a.carryIdle === true ? ', carry-idle' : ''}${a.merge !== undefined ? `, merge ${a.merge}` : ''}${a.reduce !== undefined ? `, reduce ${a.reduce}°${a.reduceHip !== undefined ? ` (hip ${a.reduceHip} units)` : ''}` : ''}`);
     say(`  RIGC   rig-c ${rigc.version} (${rigc.entry}) gates and poses this run`);
     say(`  CLEAN  ${cleanLine(seq.cleaned!)}`);
     if (a.smoothAlias !== undefined) say(`  SMOOTH --smooth is carried by clean; ignored (given ${a.smoothAlias}; this sequence was cleaned with legs ${seq.cleaned!.params.legs}, rest ${seq.cleaned!.params.rest})`);
@@ -130,6 +130,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       for (const l of windowLines(map, r.switches, r.distances, r.times, a.switchTolerance)) say(`  FRAMES ${l}`);
     }
     for (const e of r.range) say(`  RANGE  ${rangeLine(e, r.times)}`);
+    if (a.raisedByHead === true && r.raised.length === 0) say(`  RAISED none — no set drawing an arm within ${RAISED_WITHIN}° of straight up showed; no key moved`);
+    for (const e of r.raised) say(`  RAISED ${raisedLine(e, r.times)}`);
     for (const e of r.artRange) say(`  ART-RANGE ${artRangeLine(e, r.times)}`);
     for (const l of r.legScale) say(`  LEG-SCALE ${legScaleLine(l, r.times)}`);
     if (r.pivot !== null) say(`  PIVOT  bone "${r.pivot.bone}"'s origin is ${r.pivot.distance.toFixed(2)} units (${r.pivot.hipWidths.toFixed(3)} hip widths) from its thigh roots' midpoint (${r.pivot.roots.join(' + ')}): dx ${r.pivot.offset[0].toFixed(2)}, dy ${r.pivot.offset[1].toFixed(2)}, at setup — the pivot every hip turn swings the legs about`);
@@ -273,7 +275,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         frames: seq.frames.length,
         duration: r.animation.duration,
         cleaned: seq.cleaned,
-        options: { minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', reduceHip: a.reduceHip ?? 'off' },
+        options: { minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', raisedByHead: a.raisedByHead === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', reduceHip: a.reduceHip ?? 'off' },
         scale: r.scale,
         holds: r.holds,
         short: r.short,
@@ -289,6 +291,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         turns: r.turns,
         range: r.range,
         artRange: r.artRange,
+        raised: r.raised,
         legScale: r.legScale.map(({ scale: _scale, ...rest }) => rest),
         pivot: r.pivot,
         stance: r.stance === null ? null : { tolerance: r.stance.tolerance, bounds: r.stance.bounds, runs: r.stance.runs, over: r.stance.over },
