@@ -11,7 +11,7 @@
 import { poseRawAnimation, poseRawSetup, type CompiledDocument, type RawBone } from 'rig-c/core';
 import type { Body18 } from './joints.ts';
 import { aimAngle, pointAt, type JointMap } from './map.ts';
-import type { Joint } from './pose.ts';
+import type { HipsInferred, Joint, Run } from './pose.ts';
 import type { Retarget } from './retarget.ts';
 import { pictureAngle, pointOn, wrap } from './retarget.ts';
 
@@ -260,6 +260,14 @@ export interface Posture {
    */
   hipsInferred?: { frames: number; source: string };
   /**
+   * Present only when the hips were measured (#86, `hipsInferred.by` is
+   * `measured`): the method, how many frames the tilt was read on — the
+   * record's read, interpolated and held frames with both hips good, each
+   * class counted — and the record's held spans. Any other frame with an
+   * inferred hip is left out and counted in `hipsInferred`.
+   */
+  tiltMeasured?: { method: string; frames: number; read: number; interpolated: number; held: number; heldSpans: Run[] };
+  /**
    * Sway: the x-range of mid_hip − mid_shoulder, in rig units (the reference's
    * picture px × the figure scale) and in each body's own shoulder widths.
    */
@@ -302,8 +310,14 @@ const medianOf = (xs: number[]): number => {
  * from the clean record). On some frames only, the tilt is read over the rest
  * and the line counts the frames left out. Sway is read as before, inferred
  * hips included: it is a different measure, and the card leaves it as it is.
+ *
+ * Measured hips (#86, `measured`): the hips are inferred on every frame, and
+ * turned to a measured angle: read off the picture, interpolated between two
+ * close reads, or held from the nearer read. Those three are the measurement,
+ * so the tilt is read on them; any other frame with an inferred hip is left
+ * out and counted, as above. The line names the held spans.
  */
-export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: ReadonlyMap<string, number>, map: JointMap, r: Retarget, frames: ReadonlyArray<Partial<Record<Body18, Joint>>>, minScore: number, inferredSource = 'source not stated'): Posture | null {
+export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: ReadonlyMap<string, number>, map: JointMap, r: Retarget, frames: ReadonlyArray<Partial<Record<Body18, Joint>>>, minScore: number, inferredSource = 'source not stated', measured: Extract<HipsInferred, { by: 'measured' }> | null = null): Posture | null {
   const pelvis = map.chains.find((c) => c.joints.length === 2 && c.joints[0] === 'r_hip' && c.joints[1] === 'l_hip');
   if (pelvis === undefined || map.translate === null || r.origin === null || r.scale === null) return null;
   const s = r.scale.factor;
@@ -315,11 +329,18 @@ export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: Read
   const refSway: number[] = [];
   const refSw: number[] = [];
   let inferred = 0;
+  const inClass = (rs: Run[], i: number) => rs.some(([a, b]) => a <= i && i <= b);
+  const counts = { read: 0, interpolated: 0, held: 0 };
   frames.forEach((f, i) => {
     const rh = at(i, 'r_hip');
     const lh = at(i, 'l_hip');
     if (rh === null || lh === null) return;
-    if (f.r_hip?.state === 'inferred' || f.l_hip?.state === 'inferred') inferred++;
+    const isInferred = f.r_hip?.state === 'inferred' || f.l_hip?.state === 'inferred';
+    const cls = measured === null ? undefined : (['read', 'interpolated', 'held'] as const).find((c) => inClass(measured[c], i));
+    if (isInferred && cls !== undefined) {
+      counts[cls]++;
+      refTilt.push(pictureAngle(rh, lh));
+    } else if (isInferred) inferred++;
     else refTilt.push(pictureAngle(rh, lh));
     const rs = at(i, 'r_shoulder');
     const ls = at(i, 'l_shoulder');
@@ -374,6 +395,7 @@ export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: Read
     tilt,
     ...(tilt === null ? { tiltWhy: why } : {}),
     ...(inferred > 0 ? { hipsInferred: { frames: inferred, source: inferredSource } } : {}),
+    ...(measured !== null ? { tiltMeasured: { method: measured.method, frames: counts.read + counts.interpolated + counts.held, ...counts, heldSpans: measured.held.map(([a, b]): Run => [a, b]) } } : {}),
     sway,
   };
 }
@@ -386,11 +408,14 @@ const sg = (x: number) => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(1)}`;
 export function postureLines(q: Posture): string[] {
   const over = (k: number) => (k === q.frames.of ? '' : ` over ${k} of ${q.frames.of} frames`);
   const t = q.tilt;
+  const m = q.tiltMeasured;
+  const heldSpans = m === undefined || m.heldSpans.length === 0 ? 'none' : m.heldSpans.map(([a, b]) => (a === b ? `${a}` : `${a}–${b}`)).join(', ');
+  const measured = m === undefined ? '' : `; tilt measured (${m.method}) on ${m.frames} frame(s): ${m.read} read, ${m.interpolated} interpolated, ${m.held} held (held: ${heldSpans})`;
   const left = q.hipsInferred === undefined ? '' : `; ${q.hipsInferred.frames} frame(s) with an inferred hip not read (${q.hipsInferred.source})`;
   const out = [
     t === null
       ? `hip tilt not read: ${q.tiltWhy}`
-      : `hip tilt range (chain "${q.pelvis}", r_hip → l_hip, Spine degrees): reference ${f1(t.reference.range)}° (${sg(t.reference.min)}° … ${sg(t.reference.max)}°${over(q.frames.tilt)}), rig ${f1(t.rig.range)}° (${sg(t.rig.min)}° … ${sg(t.rig.max)}°) — rig/reference ${f3(t.ratio)}${left}`,
+      : `hip tilt range (chain "${q.pelvis}", r_hip → l_hip, Spine degrees): reference ${f1(t.reference.range)}° (${sg(t.reference.min)}° … ${sg(t.reference.max)}°${over(q.frames.tilt)}), rig ${f1(t.rig.range)}° (${sg(t.rig.min)}° … ${sg(t.rig.max)}°) — rig/reference ${f3(t.ratio)}${measured}${left}`,
   ];
   const w = q.sway;
   if (w === null) out.push('sway: the reference has no frame with both hips and both shoulders good; not measured');

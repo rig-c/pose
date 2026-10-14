@@ -228,7 +228,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     p.throwIfAny();
 
     const lengths = new Map(doc.bones.map((b) => [b.name, b.length ?? 0]));
-    const posture = measurePosture(posed, lengths, map, r, frames, a.minScore, inferredSource(seq.cleaned));
+    const hips = seq.cleaned?.params.hipsInferred;
+    const posture = measurePosture(posed, lengths, map, r, frames, a.minScore, inferredSource(seq.cleaned), hips?.by === 'measured' ? hips : null);
     if (posture !== null) for (const l of postureLines(posture)) say(`  POSTURE ${l}`);
     const legBones = legBonesOf(map);
     const feetReading = legBones === null ? null : measureFeet(posed, lengths, r, legBones);

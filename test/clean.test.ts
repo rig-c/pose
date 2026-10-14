@@ -12,8 +12,8 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BODY18 } from '../src/joints.ts';
-import { clean, cleanLine, jitterOf, LEGS, savitzkyGolay, type Series } from '../src/clean.ts';
-import { readPoseSequence, writePoseSequence, type PoseSequence } from '../src/pose.ts';
+import { clean, cleanLine, inferredSource, jitterOf, LEGS, savitzkyGolay, type Series } from '../src/clean.ts';
+import { measuredFrames, readPoseSequence, writePoseSequence, type PoseSequence } from '../src/pose.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const CLI = join(ROOT, 'cli.ts');
@@ -372,10 +372,10 @@ describe('the inferred state (#63) is read by name', () => {
     expect((readPoseSequence(JSON.stringify(good), 'p.json').frames[2]!.people[0]!.joints.r_hip)).toEqual({ state: 'inferred', at: [485, 600] });
   });
 
-  test('a "hipsInferred" record other than { by: "declared" } is refused by name', () => {
+  test('a "hipsInferred" record by neither "declared" nor "measured" is refused by name', () => {
     const good = clean(seqOf(seqDoc(12)), { loop: false, legs: 5, rest: 7, hipsInferred: true }, undefined, 'mem').seq;
     const doc = JSON.parse(writePoseSequence(good)) as { cleaned: { params: Record<string, unknown> } };
-    doc.cleaned.params.hipsInferred = { by: 'measured', how: 1 };
+    doc.cleaned.params.hipsInferred = { by: 'guessed', how: 1 };
     let err = '';
     try {
       readPoseSequence(JSON.stringify(doc), 'p.json');
@@ -384,7 +384,85 @@ describe('the inferred state (#63) is read by name', () => {
     }
     expect(err.split('\n')).toEqual([
       'POSE_CLEANED: p.json "cleaned" "params" "hipsInferred" has a key this reader does not know: "how"; the keys it reads are by',
-      'POSE_CLEANED: p.json "cleaned" "params" "hipsInferred" "by" is the string "measured"; this reader reads "declared" (the person running rig-pose clean --hips-inferred said so)',
+      'POSE_CLEANED: p.json "cleaned" "params" "hipsInferred" "by" is the string "guessed"; this reader reads "declared" (the person running rig-pose clean --hips-inferred said so) or "measured" (a tool read the pelvis line off the picture, tools/pelvis.py)',
+    ]);
+  });
+});
+
+describe('a measured "hipsInferred" record (#86) is read, written and refused by name', () => {
+  const MEASURED = {
+    by: 'measured',
+    method: 'a test reading',
+    read: [[0, 3], [7, 9]],
+    interpolated: [[4, 5]],
+    held: [[6, 6], [10, 11]],
+    declined: [{ frames: [4, 5], why: 'covered' }, { frames: [6, 6], why: 'edge confidence' }, { frames: [10, 11], why: 'covered' }],
+  };
+  const docWith = (h: unknown) => {
+    const good = clean(seqOf(seqDoc(12)), { loop: false, legs: 5, rest: 7, hipsInferred: true }, undefined, 'mem').seq;
+    const doc = JSON.parse(writePoseSequence(good)) as { cleaned: { params: Record<string, unknown> } };
+    doc.cleaned.params.hipsInferred = h;
+    return JSON.stringify(doc);
+  };
+  const refusal = (h: unknown): string[] => {
+    try {
+      readPoseSequence(docWith(h), 'p.json');
+    } catch (e) {
+      return (e as Error).message.split('\n');
+    }
+    return [];
+  };
+  const W = 'POSE_CLEANED: p.json "cleaned" "params" "hipsInferred"';
+
+  test('the control: a well-formed record with each class is read, round-trips byte for byte, and names its source', () => {
+    const back = readPoseSequence(docWith(MEASURED), 'p.json');
+    expect(back.cleaned!.params.hipsInferred).toEqual(MEASURED as never);
+    expect(writePoseSequence(readPoseSequence(writePoseSequence(back), 'p.json'))).toBe(writePoseSequence(back));
+    expect(measuredFrames(back.cleaned!.params.hipsInferred)).toEqual(new Set(Array.from({ length: 12 }, (_, i) => i)));
+    expect(measuredFrames({ by: 'declared' })).toBeNull();
+    expect(inferredSource(back.cleaned)).toBe('measured by a test reading');
+    expect(cleanLine(back.cleaned!)).toEndWith('; hips inferred (measured by a test reading)');
+  });
+
+  test('planted: each malformed field is refused naming the field, the value and what it must be', () => {
+    expect(refusal({ by: 'measured', read: [], interpolated: [], held: [], declined: [] })).toEqual([
+      `${W} has no "method"; a measured record is { by: "measured", method, read, interpolated, held: [[first, last]], declined: [{ frames: [first, last], why }] }`,
+    ]);
+    expect(refusal({ ...MEASURED, held: undefined })).toEqual([
+      `${W} has no "held"; a measured record is { by: "measured", method, read, interpolated, held: [[first, last]], declined: [{ frames: [first, last], why }] }`,
+    ]);
+    expect(refusal({ ...MEASURED, method: '' })).toEqual([`${W} "method" is the string ""; it must be a non-empty string naming the reading`]);
+    expect(refusal({ ...MEASURED, extra: 1 })).toEqual([`${W} has a key this reader does not know: "extra"; the keys it reads are by, method, read, interpolated, held, declined`]);
+    expect(refusal({ ...MEASURED, read: [[0, 3.5], [7, 12]] })).toEqual([
+      `${W} read[0][1] is number 3.5; it must be a frame index in [0, 11]`,
+      `${W} read[1][1] is number 12; it must be a frame index in [0, 11]`,
+    ]);
+    expect(refusal({ ...MEASURED, read: [[3, 0], [7, 9]] })).toEqual([`${W} read[0] is [3, 0]; a run's first frame must not come after its last`]);
+    expect(refusal({ ...MEASURED, held: [[10, 11], [6, 6]] })).toEqual([
+      `${W} held[1] [6, 6] starts at or before the end of p.json "cleaned" "params" "hipsInferred" held[0] [10, 11]; held runs must increase and not overlap`,
+    ]);
+    expect(refusal({ ...MEASURED, declined: [{ frames: [4, 5] }, { frames: [6], why: 'x' }] })).toEqual([
+      `${W} declined[0] has no "why"; a declined run says why, a non-empty string`,
+      `${W} declined[1] "frames" is an array; a run is [first, last], two frame indices`,
+    ]);
+  });
+
+  test('planted: the classes must be disjoint, cover every frame, and be exactly what was declined', () => {
+    // A frame in two classes.
+    expect(refusal({ ...MEASURED, interpolated: [[3, 5]] })).toEqual([
+      `${W} read[0] [0, 3] and p.json "cleaned" "params" "hipsInferred" interpolated[0] [3, 5] share frame(s) 3–3; a frame is one of read, interpolated and held`,
+    ]);
+    // A frame in none.
+    expect(refusal({ ...MEASURED, held: [[6, 6], [10, 10]], declined: [MEASURED.declined[0], MEASURED.declined[1], { frames: [10, 10], why: 'covered' }] })).toEqual([
+      `${W}: frame(s) 11 are in none of read, interpolated and held; every frame of the sequence is one of them`,
+    ]);
+    // Read and declined.
+    expect(refusal({ ...MEASURED, declined: [{ frames: [3, 5], why: 'covered' }, MEASURED.declined[1], MEASURED.declined[2]] })).toEqual([
+      `${W}: frame(s) 3 are both read and declined; a frame is read or declined, not both`,
+    ]);
+    // Filled but not declined.
+    expect(refusal({ ...MEASURED, declined: [MEASURED.declined[0], MEASURED.declined[1]] })).toEqual([
+      `${W}: frame(s) 10–11 are interpolated or held but not declined; only a frame the reading declined is filled, and "declined" says why`,
     ]);
   });
 });
