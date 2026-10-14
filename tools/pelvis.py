@@ -24,24 +24,27 @@ What it writes: the same sequence, every other joint and every frame time as
 read, with r_hip and l_hip `inferred` on every frame where they have a
 position, and turned about their midpoint to the frame's angle: the midpoint
 and the hip width are kept, the hips stay on their own sides (r_hip -> l_hip
-keeps its sense), and only the line's angle changes. A declined frame never
-falls back to the detector's hip line (the value known wrong under a skirt):
+keeps its sense), and only the line's angle changes:
 
 - read: the frame's own reading;
 - interpolated: a declined frame between two read frames at most
   FILL_MAX_GAP_S apart (by the frames' times) takes the linear interpolation,
   in time, of their angles;
-- held: any other declined frame (a longer gap, or a run to the clip's end)
-  carries the earlier read to the end of its run, and the next read starts
-  the new value; a run at the clip's start, with no earlier read, holds the
-  later read. The written angle never switches where nothing was read.
+- scaled / unmeasured (rig-c/pose#106): any other declined frame (a longer gap,
+  or a run at the clip's start or end) takes the detector's hip line scaled by
+  the least-squares gain fitted on the clip's own read frames (outside any
+  stillness hold on r_hip or l_hip) when that fit's correlation is >=
+  FIT_MIN_CORR (0.9); if the fit's correlation is under FIT_MIN_CORR, the run
+  is marked unmeasured instead of holding the last read. (`--hold-covered` is
+  the self-test's planted failure: it holds the earlier read flat, or the later
+  read at the clip's start.)
 
 A clip with no read frame is refused (PELVIS_NO_READING), nothing written.
-`cleaned.params.hipsInferred` becomes { by: "measured", method, read,
-interpolated, held: [[first, last], ...], declined: [{ frames: [first, last],
-why }] }: every frame is in exactly one of read, interpolated and held, and the
-declined runs cover exactly the interpolated and held frames, each run with a
-reason shared by every frame of it.
+`cleaned.params.hipsInferred` becomes { by: "measured", method, fit, read,
+interpolated, scaled, held, unmeasured, declined: [{ frames: [first, last],
+why }] }: every frame is in exactly one of read, interpolated, scaled, held and
+unmeasured, and the declined runs cover exactly the non-read frames, each run
+with a reason shared by every frame of it.
 
 A sequence carrying a `camera` (tools/scan.py) holds its joints normalised,
 p' = (p - t) / s. The video is the raw picture, so joints are mapped to it
@@ -93,8 +96,10 @@ rig-c/pose#86 settled):
 
 The parameters were fixed before the run that scored them (rig-c/pose#86).
 
-`--no-cover-check` drops step 2 and `--one-neighbour-guard` tests step 8 against
-the previous read only (the planted failures of tools/pelvis_selftest.py).
+`--no-cover-check` drops step 2, `--one-neighbour-guard` tests step 8 against
+the previous read only, and `--hold-covered` holds the earlier read across long
+declined runs instead of scaling the detector hip line (the planted failures of
+tools/pelvis_selftest.py).
 `--report` writes per frame: the region, the wrists tested, the waistband run,
 the columns, the spread, the reading or the reason, the class and the angle
 written. `--sheet` draws the listed frames with the region and the line
@@ -132,6 +137,7 @@ PARAMS = {
     'GUARD_MAX_ABS_DEG': 25.0,
     'GUARD_MAX_DEG_PER_FRAME': 6.0,
     'FILL_MAX_GAP_S': 1.0,
+    'FIT_MIN_CORR': 0.9,
 }
 
 WHY_COVERED = 'covered: a wrist in front of the waist'
@@ -285,11 +291,58 @@ def guard(results, P=PARAMS, two_neighbour=True):
     return results
 
 
-def fill(times, results, P=PARAMS):
-    """Per frame: ('read' | 'interpolated' | 'held', angle). Declined frames between two reads at most
-    FILL_MAX_GAP_S apart take the linear interpolation in time; others carry the earlier read to the end of
-    their run (a run at the clip's start, with no earlier read, holds the later read), so the written angle
-    changes only at a read. Raises Refusal when no frame was read."""
+def detector_angles(doc, person):
+    """Per frame: the detector's hip-line angle in the picture convention, or None where a hip has no position."""
+    out = []
+    for f in doc['frames']:
+        joints = person_joints(f, person)
+        if joints is not None and 'at' in joints.get('r_hip', {}) and 'at' in joints.get('l_hip', {}):
+            out.append(picture_angle(joints['r_hip']['at'], joints['l_hip']['at']))
+        else:
+            out.append(None)
+    return out
+
+
+def hip_held_frames(doc):
+    """Frames where rig-pose clean held r_hip or l_hip at its stillness median (cleaned.holds)."""
+    out = set()
+    for h in (doc.get('cleaned') or {}).get('holds') or []:
+        if isinstance(h, dict) and h.get('joint') in ('r_hip', 'l_hip'):
+            a, b = h['frames']
+            out.update(range(int(a), int(b) + 1))
+    return out
+
+
+def fit_detector(results, det_angles, held_frames=frozenset(), P=PARAMS):
+    """Least-squares fit of waistband angle against detector hip-line angle over the clip's read frames
+    (outside stillness holds on r_hip or l_hip when at least 2 unheld read frames exist)."""
+    all_reads = [i for i, r in enumerate(results) if 'angle' in r and det_angles[i] is not None]
+    reads = [i for i in all_reads if i not in held_frames]
+    if len(reads) < 2:
+        reads = all_reads
+    n = len(reads)
+    if n < 2:
+        return {'frames': n, 'gain': 0.0, 'corr': 0.0, 'ok': False}
+    xs = [det_angles[i] for i in reads]
+    ys = [results[i]['angle'] for i in reads]
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    sxx = sum((x - mx) ** 2 for x in xs)
+    syy = sum((y - my) ** 2 for y in ys)
+    if sxx <= 0 or syy <= 0:
+        return {'frames': n, 'gain': 0.0, 'corr': 0.0, 'ok': False}
+    corr = sxy / math.sqrt(sxx * syy)
+    gain = sxy / sxx
+    return {'frames': n, 'gain': gain, 'corr': corr, 'ok': corr >= P['FIT_MIN_CORR']}
+
+
+def fill(times, results, det_angles=None, fit=None, P=PARAMS, hold_covered=False):
+    """Per frame: ('read' | 'interpolated' | 'scaled' | 'held' | 'unmeasured', angle_or_None). Declined frames
+    between two reads at most FILL_MAX_GAP_S apart take the linear interpolation in time; longer declined runs
+    (or runs at the clip's start or end) take the detector's hip line scaled by fit['gain'] when fit['ok'] is True,
+    or are marked 'unmeasured' (angle None) when the fit's correlation is under FIT_MIN_CORR. hold_covered=True
+    (--hold-covered) is the self-test's planted failure: it holds the earlier read flat instead."""
     reads = [i for i, r in enumerate(results) if 'angle' in r]
     if not reads:
         raise Refusal('PELVIS_NO_READING: no frame gave a reading; there is no measured angle to interpolate or hold, so nothing is written')
@@ -305,8 +358,12 @@ def fill(times, results, P=PARAMS):
         if before is not None and after is not None and times[after] - times[before] <= P['FILL_MAX_GAP_S'] + TIME_EPS:
             u = (times[i] - times[before]) / (times[after] - times[before])
             out.append(('interpolated', results[before]['angle'] + u * (results[after]['angle'] - results[before]['angle'])))
-        else:
+        elif hold_covered:
             out.append(('held', results[before if before is not None else after]['angle']))
+        elif fit is not None and fit['ok'] and det_angles is not None and det_angles[i] is not None:
+            out.append(('scaled', fit['gain'] * det_angles[i]))
+        else:
+            out.append(('unmeasured', None))
     return out
 
 
@@ -403,10 +460,10 @@ def measure(video, doc, person, keep=None, cover_check=True):
     return results, pictures
 
 
-def apply(doc, person, results, classes, method=METHOD):
-    """The sequence written back: hips inferred everywhere, turned to the frame's angle (read, interpolated
-    or held); the record."""
-    groups = {'read': [], 'interpolated': [], 'held': []}
+def apply(doc, person, results, classes, fit=None, method=METHOD):
+    """The sequence written back: hips inferred everywhere, turned to the frame's angle where measured/filled
+    (read, interpolated, scaled or held) and left at the detector's hip line where unmeasured; the record."""
+    groups = {'read': [], 'interpolated': [], 'scaled': [], 'held': [], 'unmeasured': []}
     declined = []
     for i, (f, r, (cls, ang)) in enumerate(zip(doc['frames'], results, classes)):
         groups[cls].append(i)
@@ -415,7 +472,7 @@ def apply(doc, person, results, classes, method=METHOD):
         joints = person_joints(f, person)
         if joints is None:
             continue
-        if 'at' in joints.get('r_hip', {}) and 'at' in joints.get('l_hip', {}):
+        if ang is not None and 'at' in joints.get('r_hip', {}) and 'at' in joints.get('l_hip', {}):
             # The angle is the same in the normalised space (scale and translation only), so turn there.
             nr, nl = turned(joints['r_hip']['at'], joints['l_hip']['at'], ang)
             joints['r_hip']['at'] = [r2(nr[0]), r2(nr[1])]
@@ -429,8 +486,11 @@ def apply(doc, person, results, classes, method=METHOD):
             dec[-1]['frames'][1] = i
         else:
             dec.append({'frames': [i, i], 'why': why})
-    rec = {'by': 'measured', 'method': method, 'read': runs(groups['read']), 'interpolated': runs(groups['interpolated']),
-           'held': runs(groups['held']), 'declined': dec}
+    rec = {'by': 'measured', 'method': method,
+           **(({'fit': {'frames': fit['frames'], 'gain': round(fit['gain'], 4), 'corr': round(fit['corr'], 4)}}) if fit is not None else {}),
+           'read': runs(groups['read']), 'interpolated': runs(groups['interpolated']),
+           'scaled': runs(groups['scaled']), 'held': runs(groups['held']), 'unmeasured': runs(groups['unmeasured']),
+           'declined': dec}
     doc['cleaned']['params']['hipsInferred'] = rec
     return rec, {k: len(v) for k, v in groups.items()}
 
@@ -477,7 +537,7 @@ def frames_list(s):
 
 
 def main(argv):
-    ap = argparse.ArgumentParser(description="The pelvis line from the skirt's top edge (rig-c/pose#86).")
+    ap = argparse.ArgumentParser(description="The pelvis line from the skirt's top edge (rig-c/pose#86, #106).")
     ap.add_argument('--video', required=True)
     ap.add_argument('--pose', required=True, help='a sequence rig-pose clean wrote')
     ap.add_argument('--out', required=True)
@@ -487,6 +547,7 @@ def main(argv):
     ap.add_argument('--sheet-frames', type=frames_list, help='a,b,...: the frames on --sheet (default: 12 spread evenly)')
     ap.add_argument('--one-neighbour-guard', action='store_true', help="the planted failure: the misread guard tests the previous reading only (v2's rule)")
     ap.add_argument('--no-cover-check', action='store_true', help="the planted failure: a wrist in the waist band is not tested (the self-test's mutant)")
+    ap.add_argument('--hold-covered', action='store_true', help="the planted failure (#106): a long declined run holds the earlier read instead of scaling the detector hip line")
     opts = ap.parse_args(argv)
     try:
         doc, person = read_pose(opts.pose, opts.person)
@@ -497,17 +558,21 @@ def main(argv):
             raise Refusal(f'PELVIS_SHEET: --sheet-frames {", ".join(map(str, bad))} not in the sequence (frames 0 … {n - 1})')
         results, pictures = measure(opts.video, doc, person, set(which) if opts.sheet else None, not opts.no_cover_check)
         guard(results, PARAMS, not opts.one_neighbour_guard)
-        classes = fill([f['t'] for f in doc['frames']], results)
+        det = detector_angles(doc, person)
+        fit = fit_detector(results, det, hip_held_frames(doc), PARAMS)
+        classes = fill([f['t'] for f in doc['frames']], results, det, fit, PARAMS, opts.hold_covered)
     except Refusal as e:
         for line in str(e).split('\n'):
             print(f'FAIL  {line}', file=sys.stderr)
         return 1
-    planted = (', NO COVER CHECK (planted failure)' if opts.no_cover_check else '') + (', ONE-NEIGHBOUR GUARD (planted failure)' if opts.one_neighbour_guard else '')
-    rec, count = apply(doc, person, results, classes, METHOD + planted)
+    planted = ((', NO COVER CHECK (planted failure)' if opts.no_cover_check else '')
+               + (', ONE-NEIGHBOUR GUARD (planted failure)' if opts.one_neighbour_guard else '')
+               + (', HOLD COVERED (planted failure)' if opts.hold_covered else ''))
+    rec, count = apply(doc, person, results, classes, fit, METHOD + planted)
     with open(opts.out, 'w') as fh:
         fh.write(json.dumps(doc, indent=2, ensure_ascii=False) + '\n')
     spans = lambda rs: ', '.join(f'{a}-{b}' if a != b else str(a) for a, b in rs) or 'none'
-    print(f'pelvis: {n} frame(s) of person "{person}"; {METHOD}{"; NO COVER CHECK" if opts.no_cover_check else ""}')
+    print(f'pelvis: {n} frame(s) of person "{person}"; {METHOD}{"; NO COVER CHECK" if opts.no_cover_check else ""}{"; HOLD COVERED" if opts.hold_covered else ""}')
     print(f'  READ     {count["read"]} frame(s): {spans(rec["read"])}')
     for d in rec['declined']:
         a, b = d['frames']
@@ -515,13 +580,22 @@ def main(argv):
     for i, r in enumerate(results):
         if 'misread' in r:
             print(f'  MISREAD  frame {i}: read {r["misread"]:+.1f}°, declined ({r["why"]})')
+    print(f'  FIT      {fit["frames"]} read frame(s): gain {fit["gain"]:.2f}×, correlation {fit["corr"]:+.3f} (bar ≥ {PARAMS["FIT_MIN_CORR"]:g})'
+          if fit['ok'] else
+          f'  FIT      {fit["frames"]} read frame(s): gain {fit["gain"]:.2f}×, correlation {fit["corr"]:+.3f} < {PARAMS["FIT_MIN_CORR"]:g} — long runs unmeasured')
     print(f'  INTERPOLATED {count["interpolated"]} declined frame(s) between reads at most {PARAMS["FILL_MAX_GAP_S"]:g} s apart: {spans(rec["interpolated"])}')
-    print(f'  HELD     {count["held"]} declined frame(s) carrying the earlier read (the later one at the clip\'s start): {spans(rec["held"])}')
-    print('  INFERRED r_hip and l_hip on every frame where they have a position, turned about their midpoint to the frame\'s angle (read, interpolated or held), midpoint and width kept')
+    if opts.hold_covered:
+        print(f'  HELD     {count["held"]} declined frame(s) carrying the earlier read (the later one at the clip\'s start): {spans(rec["held"])}')
+    elif fit['ok']:
+        print(f'  SCALED   {count["scaled"]} declined frame(s) taking the detector hip line × {fit["gain"]:.2f}: {spans(rec["scaled"])}')
+    else:
+        print(f'  UNMEASURED {count["unmeasured"]} declined frame(s) (fit correlation {fit["corr"]:+.3f} < {PARAMS["FIT_MIN_CORR"]:g}): {spans(rec["unmeasured"])}')
+    print('  INFERRED r_hip and l_hip on every frame where they have a position, turned about their midpoint to the frame\'s angle (read, interpolated, scaled or held; unmeasured keeps the detector line), midpoint and width kept')
     print(f'  wrote {opts.out}')
     if opts.report:
         with open(opts.report, 'w') as fh:
-            json.dump({'method': METHOD, 'params': PARAMS, 'frames': [{'frame': i, **r, 'class': c, 'written': a} for i, (r, (c, a)) in enumerate(zip(results, classes))]}, fh, indent=1)
+            json.dump({'method': METHOD, 'params': PARAMS, 'fit': {'frames': fit['frames'], 'gain': round(fit['gain'], 4), 'corr': round(fit['corr'], 4), 'ok': fit['ok']},
+                       'frames': [{'frame': i, **r, 'detector': det[i], 'class': c, 'written': a} for i, (r, (c, a)) in enumerate(zip(results, classes))]}, fh, indent=1)
             fh.write('\n')
     if opts.sheet:
         sheet(opts.sheet, pictures, results, doc, person, which)

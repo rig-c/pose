@@ -1,4 +1,4 @@
-"""The synthetic check of tools/pelvis.py (rig-c/pose#86, bar 5). Not shipped.
+"""The synthetic check of tools/pelvis.py (rig-c/pose#86, bar 5; #106, bar 4). Not shipped.
 
   python3 -I tools/pelvis_selftest.py [--keep <dir>] [--mutant | --swing-only]
 
@@ -21,38 +21,9 @@ The frames (24 fps; picture px, y down; angles in the phase-2 convention,
   7      (cont.) -2° is far from both the previous (+10°) and the next (+8°) read: a lone outlier
   8      edge +8°                                                -> read
   9-10   edge +16°: 8° in one frame from +8°, but 0° from the next -> read (a real fast swing)
-  11-35  the hand in front (25 frames, > 1 s between reads)      -> covered -> held: frame 10's +16° throughout
+  11-35  the hand in front (25 frames, > 1 s between reads)      -> covered -> scaled: gain × detector hip angle (#106)
   36     edge -12°                                               -> read
-  37-39  the hand in front, to the clip's end                    -> covered -> held -12°
-
-The card's bar 5: the planted wrist on a hand in front reads "covered" (no
-line); with the hand and the wrist moved away the line is read again, within
-ANGLE_TOL degrees. Also checked: the misread guard declines frames 5 and 7 by
-name; interpolated frames take the linear interpolation of the reads either
-side, held frames carry the earlier read through their whole run (the later read at
-the clip's start), so a long run between reads a and b holds a throughout; on every frame the hips are turned to that
-angle about their midpoint, width kept (within the writer's 0.01 px), and
-`inferred`; the record's read, interpolated, held and declined runs; the
-TypeScript reader (src/pose.ts) reads the file; and the input refusals (no
-cleaned record, hipsInferred already set, a frame-count mismatch, no frame
-read), nothing written.
-
-The swing controls (#86 follow-up): real motion crossing one covered frame,
-(a) with steps near the per-frame bound (6.7, 5.6, 4.0 degrees/frame): every
-uncovered frame must be read; v2's one-neighbour guard declines the readings
-after the covered frame, so this control is red under --one-neighbour-guard;
-(b) at about 4 degrees/frame: read under both guards. `--swing-only` runs the
-two controls alone against the pelvis.py beside this file.
-
-The mutants: the same clip with --no-cover-check (the cover check disabled)
-must make the covered frames read through the hand, so the covered case fails;
-with --one-neighbour-guard (v2's guard: the previous read alone) the fast swing
-of frames 9-10 must be declined, so the swing case fails. Both run on every
-invocation and their failures are asserted. `--mutant` instead
-runs the whole check with --no-cover-check as the tool's setting, to show the
-bar going red (exit 1).
-
-Exit 0 when every case passes. Deterministic: no clock, no randomness.
+  37-39  the hand in front, to the clip's end                    -> covered -> scaled: gain × detector hip angle (#106)
 """
 import json
 import math
@@ -108,18 +79,20 @@ ON_HAND = {**AWAY, 'r_wrist': (HAND, 0.9)}
 BEHIND = {**AWAY, 'r_wrist': ((300, 540), 0.9)}
 UNTRUSTED = {**AWAY, 'l_wrist': ((235, 400), 0.2)}
 # (edge degrees, detector hip degrees, wrists, hand drawn)
+COVERED_SWING = [(16.0, round(4.0 * math.cos(k * 0.25), 2), ON_HAND, True) for k in range(25)]
 FRAMES = ([(10.0, 3.0, AWAY, False), (10.0, 3.0, ON_HAND, True), (10.0, 3.0, AWAY, False), (10.0, 3.0, BEHIND, False),
            (10.0, 3.0, UNTRUSTED, False), (26.0, 3.0, AWAY, False), (10.0, 3.0, AWAY, False), (-2.0, 1.0, AWAY, False),
            (8.0, 2.0, AWAY, False), (16.0, 4.0, AWAY, False), (16.0, 4.0, AWAY, False)]
-          + [(16.0, 4.0, ON_HAND, True)] * 25 + [(-12.0, -4.0, AWAY, False)] + [(-12.0, -4.0, ON_HAND, True)] * 3)
+          + COVERED_SWING + [(-12.0, -4.0, AWAY, False)] + [(-12.0, -4.0, ON_HAND, True)] * 3)
 READS = {0: 10.0, 2: 10.0, 3: 10.0, 4: 10.0, 6: 10.0, 8: 8.0, 9: 16.0, 10: 16.0, 36: -12.0}
 COVERED_FRAMES = [1, *range(11, 36), 37, 38, 39]
-WANT_RECORD = {'read': [[0, 0], [2, 4], [6, 6], [8, 10], [36, 36]], 'interpolated': [[1, 1], [5, 5], [7, 7]], 'held': [[11, 35], [37, 39]],
+WANT_RECORD = {'read': [[0, 0], [2, 4], [6, 6], [8, 10], [36, 36]], 'interpolated': [[1, 1], [5, 5], [7, 7]],
+               'scaled': [[11, 35], [37, 39]], 'held': [], 'unmeasured': [],
                'declined': [[1, 1], [5, 5], [7, 7], [11, 35], [37, 39]]}
 
 
-def sequence(cleaned=True, hips_inferred=False):
-    frames = [{'t': round(i / FPS, 6), 'people': [{'id': 'a', 'joints': joints(h, w)}]} for i, (_e, h, w, _x) in enumerate(FRAMES)]
+def sequence(cleaned=True, hips_inferred=False, frame_list=FRAMES):
+    frames = [{'t': round(i / FPS, 6), 'people': [{'id': 'a', 'joints': joints(h, w)}]} for i, (_e, h, w, _x) in enumerate(frame_list)]
     doc = {'spec': 'rig-pose-sequence/1', 'space': {'units': 'picture-px', 'origin': 'top-left', 'y': 'down'}, 'width': W, 'height': H,
            'source': 'synthetic (tools/pelvis_selftest.py)'}
     if cleaned:
@@ -147,8 +120,8 @@ def angle(p, q):
     return math.degrees(math.atan2(ya - yb, xb - xa))
 
 
-def expected(frames):
-    """Per frame: the class and the angle the fill must give, from the reads as the tool reported them."""
+def expected(frames, src, fit):
+    """Per frame: the class and the angle the fill must give, from the reads and fit as the tool reported them."""
     reads = sorted(i for i, r in enumerate(frames) if 'angle' in r)
     out = []
     for i, r in enumerate(frames):
@@ -160,8 +133,11 @@ def expected(frames):
         if before is not None and after is not None and (after - before) / FPS <= 1.0 + 1e-9:
             u = (i - before) / (after - before)
             out.append(('interpolated', frames[before]['angle'] + u * (frames[after]['angle'] - frames[before]['angle'])))
+        elif fit.get('ok'):
+            js = src['frames'][i]['people'][0]['joints']
+            out.append(('scaled', fit['gain'] * angle(js['r_hip']['at'], js['l_hip']['at'])))
         else:
-            out.append(('held', frames[before if before is not None else after]['angle']))
+            out.append(('unmeasured', None))
     return out
 
 
@@ -173,7 +149,9 @@ def check(dir_, clip, pose, planted=()):
         return [f'pelvis.py exit {p.returncode}: {p.stderr.strip()}']
     fails = []
     doc, src = json.load(open(out)), json.load(open(pose))
-    frames = json.load(open(rep))['frames']
+    rep_doc = json.load(open(rep))
+    frames = rep_doc['frames']
+    fit = rep_doc['fit']
     for i, want in READS.items():
         got = frames[i].get('angle')
         if got is None:
@@ -188,9 +166,9 @@ def check(dir_, clip, pose, planted=()):
     for i, word in ((5, 'misread guard: |angle| over 25°'), (7, 'misread guard: over 6°/frame from both the previous and the next reading')):
         if frames[i].get('why') != word:
             fails.append(f'frame {i}: wanted declined "{word}", got {frames[i].get("why") or "a reading %+.2f°" % frames[i].get("angle", float("nan"))}')
-    want = expected(frames)
+    want = expected(frames, src, fit)
     for i, (cls, ang) in enumerate(want):
-        if frames[i].get('class') != cls or abs(frames[i].get('written', 1e9) - ang) > 1e-4:
+        if frames[i].get('class') != cls or abs(frames[i].get('written', 1e9) - ang) > 1e-3:
             fails.append(f'frame {i}: class {frames[i].get("class")} angle {frames[i].get("written")}; wanted {cls} {ang:+.3f}°')
         hips_out = doc['frames'][i]['people'][0]['joints']
         hips_in = src['frames'][i]['people'][0]['joints']
@@ -207,11 +185,12 @@ def check(dir_, clip, pose, planted=()):
             fails.append(f'frame {i}: the hip width changed {math.dist(r0, l0):.3f} -> {math.dist(rh, lh):.3f}')
         if (lh[0] - rh[0]) * (l0[0] - r0[0]) + (lh[1] - rh[1]) * (l0[1] - r0[1]) <= 0:
             fails.append(f'frame {i}: r_hip -> l_hip reversed its sense')
-    held_run = {round(frames[i].get('written', float('nan')), 6) for i in range(11, 36)}
-    if held_run != {round(frames[10].get('angle', float('nan')), 6)}:
-        fails.append(f'frames 11-35 (a declined run between reads 10 and 36, > 1 s): written {sorted(held_run)}; wanted frame 10\'s read throughout')
+    scaled_written = [frames[i].get('written', 0.0) for i in range(11, 36)]
+    scaled_sd = float(np.std(scaled_written))
+    if scaled_sd <= 1.0:
+        fails.append(f'frames 11-35 (a covered run > 1 s): written tilt sd is {scaled_sd:.4f}° <= 1.0° (held flat instead of scaled)')
     rec = doc['cleaned']['params'].get('hipsInferred') or {}
-    got_rec = {k: rec.get(k) for k in ('read', 'interpolated', 'held')}
+    got_rec = {k: rec.get(k) for k in ('read', 'interpolated', 'scaled', 'held', 'unmeasured')}
     got_rec['declined'] = [d['frames'] for d in rec.get('declined', [])]
     if rec.get('by') != 'measured' or got_rec != WANT_RECORD:
         fails.append(f'the record is {json.dumps(got_rec)}; wanted {json.dumps(WANT_RECORD)}')
@@ -266,6 +245,39 @@ def swings(dir_, planted=()):
     return out
 
 
+def unmeasured_check(dir_, clip):
+    """#106 bar 3: when read frames do not correlate with the detector (r < 0.9), long declined spans are marked unmeasured, refused nowhere, and named on the line."""
+    uncorr_frames = [(e, (5.0 if i % 2 == 0 else -5.0), w, hand) for i, (e, _h, w, hand) in enumerate(FRAMES)]
+    pose = os.path.join(dir_, 'uncorr.json')
+    out = os.path.join(dir_, 'uncorr.out.json')
+    rep = os.path.join(dir_, 'uncorr.rep.json')
+    src = sequence(frame_list=uncorr_frames)
+    json.dump(src, open(pose, 'w'))
+    p = run(['--video', clip, '--pose', pose, '--out', out, '--report', rep])
+    if p.returncode != 0:
+        return [f'unmeasured: pelvis.py exit {p.returncode}: {p.stderr.strip()}']
+    fails = []
+    doc = json.load(open(out))
+    rec = doc['cleaned']['params'].get('hipsInferred') or {}
+    fit = rec.get('fit') or {}
+    if fit.get('corr') is None or fit.get('corr') >= 0.9:
+        fails.append(f'unmeasured: fit.corr is {fit.get("corr")}, wanted < 0.9')
+    if rec.get('unmeasured') != [[11, 35], [37, 39]] or rec.get('scaled') != [] or rec.get('held') != []:
+        fails.append(f'unmeasured: record unmeasured={rec.get("unmeasured")} scaled={rec.get("scaled")} held={rec.get("held")}')
+    if 'UNMEASURED 28 declined frame(s)' not in p.stdout or '11-35, 37-39' not in p.stdout:
+        fails.append(f'unmeasured: stdout missing UNMEASURED line: {p.stdout!r}')
+    for i in [*range(11, 36), 37, 38, 39]:
+        for h in ('r_hip', 'l_hip'):
+            if doc['frames'][i]['people'][0]['joints'][h]['at'] != src['frames'][i]['people'][0]['joints'][h]['at']:
+                fails.append(f'unmeasured: frame {i} {h} position changed on an unmeasured frame')
+    ts = subprocess.run([shutil.which('bun') or 'bun', '-e', 'import { readPoseSequence } from "./src/pose.ts"; import { cleanLine } from "./src/clean.ts"; import { readFileSync } from "node:fs";'
+                         f' const s = readPoseSequence(readFileSync({json.dumps(out)}, "utf8"), "out"); console.log(cleanLine(s.cleaned));'],
+                        capture_output=True, text=True, cwd=ROOT)
+    if ts.returncode != 0 or 'unmeasured 11–35, 37–39' not in ts.stdout:
+        fails.append(f'unmeasured: src/pose.ts / cleanLine failed: exit {ts.returncode} stdout={ts.stdout.strip()!r} stderr={ts.stderr.strip()[:200]}')
+    return fails
+
+
 def refusals(dir_, clip):
     """The input refusals, by name, nothing written."""
     fails = []
@@ -312,8 +324,8 @@ def main(argv):
         clip, pose = os.path.join(dir_, 'clip.mp4'), os.path.join(dir_, 'pose.json')
         write_clip(clip)
         json.dump(sequence(), open(pose, 'w'))
-        fails = check(dir_, clip, pose, ('--no-cover-check', '--one-neighbour-guard') if mutant else ())
-        print(f'bar 5{" (MUTANT: --no-cover-check --one-neighbour-guard as the setting)" if mutant else ""}: {"PASS" if not fails else "FAIL"}')
+        fails = check(dir_, clip, pose, ('--no-cover-check', '--one-neighbour-guard', '--hold-covered') if mutant else ())
+        print(f'bar 5{" (MUTANT: --no-cover-check --one-neighbour-guard --hold-covered as the setting)" if mutant else ""}: {"PASS" if not fails else "FAIL"}')
         for f in fails:
             print(f'  FAIL  {f}')
         if mutant:
@@ -329,6 +341,15 @@ def main(argv):
         print(f'planted (--one-neighbour-guard): the fast-swing case {"fails as it must" if swing_fail else "DOES NOT FAIL"}')
         for f in one[:4]:
             print(f'  planted  {f}')
+        hold_cov = check(dir_, clip, pose, ('--hold-covered',))
+        hold_fail = [f for f in hold_cov if 'frames 11-35 (a covered run > 1 s): written tilt sd is' in f]
+        print(f'planted (--hold-covered): the covered-span scaling case {"fails as it must" if hold_fail else "DOES NOT FAIL"}')
+        for f in hold_fail:
+            print(f'  planted  {f}')
+        unm = unmeasured_check(dir_, clip)
+        print(f'unmeasured control (r < 0.9): {"PASS" if not unm else "FAIL"}')
+        for f in unm:
+            print(f'  FAIL  {f}')
         sw = swings(dir_)
         for name, f in sw.items():
             print(f'swing control, {name}: {"PASS" if not f else "FAIL"}')
@@ -342,7 +363,8 @@ def main(argv):
         rf = refusals(dir_, clip)
         for f in rf:
             print(f'  FAIL  refusal {f}')
-        ok = not fails and bool(covered_fail) and bool(swing_fail) and not any(sw.values()) and bool(sw_planted[near]) and not rf
+        ok = (not fails and bool(covered_fail) and bool(swing_fail) and bool(hold_fail)
+              and not unm and not any(sw.values()) and bool(sw_planted[near]) and not rf)
         print('pelvis_selftest:', 'PASS' if ok else 'FAIL')
         return 0 if ok else 1
     finally:

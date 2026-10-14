@@ -11,7 +11,7 @@
 import { poseRawAnimation, poseRawSetup, type CompiledDocument, type RawBone } from 'rig-c/core';
 import type { Body18 } from './joints.ts';
 import { aimAngle, pointAt, type JointMap } from './map.ts';
-import type { HipsInferred, Joint, Run } from './pose.ts';
+import type { HipsInferred, Joint, PelvisFit, Run } from './pose.ts';
 import type { Retarget } from './retarget.ts';
 import { pictureAngle, pointOn, wrap } from './retarget.ts';
 
@@ -260,13 +260,25 @@ export interface Posture {
    */
   hipsInferred?: { frames: number; source: string };
   /**
-   * Present only when the hips were measured (#86, `hipsInferred.by` is
+   * Present only when the hips were measured (#86, #106, `hipsInferred.by` is
    * `measured`): the method, how many frames the tilt was read on — the
-   * record's read, interpolated and held frames with both hips good, each
-   * class counted — and the record's held spans. Any other frame with an
-   * inferred hip is left out and counted in `hipsInferred`.
+   * record's read, interpolated, scaled and held frames with both hips good,
+   * each class counted — and the record's spans. Any `unmeasured` frame (corr
+   * < 0.9) or other frame with an inferred hip is left out of `tilt`.
    */
-  tiltMeasured?: { method: string; frames: number; read: number; interpolated: number; held: number; heldSpans: Run[] };
+  tiltMeasured?: {
+    method: string;
+    frames: number;
+    read: number;
+    interpolated: number;
+    held: number;
+    heldSpans: Run[];
+    scaled?: number;
+    scaledSpans?: Run[];
+    unmeasured?: number;
+    unmeasuredSpans?: Run[];
+    fit?: PelvisFit;
+  };
   /**
    * Sway: the x-range of mid_hip − mid_shoulder, in rig units (the reference's
    * picture px × the figure scale) and in each body's own shoulder widths.
@@ -311,11 +323,12 @@ const medianOf = (xs: number[]): number => {
  * and the line counts the frames left out. Sway is read as before, inferred
  * hips included: it is a different measure, and the card leaves it as it is.
  *
- * Measured hips (#86, `measured`): the hips are inferred on every frame, and
- * turned to a measured angle: read off the picture, interpolated between two
- * close reads, or held from the earlier read. Those three are the measurement,
- * so the tilt is read on them; any other frame with an inferred hip is left
- * out and counted, as above. The line names the held spans.
+ * Measured hips (#86, #106, `measured`): the hips are inferred on every frame,
+ * and turned to a measured angle: read off the picture, interpolated between two
+ * close reads, scaled from the detector's hip line when `fit.corr >= 0.9`, or
+ * held from the earlier read. Those four are the measurement, so the tilt is
+ * read on them; any `unmeasured` frame (`fit.corr < 0.9`) or other frame with
+ * an inferred hip is left out and counted.
  */
 export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: ReadonlyMap<string, number>, map: JointMap, r: Retarget, frames: ReadonlyArray<Partial<Record<Body18, Joint>>>, minScore: number, inferredSource = 'source not stated', measured: Extract<HipsInferred, { by: 'measured' }> | null = null): Posture | null {
   const pelvis = map.chains.find((c) => c.joints.length === 2 && c.joints[0] === 'r_hip' && c.joints[1] === 'l_hip');
@@ -330,16 +343,23 @@ export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: Read
   const refSw: number[] = [];
   let inferred = 0;
   const inClass = (rs: Run[], i: number) => rs.some(([a, b]) => a <= i && i <= b);
-  const counts = { read: 0, interpolated: 0, held: 0 };
+  const counts = { read: 0, interpolated: 0, held: 0, scaled: 0, unmeasured: 0 };
   frames.forEach((f, i) => {
     const rh = at(i, 'r_hip');
     const lh = at(i, 'l_hip');
     if (rh === null || lh === null) return;
     const isInferred = f.r_hip?.state === 'inferred' || f.l_hip?.state === 'inferred';
     const cls = measured === null ? undefined : (['read', 'interpolated', 'held'] as const).find((c) => inClass(measured[c], i));
+    const isScaled = measured !== null && measured.scaled !== undefined && inClass(measured.scaled, i);
+    const isUnmeasured = measured !== null && measured.unmeasured !== undefined && inClass(measured.unmeasured, i);
     if (isInferred && cls !== undefined) {
       counts[cls]++;
       refTilt.push(pictureAngle(rh, lh));
+    } else if (isInferred && isScaled) {
+      counts.scaled++;
+      refTilt.push(pictureAngle(rh, lh));
+    } else if (isInferred && isUnmeasured) {
+      counts.unmeasured++;
     } else if (isInferred) inferred++;
     else refTilt.push(pictureAngle(rh, lh));
     const rs = at(i, 'r_shoulder');
@@ -352,7 +372,7 @@ export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: Read
   const aim = pelvis.aim[0]!;
   let tilt: Posture['tilt'] = null;
   const why = `hips inferred (${inferredSource})`;
-  if (inferred === 0 || refTilt.length > 0) {
+  if ((inferred === 0 && counts.unmeasured === 0) || refTilt.length > 0) {
     const rigTilt = posed.map((b) => aimAngle(b, lengths, bone, aim));
     tilt = { reference: rangeOf(unwrapped(refTilt)), rig: rangeOf(unwrapped(rigTilt)), ratio: 0 };
     tilt.ratio = tilt.rig.range / tilt.reference.range;
@@ -387,6 +407,7 @@ export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: Read
       ratioSw: rig === null || rig.rangeSw === null ? null : rig.rangeSw / reference.rangeSw,
     };
   }
+  const has106 = measured !== null && (measured.scaled !== undefined || measured.unmeasured !== undefined || measured.fit !== undefined);
   return {
     pelvis: pelvis.name,
     rigHip: r.origin.bone,
@@ -395,7 +416,27 @@ export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: Read
     tilt,
     ...(tilt === null ? { tiltWhy: why } : {}),
     ...(inferred > 0 ? { hipsInferred: { frames: inferred, source: inferredSource } } : {}),
-    ...(measured !== null ? { tiltMeasured: { method: measured.method, frames: counts.read + counts.interpolated + counts.held, ...counts, heldSpans: measured.held.map(([a, b]): Run => [a, b]) } } : {}),
+    ...(measured !== null
+      ? {
+          tiltMeasured: {
+            method: measured.method,
+            frames: counts.read + counts.interpolated + counts.scaled + counts.held,
+            read: counts.read,
+            interpolated: counts.interpolated,
+            held: counts.held,
+            heldSpans: measured.held.map(([a, b]): Run => [a, b]),
+            ...(has106
+              ? {
+                  scaled: counts.scaled,
+                  scaledSpans: (measured.scaled ?? []).map(([a, b]): Run => [a, b]),
+                  unmeasured: counts.unmeasured,
+                  unmeasuredSpans: (measured.unmeasured ?? []).map(([a, b]): Run => [a, b]),
+                  ...(measured.fit !== undefined ? { fit: { frames: measured.fit.frames, gain: measured.fit.gain, corr: measured.fit.corr } } : {}),
+                }
+              : {}),
+          },
+        }
+      : {}),
     sway,
   };
 }
@@ -403,14 +444,23 @@ export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: Read
 const f1 = (x: number) => x.toFixed(1);
 const f3 = (x: number) => x.toFixed(3);
 const sg = (x: number) => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(1)}`;
+const spansText = (rs: Run[] | undefined) => (rs === undefined || rs.length === 0 ? 'none' : rs.map(([a, b]) => (a === b ? `${a}` : `${a}–${b}`)).join(', '));
 
 /** The POSTURE lines. */
 export function postureLines(q: Posture): string[] {
   const over = (k: number) => (k === q.frames.of ? '' : ` over ${k} of ${q.frames.of} frames`);
   const t = q.tilt;
   const m = q.tiltMeasured;
-  const heldSpans = m === undefined || m.heldSpans.length === 0 ? 'none' : m.heldSpans.map(([a, b]) => (a === b ? `${a}` : `${a}–${b}`)).join(', ');
-  const measured = m === undefined ? '' : `; tilt measured (${m.method}) on ${m.frames} frame(s): ${m.read} read, ${m.interpolated} interpolated, ${m.held} held (held: ${heldSpans})`;
+  const heldSpans = spansText(m?.heldSpans);
+  const scaledPart =
+    m?.scaled !== undefined && m.scaled > 0
+      ? `, ${m.scaled} scaled (scaled: ${spansText(m.scaledSpans)}${m.fit?.gain !== undefined && m.fit.gain !== null && m.fit.corr !== null ? `, gain ${m.fit.gain.toFixed(2)}×, r=${m.fit.corr.toFixed(3)}` : ''})`
+      : '';
+  const unmeasuredPart =
+    m?.unmeasured !== undefined && (m.unmeasured > 0 || (m.fit !== undefined && (m.fit.corr === null || m.fit.corr < 0.9)))
+      ? `; ${m.unmeasured} unmeasured (${spansText(m.unmeasuredSpans)}${m.fit !== undefined ? `, r=${m.fit.corr === null ? 'none' : m.fit.corr.toFixed(3)} < 0.9` : ''})`
+      : '';
+  const measured = m === undefined ? '' : `; tilt measured (${m.method}) on ${m.frames} frame(s): ${m.read} read, ${m.interpolated} interpolated${scaledPart}, ${m.held} held (held: ${heldSpans})${unmeasuredPart}`;
   const left = q.hipsInferred === undefined ? '' : `; ${q.hipsInferred.frames} frame(s) with an inferred hip not read (${q.hipsInferred.source})`;
   const out = [
     t === null
