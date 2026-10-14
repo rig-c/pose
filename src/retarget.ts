@@ -82,7 +82,7 @@ import { Problems, Refusal } from './problems.ts';
 import type { ArtRange, ByHip, Raised, ReachShort, SlotTrack, Switch, SwitchOptions } from './switch.ts';
 import { clampArt, coveredChains, isRaised, measureArt, overflow, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
 import type { BlendHold, Closure, Feet, Floor, LegScale, PathPose, Posing, Side, Stance } from './legs.ts';
-import { holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, plantHip, posePath, rootOf, SIDES, stanceOf, supportsOf, tipOf } from './legs.ts';
+import { holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, plantHip, posePath, rootOf, SIDES, stanceOf, stanceRangeOf, supportsOf, tipOf } from './legs.ts';
 
 const DEG = 180 / Math.PI;
 
@@ -745,14 +745,15 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     };
     // #85: on a blend frame the hip is between two derivations; the supporting leg is stretched
     // (stanceOf's mechanism, its bounds) so its ankle stays on the floor. Before --stance, whose
-    // floor is that supporting ankle.
-    blendHold = holdBlend(planted.blends, n, posedFeet);
+    // floor is that supporting ankle. #95: the lower bound on a frame is the leg's own range there.
+    const ankleSeries = { r: series.get('r_ankle')!, l: series.get('l_ankle')! };
+    const lower = stanceRangeOf(ankleSeries, { r: series.get('r_hip')!, l: series.get('l_hip')! });
+    blendHold = holdBlend(planted.blends, n, posedFeet, lower);
     stretchChain(blendHold.stretch);
     // --stance (#60): with the hip placed, a free ankle within the tolerance of the floor has its leg
     // stretched (every bone of its chain's scalex, about the chain's root) until it reaches it.
     if (opts.stance !== undefined && opts.stance !== 'off') {
-      const ankleSeries = { r: series.get('r_ankle')!, l: series.get('l_ankle')! };
-      stance = stanceOf(feet!, ankleSeries, opts.stance, posedFeet, secondsOf);
+      stance = stanceOf(feet!, ankleSeries, opts.stance, posedFeet, secondsOf, lower);
       // The supporting leg (the blend's) and the free leg (the stance's) are different chains on a frame.
       for (let i = 0; i < n; i++) {
         const b = blendHold.stretch[i];

@@ -591,8 +591,47 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
 
 // --- stance (rig-c/pose#60) --------------------------------------------------
 
-/** A free leg is scaled within these factors to reach the floor (raised from below or lowered from above); past them the frame is reported, not forced. */
+/**
+ * A free leg is scaled within these factors to reach the floor (raised from below or lowered from above); past them the frame is reported, not forced.
+ * The default: a frame whose leg the picture folds further has its lower bound from the leg's own range (`stanceRangeOf`, #95).
+ */
 export const STANCE_BOUNDS: readonly [number, number] = [0.92, 1.08];
+
+/** Per side, per frame: the lower bound of the leg's stretch (#95). */
+export type StanceLower = Record<Side, readonly number[]>;
+
+/**
+ * The leg's own range (rig-c/pose#95). Per side, r(i) = the leg's picture
+ * length hip → ankle on frame i ÷ its straight length (`STRAIGHT_PERCENTILE`
+ * of that length over the sequence, as `--leg-scale` reads a segment's), and
+ * the lower bound on frame i is min(`STANCE_BOUNDS[0]`, r(i)): the rig leg may
+ * fold as far as the picture's leg is folded on that frame, never less far
+ * than the default. A leg with no straight length keeps the default.
+ */
+export function stanceRangeOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>): StanceLower {
+  const out = {} as Record<Side, number[]>;
+  for (const s of SIDES) {
+    const len = ankle[s].map((a, i) => Math.hypot(a[0] - hip[s][i]![0], a[1] - hip[s][i]![1]));
+    const straight = percentile(len, STRAIGHT_PERCENTILE);
+    out[s] = len.map((l) => (straight > 1e-9 && Number.isFinite(l) ? Math.min(STANCE_BOUNDS[0], l / straight) : STANCE_BOUNDS[0]));
+  }
+  return out;
+}
+
+/** The lower bound on frame i for side s: the leg's own (#95), or the default. */
+function lowerOf(lower: StanceLower | undefined, s: Side, i: number): number {
+  return lower?.[s][i] ?? STANCE_BOUNDS[0];
+}
+
+/** The lowest lower bound per side over `frames`, where any is below the default (#95); null where none is. */
+function rangeUsed(lower: StanceLower | undefined, frames: ReadonlyArray<{ side: Side; frame: number }>): Partial<Record<Side, number>> | null {
+  const out: Partial<Record<Side, number>> = {};
+  for (const { side, frame } of frames) {
+    const lo = lowerOf(lower, side, frame);
+    if (lo < STANCE_BOUNDS[0]) out[side] = Math.min(out[side] ?? Infinity, lo);
+  }
+  return Object.keys(out).length === 0 ? null : out;
+}
 
 /** A lifted free foot is planted again only when its height comes back under this fraction of the tolerance (#87): hysteresis, a stated factor, not tuned. */
 export const STANCE_RELEASE = 0.8;
@@ -622,6 +661,8 @@ export interface StanceOver {
   needed: number | null;
   /** The free ankle's largest distance left from the floor after the bound, world units. */
   left: number;
+  /** #95: the bound on the frame of `needed`, where the leg's own range set it below the default. */
+  bound?: [number, number];
 }
 
 export interface Stance {
@@ -632,6 +673,8 @@ export interface Stance {
   /** The shortest run kept as its own state, seconds (#87). */
   minSeconds: number;
   bounds: readonly [number, number];
+  /** #95: per side, the lowest lower bound the leg's own range set on a planted-both frame, where any is below `bounds[0]`. */
+  range?: Partial<Record<Side, number>>;
   runs: StanceRun[];
   over: StanceOver[];
   /** Per frame: the free side and the stretch keyed on it, or null (lifted, a jump, no support). */
@@ -653,8 +696,9 @@ export interface StancePosed {
  * k = (root y − floor y) / (root y − ankle y) on the posed rig (`posed`, world,
  * y up), the floor being the supporting ankle's posed y; k is held within
  * `STANCE_BOUNDS` (a free ankle below the floor shortens its leg, one above
- * lengthens it), and a frame past them is listed in `over`. Above the tolerance
- * the foot is lifted and keeps the pose's height.
+ * lengthens it), its lower bound on the frame the leg's own (`lower`, #95)
+ * where the picture folds that leg further, and a frame past them is listed in
+ * `over`. Above the tolerance the foot is lifted and keeps the pose's height.
  *
  * The state is read with hysteresis (#87): a planted foot is lifted when its
  * height goes past `tolerance`, and a lifted one is planted again only under
@@ -664,7 +708,7 @@ export interface StancePosed {
  * free side and with no frame between, takes their state, and is listed with
  * `absorbed`.
  */
-export function stanceOf(feet: Feet, ankle: Record<Side, readonly Pt[]>, tolerance: number, posed: (i: number) => StancePosed, secondsOf: (run: [number, number]) => number): Stance {
+export function stanceOf(feet: Feet, ankle: Record<Side, readonly Pt[]>, tolerance: number, posed: (i: number) => StancePosed, secondsOf: (run: [number, number]) => number, lower?: StanceLower): Stance {
   const n = feet.support.length;
   const stretch: Stance['stretch'] = new Array(n).fill(null);
   type Read = { state: 'both' | 'lifted'; side: Side; height: number };
@@ -715,7 +759,7 @@ export function stanceOf(feet: Feet, ankle: Record<Side, readonly Pt[]>, toleran
     }
     i = end + 1;
   }
-  type Row = { state: 'both' | 'lifted'; side: Side; height: number; k: number | null; needed: number | null; over: boolean; left: number };
+  type Row = { state: 'both' | 'lifted'; side: Side; height: number; k: number | null; needed: number | null; over: boolean; left: number; lo: number };
   const rows: Array<Row | null> = new Array<Row | null>(n).fill(null);
   for (let i = 0; i < n; i++) {
     const r = read[i];
@@ -723,8 +767,9 @@ export function stanceOf(feet: Feet, ankle: Record<Side, readonly Pt[]>, toleran
     const s: Side = r.side === 'r' ? 'l' : 'r';
     const f = r.side;
     const height = r.height;
+    const lo = lowerOf(lower, f, i);
     if (r.state === 'lifted') {
-      rows[i] = { state: 'lifted', side: f, height, k: null, needed: null, over: false, left: 0 };
+      rows[i] = { state: 'lifted', side: f, height, k: null, needed: null, over: false, left: 0, lo };
       continue;
     }
     const p = posed(i);
@@ -733,12 +778,13 @@ export function stanceOf(feet: Feet, ankle: Record<Side, readonly Pt[]>, toleran
     const a = p.ankle[f][1];
     const ok = root - a > 1e-9 && root - floor > 1e-9;
     const needed = ok ? (root - floor) / (root - a) : null;
-    const k = needed === null ? 1 : Math.min(Math.max(needed, STANCE_BOUNDS[0]), STANCE_BOUNDS[1]);
-    const over = needed === null || needed < STANCE_BOUNDS[0] || needed > STANCE_BOUNDS[1];
+    const k = needed === null ? 1 : Math.min(Math.max(needed, lo), STANCE_BOUNDS[1]);
+    const over = needed === null || needed < lo || needed > STANCE_BOUNDS[1];
     const left = Math.abs(root - k * (root - a) - floor);
-    rows[i] = { state: 'both', side: f, height, k, needed, over, left };
+    rows[i] = { state: 'both', side: f, height, k, needed, over, left, lo };
     if (k !== 1) stretch[i] = { side: f, k };
   }
+  const boundOf = (lo: number): { bound?: [number, number] } => (lo < STANCE_BOUNDS[0] ? { bound: [lo, STANCE_BOUNDS[1]] } : {});
   const runs: StanceRun[] = [];
   const over: StanceOver[] = [];
   for (let i = 0; i < n; i++) {
@@ -754,13 +800,19 @@ export function stanceOf(feet: Feet, ankle: Record<Side, readonly Pt[]>, toleran
     const o = over[over.length - 1];
     if (o !== undefined && o.frames[1] === i - 1 && o.side === r.side) {
       o.frames[1] = i;
-      o.needed = o.needed === null || r.needed === null ? null : Math.abs(r.needed - 1) > Math.abs(o.needed - 1) ? r.needed : o.needed;
+      const takes = o.needed !== null && (r.needed === null || Math.abs(r.needed - 1) > Math.abs(o.needed - 1));
+      o.needed = o.needed === null || r.needed === null ? null : takes ? r.needed : o.needed;
+      if (takes) {
+        delete o.bound;
+        Object.assign(o, boundOf(r.lo));
+      }
       o.left = Math.max(o.left, r.left);
-    } else over.push({ side: r.side, frames: [i, i], needed: r.needed, left: r.left });
+    } else over.push({ side: r.side, frames: [i, i], needed: r.needed, left: r.left, ...boundOf(r.lo) });
   }
   for (const x of absorbed) runs.push(x);
   runs.sort((a, b) => a.frames[0] - b.frames[0] || (a.absorbed === true ? 1 : 0) - (b.absorbed === true ? 1 : 0));
-  return { tolerance, release: STANCE_RELEASE, minSeconds: STANCE_MIN_SECONDS, bounds: STANCE_BOUNDS, runs, over, stretch };
+  const range = rangeUsed(lower, rows.flatMap((r, i) => (r !== null && r.state === 'both' ? [{ side: r.side, frame: i }] : [])));
+  return { tolerance, release: STANCE_RELEASE, minSeconds: STANCE_MIN_SECONDS, bounds: STANCE_BOUNDS, ...(range === null ? {} : { range }), runs, over, stretch };
 }
 
 // --- the blend held on the floor (rig-c/pose#85) ------------------------------
@@ -774,10 +826,14 @@ export interface BlendRun {
   frames: [number, number];
   /** The smallest and largest stretch keyed (bounded). */
   k: { min: number; max: number };
+  /** #95: the lowest lower bound on the run's frames, where the leg's own range set it below the default. */
+  lower?: number;
 }
 
 export interface BlendHold {
   bounds: readonly [number, number];
+  /** #95: per side, the lowest lower bound the leg's own range set on a blend frame, where any is below `bounds[0]`. */
+  range?: Partial<Record<Side, number>>;
   runs: BlendRun[];
   /** Runs whose stretch needed a factor past the bounds: held at the bound, the remainder left to the blend. */
   over: StanceOver[];
@@ -791,38 +847,50 @@ export interface BlendHold {
  * supporting ankle is off the y its plant holds. Its leg is stretched along its
  * chain about the chain's root, as `--stance` stretches a free leg (`stanceOf`):
  * k = (root y − anchor y) / (root y − ankle y) on the posed rig (`posed`, world,
- * y up), held within `STANCE_BOUNDS`; a frame past them is listed in `over`, and
+ * y up), held within `STANCE_BOUNDS` — its lower bound on the frame the leg's own
+ * (`lower`, #95) as `stanceOf`'s; a frame past them is listed in `over`, and
  * the remainder stays with the blend. An ankle within `BLEND_HOLD_WITHIN` of the
  * anchor is not stretched.
  */
-export function holdBlend(blends: readonly BlendFrame[], n: number, posed: (i: number) => StancePosed): BlendHold {
+export function holdBlend(blends: readonly BlendFrame[], n: number, posed: (i: number) => StancePosed, lower?: StanceLower): BlendHold {
   const stretch: BlendHold['stretch'] = new Array(n).fill(null);
   const runs: BlendRun[] = [];
   const over: StanceOver[] = [];
+  const held: Array<{ side: Side; frame: number }> = [];
   for (const b of blends) {
     const p = posed(b.frame);
     const root = p.root[b.side][1];
     const a = p.ankle[b.side][1];
     if (Math.abs(a - b.y) <= BLEND_HOLD_WITHIN) continue;
+    held.push({ side: b.side, frame: b.frame });
     const ok = root - a > 1e-9 && root - b.y > 1e-9;
     const needed = ok ? (root - b.y) / (root - a) : null;
-    const k = needed === null ? 1 : Math.min(Math.max(needed, STANCE_BOUNDS[0]), STANCE_BOUNDS[1]);
+    const lo = lowerOf(lower, b.side, b.frame);
+    const k = needed === null ? 1 : Math.min(Math.max(needed, lo), STANCE_BOUNDS[1]);
     const left = Math.abs(root - k * (root - a) - b.y);
+    const bound = lo < STANCE_BOUNDS[0] ? { bound: [lo, STANCE_BOUNDS[1]] as [number, number] } : {};
     if (k !== 1) {
       stretch[b.frame] = { side: b.side, k };
       const last = runs[runs.length - 1];
       if (last !== undefined && last.side === b.side && last.frames[1] === b.frame - 1) {
         last.frames[1] = b.frame;
         last.k = { min: Math.min(last.k.min, k), max: Math.max(last.k.max, k) };
-      } else runs.push({ side: b.side, frames: [b.frame, b.frame], k: { min: k, max: k } });
+        if (lo < STANCE_BOUNDS[0]) last.lower = Math.min(last.lower ?? Infinity, lo);
+      } else runs.push({ side: b.side, frames: [b.frame, b.frame], k: { min: k, max: k }, ...(lo < STANCE_BOUNDS[0] ? { lower: lo } : {}) });
     }
-    if (needed !== null && needed >= STANCE_BOUNDS[0] && needed <= STANCE_BOUNDS[1]) continue;
+    if (needed !== null && needed >= lo && needed <= STANCE_BOUNDS[1]) continue;
     const o = over[over.length - 1];
     if (o !== undefined && o.side === b.side && o.frames[1] === b.frame - 1) {
       o.frames[1] = b.frame;
-      o.needed = o.needed === null || needed === null ? null : Math.abs(needed - 1) > Math.abs(o.needed - 1) ? needed : o.needed;
+      const takes = o.needed !== null && (needed === null || Math.abs(needed - 1) > Math.abs(o.needed - 1));
+      o.needed = o.needed === null || needed === null ? null : takes ? needed : o.needed;
+      if (takes) {
+        delete o.bound;
+        Object.assign(o, bound);
+      }
       o.left = Math.max(o.left, left);
-    } else over.push({ side: b.side, frames: [b.frame, b.frame], needed, left });
+    } else over.push({ side: b.side, frames: [b.frame, b.frame], needed, left, ...bound });
   }
-  return { bounds: STANCE_BOUNDS, runs, over, stretch };
+  const range = rangeUsed(lower, held);
+  return { bounds: STANCE_BOUNDS, ...(range === null ? {} : { range }), runs, over, stretch };
 }

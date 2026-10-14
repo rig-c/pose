@@ -7,7 +7,7 @@
 import { describe, expect, test } from 'bun:test';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { STANCE_MIN_SECONDS, STANCE_RELEASE, stanceOf, type Feet, type Stance, type StancePosed } from '../src/legs.ts';
+import { holdBlend, STANCE_BOUNDS, STANCE_MIN_SECONDS, STANCE_RELEASE, stanceOf, stanceRangeOf, type Feet, type Stance, type StancePosed } from '../src/legs.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const MUTANTS = join(ROOT, 'node_modules', '.cache', 'rig-pose-mutants');
@@ -17,6 +17,7 @@ const TOL = 0.07;
 const LEG = 100;
 
 type StanceOf = typeof stanceOf;
+type StanceRangeOf = typeof stanceRangeOf;
 
 /** The right foot supports on every frame; the left (free) ankle stands `heights[i]` leg lengths above it. */
 function run(heights: readonly number[], fn: StanceOf = stanceOf): Stance {
@@ -89,6 +90,88 @@ describe('#87: --stance with hysteresis, and a run shorter than 0.1 s absorbed',
       expect(states(run([...flat(10, 0.0649), 0.0708, ...flat(10, 0.0681)], m.stanceOf))).toEqual([['both', 0, 9], ['lifted', 10, 10], ['both', 11, 20]]);
       // The control still passes on the mutant: the clean lift is not what the factor is for.
       expect(states(run(CLEAN, m.stanceOf))).toEqual([['both', 0, 9], ['lifted', 10, 21], ['both', 22, 31]]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * #95: the stretch's lower bound comes from the leg's own range. The free (left)
+ * foot stands level with the supporting one on every frame (planted both); on
+ * frames 30–39 the picture's left leg is folded to `fold` of its straight length
+ * (the hip dropped onto a bent knee), and the posed rig needs k = 0.5 there to
+ * put the free ankle on the floor.
+ */
+describe('#95: --stance\'s stretch bound from the leg\'s own range', () => {
+  const N = 40;
+  const FOLDED = (i: number) => i >= 30;
+  function folding(fold: number, range: StanceRangeOf = stanceRangeOf, fn: StanceOf = stanceOf): Stance {
+    const feet: Feet = { legLength: { r: LEG, l: LEG }, support: new Array(N).fill('r'), supports: [{ side: 'r', frames: [0, N - 1] }], jumps: [], steps: [], changes: [] };
+    const ankle = { r: Array.from({ length: N }, (): [number, number] => [0, 500]), l: Array.from({ length: N }, (): [number, number] => [20, 500]) };
+    const hip = { r: Array.from({ length: N }, (): [number, number] => [0, 500 - LEG]), l: Array.from({ length: N }, (_, i): [number, number] => [20, 500 - (FOLDED(i) ? fold : 1) * LEG]) };
+    // World, y up: the floor at 0; on the folded frames the hip dropped to 75 and the rig's straight free leg (150) reaches −75, so k = 75 / 150 = 0.5.
+    const posed = (i: number): StancePosed => (FOLDED(i) ? { root: { r: [0, 75], l: [20, 75] }, ankle: { r: [0, 0], l: [20, -75] } } : { root: { r: [0, 150], l: [20, 150] }, ankle: { r: [0, 0], l: [20, 0] } });
+    const secondsOf = (x: [number, number]) => (x[1] - x[0] + 1) / FPS;
+    return fn(feet, ankle, TOL, posed, secondsOf, range(ankle, hip));
+  }
+
+  test('a free leg the picture folds to 0.5 plants with k 0.5: nothing past the bounds, and the range stated', () => {
+    const st = folding(0.5);
+    expect(states(st)).toEqual([['both', 0, 39]]);
+    for (let i = 30; i < N; i++) expect(st.stretch[i]).toEqual({ side: 'l', k: 0.5 });
+    expect(st.over).toEqual([]);
+    expect(st.range).toEqual({ l: 0.5 });
+    expect(st.bounds).toEqual(STANCE_BOUNDS);
+  });
+
+  test('control: a leg that never folds keeps [0.92, 1.08] — held at 0.92, listed past the bounds, no range', () => {
+    const st = folding(1);
+    for (let i = 30; i < N; i++) expect(st.stretch[i]).toEqual({ side: 'l', k: 0.92 });
+    expect(st.over.map((o) => [o.side, o.frames, o.needed, 'bound' in o])).toEqual([['l', [30, 39], 0.5, false]]);
+    expect(st.range).toBeUndefined();
+    // A fold above the default (0.95) is no fold: the default stands.
+    expect(folding(0.95).range).toBeUndefined();
+  });
+
+  test('a fold short of what the floor needs is held at the fold, and listed past it with the bound it had', () => {
+    const st = folding(0.7);
+    expect(st.stretch[35]).toEqual({ side: 'l', k: 0.7 });
+    expect(st.over).toHaveLength(1);
+    expect(st.over[0]!.bound).toEqual([0.7, 1.08]);
+  });
+
+  test('the blend\'s supporting leg takes the same per-frame bound (#85)', () => {
+    const blends = [30, 31, 32].map((frame) => ({ frame, side: 'r' as const, y: 0 }));
+    const posed = (): StancePosed => ({ root: { r: [0, 75], l: [20, 75] }, ankle: { r: [0, -75], l: [20, 0] } });
+    const lower = { r: new Array<number>(N).fill(0.92).map((x, i) => (i >= 30 ? 0.5 : x)), l: new Array<number>(N).fill(0.92) };
+    const h = holdBlend(blends, N, posed, lower);
+    expect(h.stretch.slice(30, 33)).toEqual([{ side: 'r', k: 0.5 }, { side: 'r', k: 0.5 }, { side: 'r', k: 0.5 }]);
+    expect(h.over).toEqual([]);
+    expect(h.range).toEqual({ r: 0.5 });
+    // Control: without the leg's range, the default holds it at 0.92.
+    const d = holdBlend(blends, N, posed);
+    expect(d.stretch[30]).toEqual({ side: 'r', k: 0.92 });
+    expect(d.over).toHaveLength(1);
+  });
+
+  test('mutant: with the fixed bound the folding leg is held at 0.92, and the fold test is red', async () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      const path = join(d, 'src', 'legs.ts');
+      const src = readFileSync(path, 'utf8');
+      const from = 'Math.min(STANCE_BOUNDS[0], l / straight)';
+      expect(src.split(from)).toHaveLength(2);
+      writeFileSync(path, src.replace(from, 'STANCE_BOUNDS[0]'));
+      const m = (await import(path)) as { stanceOf: StanceOf; stanceRangeOf: StanceRangeOf };
+      const st = folding(0.5, m.stanceRangeOf, m.stanceOf);
+      console.log(`  mutant "the fixed bound": the folded frames keyed k ${st.stretch[35]!.k}, ${st.over.length} run(s) past the bounds`);
+      expect(st.stretch[35]).toEqual({ side: 'l', k: 0.92 });
+      expect(st.over).toHaveLength(1);
+      // The control still passes on the mutant.
+      expect(folding(1, m.stanceRangeOf, m.stanceOf).stretch[35]).toEqual({ side: 'l', k: 0.92 });
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
