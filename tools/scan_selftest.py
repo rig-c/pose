@@ -35,7 +35,29 @@ The order (rig-c/pose#80), scan -> clean -> retarget:
 - the refusal: the raw sequence cleaned first and then scanned (with the hand
   keys) is refused by name (SCAN_AFTER_CLEAN), and nothing is written.
 
-Exit 0 when the moving, still, hand, malformed and order cases pass; the planted outcome is reported.
+The hand windows, floor-snapped (`--camera-windows`, rig-c/pose#82), on a
+synthetic standing figure (60 frames, both feet on the floor, each lifted in
+turn so each side supports, a small sway), its zoom about the picture centre
+linear across the window 26-33 and held either side:
+- bar 4: an 8 % step is recovered within 0.5 % of s and 2 px of t on every
+  frame; the control (no step, the same window given) reads s within 0.5 % of 1;
+  the planted failure, the step scanned with the window at 8-15, must fail that
+  bar;
+- bar 5, always reported: the left ankle stepping 6 % where the camera steps
+  8 % (a foot changing depth) puts its l/r disagreement, over 1 %, in
+  cameraSource with its value; the 8 % step case, both ankles read, shows about
+  0 %;
+- bar 3: the raw wave (examples/wave/make-pose.ts's construction before its
+  clean, ported here) scanned with no window writes s = 1, t = 0 exactly and
+  the input's joints; cleaned and retargeted onto examples/wave, it writes a
+  motion file byte-identical to the unscanned sequence's;
+- malformed windows (a > b, out of range, not a-b, overlapping, adjacent) are
+  refused by name in one run, a window no ankle is planted on 3 frames on both
+  sides of is refused, --camera-windows with --camera-file is refused (SCAN_ARGS), and
+  nothing is written.
+
+Exit 0 when the moving, still, hand, malformed, order and hand-window cases pass
+(the wrong window failing its bar); the no-person-mask planted outcome is reported.
 Deterministic: seeded RNGs, no clock.
 """
 import json
@@ -210,6 +232,207 @@ def order(dir_, pose, truth):
             'stderr': [] if c.returncode == 0 and c0.returncode == 0 else (c.stderr + c0.stderr).strip().split('\n')[:3]}
 
 
+# --- hand windows, floor-snapped (rig-c/pose#82) -----------------------------------------------------------------
+
+WN = 60
+WINDOW = (26, 33)
+WRONG_WINDOW = (8, 15)
+FLOOR = 850.0
+LIFT = 30.0  # the unweighted foot's heel raise, px at its top: one foot lifted at a time, so each side supports in turn
+
+
+def lift(i):
+    """(right, left) lift in world px: half-periods of 7 frames, the left lifted first, ramps of 10 px a frame.
+    Short enough that each foot stands still on 3 frames within the snap's 15-frame search on either side of a window."""
+    p = i % 14
+    q = p % 7
+    v = min(q, 6 - q) * LIFT / 3
+    return (0.0, v) if p < 7 else (v, 0.0)
+
+
+def ramp(i, a, b, end):
+    """1 up to frame a-1, `end` from frame b+1, linear in the frame index between (the zoom inside the window)."""
+    if i <= a - 1:
+        return 1.0
+    if i >= b + 1:
+        return end
+    return 1.0 + (end - 1.0) * (i - (a - 1)) / ((b + 1) - (a - 1))
+
+
+def standing(dir_, name, step, left_step=None, window=WINDOW):
+    """A standing figure, both feet on the floor in turn, under a zoom about the centre across `window`.
+    `left_step` scales the left ankle's y about the centre by a different step (a foot changing depth, not the camera)."""
+    c = np.array([W / 2, H / 2])
+    frames, truth = [], []
+    for i in range(WN):
+        sway = 6 * math.sin(2 * math.pi * i / 20)
+        lr, ll = lift(i)
+        world = {
+            'nose': (270 + sway, 262), 'r_eye': (262 + sway, 255), 'l_eye': (278 + sway, 255), 'r_ear': (252 + sway, 260), 'l_ear': (288 + sway, 260),
+            'neck': (270 + sway, 300), 'r_shoulder': (230 + sway, 312), 'l_shoulder': (310 + sway, 312),
+            'r_elbow': (222 + sway, 400), 'l_elbow': (318 + sway, 400), 'r_wrist': (226 + sway, 480), 'l_wrist': (314 + sway, 480),
+            'r_hip': (250 + sway, 520), 'l_hip': (290 + sway, 520), 'r_knee': (248 + sway / 2, 685), 'l_knee': (292 + sway / 2, 685),
+            'r_ankle': (246, FLOOR - lr), 'l_ankle': (294, FLOOR - ll),
+        }
+        s = ramp(i, window[0], window[1], step)
+        sl = ramp(i, window[0], window[1], left_step if left_step is not None else step)
+        joints = {}
+        for name_ in BODY18:
+            x, y = world[name_]
+            px = c[0] + s * (x - c[0])
+            py = c[1] + (sl if name_ == 'l_ankle' else s) * (y - c[1])
+            joints[name_] = {'state': 'observed', 'at': [round(px, 2), round(py, 2)], 'score': 0.9}
+        frames.append({'t': round(i / FPS, 6), 'people': [{'id': 'a', 'joints': joints}]})
+        truth.append((s, (c * (1 - s)).tolist()))
+    pose = os.path.join(dir_, f'{name}.pose.json')
+    json.dump({'spec': 'rig-pose-sequence/1', 'space': {'units': 'picture-px', 'origin': 'top-left', 'y': 'down'}, 'width': W, 'height': H,
+               'source': 'synthetic standing figure, tools/scan_selftest.py', 'frames': frames}, open(pose, 'w'))
+    return pose, truth
+
+
+def scan_windows(dir_, name, pose, windows, extra=()):
+    out = os.path.join(dir_, f'{name}.out.json')
+    rep = os.path.join(dir_, f'{name}.report.json')
+    p = subprocess.run([sys.executable, '-I', os.path.join(HERE, 'scan.py'), '--camera-windows', windows, '--pose', pose, '--out', out, '--report', rep, *extra],
+                       capture_output=True, text=True)
+    return p, out, rep
+
+
+def windows_case(dir_, name, pose, truth, windows, want_pass=True):
+    p, out, rep = scan_windows(dir_, name, pose, windows)
+    if p.returncode != 0:
+        return {'case': name, 'windows': windows, 'exit': p.returncode, 'stderr': p.stderr.strip().split('\n')[:4], 'pass': False}
+    got = json.load(open(out))
+    es = [abs(c['s'] / tr[0] - 1) for c, tr in zip(got['camera'], truth)]
+    et = [math.hypot(c['tx'] - tr[1][0], c['ty'] - tr[1][1]) for c, tr in zip(got['camera'], truth)]
+    ws, wt = int(np.argmax(es)), int(np.argmax(et))
+    rp = json.load(open(rep))
+    return {'case': name, 'windows': windows, 'exit': 0, 'cameraSource': got['cameraSource'],
+            'worst_s_rel': es[ws], 'worst_s_frame': ws, 'worst_s_read': got['camera'][ws]['s'], 'worst_s_true': truth[ws][0],
+            'worst_t_px': et[wt], 'worst_t_frame': wt, 'inliers_max': max(c['inliers'] for c in got['camera']),
+            'windows_read': [{**{k: w[k] for k in ('window', 'used', 'step', 'disagree', 's_before', 's_after')},
+                              'sides': {sd: {k: v for k, v in r_.items() if k in ('before', 'after', 'y_before', 'y_after', 'ratio')} for sd, r_ in w['sides'].items()}}
+                             for w in rp['windows']],
+            'stdout': p.stdout.strip().split('\n'),
+            'pass': max(es) <= S_TOL and max(et) <= T_TOL}
+
+
+def wave_raw(path):
+    """examples/wave/make-pose.ts's sequence before its `clean` (the same construction, ported): a raw fixed-camera clip with legs."""
+    fps, rad = 24, math.pi / 180
+    dir_ = lambda deg, ln: (ln * math.cos(deg * rad), -ln * math.sin(deg * rad))
+    add = lambda a, b: (a[0] + b[0], a[1] + b[1])
+    frames = []
+    for i in range(fps * 3 + 1):
+        t = i / fps
+        rise = min(1, t)
+        sway = 6 * math.sin(2 * math.pi * 0.75 * t)
+        mid = (200 + sway, 400)
+        neck = add(mid, dir_(90 - sway / 4, 150))
+        rsh, lsh = add(neck, (-30, 10)), add(neck, (30, 10))
+        upper = -100 + rise * 150
+        fore = upper + 20 + rise * (30 + (35 * math.sin(2 * math.pi * 1.5 * (t - 1)) if t > 1 else 0))
+        rel, lel = add(rsh, dir_(upper, 70)), add(lsh, dir_(-80, 70))
+        nose = add(neck, (0, -30))
+        j = {'nose': nose, 'neck': neck, 'r_shoulder': rsh, 'r_elbow': rel, 'r_wrist': add(rel, dir_(fore, 60)), 'l_shoulder': lsh, 'l_elbow': lel,
+             'l_wrist': add(lel, dir_(-100, 60)), 'r_hip': add(mid, (-15, 0)), 'r_knee': add(mid, (-22, 80)), 'r_ankle': add(mid, (-26, 150)),
+             'l_hip': add(mid, (15, 0)), 'l_knee': add(mid, (22, 80)), 'l_ankle': add(mid, (26, 150)), 'r_eye': add(nose, (-6, -5)), 'l_eye': add(nose, (6, -5))}
+        joints = {k: {'state': 'observed', 'at': [round(v[0], 2), round(v[1], 2)], 'score': 1} for k, v in j.items()}
+        frames.append({'t': round(t, 6), 'people': [{'id': 'a', 'joints': joints}]})
+    json.dump({'spec': 'rig-pose-sequence/1', 'space': {'units': 'picture-px', 'origin': 'top-left', 'y': 'down'}, 'width': 400, 'height': 600,
+               'source': 'examples/wave/make-pose.ts construction before clean, ported in tools/scan_selftest.py', 'frames': frames}, open(path, 'w'))
+
+
+def retarget(pose, out):
+    cli = os.path.join(HERE, '..', 'cli.ts')
+    wave = os.path.join(HERE, '..', 'examples', 'wave')
+    return subprocess.run([shutil.which('bun') or 'bun', cli, 'retarget', '--rig', os.path.join(wave, 'rig'), '--map', os.path.join(wave, 'map.json'),
+                           '--pose', pose, '--out', out], capture_output=True, text=True)
+
+
+def held_out(dir_):
+    """Bar 3: a fixed-camera clip, no window: s = 1, t = 0 exactly, the joints the input's, and the same motion file."""
+    raw = os.path.join(dir_, 'wave.raw.json')
+    wave_raw(raw)
+    p, out, _ = scan_windows(dir_, 'wave-scanned', raw, '')
+    if p.returncode != 0:
+        return {'case': 'held-out', 'exit': p.returncode, 'stderr': p.stderr.strip().split('\n')[:4], 'pass': False}
+    got, inp = json.load(open(out)), json.load(open(raw))
+    exact = all(c['s'] == 1 and c['tx'] == 0 and c['ty'] == 0 for c in got['camera'])
+    dj = 0.0
+    for fo, fi in zip(got['frames'], inp['frames']):
+        for n_, j in fi['people'][0]['joints'].items():
+            k = fo['people'][0]['joints'][n_]['at']
+            dj = max(dj, abs(round(k[0], 2) - round(j['at'][0], 2)), abs(round(k[1], 2) - round(j['at'][1], 2)))
+    runs = {}
+    for name, src in (('scanned', out), ('unscanned', raw)):
+        cl = os.path.join(dir_, f'wave-{name}.cleaned.json')
+        c = clean(src, cl)
+        mo = os.path.join(dir_, f'wave-{name}.motion.json')
+        r_ = retarget(cl, mo) if c.returncode == 0 else None
+        runs[name] = {'clean_exit': c.returncode, 'retarget_exit': r_.returncode if r_ else None, 'motion': mo,
+                      'stdout': r_.stdout.strip().split('\n') if r_ else [], 'stderr': (c.stderr + (r_.stderr if r_ else '')).strip().split('\n')[:3]}
+    ok_runs = all(v['clean_exit'] == 0 and v['retarget_exit'] == 0 for v in runs.values())
+    same = ok_runs and open(runs['scanned']['motion'], 'rb').read() == open(runs['unscanned']['motion'], 'rb').read()
+    a, b = runs['scanned']['stdout'], runs['unscanned']['stdout']
+    differ = [line for line in a if line not in b] + [line for line in b if line not in a]
+    return {'case': 'held-out', 'exit': 0, 'cameraSource': got['cameraSource'], 'camera_exact_identity': exact, 'worst_joint_diff_2dp': dj,
+            'clean_retarget': {k: {kk: v[kk] for kk in ('clean_exit', 'retarget_exit', 'stderr')} for k, v in runs.items()},
+            'motion_bytes_identical': same, 'motion_bytes': os.path.getsize(runs['scanned']['motion']) if ok_runs else None,
+            'retarget_stdout_lines_differing': differ,
+            'pass': exact and dj == 0 and same and got['cameraSource'] == 'hand windows, floor-snapped: no window'}
+
+
+WINDOWS_WANT = [
+    'window 30-20: its first frame 30 is after its last 20',
+    "window 10-70: frame 70 is outside the pose's frames 0 … 59",
+    '--camera-windows item 3 is "5-x"',
+    'window 15-25 does not start after window 12-18 ends (frame 18)',
+    'windows 12-18 and 19-22 leave no frame between them',
+]
+
+
+def windows_refused(dir_, pose):
+    p, out, _ = scan_windows(dir_, 'windows-malformed', pose, '30-20,10-70,5-x,12-18,15-25,19-22')
+    fails = [line for line in p.stderr.strip().split('\n') if line.startswith('FAIL  CAMERA_WINDOWS: ')]
+    named = all(any(w in f for f in fails) for w in WINDOWS_WANT)
+    p2, out2, _ = scan_windows(dir_, 'windows-unplanted', pose, '2-30')
+    fails2 = [line for line in p2.stderr.strip().split('\n') if line.startswith('FAIL  CAMERA_WINDOWS: ')]
+    short = len(fails2) == 1 and 'window 2-30: no ankle planted on 3 frames on both sides' in fails2[0]
+    cam = os.path.join(dir_, 'any.camera.json')
+    json.dump({'spec': 'rig-pose-camera/1', 'keys': [{'frame': 0, 's': 1, 'tx': 0, 'ty': 0}]}, open(cam, 'w'))
+    p3, out3, _ = scan_windows(dir_, 'windows-with-file', pose, '26-33', ['--camera-file', cam])
+    both = p3.returncode == 2 and 'FAIL  SCAN_ARGS: ' in p3.stderr and '--camera-windows' in p3.stderr
+    return {'case': 'windows-refused', 'malformed_exit': p.returncode, 'malformed_fails': fails, 'malformed_all_named': named, 'malformed_written': os.path.exists(out),
+            'unplanted_exit': p2.returncode, 'unplanted_fails': fails2, 'unplanted_written': os.path.exists(out2), 'with_camera_file_exit': p3.returncode,
+            'with_camera_file_stderr': p3.stderr.strip(), 'with_camera_file_written': os.path.exists(out3),
+            'pass': (p.returncode == 1 and named and len(fails) == len(WINDOWS_WANT) and not os.path.exists(out)
+                     and p2.returncode == 1 and short and not os.path.exists(out2) and both and not os.path.exists(out3))}
+
+
+def windows_cases(dir_):
+    """#82's bars 3, 4 and 5 (the snap), the planted wrong window, and the refusals."""
+    step_pose, step_truth = standing(dir_, 'stand-step', 1.08)
+    flat_pose, flat_truth = standing(dir_, 'stand-flat', 1.0)
+    depth_pose, depth_truth = standing(dir_, 'stand-depth', 1.08, left_step=1.06)
+    w = f'{WINDOW[0]}-{WINDOW[1]}'
+    step = windows_case(dir_, 'windows-step', step_pose, step_truth, w)
+    flat = windows_case(dir_, 'windows-control', flat_pose, flat_truth, w)
+    wrong = windows_case(dir_, 'windows-planted-wrong', step_pose, step_truth, f'{WRONG_WINDOW[0]}-{WRONG_WINDOW[1]}')
+    depth = windows_case(dir_, 'windows-depth', depth_pose, depth_truth, w)
+    # Bar 5, always reported: the depth case's l/r disagreement over 1 % on the CAMERA line with its value, the step case's about 0.
+    dis = lambda r_: r_['windows_read'][0]['disagree'] if r_.get('exit') == 0 and r_['windows_read'][0]['used'] == 'r+l' else None
+    sd, dd = dis(step), dis(depth)
+    # The source also names the frames each side's medians stood on (r before|after; l before|after).
+    on = lambda r_: '; '.join(f'{x} {",".join(map(str, r_["windows_read"][0]["sides"][x]["before"]))}|{",".join(map(str, r_["windows_read"][0]["sides"][x]["after"]))}' for x in ('r', 'l'))
+    step['bar5_about_zero'] = sd is not None and sd < 0.001 and step['cameraSource'] == f'hand windows, floor-snapped: {w} (r+l, l/r {sd * 100:.1f} %; {on(step)})'
+    depth['bar5_named'] = dd is not None and dd > 0.01 and depth['cameraSource'] == f'hand windows, floor-snapped: {w} (r+l, l/r {dd * 100:.1f} %; {on(depth)})'
+    held = held_out(dir_)
+    refused = windows_refused(dir_, step_pose)
+    ok = step['pass'] and step['bar5_about_zero'] and flat['pass'] and not wrong['pass'] and depth['bar5_named'] and held['pass'] and refused['pass']
+    return [step, flat, wrong, depth, held, refused], ok
+
+
 def main(argv):
     keep = argv[argv.index('--keep') + 1] if '--keep' in argv else None
     d = keep or tempfile.mkdtemp(prefix='scan-selftest-')
@@ -229,13 +452,24 @@ def main(argv):
         print(json.dumps(hand))
         print(json.dumps(bad))
         print(json.dumps(order_))
-        ok = all(r['pass'] for r in rows if not r['case'].endswith('planted')) and hand['pass'] and bad['pass'] and order_['pass']
+        win_rows, win_ok = windows_cases(d)
+        for r in win_rows:
+            print(json.dumps(r))
+        ok = all(r['pass'] for r in rows if not r['case'].endswith('planted')) and hand['pass'] and bad['pass'] and order_['pass'] and win_ok
         print(f"selftest: moving {'PASS' if rows[0]['pass'] else 'FAIL'}, still {'PASS' if rows[2]['pass'] else 'FAIL'} "
               f"(bars: |s'/s - 1| <= {S_TOL}, |t' - t| <= {T_TOL} px on every frame); planted, no person mask: "
               f"moving {'within' if rows[1]['pass'] else 'OUTSIDE'} the bars (worst s {rows[1]['worst_s_rel']:.4f}, t {rows[1]['worst_t_px']:.2f} px, inliers min {rows[1]['inliers_min']}), "
               f"still {'within' if rows[3]['pass'] else 'OUTSIDE'} the bars (worst s {rows[3]['worst_s_rel']:.4f}, t {rows[3]['worst_t_px']:.2f} px, inliers min {rows[3]['inliers_min']}); "
               f"hand keys = truth {'PASS' if hand['pass'] else 'FAIL'}; malformed camera file refused {'PASS' if bad['pass'] else 'FAIL'}; "
               f"scan -> clean kept, clean -> scan refused {'PASS' if order_['pass'] else 'FAIL'}")
+        st, fl, wr, dp, ho, rf = win_rows
+        print(f"selftest (#82, hand windows): step {'PASS' if st['pass'] else 'FAIL'} (worst s {st.get('worst_s_rel', float('nan')):.2e}, t {st.get('worst_t_px', float('nan')):.2e} px); "
+              f"control {'PASS' if fl['pass'] else 'FAIL'} (worst |s - 1| {fl.get('worst_s_rel', float('nan')):.2e}); "
+              f"planted wrong window {'FIRES' if not wr['pass'] else 'DOES NOT FIRE'} (worst s {wr.get('worst_s_rel', float('nan')):.4f} at frame {wr.get('worst_s_frame')}); "
+              f"bar 5: depth case l/r {dp['windows_read'][0]['disagree'] * 100 if dp.get('bar5_named') else float('nan'):.2f} % named {'PASS' if dp.get('bar5_named') else 'FAIL'}, "
+              f"step case l/r {st['windows_read'][0]['disagree'] * 100 if st.get('bar5_about_zero') else float('nan'):.2f} % {'PASS' if st.get('bar5_about_zero') else 'FAIL'}; "
+              f"bar 3 held out {'PASS' if ho['pass'] else 'FAIL'} (motion byte-identical {ho.get('motion_bytes_identical')}); "
+              f"CAMERA_WINDOWS refusals {'PASS' if rf['pass'] else 'FAIL'}")
         return 0 if ok else 1
     finally:
         if keep is None:

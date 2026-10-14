@@ -9,6 +9,8 @@ camera itself beside them:
       [--report <scan.json>] [--plot <camera.png> [--mark a-b ...]]
   python3 -I tools/scan.py --camera-file <camera.json> --pose <pose.json> --out <scanned.pose.json>
       [--person <id>] [--plot <camera.png> [--mark a-b ...]]
+  python3 -I tools/scan.py --camera-windows a-b,c-d,... --pose <pose.json> --out <scanned.pose.json>
+      [--person <id>] [--min-score 0.3] [--report <windows.json>] [--plot <ankles.png> [--mark a-b ...]]
 
 The input is a `rig-pose-sequence/1` or `rig-c-pose-frames/0` with one frame per
 video frame (a different count is refused). It is left unchanged. The order is
@@ -66,6 +68,47 @@ first and after the last; the joints are normalised exactly as above, and
 `cameraSource` says which: "tracked" or "hand-labelled, N keys". A malformed
 file is refused by name (CAMERA_FILE).
 
+`--camera-windows a-b,c-d,...` (rig-c/pose#82) is the third path, for a clip
+whose background refuses tracking (a seamless studio sweep) and whose zooms
+come in steps: the zoom windows are given by hand and each step is read off
+the floor. The floor is the one background feature every full-body clip has,
+and `--plant-feet` already reads it. The windows are a visual judgment (the
+picture changes size over those frames, by eye) and are given; the step is not,
+and is measured. A wrong window shows on `--plot`. The reading, the snap:
+
+- The feet are the retarget's own: `bun tools/supports.ts` runs `supportsOf`
+  (src/legs.ts) on the sequence's held hip and ankle series and reports each
+  ankle's speed in one picture leg length (the clip median of hip -> ankle over
+  both sides). A frame is planted for an ankle when it is still both ways (its
+  speed from the previous frame and to the next each under `STILL_SPEED`, 0.01
+  leg lengths a frame). Jump frames are not excluded: the detector reads them on
+  the uncorrected picture, so they carry the camera's own steps, and an airborne
+  ankle cannot hold still over three frames. A frame read inside a detector jump
+  is named in cameraSource ("r 187 inside detector jump 187-193"), not refused.
+- Per window a-b and per ankle: the 3 planted frames nearest the window before
+  it and the 3 nearest after it, searched within 15 frames of the window and
+  never past a neighbouring window; y_before and y_after are the ankle's median picture
+  y over each three. An ankle reads the window only with 3 on both sides, and its
+  ratio is (y_after - c_y) / (y_before - c_y), about the picture's centre
+  c = (width / 2, height / 2).
+- Both ankles read: the step is the mean of the two ratios, and their
+  disagreement |r_r / r_l - 1| is written for the window, always (foot depth and
+  the frames chosen, not camera). One reads: its ratio, and the window says which
+  ankle alone. None reads: the window is refused by name (CAMERA_WINDOWS) and
+  nothing is written.
+- s is 1 before the first window; after each window it is the s before times
+  the step, held to the next window; across a window it is linear in the frame
+  index from frame a-1's s to frame b+1's. t = c (1 - s), x and y (no pan is
+  read). Joints are normalised as above, and `inliers` is 0 on every frame.
+- The drift between windows (a slow push-in) is held, not fitted: keying it
+  from the foot's drift would count again what the steps carry, and keying it
+  from the figure's size carries the body's motion. It is open.
+- `cameraSource` is "hand windows, floor-snapped: a-b (r+l, l/r x.x %), c-d (r
+  alone), ..." ("no window" for none); the retarget's CAMERA line prints it.
+  Windows that are not integer a <= b inside the pose's frames, that overlap, do
+  not increase, or leave no frame between them are refused by name
+  (CAMERA_WINDOWS), every fault in one run; nothing is written.
+
 `--no-person-mask` drops the person's mask (the planted failure of the card's
 synthetic bar); `--report` writes per-frame diagnostics; `--plot` draws s, tx,
 ty and the inliers against the frame, with `--mark a-b` spans shaded.
@@ -77,6 +120,8 @@ import hashlib
 import json
 import math
 import os
+import shutil
+import subprocess
 import sys
 
 import cv2
@@ -445,6 +490,235 @@ def plot(cams, path, marks, title):
     cv2.imwrite(path, im)
 
 
+# --- hand windows, floor-snapped (rig-c/pose#82) -----------------------------------------------------------------
+
+SNAP_FRAMES = 3
+SNAP_SEARCH = 15
+SUPPORTS_TOOL = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'supports.ts')
+
+
+def parse_windows(text, n):
+    """The windows as (a, b) frame pairs, inclusive; every fault named in one Refusal."""
+    if text.strip() == '':
+        return []
+    bad = []
+    wins = []
+    for k, item in enumerate(text.split(',')):
+        item = item.strip()
+        parts = item.split('-')
+        if len(parts) != 2 or not all(p.isdigit() for p in parts):
+            bad.append(f'--camera-windows item {k + 1} is {json.dumps(item)}; a window is a-b, two integer frames with a <= b')
+            continue
+        a, b = int(parts[0]), int(parts[1])
+        ok = True
+        if a > b:
+            bad.append(f'window {a}-{b}: its first frame {a} is after its last {b}; a window is a-b with a <= b')
+            ok = False
+        for f in (a, b):
+            if f >= n:
+                bad.append(f'window {a}-{b}: frame {f} is outside the pose\'s frames 0 … {n - 1}')
+                ok = False
+        if ok and wins:
+            pa, pb = wins[-1]
+            if a <= pb:
+                bad.append(f'window {a}-{b} does not start after window {pa}-{pb} ends (frame {pb}); windows must increase and not overlap')
+                ok = False
+            elif a == pb + 1:
+                bad.append(f'windows {pa}-{pb} and {a}-{b} leave no frame between them; each window is read on the planted frames beside it')
+                ok = False
+        if ok:
+            wins.append((a, b))
+    if bad:
+        raise Refusal('\n'.join(f'CAMERA_WINDOWS: {b}' for b in bad))
+    return wins
+
+
+def read_supports(pose, person, min_score, n):
+    """tools/supports.ts on the pose (supportsOf's reading, the ankles' speed, planted frames); its refusal relayed by name."""
+    bun = shutil.which('bun')
+    if bun is None:
+        raise Refusal('CAMERA_WINDOWS: bun is not on PATH; --camera-windows reads the feet with `bun tools/supports.ts`')
+    p = subprocess.run([bun, SUPPORTS_TOOL, '--pose', pose, '--person', person, '--min-score', repr(min_score)], capture_output=True, text=True)
+    if p.returncode != 0:
+        lines = [line[len('FAIL  '):] if line.startswith('FAIL  ') else line for line in p.stderr.strip().split('\n') if line.strip()]
+        raise Refusal('\n'.join(f'CAMERA_WINDOWS: tools/supports.ts refused {pose} (exit {p.returncode}): {line}' for line in lines or ['(no message)']))
+    feet = json.loads(p.stdout)
+    if len(feet['planted']['r']) != n:
+        raise Refusal(f'CAMERA_WINDOWS: tools/supports.ts read {len(feet["planted"]["r"])} frames of {pose}, and the pose has {n}')
+    return feet
+
+
+def snap_windows(doc, feet, wins):
+    """Per frame (s, tx, ty, 0, diagnostics) and each window's reading; a window no ankle reads is refused."""
+    n = len(doc['frames'])
+    cx, cy = doc['width'] / 2, doc['height'] / 2
+    readings = []
+    bad = []
+    for k, (a, b) in enumerate(wins):
+        # Searched within SNAP_SEARCH frames of the window, never past a neighbouring window.
+        lo = max(wins[k - 1][1] + 1 if k > 0 else 0, a - SNAP_SEARCH)
+        hi = min(wins[k + 1][0] - 1 if k + 1 < len(wins) else n - 1, b + SNAP_SEARCH)
+        w = {'window': [a, b], 'sides': {}}
+        for side in ('r', 'l'):
+            planted = feet['planted'][side]
+            before = [i for i in range(a - 1, lo - 1, -1) if planted[i]][:SNAP_FRAMES]
+            after = [i for i in range(b + 1, hi + 1) if planted[i]][:SNAP_FRAMES]
+            r_ = {'before': sorted(before), 'after': after}
+            if len(before) == SNAP_FRAMES and len(after) == SNAP_FRAMES:
+                yb = float(np.median([feet['ankle'][side][i][1] for i in before]))
+                ya = float(np.median([feet['ankle'][side][i][1] for i in after]))
+                r_.update({'y_before': yb, 'y_after': ya, 'ratio': (ya - cy) / (yb - cy) if yb != cy else None})
+                if yb == cy:
+                    r_['why'] = f'its floor before the window is the picture centre\'s y {cy:g}'
+            w['sides'][side] = r_
+        read = [s_ for s_ in ('r', 'l') if w['sides'][s_].get('ratio') is not None]
+        if not read:
+            got = '; '.join(f'{s_} has {len(w["sides"][s_]["before"])} before / {len(w["sides"][s_]["after"])} after' for s_ in ('r', 'l'))
+            bad.append(f'window {a}-{b}: no ankle planted on {SNAP_FRAMES} frames on both sides (frames {lo}-{a - 1} before, {b + 1}-{hi} after); {got}')
+            continue
+        w['inJump'] = [(side, i, j0, j1) for side in read for i in w['sides'][side]['before'] + w['sides'][side]['after']
+                       for j0, j1 in feet['jumps'] if j0 <= i <= j1]
+        rr, rl = w['sides']['r'].get('ratio'), w['sides']['l'].get('ratio')
+        if len(read) == 2:
+            w.update({'used': 'r+l', 'step': (rr + rl) / 2, 'disagree': abs(rr / rl - 1)})
+        else:
+            w.update({'used': f'{read[0]} alone', 'step': rr if rr is not None else rl, 'disagree': None})
+        if not w['step'] > 0:
+            bad.append(f'window {a}-{b}: the step read is {w["step"]:.4f}; a scale step must be > 0 (the ankle crossed the picture centre\'s y {cy:g})')
+        readings.append(w)
+    if bad:
+        raise Refusal('\n'.join(f'CAMERA_WINDOWS: {b}' for b in bad))
+    s = [1.0] * n
+    cur = 1.0
+    nxt = 0
+    for w in readings:
+        a, b = w['window']
+        for i in range(nxt, a):
+            s[i] = cur
+        w['s_before'] = cur
+        w['s_after'] = cur * w['step']
+        for i in range(a, b + 1):
+            s[i] = cur + (w['s_after'] - cur) * (i - (a - 1)) / ((b + 1) - (a - 1))
+        cur = w['s_after']
+        nxt = b + 1
+    for i in range(nxt, n):
+        s[i] = cur
+    cams = [(float(v), float(cx * (1 - v)), float(cy * (1 - v)), 0, {'frame': i, 'snap': True}) for i, v in enumerate(s)]
+    return cams, readings
+
+
+def windows_text(wins):
+    return ', '.join(f'{a}-{b}' for a, b in wins) or 'no window'
+
+
+def window_tag(w):
+    a, b = w['window']
+    dis = '' if w['disagree'] is None else f', l/r {w["disagree"] * 100:.1f} %'
+    # The frames each side's medians stood on (HQ's ruling, #82): a reader sees what the step was read from.
+    on = '; '.join(f'{side} {",".join(map(str, w["sides"][side]["before"]))}|{",".join(map(str, w["sides"][side]["after"]))}'
+                   for side in ('r', 'l') if w['sides'][side].get('ratio') is not None)
+    # A frame read inside a jump the detector found (on the uncorrected picture) is named, not refused (#82).
+    inside = ', '.join(f'{side} {i} inside detector jump {j0}-{j1}' for side, i, j0, j1 in w.get('inJump', []))
+    return f'{a}-{b} ({w["used"]}{dis}; {on}{"; " + inside if inside else ""})'
+
+
+def windows_source(readings):
+    return f'hand windows, floor-snapped: {", ".join(window_tag(w) for w in readings) or "no window"}'
+
+
+def window_line(w):
+    a, b = w['window']
+    sides = []
+    for side in ('r', 'l'):
+        r_ = w['sides'][side]
+        fr = f'frames {",".join(map(str, r_["before"])) or "-"} | {",".join(map(str, r_["after"])) or "-"}'
+        if r_.get('ratio') is None:
+            sides.append(f'{side} not read ({fr}: {r_.get("why") or f"{len(r_["before"])} before, {len(r_["after"])} after, {SNAP_FRAMES} needed on each side"})')
+        else:
+            sides.append(f'{side} {fr}, y {r_["y_before"]:.2f} -> {r_["y_after"]:.2f} px, ratio {r_["ratio"]:.6f}')
+    dis = f'l/r {w["disagree"] * 100:.2f} %' if w['disagree'] is not None else f'{w["used"]}, no l/r disagreement read'
+    return f'window {a}-{b}: {"; ".join(sides)}; step {w["step"]:.6f} ({w["used"]}), {dis}; s {w["s_before"]:.6f} -> {w["s_after"]:.6f}'
+
+
+def plot_snap(feet, cams, readings, wins, marks, path, title):
+    """Both ankles' picture y per frame, the windows shaded and the frames each window was read on marked."""
+    n = len(cams)
+    W, PH, ML, MR, MT = 1500, 520, 90, 30, 50
+    H = MT + PH + 60
+    im = np.full((H, W, 3), 255, np.uint8)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    cv2.putText(im, title, (ML, 30), font, 0.5, (30, 30, 30), 1, cv2.LINE_AA)
+    px = lambda i: int(round(ML + i / max(1, n - 1) * (W - ML - MR)))
+    ys = [a[1] for side in ('r', 'l') for a in feet['ankle'][side]]
+    lo, hi = min(ys), max(ys)
+    if hi - lo < 1e-9:
+        lo, hi = lo - 1, hi + 1
+    pad = (hi - lo) * 0.08
+    lo, hi = lo - pad, hi + pad
+    y0, y1 = MT + 10, MT + PH - 20
+    # Picture y grows downward, and is drawn so: lower on the plot is lower in the picture.
+    py = lambda v: int(round(y0 + (v - lo) / (hi - lo) * (y1 - y0)))
+    for a, b in marks:
+        cv2.rectangle(im, (px(a), y0), (px(b), y1), (200, 235, 200), -1)
+    for a, b in wins:
+        cv2.rectangle(im, (px(a), y0), (px(b), y1), (160, 226, 255), -1)
+    cv2.rectangle(im, (ML, y0), (W - MR, y1), (200, 200, 200), 1)
+    for frac in (0, 0.5, 1):
+        v = lo + pad + frac * (hi - lo - 2 * pad)
+        cv2.putText(im, f'{v:.1f}', (5, py(v) + 4), font, 0.4, (30, 30, 30), 1, cv2.LINE_AA)
+        cv2.line(im, (ML, py(v)), (W - MR, py(v)), (230, 230, 230), 1)
+    colour = {'r': (214, 120, 52), 'l': (52, 160, 52)}
+    for side in ('r', 'l'):
+        pts = np.array([[px(i), py(a[1])] for i, a in enumerate(feet['ankle'][side])], np.int32)
+        cv2.polylines(im, [pts], False, colour[side], 1, cv2.LINE_AA)
+        for i, a in enumerate(feet['ankle'][side]):
+            if feet['planted'][side][i]:
+                cv2.circle(im, (px(i), py(a[1])), 2, colour[side], -1, cv2.LINE_AA)
+    for w in readings:
+        for side in ('r', 'l'):
+            r_ = w['sides'][side]
+            if r_.get('ratio') is None:
+                continue
+            for i in r_['before'] + r_['after']:
+                cv2.circle(im, (px(i), py(feet['ankle'][side][i][1])), 6, (60, 60, 214), 2, cv2.LINE_AA)
+    cv2.putText(im, 'ankle y (px, down): right blue, left green, dots = planted; red rings = the frames each window was read on; orange = windows, green = --mark',
+                (ML + 6, y0 + 16), font, 0.42, (30, 30, 30), 1, cv2.LINE_AA)
+    for i in range(0, n, 24 if n < 400 else 30):
+        cv2.line(im, (px(i), y1), (px(i), y1 + 4), (30, 30, 30), 1)
+        cv2.putText(im, str(i), (px(i) - 8, y1 + 16), font, 0.35, (30, 30, 30), 1, cv2.LINE_AA)
+    cv2.imwrite(path, im)
+
+
+def run_windows(opts, doc, person):
+    """--camera-windows end to end; returns the exit code."""
+    n = len(doc['frames'])
+    wins = parse_windows(opts.camera_windows, n)
+    feet = read_supports(opts.pose, person, opts.min_score, n)
+    cams, readings = snap_windows(doc, feet, wins)
+    camera_source = windows_source(readings)
+    cx, cy = doc['width'] / 2, doc['height'] / 2
+    steps = '; '.join(f'{w["window"][0]}-{w["window"][1]} step {w["step"]:.6f} ({w["used"]}), s {w["s_before"]:.6f} -> {w["s_after"]:.6f}' for w in readings) or 'none'
+    source = (f"{doc['source']} | camera hand windows ({windows_text(wins)}), floor-snapped by tools/scan.py (rig-c/pose#82) on "
+              f"{os.path.basename(opts.pose)} (sha256 {sha(opts.pose)[:16]}), {n} frames; planted ankles (speed < {feet['stillSpeed']} leg lengths a frame, "
+              f"no jump) by tools/supports.ts (src/legs.ts supportsOf, min-score {opts.min_score}); per window, each ankle's median picture y on the "
+              f"{SNAP_FRAMES} planted frames nearest each side, step (y_after - c_y) / (y_before - c_y), the mean where both read: {steps}; "
+              f"about the picture centre ({cx:g}, {cy:g}), s 1 before the first window, held between windows, linear across one; "
+              f"t = c (1 - s); joints normalised p' = (p - t) / s; inliers 0 (no features were fitted)")
+    for w in readings:
+        print(window_line(w))
+    ss = [c[0] for c in cams]
+    if opts.report:
+        with open(opts.report, 'w') as fh:
+            json.dump({'source': source, 'cameraSource': camera_source, 'windows': readings,
+                       'frames': [{'s': c[0], 'tx': c[1], 'ty': c[2]} for c in cams]}, fh, indent=1)
+            fh.write('\n')
+    if opts.plot:
+        plot_snap(feet, cams, readings, wins, opts.mark, opts.plot, f'{os.path.basename(opts.pose)}: hand windows, floor-snapped ({windows_text(wins)})')
+    write(doc, person, cams, opts.out, source, camera_source)
+    print(f'scan: {n} frames, {len(wins)} hand window(s), floor-snapped; s {min(ss):.4f} … {max(ss):.4f}; cameraSource "{camera_source}"; wrote {opts.out}')
+    return 0
+
+
 def rect(s):
     v = [float(x) for x in s.split(',')]
     if len(v) != 4 or not (v[2] > v[0] and v[3] > v[1]):
@@ -461,6 +735,8 @@ def main(argv):
     ap = argparse.ArgumentParser(description='Read the camera off the background (rig-c/pose#63).')
     ap.add_argument('--video', help='the video to track (or --camera-file)')
     ap.add_argument('--camera-file', help=f'a hand-written camera ({CAMERA_SPEC}) instead of tracking')
+    ap.add_argument('--camera-windows', help='a-b,c-d,...: hand zoom windows (frames, inclusive); each step is read off the planted feet (rig-c/pose#82); "" for none')
+    ap.add_argument('--min-score', type=float, default=0.3, help='with --camera-windows: a joint scored below this holds its last good value, as in the retarget (default 0.3)')
     ap.add_argument('--pose', required=True)
     ap.add_argument('--out', required=True)
     ap.add_argument('--person')
@@ -476,11 +752,14 @@ def main(argv):
     ap.add_argument('--plot')
     ap.add_argument('--mark', type=span, action='append', default=[], help='a-b: a frame span shaded on --plot')
     opts = ap.parse_args(argv)
-    if (opts.video is None) == (opts.camera_file is None):
-        print('FAIL  SCAN_ARGS: give --video (track the camera) or --camera-file (a hand-written one), exactly one', file=sys.stderr)
+    if (opts.video is not None) + (opts.camera_file is not None) + (opts.camera_windows is not None) != 1:
+        print('FAIL  SCAN_ARGS: give --video (track the camera), --camera-file (a hand-written one) or --camera-windows '
+              '(hand zoom windows, each step read off the planted feet), exactly one', file=sys.stderr)
         return 2
     try:
         doc, person = read_pose(opts.pose, opts.person)
+        if opts.camera_windows is not None:
+            return run_windows(opts, doc, person)
         if opts.camera_file is not None:
             cams, nkeys, note = read_camera_file(opts.camera_file, len(doc['frames']))
         else:

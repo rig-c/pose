@@ -416,7 +416,7 @@ export function cameraLine(camera: readonly CameraFrame[], times: readonly numbe
   const fastest = [...steps].sort((x, y) => Math.abs(y.d) - Math.abs(x.d) || x.to - y.to).slice(0, 3);
   const sign = (d: number) => `${d < 0 ? '−' : '+'}${Math.abs(d).toFixed(4)}`;
   const inl = camera.reduce((m, c) => Math.min(m, c.inliers), Infinity);
-  return `${source ?? '(source not stated)'}: the sequence carries the picture's camera against frame 0's; its joints are normalised by it (p′ = (p − t) / s): s ${ss[lo]!.toFixed(4)} (frame ${lo}) … ${ss[hi]!.toFixed(4)} (frame ${hi}) over ${camera.length} frames; s changes fastest at ${fastest.map((x) => `frame ${x.to - 1}→${x.to} (t=${times[x.to]!.toFixed(3)}s) ${sign(x.d)}`).join(', ') || 'no frame (one frame only)'}${source?.startsWith('hand-labelled') === true ? '' : `; fewest background inliers ${inl}`}`;
+  return `${source ?? '(source not stated)'}: the sequence carries the picture's camera against frame 0's; its joints are normalised by it (p′ = (p − t) / s): s ${ss[lo]!.toFixed(4)} (frame ${lo}) … ${ss[hi]!.toFixed(4)} (frame ${hi}) over ${camera.length} frames; s changes fastest at ${fastest.map((x) => `frame ${x.to - 1}→${x.to} (t=${times[x.to]!.toFixed(3)}s) ${sign(x.d)}`).join(', ') || 'no frame (one frame only)'}${source?.startsWith('hand') === true ? '' : `; fewest background inliers ${inl}`}`;
 }
 
 /** Each leg's first bone (its root, the thigh) and last bone (whose tip is the ankle), when the map has both. */

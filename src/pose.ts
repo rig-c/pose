@@ -95,7 +95,7 @@ export interface PoseSequence {
   width: number;
   height: number;
   source: string;
-  /** Optional, only with `camera`: where it came from — "tracked", or "hand-labelled, N keys" (#63). */
+  /** Optional, only with `camera`: where it came from — "tracked", "hand-labelled, N keys" (#63), or "hand windows, floor-snapped: …" (#82). */
   cameraSource?: string;
   /** Optional: one per frame, when a scan read the camera (#63). */
   camera?: CameraFrame[];
