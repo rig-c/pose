@@ -129,6 +129,8 @@ export interface ArtRange {
   limits: [number, number];
   /** Whether the bone was held at the limit (the set's `turn`) or followed the pose (its chain's `range` only). */
   clamped: boolean;
+  /** --raised-by-head (#62): on a held upper arm, the most the re-aimed forearm left the wrist short of its placed point, eye distances; `turn` and `maxOverflow` are then the upper arm's on that frame. */
+  shortfall?: number;
 }
 
 export interface Uncovered {
@@ -580,6 +582,9 @@ function moveText(m: Move): string {
 }
 
 export function artRangeLine(e: ArtRange, times: readonly number[]): string {
+  if (e.shortfall !== undefined) {
+    return `set "${e.set}" chain "${e.chain}" bone "${e.bone}" held at its turn (range [${e.limits[0]}, ${e.limits[1]}]) ${spanOf(e.frames, times)}: ${e.seconds.toFixed(3)}s the re-aimed forearm leaves the wrist up to ${e.shortfall.toFixed(2)} eye distances short of its placed point (the upper arm asked ${sg(e.turn)} from drawn, ${deg(e.maxOverflow)} past) — demand for another drawing of the set`;
+  }
   return `set "${e.set}" chain "${e.chain}" bone "${e.bone}" turned ${sg(e.turn)} from drawn (range [${e.limits[0]}, ${e.limits[1]}]) ${spanOf(e.frames, times)}: ${e.seconds.toFixed(3)}s, up to ${deg(e.maxOverflow)} past it; ${e.clamped ? 'held at the limit' : 'the bone follows the pose'} — demand for another drawing of the set`;
 }
 
@@ -602,4 +607,163 @@ export function clampArt(switches: readonly Switch[], map: JointMap, targets: Ma
       }
     }
   }
+}
+
+/**
+ * A set's arm is raised (rig-c/pose#62) when its `drawn` world angle on the
+ * chain's first bone (the upper arm) is within this many degrees of straight up.
+ */
+export const RAISED_WITHIN = 30;
+
+/** Whether a drawn world angle, Spine degrees, is within `RAISED_WITHIN` of straight up (90°). */
+export const isRaised = (drawn: number): boolean => Math.abs(wrap(drawn - 90)) <= RAISED_WITHIN;
+
+type P2 = [number, number];
+
+/**
+ * A two-bone solve in the world (y up): the directions, degrees, of the vector
+ * from the shoulder to the elbow (`upper`) and from the elbow to the wrist
+ * (`fore`) that put the wrist on `target`, for bones of lengths `l0` and `l1`.
+ * `side` is the elbow's bend: +1 when the forearm turns counter-clockwise from
+ * the upper arm, −1 clockwise. Out of reach (farther than l0 + l1, nearer than
+ * |l0 − l1|, beyond a relative 1e-6) both point straight at the target and
+ * `reached` is false; on the shoulder, where there is no direction, `upper` is
+ * null. `reachLimit` puts a target inside first, so the raised solve always reaches.
+ */
+export function twoBone(shoulder: P2, target: P2, l0: number, l1: number, side: 1 | -1): { upper: number; fore: number; reached: boolean } | { upper: null; reached: false } {
+  const dx = target[0] - shoulder[0];
+  const dy = target[1] - shoulder[1];
+  const d = Math.hypot(dx, dy);
+  if (d < 1e-9) return { upper: null, reached: false };
+  const theta = Math.atan2(dy, dx) * (180 / Math.PI);
+  const eps = 1e-6 * Math.max(1, l0 + l1);
+  if (d > l0 + l1 + eps || d < Math.abs(l0 - l1) - eps) return { upper: theta, fore: theta, reached: false };
+  const cos = Math.min(1, Math.max(-1, (l0 * l0 + d * d - l1 * l1) / (2 * l0 * d)));
+  const upper = theta - side * Math.acos(cos) * (180 / Math.PI);
+  const r = upper * (Math.PI / 180);
+  const ex = shoulder[0] + l0 * Math.cos(r);
+  const ey = shoulder[1] + l0 * Math.sin(r);
+  return { upper: wrap(upper), fore: Math.atan2(target[1] - ey, target[0] - ex) * (180 / Math.PI), reached: true };
+}
+
+/** Where a raised wrist is placed: the target itself, or the reach limit (rig-c/pose#62, HQ's ruling). */
+export interface Placement {
+  point: P2;
+  /** `in`: the target is within reach. `far` / `near`: past l0 + l1, or nearer than |l0 − l1|, and placed on the ray from the head centre. `missed`: that ray never enters the reach; placed at the reach's point nearest the target. */
+  how: 'in' | 'far' | 'near' | 'missed';
+}
+
+/**
+ * The raised wrist's placement. The arm reaches the annulus about the shoulder
+ * between |l0 − l1| and l0 + l1. A target inside it is kept. Otherwise the wrist
+ * goes on the ray from the head centre through the target, at the point of
+ * that ray inside the annulus nearest the target — the reach limit along the
+ * head-relative direction. The ray can cross the annulus twice (out and back
+ * through the inner disc, or through the whole ring): of the reachable stretches
+ * the one nearest the target wins, a tie going to the point nearer the head. A
+ * ray that never enters it (`missed`) gives the annulus point nearest the
+ * target, on the line from the shoulder through it (toward the head centre when
+ * the target is on the shoulder).
+ */
+export function reachLimit(centre: P2, target: P2, shoulder: P2, l0: number, l1: number): Placement {
+  const rMin = Math.abs(l0 - l1);
+  const rMax = l0 + l1;
+  const eps = 1e-9 * Math.max(1, rMax);
+  const dT = Math.hypot(target[0] - shoulder[0], target[1] - shoulder[1]);
+  if (dT >= rMin - eps && dT <= rMax + eps) return { point: target, how: 'in' };
+  const how = dT > rMax ? 'far' : 'near';
+  const vx = target[0] - centre[0];
+  const vy = target[1] - centre[1];
+  const L = Math.hypot(vx, vy);
+  if (L > 1e-9) {
+    const u: P2 = [vx / L, vy / L];
+    // |C + s·u − S|² = s² + 2·s·b + c
+    const b = u[0] * (centre[0] - shoulder[0]) + u[1] * (centre[1] - shoulder[1]);
+    const c = (centre[0] - shoulder[0]) ** 2 + (centre[1] - shoulder[1]) ** 2;
+    const roots = (r: number): [number, number] | null => {
+      const disc = b * b - c + r * r;
+      return disc < 0 ? null : [-b - Math.sqrt(disc), -b + Math.sqrt(disc)];
+    };
+    const outer = roots(rMax);
+    const stretches: Array<[number, number]> = [];
+    if (outer !== null) {
+      const lo = Math.max(0, outer[0]);
+      const hi = outer[1];
+      const inner = rMin > 0 ? roots(rMin) : null;
+      if (hi >= lo) {
+        if (inner === null || inner[1] <= lo || inner[0] >= hi) stretches.push([lo, hi]);
+        else {
+          if (inner[0] > lo) stretches.push([lo, inner[0]]);
+          if (inner[1] < hi) stretches.push([inner[1], hi]);
+        }
+      }
+    }
+    let best: number | null = null;
+    for (const [lo, hi] of stretches) {
+      const s = Math.min(Math.max(L, lo), hi);
+      if (best === null || Math.abs(s - L) < Math.abs(best - L) - 1e-9 || (Math.abs(Math.abs(s - L) - Math.abs(best - L)) <= 1e-9 && s < best)) best = s;
+    }
+    if (best !== null) return { point: [centre[0] + best * u[0], centre[1] + best * u[1]], how };
+  }
+  const from: P2 = dT > 1e-9 ? target : centre;
+  const k = Math.hypot(from[0] - shoulder[0], from[1] - shoulder[1]) || 1;
+  const r = Math.min(Math.max(dT, rMin), rMax);
+  return { point: [shoulder[0] + (r * (from[0] - shoulder[0])) / k, shoulder[1] + (r * (from[1] - shoulder[1])) / k], how: 'missed' };
+}
+
+/** A run of frames whose target was out of reach, one way. */
+export interface ReachShort {
+  frames: [number, number];
+  how: 'far' | 'near' | 'missed';
+  /** |target − placed| in the rig's eye distances: the most, and the median, over the run. */
+  shortfall: { max: number; median: number };
+}
+
+/** One span of a raised set on one chain: its wrist placed against the head (rig-c/pose#62). */
+export interface Raised {
+  set: string;
+  chain: string;
+  frames: [number, number];
+  seconds: number;
+  /** The unit: the eye distance's median over the span, the rig's in world units, the reference's in picture px. */
+  eyes: { rig: number; reference: number };
+  /**
+   * Per frame of the span, the wrist's offset from the head centre in eye
+   * distances (x right, y up): the reference's; where the wrist was placed (the
+   * target, or the reach limit); the rig's on the pose's angles; the rig's as
+   * keyed.
+   */
+  reference: P2[];
+  placed: P2[];
+  before: P2[];
+  after: P2[];
+  /** The largest |rig − reference| over the span, x and y, before and after; and the largest |after − placed|, eye distances. */
+  worst: { before: P2; after: P2; placed: number };
+  /** The runs of frames out of the arm's reach (the REACH line). */
+  short: ReachShort[];
+  /** The frames whose upper arm the set's `turn` held: the forearm re-aimed at the placed wrist. */
+  upperHeld: number[];
+  /** The arm's reach (from |l0 − l1| to l0 + l1, world units from the shoulder) and the farthest target from the shoulder over the span. */
+  reach: { min: number; max: number; farthest: number };
+}
+
+const xy = (v: P2) => `(${v[0].toFixed(2)}, ${v[1].toFixed(2)})`;
+const framesText = (fs: readonly number[]): string => {
+  const flag: boolean[] = [];
+  for (const f of fs) flag[f] = true;
+  return runsOf(Array.from({ length: flag.length }, (_, i) => flag[i] === true), 0).map(([a, b]) => (a === b ? `${a}` : `${a}–${b}`)).join(', ');
+};
+
+export function raisedLine(e: Raised, times: readonly number[]): string {
+  const med = (vs: readonly P2[]): P2 => [median(vs.map((v) => v[0])), median(vs.map((v) => v[1]))];
+  const held = e.upperHeld.length === 0 ? 'the upper arm within its turn on every frame' : `the upper arm held by the set's turn on ${e.upperHeld.length} frame(s) (${framesText(e.upperHeld)}), the forearm re-aimed`;
+  const out = e.short.length === 0 ? 'every target in reach' : `out of reach on ${e.short.reduce((k, s) => k + s.frames[1] - s.frames[0] + 1, 0)} frame(s) (REACH)`;
+  return `set "${e.set}" chain "${e.chain}" ${spanOf(e.frames, times)}: the wrist placed against the head; eye distance (median) rig ${e.eyes.rig.toFixed(2)} units, reference ${e.eyes.reference.toFixed(2)} px; wrist − head centre in eye distances (x right, y up), median reference ${xy(med(e.reference))}, placed ${xy(med(e.placed))}, before ${xy(med(e.before))}, after ${xy(med(e.after))}; worst |rig − reference| before ${xy(e.worst.before)}, after ${xy(e.worst.after)}; worst |after − placed| ${e.worst.placed.toFixed(2)}; ${held}; ${out}`;
+}
+
+/** The REACH line: a raised span whose target was out of the arm's reach on some frames — the proportions, not the art's range, were the limit. */
+export function reachLine(e: Raised, times: readonly number[]): string {
+  const why = { far: `farther than l0 + l1 = ${e.reach.max.toFixed(1)}`, near: `nearer than |l0 − l1| = ${e.reach.min.toFixed(1)}`, missed: 'and the ray from the head centre never enters the reach; placed at the reach\'s point nearest it' } as const;
+  const runs = e.short.map((s) => `${spanOf(s.frames, times)} ${s.how === 'missed' ? 'out of reach' : why[s.how]}${s.how === 'missed' ? `, ${why.missed}` : ''}: up to ${s.shortfall.max.toFixed(2)} eye distances short (median ${s.shortfall.median.toFixed(2)})`);
+  return `set "${e.set}" chain "${e.chain}": the target out of the arm's reach from the shoulder — ${runs.join('; ')}; the wrist placed at the reach limit along the head-relative direction (the farthest target ${e.reach.farthest.toFixed(1)} units from the shoulder). Not ART-RANGE: the rig's proportions, not the art's range, were the limit`;
 }

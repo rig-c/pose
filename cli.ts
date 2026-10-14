@@ -98,6 +98,18 @@ retarget
                         reaches the floor, raised or lowered, k within [0.92, 1.08] (past it, reported, not forced); above
                         it the foot is lifted and keeps the pose's height (STANCE lines; default: off; 0.07 is
                         the card's, rig-c/pose#60)
+  --raised-by-head      while a set whose arm is drawn raised shows (its "drawn" upper arm within 30° of straight
+                        up), that arm's wrist goes where the reference's is against the head, in eye distances:
+                        rig head centre + (reference wrist − reference head centre) × rig eye distance ÷ the
+                        reference's, per frame; each eye distance is its median over the span. The head centre is
+                        the eyes' midpoint; the rig's eyes are the two points the head chain's "a>b" aim names
+                        (refused without one, RAISED_HEAD), posed from the targets of the bones above. A target out
+                        of the arm's reach, too far or too near, goes to the reach limit on the ray from the head
+                        centre toward it and is graded at that placed distance (REACH lines, in eye distances). A
+                        two-bone solve on the rig's own lengths keeps the pose's elbow side; when the set's "turn"
+                        holds the upper arm the forearm is re-aimed at the wrist. ART-RANGE: a forearm still past
+                        its turn, or a held arm leaving the wrist > 0.01 eye distances short of its placed point
+                        (the shortfall listed). RAISED lines (default: off; rig-c/pose#62)
   --idle <name>         the rig's animation read as its idle (default: idle). Every idle track the new
                         animation does not key, on any channel, is listed as IDLE-DROPPED (a blink, a
                         breath); one it keys is IDLE-KEPT-OUT, naming the track that keys it, and so is a
@@ -129,7 +141,7 @@ retarget
   --build <dir>         keep the gated build (skeleton.json, .atlas, .model.json) here
   --render <dir>        keep rigc's render of the animation (frames, contact.png, folds.json) here
   --report <file>       write the run's measurements (holds, short, endOn, flips, bends, landings, folds,
-                        switches, uncovered, turns, range, artRange,
+                        switches, uncovered, turns, range, artRange, raised,
                         idleDropped, idleKeptOut, merged, reduce) as JSON
 
   It writes nothing until rigc's gate is green with the animation in, every mapped bone lands on
@@ -228,7 +240,7 @@ function legScaleOf(f: Map<string, string>): [number, number] | 'off' {
 }
 
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance'], ['coco', 'plant-feet', 'carry-idle']);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head']);
   const bends = f.get('bends') ?? 'refuse';
   if (bends !== 'refuse' && bends !== 'clamp') throw new Usage(`--bends is "${bends}"; it must be refuse or clamp`);
   const switchAt = f.get('switch-at') ?? 'first';
@@ -254,6 +266,7 @@ function retargetArgs(argv: string[]): RetargetArgs {
     legScale: legScaleOf(f),
     plantFeet: f.has('plant-feet'),
     stance: stanceOf(f),
+    raisedByHead: f.has('raised-by-head'),
     bends,
     bendTolerance: num(f, 'bend-tolerance', 0, (n) => n >= 0 && n < 180, 'degrees in [0, 180)'),
     switchTolerance: num(f, 'switch-tolerance', 25, (n) => n >= 0 && n < 180, 'degrees in [0, 180)'),
