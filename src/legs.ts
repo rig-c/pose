@@ -334,6 +334,28 @@ export interface Feet {
   steps: Step[];
   /** The frames a change of support (or a landing, or a re-plant) was keyed on: the blend starts there. */
   changes: Array<{ frame: number; from: Side | null; to: Side }>;
+  /**
+   * rig-c/pose#113, read from the lower ankle: each run of frames whose
+   * supporting side differs from the reading before #113 (`was`, `now`; null:
+   * no foot supports). Absent where the rule does not apply (in place, or
+   * without `lowerAnkle`).
+   */
+  lowered?: Lowered[];
+}
+
+/** A run of frames whose support the lower-ankle rule (rig-c/pose#113) reads differently from the reading before it. */
+export interface Lowered {
+  frames: [number, number];
+  was: Side | null;
+  now: Side | null;
+  /**
+   * Why no foot supports, where `now` is null: `released` — the supporting foot
+   * was released on the run's first frame because the other ankle had been lower
+   * past the margin for `PLANT_SWITCH_SECONDS` and could not take support
+   * (released by a step, or moving); `higher` — the only foot free to take
+   * support was the higher one.
+   */
+  cause?: 'released' | 'higher';
 }
 
 /** Each frame's rolling floor of a picture-y series: its `FLOOR_PERCENTILE` over the frames within ± `FLOOR_SECONDS`. */
@@ -351,8 +373,33 @@ export function rollingFloor(ys: readonly number[], times: readonly number[]): n
  * times a run of frames as the rest of the retarget does. `inPlace` (#92): no
  * ankle is moving for the step rules, so nothing is released and every foot is
  * free to take support.
+ *
+ * `lowerAnkle` (rig-c/pose#113, `--plant-feet` on a sequence not declared in
+ * place): a foot whose ankle is higher in the picture than the other's by
+ * `PLANT_SWITCH` leg lengths or more never takes support — not when the plant
+ * starts, not when a step releases the other foot. A supporting foot whose
+ * other ankle has been that much lower for `PLANT_SWITCH_SECONDS` hands support
+ * to it when it is free (as before) and is otherwise released (the hip follows
+ * the pose until a foot may take support). Steps and jumps are read as before.
+ * The frames whose support this changes are `lowered`.
  */
-export function supportsOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, times: readonly number[], secondsOf: (run: [number, number]) => number, inPlace = false): Feet {
+export function supportsOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, times: readonly number[], secondsOf: (run: [number, number]) => number, inPlace = false, lowerAnkle = false): Feet {
+  if (inPlace || !lowerAnkle) return readSupports(ankle, hip, times, secondsOf, inPlace, false).feet;
+  const { feet, released } = readSupports(ankle, hip, times, secondsOf, false, true);
+  const before = readSupports(ankle, hip, times, secondsOf, false, false).feet.support;
+  const lowered: Lowered[] = [];
+  feet.support.forEach((now, i) => {
+    const was = before[i] ?? null;
+    if (was === now) return;
+    const last = lowered[lowered.length - 1];
+    if (last !== undefined && last.frames[1] === i - 1 && last.was === was && last.now === now) last.frames[1] = i;
+    else lowered.push({ frames: [i, i], was, now, ...(now === null ? { cause: released.includes(i) ? ('released' as const) : ('higher' as const) } : {}) });
+  });
+  return { ...feet, lowered };
+}
+
+/** The reader; `released` (#113): the frames a supporting foot was released because the lower foot could not take support. */
+function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, times: readonly number[], secondsOf: (run: [number, number]) => number, inPlace: boolean, lowerAnkle: boolean): { feet: Feet; released: number[] } {
   const n = ankle.r.length;
   const legLength = {} as Record<Side, number>;
   for (const s of SIDES) legLength[s] = percentile(ankle[s].map((a, i) => Math.hypot(a[0] - hip[s][i]![0], a[1] - hip[s][i]![1])), 0.5);
@@ -388,6 +435,7 @@ export function supportsOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side,
   const open: Partial<Record<Side, Step>> = {};
   let cur: Side | null = null;
   let lowerFrom = -1;
+  const released: number[] = [];
   const lower = (cands: Side[], i: number): Side => (cands.length === 2 ? (ankle.l[i]![1] > ankle.r[i]![1] ? 'l' : 'r') : cands[0]!);
   for (let i = 0; i < n; i++) {
     // A released ankle re-plants once it has been still for STILL_FRAMES frames.
@@ -405,9 +453,12 @@ export function supportsOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side,
       continue;
     }
     const free = (s: Side) => open[s] === undefined && !moving(s, i);
+    // #113: a foot higher than the other by PLANT_SWITCH leg lengths or more does not take support.
+    const higher = (s: Side) => ankle[s === 'r' ? 'l' : 'r'][i]![1] - ankle[s][i]![1] >= PLANT_SWITCH * mean;
+    const may = (s: Side) => free(s) && !(lowerAnkle && higher(s));
     if (cur !== null && moving(cur, i)) {
       const other: Side = cur === 'r' ? 'l' : 'r';
-      const to: Side | null = free(other) ? other : null;
+      const to: Side | null = may(other) ? other : null;
       const st: Step = { side: cur, frames: [i, n - 1], replant: null, to };
       steps.push(st);
       open[cur] = st;
@@ -415,7 +466,7 @@ export function supportsOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side,
       cur = to;
       lowerFrom = -1;
     } else if (cur === null) {
-      const cands = SIDES.filter(free);
+      const cands = SIDES.filter(may);
       if (cands.length > 0) {
         cur = lower(cands, i);
         changes.push({ frame: i, from: null, to: cur });
@@ -423,11 +474,16 @@ export function supportsOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side,
       }
     } else {
       const other: Side = cur === 'r' ? 'l' : 'r';
-      if (free(other) && ankle[other][i]![1] - ankle[cur][i]![1] >= PLANT_SWITCH * mean) {
+      if ((free(other) || lowerAnkle) && higher(cur)) {
         if (lowerFrom < 0) lowerFrom = i;
         if (secondsOf([lowerFrom, i]) >= PLANT_SWITCH_SECONDS - 1e-9) {
-          changes.push({ frame: i, from: cur, to: other });
-          cur = other;
+          if (free(other)) {
+            changes.push({ frame: i, from: cur, to: other });
+            cur = other;
+          } else {
+            cur = null; // #113: the lower foot may not take support (released, or moving); neither foot supports
+            released.push(i);
+          }
           lowerFrom = -1;
         }
       } else lowerFrom = -1;
@@ -442,7 +498,7 @@ export function supportsOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side,
     if (last !== undefined && last.side === s && last.frames[1] === i - 1) last.frames[1] = i;
     else supports.push({ side: s, frames: [i, i] });
   }
-  return { legLength, support, supports, jumps, steps, changes };
+  return { feet: { legLength, support, supports, jumps, steps, changes }, released };
 }
 
 /** One support span's shift onto the floor (rig-c/pose#85): its side, its frames, and floor − its planted height, world units. */

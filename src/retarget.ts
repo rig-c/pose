@@ -660,7 +660,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       const hipOf = (s: Side) => series.get(`${s}_hip`);
       const ankleOf = (s: Side) => series.get(`${s}_ankle`);
       const hr = hipOf('r'), hl = hipOf('l'), ar = ankleOf('r'), al = ankleOf('l');
-      if (hr !== undefined && hl !== undefined && ar !== undefined && al !== undefined) feet = supportsOf({ r: ar, l: al }, { r: hr, l: hl }, keyTimes, secondsOf, inPlace);
+      if (hr !== undefined && hl !== undefined && ar !== undefined && al !== undefined) feet = supportsOf({ r: ar, l: al }, { r: hr, l: hl }, keyTimes, secondsOf, inPlace, plantOn); // #113: planted, the support is read from the lower ankle
       else if (plantOn) p.add('LEGS_MAP', `--plant-feet reads both hips and both ankles from the pose; the map's chains use ${['r_hip', 'l_hip', 'r_ankle', 'l_ankle'].filter((j) => !series.has(j)).join(', ')} nowhere`);
     }
   }
