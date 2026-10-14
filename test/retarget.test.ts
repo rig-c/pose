@@ -2419,6 +2419,33 @@ describe('#47: --leg-scale and --plant-feet', () => {
     expect(rep.feet.planted).toBe(true);
     expect(rep.feet.jumps).toEqual([]);
     expect(rep.legScale.map((l) => l.bone)).toEqual(['leg_r0', 'leg_r1', 'leg_l0', 'leg_l1']);
+    // #83: the README's `--report` paragraph is the documented interface. Its `feet` keys are read from
+    // the README itself and must equal the written ones, so a field added or dropped without the
+    // README fails here; `gate` is documented as a string and written as one.
+    const readme = readFileSync(join(import.meta.dir, '..', 'README.md'), 'utf8');
+    const para = readme.split('\n').find((l) => l.startsWith('`--report <file>` writes all of it as JSON (`rig-pose-report/1`)'))!;
+    const feetDoc = /`feet` \(([^;)]*)/.exec(para)![1]!;
+    const documented = [...feetDoc.matchAll(/`([A-Za-z]+)`/g)].map((m) => m[1]!).sort();
+    expect(Object.keys(rep.feet).sort()).toEqual(documented);
+    // The report's top level: the paragraph's names outside its parentheses, and the demand lists below it.
+    let depth = 0;
+    const top: string[] = [];
+    for (const m of para.matchAll(/[()]|`([^`]*)`/g)) {
+      if (m[0] === '(') depth++;
+      else if (m[0] === ')') depth--;
+      else if (depth === 0 && /^[A-Za-z]+$/.test(m[1]!)) top.push(m[1]!);
+    }
+    const lines = readme.split('\n');
+    const from = lines.indexOf('The demand lists:');
+    expect(from).toBeGreaterThan(-1);
+    for (const l of lines.slice(from + 2)) {
+      const d = /^- `([A-Za-z]+)[`:]/.exec(l);
+      if (d === null) break;
+      top.push(d[1]!);
+    }
+    expect(Object.keys(rep).sort()).toEqual([...new Set(top)].sort());
+    expect(para).toContain("`gate` (rig-c's gate summary, a string)");
+    expect(typeof (rep as unknown as { gate: unknown }).gate).toBe('string');
   }, SLOW);
 
   test('control: without the two flags the same pose keys no scale, and the hip follows the pose\'s travel with the feet sliding', () => {
