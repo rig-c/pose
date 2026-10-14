@@ -334,8 +334,9 @@ export function jitterOf(all: readonly Series[], loop: boolean): { value: number
 
 /**
  * The stillness hold (#91), on the cleaned positions (after the smoothing and
- * the floor), joint by joint: stillness is a property of a joint, so a joint
- * that has stopped is held while one beside it still moves.
+ * the floor), joint by joint — except the face (`FACE`: nose, eyes, ears, #109),
+ * which is held as one group (all of them or none, over the span where all of
+ * them pass), so a piecewise hold does not turn the head.
  *
  * A joint's speed on frame i is its movement from frame i − 1 in trunk lengths
  * (wrapping with `loop`; none where either frame has no position), taken as a
@@ -398,12 +399,16 @@ export function jitterOf(all: readonly Series[], loop: boolean): { value: number
  * passes all three over the run, and its greedy spans broke elsewhere; the
  * figure is its reach).
  */
+/** The face joints (#109): held as one group (all of them or none, over the span where all of them pass), so a piecewise hold does not turn the head. */
+export const FACE: readonly Body18[] = ['nose', 'r_eye', 'l_eye', 'r_ear', 'l_ear'];
+
 export function holdStill(series: ReadonlyMap<Body18, Series>, times: readonly number[], trunk: number, speed: number, reach: number, loop: boolean, minSeconds = HOLD_MIN_SECONDS): { held: Map<Body18, Series>; holds: HoldFound[]; unheld: Unheld[]; seams: Seam[] } {
   const n = times.length;
   const names = BODY18.filter((name) => series.has(name));
   const endOf = (i: number): number => (i + 1 < n ? times[i + 1]! : n > 1 ? 2 * times[i]! - times[i - 1]! : times[i]!);
   const secondsOf = (a: number, b: number): number => Math.round((endOf(b) - times[a]!) * 1e6) / 1e6;
   const med = new Map<Body18, Array<number | null>>();
+  const stillByJoint = new Map<Body18, boolean[]>();
   for (const name of names) {
     const xs = series.get(name)!;
     const v: Array<number | null> = xs.map((p, i) => {
@@ -413,14 +418,18 @@ export function holdStill(series: ReadonlyMap<Body18, Series>, times: readonly n
       if (q === null || q === undefined) return null;
       return Math.hypot(p[0] - q[0], p[1] - q[1]) / trunk;
     });
-    med.set(name, v.map((_, i) => {
+    const sp = v.map((_, i) => {
       const w = windowAt(i, n, HOLD_SPEED_WINDOW, loop).map((j) => v[j]).filter((x): x is number => x !== null && x !== undefined);
       return w.length === 0 ? null : median1(w);
-    }));
+    });
+    med.set(name, sp);
+    stillByJoint.set(name, xs.map((p, i) => p !== null && sp[i] !== null && sp[i] !== undefined && sp[i]! < speed));
   }
   /** One joint's distance (largest) from its per-coordinate median over a..b, trunk lengths, and that median; null where it has no position there. */
   const spanOf = (name: Body18, a: number, b: number): { reach: number; at: Pt } | null => {
-    const pts = series.get(name)!.slice(a, b + 1).filter((p): p is Pt => p !== null);
+    const s = series.get(name);
+    if (s === undefined) return null;
+    const pts = s.slice(a, b + 1).filter((p): p is Pt => p !== null);
     if (pts.length === 0) return null;
     const m: Pt = [median1(pts.map((p) => p[0])), median1(pts.map((p) => p[1]))];
     let worst = 0;
@@ -433,7 +442,9 @@ export function holdStill(series: ReadonlyMap<Body18, Series>, times: readonly n
   for (const name of names) {
     const xs = series.get(name)!;
     const sp = med.get(name)!;
-    const still = xs.map((p, i) => p !== null && sp[i] !== null && sp[i] !== undefined && sp[i]! < speed);
+    // #109: the face joints (nose, eyes, ears) are held as one group — all of them or none, over the span where all of them pass.
+    const group: readonly Body18[] = FACE.includes(name) ? FACE : [name];
+    const still = Array.from({ length: n }, (_, i) => group.every((g) => stillByJoint.get(g)?.[i] === true));
     const spans: Array<{ a: number; b: number; exc: [number, number] | null }> = [];
     let s = 0;
     while (s < n) {
@@ -442,7 +453,7 @@ export function holdStill(series: ReadonlyMap<Body18, Series>, times: readonly n
         continue;
       }
       let e = s;
-      while (e + 1 < n && still[e + 1] && spanOf(name, s, e + 1)!.reach <= reach) e++;
+      while (e + 1 < n && still[e + 1] && group.every((g) => spanOf(g, s, e + 1)!.reach <= reach)) e++;
       if (secondsOf(s, e) >= minSeconds - 1e-9) {
         spans.push({ a: s, b: e, exc: null });
         s = e + 1;
@@ -460,13 +471,17 @@ export function holdStill(series: ReadonlyMap<Body18, Series>, times: readonly n
       let v = u;
       while (v + 1 < n && still[v + 1] && !coveredByPass1(v + 1)) v++;
       if (secondsOf(u, v) >= minSeconds - 1e-9) {
-        const { at } = spanOf(name, u, v)!;
+        const ats = new Map(group.map((g) => [g, spanOf(g, u, v)!.at]));
         let e0 = -1;
         let e1 = -1;
         let single = true;
         for (let i = u; i <= v; i++) {
-          const p = xs[i]!;
-          if (Math.hypot(p[0] - at[0], p[1] - at[1]) / trunk > reach) {
+          const over = group.some((g) => {
+            const p = series.get(g)![i]!;
+            const at = ats.get(g)!;
+            return Math.hypot(p[0] - at[0], p[1] - at[1]) / trunk > reach;
+          });
+          if (over) {
             if (e0 === -1) e0 = i;
             else if (i > e1 + 1) {
               single = false;
@@ -476,11 +491,12 @@ export function holdStill(series: ReadonlyMap<Body18, Series>, times: readonly n
           }
         }
         if (single && e0 > u && e1 < v && e1 - e0 + 1 <= HOLD_EXCURSION && secondsOf(u, e0 - 1) + secondsOf(e1 + 1, v) >= minSeconds - 1e-9) {
-          const kept = xs.slice(u, v + 1).filter((p, k): p is Pt => p !== null && (u + k < e0 || u + k > e1));
-          const km: Pt = [median1(kept.map((p) => p[0])), median1(kept.map((p) => p[1]))];
-          if (kept.every((p) => Math.hypot(p[0] - km[0], p[1] - km[1]) / trunk <= reach)) {
-            spans.push({ a: u, b: v, exc: [e0, e1] });
-          }
+          const ok = group.every((g) => {
+            const kept = series.get(g)!.slice(u, v + 1).filter((p, k): p is Pt => p !== null && (u + k < e0 || u + k > e1));
+            const km: Pt = [median1(kept.map((p) => p[0])), median1(kept.map((p) => p[1]))];
+            return kept.every((p) => Math.hypot(p[0] - km[0], p[1] - km[1]) / trunk <= reach);
+          });
+          if (ok) spans.push({ a: u, b: v, exc: [e0, e1] });
         }
       }
       u = v + 1;
