@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.1](https://github.com/rig-c/pose/compare/v0.20.0...v0.20.1) (2026-10-14)
+
+
+### Bug Fixes
+
+* **plant-feet:** scale supporting leg under --leg-scale floor to its own range ([#133](https://github.com/rig-c/pose/issues/133)) ([#134](https://github.com/rig-c/pose/issues/134)) ([43681e7](https://github.com/rig-c/pose/commit/43681e73fc87a4f8d38962021a5de8cebe488e61))
+
 ## [0.20.0](https://github.com/rig-c/pose/compare/v0.19.0...v0.20.0) (2026-10-14)
 
 
