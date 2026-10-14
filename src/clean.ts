@@ -37,7 +37,15 @@
  * median of on its own frame, and a value made from its neighbours would be a
  * guess; `retarget` holds it, and says so with a HOLD line. A joint's state and
  * score are the detector's and are written as they were read: this step moves
- * positions only.
+ * positions only — with one stated exception, `hipsInferred` below.
+ *
+ * `hipsInferred` (rig-c/pose#63, `--hips-inferred`): after the four steps, r_hip
+ * and l_hip are marked `inferred` on every frame where they have a position,
+ * and the record says who said so (`{ by: 'declared' }`, the person running
+ * clean). Positions and scores are not touched by it, so retarget's keys are
+ * the same with and without it; what changes is POSTURE, which does not read a
+ * hip tilt off inferred hips. The occlusion step reads `inferred` as it reads
+ * `observed`: a cleaned file cleaned again moves its hips the same way.
  *
  * The smoothing fits the frames of the window where the joint has a position;
  * where fewer than three are there, the polynomial's degree drops to fit the
@@ -75,7 +83,12 @@ export interface CleanParams {
   legs: number;
   /** Savitzky–Golay window over every other joint, frames: 1 (none), or odd and ≥ 5. */
   rest: number;
+  /** Mark r_hip and l_hip `inferred` wherever they have a position (#63): the person running clean declares it. */
+  hipsInferred?: boolean;
 }
+
+/** The joints `--hips-inferred` marks. */
+export const HIPS: readonly Body18[] = ['r_hip', 'l_hip'];
 
 export type Pt = [number, number];
 /** One joint's positions over the frames; null where it has none. */
@@ -116,6 +129,8 @@ export interface Cleaned {
   floor: Floor | null;
   /** How many (joint, three-frame) runs the jitter was read over: before, after. */
   triples: number;
+  /** With `hipsInferred`: how many joint-frames were marked `inferred`, per hip. */
+  inferred: { r_hip: number; l_hip: number } | null;
 }
 
 /**
@@ -323,10 +338,10 @@ export function clean(seq: PoseSequence, params: CleanParams, wanted: string | u
       if (q === null) return;
       const j = track[i]![name]!;
       const low = j.score !== undefined && j.score < OCCLUSION_SCORE;
-      if (j.state === 'observed' && !low) return;
+      if ((j.state === 'observed' || j.state === 'inferred') && !low) return;
       const m = medianAt(xs, i, OCCLUSION_WINDOW, params.loop)!;
       out[i] = m;
-      occluded.push({ joint: name, frame: i, moved: Math.hypot(m[0] - q[0], m[1] - q[1]), why: j.state !== 'observed' ? j.state : `score ${j.score!.toFixed(3)} < ${OCCLUSION_SCORE}` });
+      occluded.push({ joint: name, frame: i, moved: Math.hypot(m[0] - q[0], m[1] - q[1]), why: j.state !== 'observed' && j.state !== 'inferred' ? j.state : `score ${j.score!.toFixed(3)} < ${OCCLUSION_SCORE}` });
     });
     unhidden.set(name, out);
   }
@@ -366,17 +381,23 @@ export function clean(seq: PoseSequence, params: CleanParams, wanted: string | u
   const after = jitterOf([...smoothed.values()], params.loop);
   const record: CleanRecord = {
     spec: CLEAN_SPEC,
-    params: { loop: params.loop, legs: params.legs, rest: params.rest },
+    params: { loop: params.loop, legs: params.legs, rest: params.rest, ...(params.hipsInferred === true ? { hipsInferred: { by: 'declared' as const } } : {}) },
     spikes: { found: spikes.map((s) => ({ frame: s.frame, joint: s.joint })), untested },
     jitter: { before: before.value, after: after.value },
   };
+  const inferred = params.hipsInferred === true ? { r_hip: 0, l_hip: 0 } : null;
   const frames = seq.frames.map((f, i) => {
     const q = f.people.find((x) => x.id === person);
     if (q === undefined) return { t: f.t, people: [] };
     const joints: Partial<Record<Body18, Joint>> = {};
     for (const [name, j] of Object.entries(q.joints) as Array<[Body18, Joint]>) {
       const moved = smoothed.get(name)?.[i] ?? null;
-      joints[name] = moved === null ? { ...j } : { ...j, at: [moved[0], moved[1]] };
+      const out: Joint = moved === null ? { ...j } : { ...j, at: [moved[0], moved[1]] };
+      if (inferred !== null && (name === 'r_hip' || name === 'l_hip') && out.state !== 'missing' && out.at !== undefined) {
+        out.state = 'inferred';
+        inferred[name]++;
+      }
+      joints[name] = out;
     }
     return { t: f.t, people: [{ id: person, joints: sortedJoints(joints) }] };
   });
@@ -392,6 +413,7 @@ export function clean(seq: PoseSequence, params: CleanParams, wanted: string | u
     untested,
     floor,
     triples: before.triples,
+    inferred,
   };
 }
 
@@ -409,5 +431,18 @@ export function cleanLine(r: CleanRecord): string {
   const shown = found.slice(0, 8).map((s) => `frame ${s.frame} ${s.joint}`).join(', ');
   const spikes = `${found.length === 0 ? 'no spike' : `${found.length} spike(s) replaced (${shown}${found.length > 8 ? `, … ${found.length - 8} more` : ''})`}, ${untestedText(r.spikes.untested)}`;
   const jit = (v: number | null) => (v === null ? 'not measured' : v.toFixed(2));
-  return `${r.spec}: ${windows}, ${loop ? 'loop' : 'no loop'}; ${spikes}; jitter (mean |second difference| of y) ${jit(r.jitter.before)} → ${jit(r.jitter.after)} px/f²`;
+  const hips = r.params.hipsInferred === undefined ? '' : `; hips inferred (${inferredSource(r)})`;
+  return `${r.spec}: ${windows}, ${loop ? 'loop' : 'no loop'}; ${spikes}; jitter (mean |second difference| of y) ${jit(r.jitter.before)} → ${jit(r.jitter.after)} px/f²${hips}`;
+}
+
+/**
+ * Where a sequence's `inferred` hips come from, as the lines say it: "declared
+ * at clean" when the record says `--hips-inferred` marked them; "source not
+ * stated" when the joints carry the state and the record does not say why
+ * (a file whose states were written by hand or by another tool).
+ */
+export function inferredSource(r: CleanRecord | undefined): string {
+  const h = r?.params.hipsInferred;
+  if (h === undefined) return 'source not stated';
+  return h.by === 'declared' ? 'declared at clean' : h.by;
 }

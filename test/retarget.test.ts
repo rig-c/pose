@@ -1518,10 +1518,76 @@ describe('the pelvis tilts and the trunk reaches from the posed hip for the shou
     expect(lines[1]).toContain('mid_hip = "hip", mid_shoulder = "sleeve_r0+sleeve_l0"');
     const q = (JSON.parse(readFileSync(report, 'utf8')) as { posture: { tilt: { reference: { range: number }; ratio: number }; sway: { ratio: number } } }).posture;
     const tilts = Array.from({ length: BASE.n }, (_, i) => tilt(i));
-    expect(q.tilt.reference.range).toBeCloseTo(Math.max(...tilts) - Math.min(...tilts), 6);
-    expect(q.tilt.ratio).toBeCloseTo(1, 3);
+    expect(q.tilt!.reference.range).toBeCloseTo(Math.max(...tilts) - Math.min(...tilts), 6);
+    expect(q.tilt!.ratio).toBeCloseTo(1, 3);
     // The rig's shoulders land on the pose's (above), so its sway is the reference's.
     expect(q.sway.ratio).toBeCloseTo(1, 3);
+  }, SLOW);
+
+  /**
+   * #63: the same pelvis pose, cleaned by clean() with and without
+   * `hipsInferred` (windows of 1, as the fixture's), written by the writer,
+   * retargeted in the same directory so every path in the output is the same.
+   */
+  const inferredRuns = (edit?: (doc: Record<string, unknown>) => void) => {
+    const c = setup({ rig: { bones: ctlBones }, map: pelvisMap(true), pose: pelvisPose() });
+    const doc = pelvisPose();
+    edit?.(doc);
+    const run = (hipsInferred: boolean) => {
+      const seq = clean(readPoseSequence(JSON.stringify(doc), 'fixture'), { loop: false, legs: 1, rest: 1, hipsInferred }, undefined, 'fixture').seq;
+      writeFileSync(c.pose, writePoseSequence(seq));
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--report', report]);
+      return { r, motion: readFileSync(c.out, 'utf8'), report: JSON.parse(readFileSync(report, 'utf8')) as Record<string, unknown> };
+    };
+    return { plain: run(false), flagged: run(true) };
+  };
+
+  test('#63 bar: with clean --hips-inferred, POSTURE reads no tilt and names why; the keys and every other line are the same as without it', () => {
+    const { plain, flagged } = inferredRuns();
+    expect(flagged.r.stderr).toBe('');
+    expect(flagged.r.status).toBe(0);
+    const lp = linesOf(plain.r, 'POSTURE');
+    const lf = linesOf(flagged.r, 'POSTURE');
+    expect(lp[0]).toStartWith('POSTURE hip tilt range (chain "pelvis", r_hip → l_hip, Spine degrees): reference ');
+    expect(lf).toEqual(['POSTURE hip tilt not read: hips inferred (declared at clean)', lp[1]!]);
+    expect(linesOf(flagged.r, 'CLEAN')).toEqual([`${linesOf(plain.r, 'CLEAN')[0]!}; hips inferred (declared at clean)`]);
+    // Every other stdout line is the same, and the motion is byte-identical.
+    const others = (r: Ran) => r.stdout.split('\n').filter((l) => !/^\s*(POSTURE hip tilt|CLEAN )/.test(l));
+    expect(others(flagged.r)).toEqual(others(plain.r));
+    expect(flagged.motion).toBe(plain.motion);
+    // The report: the posture says tilt null and why; the clean record says who declared it; nothing else moves.
+    const qp = plain.report.posture as Record<string, unknown>;
+    const qf = flagged.report.posture as Record<string, unknown>;
+    expect(Object.keys(qp)).toEqual(['pelvis', 'rigHip', 'rigShoulder', 'frames', 'tilt', 'sway']);
+    expect(qf.tilt).toBeNull();
+    expect(qf.tiltWhy).toBe('hips inferred (declared at clean)');
+    expect(qf.hipsInferred).toEqual({ frames: BASE.n, source: 'declared at clean' });
+    expect(qf.frames).toEqual({ ...(qp.frames as object), tilt: 0 });
+    expect(qf.sway).toEqual(qp.sway);
+    expect((flagged.report.cleaned as { params: unknown }).params).toEqual({ loop: false, legs: 1, rest: 1, hipsInferred: { by: 'declared' } });
+    const rest = (rep: Record<string, unknown>) => ({ ...rep, posture: null, cleaned: null });
+    expect(rest(flagged.report)).toEqual(rest(plain.report));
+  }, SLOW);
+
+  test('#63: hips inferred on some frames only — the tilt is read over the others and the line counts those left out', () => {
+    const k = 5;
+    const { plain } = inferredRuns((doc) => {
+      (doc.frames as Array<{ people: Array<{ joints: Record<string, { state: string }> }> }>).forEach((f, i) => {
+        if (i < k) f.people[0]!.joints.r_hip!.state = 'inferred';
+      });
+    });
+    expect(plain.r.status).toBe(0);
+    const l = linesOf(plain.r, 'POSTURE')[0]!;
+    expect(l).toStartWith('POSTURE hip tilt range (chain "pelvis", r_hip → l_hip, Spine degrees): reference ');
+    expect(l).toContain(` over ${BASE.n - k} of ${BASE.n} frames)`);
+    expect(l).toEndWith(`; ${k} frame(s) with an inferred hip not read (source not stated)`);
+    const q = plain.report.posture as { tilt: { reference: { range: number } }; hipsInferred: unknown; frames: { tilt: number } };
+    const tilts = Array.from({ length: BASE.n - k }, (_, i) => tilt(i + k));
+    // The writer rounds each hip to 0.01 px on a 30 px hip line: ≤ 0.027° an angle, ≤ 0.054° a range.
+    expect(Math.abs(q.tilt.reference.range - (Math.max(...tilts) - Math.min(...tilts)))).toBeLessThan(0.054);
+    expect(q.hipsInferred).toEqual({ frames: k, source: 'source not stated' });
+    expect(q.frames.tilt).toBe(BASE.n - k);
   }, SLOW);
 
   test('control: a map without a pelvis chain prints no POSTURE line', () => {
