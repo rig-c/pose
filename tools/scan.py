@@ -81,8 +81,10 @@ and is measured. A wrong window shows on `--plot`. The reading, the snap:
   ankle's speed in one picture leg length (the clip median of hip -> ankle over
   both sides). A frame is planted for an ankle when it is still both ways (its
   speed from the previous frame and to the next each under `STILL_SPEED`, 0.01
-  leg lengths a frame) and it is not a jump frame (the detector's: the tool
-  cannot see by-eye labels).
+  leg lengths a frame). Jump frames are not excluded: the detector reads them on
+  the uncorrected picture, so they carry the camera's own steps, and an airborne
+  ankle cannot hold still over three frames. A frame read inside a detector jump
+  is named in cameraSource ("r 187 inside detector jump 187-193"), not refused.
 - Per window a-b and per ankle: the 3 planted frames nearest the window before
   it and the 3 nearest after it, searched within 15 frames of the window and
   never past a neighbouring window; y_before and y_after are the ankle's median picture
@@ -574,6 +576,8 @@ def snap_windows(doc, feet, wins):
             got = '; '.join(f'{s_} has {len(w["sides"][s_]["before"])} before / {len(w["sides"][s_]["after"])} after' for s_ in ('r', 'l'))
             bad.append(f'window {a}-{b}: no ankle planted on {SNAP_FRAMES} frames on both sides (frames {lo}-{a - 1} before, {b + 1}-{hi} after); {got}')
             continue
+        w['inJump'] = [(side, i, j0, j1) for side in read for i in w['sides'][side]['before'] + w['sides'][side]['after']
+                       for j0, j1 in feet['jumps'] if j0 <= i <= j1]
         rr, rl = w['sides']['r'].get('ratio'), w['sides']['l'].get('ratio')
         if len(read) == 2:
             w.update({'used': 'r+l', 'step': (rr + rl) / 2, 'disagree': abs(rr / rl - 1)})
@@ -613,7 +617,9 @@ def window_tag(w):
     # The frames each side's medians stood on (HQ's ruling, #82): a reader sees what the step was read from.
     on = '; '.join(f'{side} {",".join(map(str, w["sides"][side]["before"]))}|{",".join(map(str, w["sides"][side]["after"]))}'
                    for side in ('r', 'l') if w['sides'][side].get('ratio') is not None)
-    return f'{a}-{b} ({w["used"]}{dis}; {on})'
+    # A frame read inside a jump the detector found (on the uncorrected picture) is named, not refused (#82).
+    inside = ', '.join(f'{side} {i} inside detector jump {j0}-{j1}' for side, i, j0, j1 in w.get('inJump', []))
+    return f'{a}-{b} ({w["used"]}{dis}; {on}{"; " + inside if inside else ""})'
 
 
 def windows_source(readings):

@@ -22,8 +22,9 @@
  * median of hip → ankle over both sides (#82's ruling). `speed` is each ankle's
  * movement from the frame before in `leg` (0 on the first frame); `planted` is
  * still both ways — the speed from the previous frame and to the next each
- * under `STILL_SPEED` (src/legs.ts) — on a frame that is not a jump (the first
- * and last frames, missing a neighbour, are not). A hip or ankle good on no
+ * under `STILL_SPEED` (src/legs.ts); jump frames are not excluded, and `jumps`
+ * is reported beside it (the first and last frames, missing a neighbour, are
+ * not planted). A hip or ankle good on no
  * frame is refused by name on stderr, exit 1.
  *
  * Two pieces are minimal equivalents of code src/ does not export: `held` is the
@@ -115,9 +116,11 @@ function main(): void {
   const planted = {} as Record<Side, boolean[]>;
   for (const s of SIDES) {
     speed[s] = ankle[s].map((a, i) => (i === 0 ? 0 : Math.hypot(a[0] - ankle[s][i - 1]![0], a[1] - ankle[s][i - 1]![1]) / leg));
-    // Planted: still both ways (from the previous frame and to the next, each under STILL_SPEED) and not a jump;
-    // the first and last frames, missing a neighbour, are not.
-    planted[s] = speed[s].map((v, i) => i > 0 && i + 1 < n && v < STILL_SPEED && speed[s][i + 1]! < STILL_SPEED && !jump[i]);
+    // Planted: still both ways (from the previous frame and to the next, each under STILL_SPEED); the first
+    // and last frames, missing a neighbour, are not. Jump frames are not excluded (#82's ruling): the jumps are
+    // read on the uncorrected picture, so they carry the very camera steps the windows remove, and an airborne
+    // ankle cannot hold still over three frames. scan.py names a frame that falls inside one.
+    planted[s] = speed[s].map((v, i) => i > 0 && i + 1 < n && v < STILL_SPEED && speed[s][i + 1]! < STILL_SPEED);
   }
   const out = { legLength: feet.legLength, leg, support: feet.support, jumps: feet.jumps, jump, stillSpeed: STILL_SPEED, speed, planted, ankle: { r: ankle.r, l: ankle.l } };
   process.stdout.write(`${JSON.stringify(out)}\n`);
