@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/rig-c/pose/compare/v0.15.0...v0.16.0) (2026-10-14)
+
+
+### Features
+
+* **retarget:** a raised arm placed by the hand's offset from the head, reach-limited (--raised-by-head) ([#78](https://github.com/rig-c/pose/issues/78)) ([7a200ee](https://github.com/rig-c/pose/commit/7a200eee29cd41a1ae681f4d77ec6a7dc7ee074f))
+
 ## [0.15.0](https://github.com/rig-c/pose/compare/v0.14.0...v0.15.0) (2026-10-14)
 
 
