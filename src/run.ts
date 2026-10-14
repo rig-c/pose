@@ -17,7 +17,7 @@ import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, rea
 import { artRangeLine, chainsMoving, raisedLine, RAISED_WITHIN, reachLine, switchLine, uncoveredFolds } from './switch.ts';
 import { landed, measureFeet, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
 import { legsOf, STANCE_BOUNDS } from './legs.ts';
-import { reduceKeys, type ReduceBone, type Reduced } from './reduce.ts';
+import { M2_IDENTITY, mulM2, reduceKeys, reduceScale, reduceUnderScale, SCALE_REDUCE, setupLocal, type M2, type ReduceBone, type Reduced, type ReduceRow, type UnderBone } from './reduce.ts';
 import type { BlendHold, Closure, Floor, LegScale, Stance } from './legs.ts';
 
 export interface RetargetArgs extends RetargetOptions {
@@ -158,9 +158,13 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     // --reduce (#32): the dense keys thinned top-down, before anything reads the tracks.
     const reduced = a.reduce === undefined ? null : reduceTracks(r, map, rest, a.reduce, a.reduceHip);
     if (reduced !== null) {
-      for (const row of reduced.rows) say(`  REDUCE ${row.kind === 'angle' ? 'bone' : 'hip'} "${row.bone}" ${row.kind === 'angle' ? 'rotate' : 'translate'}: ${row.before} → ${row.after} key(s); worst ${row.kind === 'angle' ? 'aim' : 'origin'} error ${row.worst.toPrecision(3)}${row.kind === 'angle' ? '°' : ' units'} at frame ${row.frame} (t=${r.times[row.frame]!.toFixed(3)}s)`);
-      const sum = (k: 'before' | 'after') => reduced.rows.filter((x) => x.kind === 'angle').reduce((t, x) => t + x[k], 0);
-      say(`  REDUCE rotate keys ${sum('before')} → ${sum('after')} (${(sum('before') / sum('after')).toFixed(2)}×) within ${a.reduce}°${a.reduceHip === undefined ? '; the hip stays dense (no --reduce-hip)' : ''}`);
+      for (const row of reduced.rows) {
+        const [who, track, what, unit] = row.kind === 'angle' ? ['bone', 'rotate', 'aim', '°'] : row.kind === 'origin' ? ['hip', 'translate', 'origin', ' units'] : ['bone', 'scalex', 'scale', ' of its setup length'];
+        say(`  REDUCE ${who} "${row.bone}" ${track}: ${row.before} → ${row.after} key(s); worst ${what} error ${row.worst.toPrecision(3)}${unit} at frame ${row.frame} (t=${r.times[row.frame]!.toFixed(3)}s)`);
+      }
+      const sum = (kind: ReduceRow['kind'], k: 'before' | 'after') => reduced.rows.filter((x) => x.kind === kind).reduce((t, x) => t + x[k], 0);
+      const scales = reduced.rows.some((x) => x.kind === 'scale') ? `; scalex keys ${sum('scale', 'before')} → ${sum('scale', 'after')} within ${SCALE_REDUCE} of the setup length` : '';
+      say(`  REDUCE rotate keys ${sum('angle', 'before')} → ${sum('angle', 'after')} (${(sum('angle', 'before') / sum('angle', 'after')).toFixed(2)}×) within ${a.reduce}°${scales}${a.reduceHip === undefined ? '; the hip stays dense (no --reduce-hip)' : ''}`);
     }
 
     // The idle against the new animation (#43 item 2): what it drops, and with --carry-idle, looped back in.
@@ -213,8 +217,13 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
 
     const doc = readBuild(g1.build);
     const posed = poseFrames(doc, a.name, r.times);
-    // A reduced track is held to the dense target plus its tolerance (#32).
-    const landings = measureLanding(doc, a.name, map, r, posed).map((l) => (l.kind === 'angle' && a.reduce !== undefined ? { ...l, tolerance: l.tolerance + a.reduce } : l.kind === 'origin' && a.reduceHip !== undefined ? { ...l, tolerance: l.tolerance + a.reduceHip } : l));
+    // A reduced track is held to the dense target plus its tolerance (#32); an ankle, to what the
+    // reduced bones above it may move it by (#94, `footReduce`). A scale keeps its own: it is reduced within half of it.
+    const landings = measureLanding(doc, a.name, map, r, posed).map((l) => (a.reduce === undefined ? l
+      : l.kind === 'angle' ? { ...l, tolerance: l.tolerance + a.reduce }
+      : l.kind === 'origin' && a.reduceHip !== undefined ? { ...l, tolerance: l.tolerance + a.reduceHip }
+      : l.kind === 'foot' ? { ...l, tolerance: l.tolerance + footReduce(rest, r, l.bone.replace(/:tip$/, ''), a.reduce, a.reduceHip) }
+      : l));
     const p = new Problems();
     // A carried idle track on a bone above a mapped one moves it where the keys did not ask (the key formula holds unmapped bones at setup).
     const carriedAbove = (bone: string): string => {
@@ -325,9 +334,18 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
 
 /**
  * The retarget's rotate tracks (and with a hip tolerance, its translate) thinned
- * in place (#32). Kept regardless, per bone: the frames either side of each
- * switch boundary on the chains it changes, and the edges of every FLIP spread,
- * SHORT span and RANGE run on it (the first and last frame the reducer keeps).
+ * in place (#32), on the final keys: the plant, the one floor, the stretches and
+ * the in-place closure all live inside `retarget`, so they are done (#94). Kept
+ * regardless, per bone: the frames either side of each switch boundary on the
+ * chains it changes, and the edges of every FLIP spread, SHORT span and RANGE
+ * run on it (the first and last frame the reducer keeps).
+ *
+ * With scaled bones (`--leg-scale`, the stretches; #94): a scaled bone's
+ * `scalex` is thinned within `SCALE_REDUCE`, and a mapped bone under a scaled
+ * bone — keyed through its parent's posed matrix (legs.ts) — is re-solved
+ * through its parent as reduced and thinned with its error read as the world
+ * aim and length it lands on (`reduceUnderScale`). With none, this is #32's
+ * reduction, unchanged.
  */
 function reduceTracks(r: ReturnType<typeof retarget>, map: JointMap, rest: Rest, tolerance: number, hipTolerance: number | undefined): Reduced {
   const n = r.times.length;
@@ -347,8 +365,19 @@ function reduceTracks(r: ReturnType<typeof retarget>, map: JointMap, rest: Rest,
     return null;
   };
   const rotate = new Map<string, MotionTrack>();
-  for (const tr of r.animation.tracks) if ('bone' in tr && tr.property === 'rotate') rotate.set(tr.bone, tr);
-  const bones: ReduceBone[] = [...rotate.values()].map((tr) => ({ bone: tr.bone, above: above(tr.bone), dense: tr.keys.map((k) => k.v[0]!), keep: keep.get(tr.bone) ?? new Set<number>() }));
+  const scalex = new Map<string, MotionTrack>();
+  for (const tr of r.animation.tracks) {
+    if (!('bone' in tr)) continue;
+    if (tr.property === 'rotate') rotate.set(tr.bone, tr);
+    else if (tr.property === 'scalex') scalex.set(tr.bone, tr);
+  }
+  /** A bone with a scaled bone above it: keyed through its parent's posed matrix (legs.ts), not by the key formula. */
+  const under = (b: string): boolean => {
+    for (let p = rest.get(b)!.parent; p !== null; p = rest.get(p)!.parent) if (scalex.has(p)) return true;
+    return false;
+  };
+  const dense = new Map([...rotate].map(([b, tr]) => [b, tr.keys.map((k) => k.v[0]!)]));
+  const bones: ReduceBone[] = [...rotate.values()].filter((tr) => !under(tr.bone)).map((tr) => ({ bone: tr.bone, above: above(tr.bone), dense: dense.get(tr.bone)!, keep: keep.get(tr.bone) ?? new Set<number>() }));
   const hipTrack = r.origin === null || hipTolerance === undefined ? undefined : r.animation.tracks.find((tr): tr is MotionTrack => 'bone' in tr && tr.property === 'translate' && tr.bone === r.origin!.bone && tr.keys.every((k) => k.ease === undefined));
   const parent = hipTrack === undefined ? null : rest.get(hipTrack.bone)!.parent;
   const pm = parent === null ? null : rest.get(parent)!;
@@ -361,7 +390,101 @@ function reduceTracks(r: ReturnType<typeof retarget>, map: JointMap, rest: Rest,
   });
   for (const [bone, keys] of out.rotate) rotate.get(bone)!.keys = keys;
   if (hipTrack !== undefined && out.hip !== null) hipTrack.keys = out.hip;
-  return out;
+  if (scalex.size === 0) return out;
+
+  // #94: the scales of the bones the key formula holds for, then the bones under a scaled bone, parents first.
+  const rows = new Map<string, ReduceRow>();
+  for (const row of out.rows) if (row.kind === 'angle') rows.set(`rotate ${row.bone}`, row);
+  const scaleAt = new Map<string, number[]>();
+  const keepOf = (b: string) => keep.get(b) ?? new Set<number>();
+  for (const [bone, tr] of scalex) {
+    if (under(bone)) continue;
+    const red = reduceScale(r.times, bone, r.scales.get(bone) ?? tr.keys.map((k) => k.v[0]!), keepOf(bone), SCALE_REDUCE);
+    tr.keys = red.keys;
+    scaleAt.set(bone, red.at);
+    rows.set(`scalex ${bone}`, red.row);
+  }
+  /** A bone the key formula holds for: its world turn from setup on every frame as reduced — its dense turn (the keys summed down the mapped chain) plus its world error; an unmapped bone turns with the nearest mapped bone above it. */
+  const turnOf = (b: string): number[] => {
+    const m = mapped.has(b) ? b : above(b);
+    if (m === null) return new Array<number>(n).fill(0);
+    const denseTurn = (x: string): number[] => {
+      const up = above(x);
+      const own = dense.get(x)!;
+      if (up === null) return [...own];
+      const t = denseTurn(up);
+      return own.map((v, i) => v + t[i]!);
+    };
+    const e = out.errors.get(m)!;
+    return denseTurn(m).map((v, i) => v + e[i]!);
+  };
+  const world0 = (b: string): M2 => {
+    const x = rest.get(b)!;
+    return [x.a, x.b, x.c, x.d];
+  };
+  const depth = (b: string): number => {
+    let d = 0;
+    for (let p = rest.get(b)!.parent; p !== null; p = rest.get(p)!.parent) d++;
+    return d;
+  };
+  const underBones = [...rotate.keys()].filter(under).sort((x, y) => depth(x) - depth(y));
+  const given: UnderBone[] = underBones.map((b) => {
+    if (!scalex.has(b)) throw new Refusal([{ code: 'POSE_REDUCE', text: `bone "${b}" hangs under a scaled bone and has no scalex track, so it was not keyed through its parent's posed matrix; --reduce re-solves only a bone the legs keyed that way` }]);
+    // Up through the unmapped bones between (their setup locals), to a bone given before it or one the key formula holds for.
+    let via: M2 = M2_IDENTITY;
+    let p = rest.get(b)!.parent!;
+    while (under(p) && !mapped.has(p)) {
+      via = mulM2(setupLocal(world0(rest.get(p)!.parent!), world0(p)), via);
+      p = rest.get(p)!.parent!;
+    }
+    const parent: UnderBone['parent'] = under(p) ? { under: p, via } : { rigid: { turn: turnOf(p), world0: world0(p), scale: scaleAt.get(p) ?? new Array<number>(n).fill(1) }, via };
+    const w0 = world0(b);
+    return {
+      bone: b,
+      parent,
+      local: setupLocal(world0(rest.get(b)!.parent!), w0),
+      len0: Math.hypot(w0[0], w0[2]),
+      target: r.targets.get(b)!,
+      asked: r.scales.get(b) ?? new Array<number>(n).fill(1),
+      dense: dense.get(b)!,
+      keep: keepOf(b),
+    };
+  });
+  const red = reduceUnderScale(r.times, given, tolerance, SCALE_REDUCE);
+  for (const [bone, keys] of red.rotate) rotate.get(bone)!.keys = keys;
+  for (const [bone, keys] of red.scale) scalex.get(bone)!.keys = keys;
+  for (const row of red.rows) rows.set(`${row.kind === 'angle' ? 'rotate' : 'scalex'} ${row.bone}`, row);
+  // The rows: every rotate track in the animation's order, the hip, then every scalex track.
+  const hipRow = out.rows.filter((x) => x.kind === 'origin');
+  return {
+    ...out,
+    rows: [...[...rotate.keys()].map((b) => rows.get(`rotate ${b}`)!), ...hipRow, ...[...scalex.keys()].map((b) => rows.get(`scalex ${b}`)!)],
+  };
+}
+
+/**
+ * How far `--reduce` may move an ankle (the tip of `ankle`), world units (#94):
+ * the hip's tolerance when its translate is reduced, plus every segment from
+ * the legs' top down to the ankle — each bone's setup offset from its parent,
+ * and the ankle bone's length — times the largest scale asked of any bone, each
+ * turned by at most the angle tolerance (a vector of length ℓ turned by θ moves
+ * its end ≤ ℓ·θ) and lengthened by at most `SCALE_REDUCE`. Every reduced bone's
+ * world aim is within the angle tolerance of its dense one, top-down, so the
+ * segments' errors are each bounded and the sum bounds the ankle's.
+ */
+export function footReduce(rest: Rest, r: ReturnType<typeof retarget>, ankle: string, tolerance: number, hipTolerance: number | undefined): number {
+  const top = r.origin?.bone ?? null;
+  let sMax = 1;
+  for (const s of r.scales.values()) for (const v of s) sMax = Math.max(sMax, v);
+  const a = rest.get(ankle)!;
+  let lever = a.length * Math.hypot(a.a, a.c);
+  for (let b: string | null = ankle; b !== null && b !== top; b = rest.get(b)!.parent) {
+    const x = rest.get(b)!;
+    const p = x.parent === null ? null : rest.get(x.parent)!;
+    if (p === null) break;
+    lever += Math.hypot(x.worldX - p.worldX, x.worldY - p.worldY);
+  }
+  return (hipTolerance ?? 0) + lever * sMax * ((tolerance * Math.PI) / 180 + SCALE_REDUCE);
 }
 
 function spans(ts: number[], step: number): string {
