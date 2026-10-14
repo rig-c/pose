@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.19.0](https://github.com/rig-c/pose/compare/v0.18.0...v0.19.0) (2026-10-14)
+
+
+### Features
+
+* **pelvis:** scale long covered spans by the clip's detector hip gain ([#106](https://github.com/rig-c/pose/issues/106)) ([#121](https://github.com/rig-c/pose/issues/121)) ([6c2ecd9](https://github.com/rig-c/pose/commit/6c2ecd9ca70e2b609b07d0269c18f707e3d61dbe))
+
+
+### Bug Fixes
+
+* **legs:** hold planted foot horizontal anchor from landing through blend ([#102](https://github.com/rig-c/pose/issues/102)) ([#122](https://github.com/rig-c/pose/issues/122)) ([c2e0e73](https://github.com/rig-c/pose/commit/c2e0e739f3d847fdf8270cdcb3405d643543ca31))
+
 ## [0.18.0](https://github.com/rig-c/pose/compare/v0.17.0...v0.18.0) (2026-10-14)
 
 
