@@ -50,6 +50,9 @@
  * directions are read), holding every joint its `chains` use; `drawn` is each
  * bone's world angle as painted (a reading: `artTurn`); `offsets` is a
  * translate per bone, in its parent's axes, held while the set shows.
+ * `place: "by-hip"` (rig-c/pose#93) places the wrist of each of its chains that
+ * `pose` puts within one hip width of the mid-hip by its offset from the hip
+ * (`byHipChains`; the retarget solves it).
  * `switch.ts` decides when each one shows.
  */
 import type { RawBone } from 'rig-c/core';
@@ -95,6 +98,8 @@ export interface AlternateSet {
   turn: Record<string, [number, number]>;
   /** A stopgap: the only frames the set may show on, a list of [first, last] windows; on them it is chosen over any set without windows. Null: any frame. */
   frames: Array<[number, number]> | null;
+  /** `place: "by-hip"` (rig-c/pose#93): the chains whose wrist `pose` puts within one hip width of the mid-hip, their wrists placed by the offset from the hip while the set shows. Absent or null: the pose's angles. */
+  place?: { by: 'hip'; chains: string[] } | null;
 }
 export interface JointMap {
   chains: Chain[];
@@ -228,7 +233,39 @@ export function readMap(text: string, where: string): JointMap {
   return { chains, translate, alternates };
 }
 
-const SET_SHAPE = '{ name, slots: { "<slot>": "<attachment>" }, hides?: [slot], chains: [chain], pose: { "<joint>": [x, y] }, drawn?: { "<bone>": deg }, offsets?: { "<bone>": [dx, dy] }, turn?: { "<bone>": [min, max] }, frames?: [[first, last], …] }';
+const SET_SHAPE = '{ name, slots: { "<slot>": "<attachment>" }, hides?: [slot], chains: [chain], pose: { "<joint>": [x, y] }, drawn?: { "<bone>": deg }, offsets?: { "<bone>": [dx, dy] }, turn?: { "<bone>": [min, max] }, frames?: [[first, last], …], place?: "by-hip" }';
+
+/** The joints a wrist is, for `place: "by-hip"`: a chain whose last joint is one of them carries a wrist. */
+export const WRISTS: readonly string[] = ['r_wrist', 'l_wrist'];
+
+/**
+ * `place: "by-hip"` (rig-c/pose#93): the set's chains that carry a wrist (their
+ * last joint) which its key skeleton puts within one hip width of the mid-hip —
+ * |wrist − (r_hip + l_hip) / 2| ≤ |r_hip − l_hip| — and each wrist chain's
+ * distance in hip widths; or why the key skeleton cannot be read so.
+ */
+export function byHipChains(pose: Readonly<Record<string, readonly [number, number]>>, chains: readonly Chain[]): { chains: string[]; distances: Array<{ chain: string; wrist: string; hipWidths: number }> } | { problem: string } {
+  const r = pose.r_hip;
+  const l = pose.l_hip;
+  if (r === undefined || l === undefined) return { problem: `its "pose" has no ${[r === undefined ? '"r_hip"' : '', l === undefined ? '"l_hip"' : ''].filter((x) => x !== '').join(' or ')}; "by-hip" reads the hip width and the mid-hip off the key skeleton's two hips, which the map's author supplies` };
+  const noWrist = chains.filter((c) => WRISTS.includes(c.joints[c.joints.length - 1]!) && pose[c.joints[c.joints.length - 1]!] === undefined);
+  if (noWrist.length > 0) return { problem: noWrist.map((c) => `its "pose" has no "${c.joints[c.joints.length - 1]}", the wrist of chain "${c.name}"`).join('; ') + '; "by-hip" reads each wrist\'s distance from the mid-hip off the key skeleton' };
+  const width = Math.hypot(l[0] - r[0], l[1] - r[1]);
+  if (!(width > 1e-9)) return { problem: `its "pose" puts r_hip and l_hip at the same point; a hip width of 0 is no unit` };
+  const mid: [number, number] = [(r[0] + l[0]) / 2, (r[1] + l[1]) / 2];
+  const distances: Array<{ chain: string; wrist: string; hipWidths: number }> = [];
+  for (const c of chains) {
+    const wrist = c.joints[c.joints.length - 1]!;
+    if (!WRISTS.includes(wrist)) continue;
+    const w = pose[wrist];
+    if (w === undefined) continue;
+    distances.push({ chain: c.name, wrist, hipWidths: Math.hypot(w[0] - mid[0], w[1] - mid[1]) / width });
+  }
+  if (distances.length === 0) return { problem: `none of its chains (${chains.map((c) => c.name).join(', ')}) ends at a wrist (${WRISTS.join(', ')}); "by-hip" places a wrist` };
+  const near = distances.filter((d) => d.hipWidths <= 1);
+  if (near.length === 0) return { problem: `its "pose" puts no wrist within one hip width of the mid-hip (${distances.map((d) => `chain "${d.chain}" ${d.wrist} ${d.hipWidths.toFixed(2)} hip widths`).join(', ')}); "by-hip" places a hand that meets the body` };
+  return { chains: near.map((d) => d.chain), distances };
+}
 
 /** `alternates`: each set's shape, its chains against the map's, its key skeleton against those chains' joints, and its bones against those chains' bones. */
 function readAlternates(p: Problems, where: string, raw: unknown, chains: readonly Chain[], translate: Translate | null): AlternateSet[] {
@@ -245,7 +282,7 @@ function readAlternates(p: Problems, where: string, raw: unknown, chains: readon
       p.add('MAP_ALT_SHAPE', `${aw} is ${typeName(a)}; a set is ${SET_SHAPE}`);
       return;
     }
-    refuseUnknownKeys(p, 'MAP_KEYS', aw, a, ['name', 'note', 'slots', 'hides', 'chains', 'pose', 'drawn', 'offsets', 'turn', 'frames']);
+    refuseUnknownKeys(p, 'MAP_KEYS', aw, a, ['name', 'note', 'slots', 'hides', 'chains', 'pose', 'drawn', 'offsets', 'turn', 'frames', 'place']);
     const name = typeof a.name === 'string' && a.name !== '' ? a.name : null;
     if (name === null) p.add('MAP_ALT_NAME', `${aw} "name" is ${typeName(a.name)}; it must be a non-empty string`);
     else if (names.has(name)) p.add('MAP_ALT_NAME', `${aw} "name" "${name}" names two sets`);
@@ -354,7 +391,16 @@ function readAlternates(p: Problems, where: string, raw: unknown, chains: readon
         p.add('MAP_ALT_FRAMES', `${label} "frames" is ${JSON.stringify(f)}; it must be a non-empty list of windows [[first, last], …], whole frame numbers ≥ 0 with first ≤ last`);
       } else frames = (f as Array<[number, number]>).map((w) => [w[0], w[1]]);
     }
-    if (ok && name !== null && cs !== null) out.push({ name, slots, hides, chains: cs, pose, drawn, offsets, turn, frames });
+    let place: AlternateSet['place'] = null;
+    if ('place' in a) {
+      if (a.place !== 'by-hip') p.add('MAP_ALT_PLACE', `${label} "place" is ${JSON.stringify(a.place)}; the one placement a set may ask for is "by-hip"`);
+      else if (isObject(a.pose) && own.length > 0) {
+        const by = byHipChains(pose, own);
+        if ('problem' in by) p.add('MAP_ALT_PLACE', `${label} "place" is "by-hip", and ${by.problem}`);
+        else place = { by: 'hip', chains: by.chains };
+      }
+    }
+    if (ok && name !== null && cs !== null) out.push({ name, slots, hides, chains: cs, pose, drawn, offsets, turn, frames, ...(place === null ? {} : { place }) });
   });
   return out;
 }

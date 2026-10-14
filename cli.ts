@@ -159,7 +159,7 @@ retarget
   --build <dir>         keep the gated build (skeleton.json, .atlas, .model.json) here
   --render <dir>        keep rigc's render of the animation (frames, contact.png, folds.json) here
   --report <file>       write the run's measurements (holds, short, endOn, flips, bends, landings, folds,
-                        switches, uncovered, turns, range, artRange, raised,
+                        switches, uncovered, turns, range, artRange, raised, byHip,
                         idleDropped, idleKeptOut, merged, reduce) as JSON
 
   It writes nothing until rigc's gate is green with the animation in, every mapped bone lands on

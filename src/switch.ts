@@ -131,6 +131,8 @@ export interface ArtRange {
   clamped: boolean;
   /** --raised-by-head (#62): on a held upper arm, the most the re-aimed forearm left the wrist short of its placed point, eye distances; `turn` and `maxOverflow` are then the upper arm's on that frame. */
   shortfall?: number;
+  /** `place: "by-hip"` (#93): the shortfall is in hip widths, the wrist placed against the hip. Absent: against the head, eye distances. */
+  anchor?: 'hip';
 }
 
 export interface Uncovered {
@@ -583,7 +585,7 @@ function moveText(m: Move): string {
 
 export function artRangeLine(e: ArtRange, times: readonly number[]): string {
   if (e.shortfall !== undefined) {
-    return `set "${e.set}" chain "${e.chain}" bone "${e.bone}" held at its turn (range [${e.limits[0]}, ${e.limits[1]}]) ${spanOf(e.frames, times)}: ${e.seconds.toFixed(3)}s the re-aimed forearm leaves the wrist up to ${e.shortfall.toFixed(2)} eye distances short of its placed point (the upper arm asked ${sg(e.turn)} from drawn, ${deg(e.maxOverflow)} past) — demand for another drawing of the set`;
+    return `set "${e.set}" chain "${e.chain}" bone "${e.bone}" held at its turn (range [${e.limits[0]}, ${e.limits[1]}]) ${spanOf(e.frames, times)}: ${e.seconds.toFixed(3)}s the re-aimed forearm leaves the wrist up to ${e.shortfall.toFixed(2)} ${e.anchor === 'hip' ? 'hip widths' : 'eye distances'} short of its placed point (the upper arm asked ${sg(e.turn)} from drawn, ${deg(e.maxOverflow)} past) — demand for another drawing of the set`;
   }
   return `set "${e.set}" chain "${e.chain}" bone "${e.bone}" turned ${sg(e.turn)} from drawn (range [${e.limits[0]}, ${e.limits[1]}]) ${spanOf(e.frames, times)}: ${e.seconds.toFixed(3)}s, up to ${deg(e.maxOverflow)} past it; ${e.clamped ? 'held at the limit' : 'the bone follows the pose'} — demand for another drawing of the set`;
 }
@@ -747,6 +749,17 @@ export interface Raised {
   reach: { min: number; max: number; farthest: number };
 }
 
+/**
+ * One span of a `place: "by-hip"` set on one of its placed chains: its wrist
+ * placed against the hip (rig-c/pose#93), as `Raised` against the head, in hip
+ * widths. `reference`, `placed`, `before` and `after` are the wrist's offset
+ * from the mid-hip, x right and y up; `short` is in hip widths.
+ */
+export interface ByHip extends Omit<Raised, 'eyes'> {
+  /** The unit: the hip width's median over the span, the rig's in world units, the reference's in picture px. */
+  hips: { rig: number; reference: number };
+}
+
 const xy = (v: P2) => `(${v[0].toFixed(2)}, ${v[1].toFixed(2)})`;
 const framesText = (fs: readonly number[]): string => {
   const flag: boolean[] = [];
@@ -754,16 +767,26 @@ const framesText = (fs: readonly number[]): string => {
   return runsOf(Array.from({ length: flag.length }, (_, i) => flag[i] === true), 0).map(([a, b]) => (a === b ? `${a}` : `${a}–${b}`)).join(', ');
 };
 
-export function raisedLine(e: Raised, times: readonly number[]): string {
+/** The words a placement's lines use: what the wrist is placed against, its centre, and the unit. */
+const ANCHOR = {
+  head: { against: 'the head', centre: 'head centre', unit: 'eye distances', unitOne: 'eye distance', relative: 'head-relative' },
+  hip: { against: 'the hip', centre: 'mid-hip', unit: 'hip widths', unitOne: 'hip width', relative: 'hip-relative' },
+} as const;
+const anchorOf = (e: Raised | ByHip) => ('hips' in e ? ANCHOR.hip : ANCHOR.head);
+
+export function raisedLine(e: Raised | ByHip, times: readonly number[]): string {
+  const w = anchorOf(e);
+  const units = 'hips' in e ? e.hips : e.eyes;
   const med = (vs: readonly P2[]): P2 => [median(vs.map((v) => v[0])), median(vs.map((v) => v[1]))];
   const held = e.upperHeld.length === 0 ? 'the upper arm within its turn on every frame' : `the upper arm held by the set's turn on ${e.upperHeld.length} frame(s) (${framesText(e.upperHeld)}), the forearm re-aimed`;
   const out = e.short.length === 0 ? 'every target in reach' : `out of reach on ${e.short.reduce((k, s) => k + s.frames[1] - s.frames[0] + 1, 0)} frame(s) (REACH)`;
-  return `set "${e.set}" chain "${e.chain}" ${spanOf(e.frames, times)}: the wrist placed against the head; eye distance (median) rig ${e.eyes.rig.toFixed(2)} units, reference ${e.eyes.reference.toFixed(2)} px; wrist − head centre in eye distances (x right, y up), median reference ${xy(med(e.reference))}, placed ${xy(med(e.placed))}, before ${xy(med(e.before))}, after ${xy(med(e.after))}; worst |rig − reference| before ${xy(e.worst.before)}, after ${xy(e.worst.after)}; worst |after − placed| ${e.worst.placed.toFixed(2)}; ${held}; ${out}`;
+  return `set "${e.set}" chain "${e.chain}" ${spanOf(e.frames, times)}: the wrist placed against ${w.against}; ${w.unitOne} (median) rig ${units.rig.toFixed(2)} units, reference ${units.reference.toFixed(2)} px; wrist − ${w.centre} in ${w.unit} (x right, y up), median reference ${xy(med(e.reference))}, placed ${xy(med(e.placed))}, before ${xy(med(e.before))}, after ${xy(med(e.after))}; worst |rig − reference| before ${xy(e.worst.before)}, after ${xy(e.worst.after)}; worst |after − placed| ${e.worst.placed.toFixed(2)}; ${held}; ${out}`;
 }
 
-/** The REACH line: a raised span whose target was out of the arm's reach on some frames — the proportions, not the art's range, were the limit. */
-export function reachLine(e: Raised, times: readonly number[]): string {
-  const why = { far: `farther than l0 + l1 = ${e.reach.max.toFixed(1)}`, near: `nearer than |l0 − l1| = ${e.reach.min.toFixed(1)}`, missed: 'and the ray from the head centre never enters the reach; placed at the reach\'s point nearest it' } as const;
-  const runs = e.short.map((s) => `${spanOf(s.frames, times)} ${s.how === 'missed' ? 'out of reach' : why[s.how]}${s.how === 'missed' ? `, ${why.missed}` : ''}: up to ${s.shortfall.max.toFixed(2)} eye distances short (median ${s.shortfall.median.toFixed(2)})`);
-  return `set "${e.set}" chain "${e.chain}": the target out of the arm's reach from the shoulder — ${runs.join('; ')}; the wrist placed at the reach limit along the head-relative direction (the farthest target ${e.reach.farthest.toFixed(1)} units from the shoulder). Not ART-RANGE: the rig's proportions, not the art's range, were the limit`;
+/** The REACH line: a placed span (raised, or by the hip) whose target was out of the arm's reach on some frames — the proportions, not the art's range, were the limit. */
+export function reachLine(e: Raised | ByHip, times: readonly number[]): string {
+  const w = anchorOf(e);
+  const why = { far: `farther than l0 + l1 = ${e.reach.max.toFixed(1)}`, near: `nearer than |l0 − l1| = ${e.reach.min.toFixed(1)}`, missed: `and the ray from the ${w.centre} never enters the reach; placed at the reach's point nearest it` } as const;
+  const runs = e.short.map((s) => `${spanOf(s.frames, times)} ${s.how === 'missed' ? 'out of reach' : why[s.how]}${s.how === 'missed' ? `, ${why.missed}` : ''}: up to ${s.shortfall.max.toFixed(2)} ${w.unit} short (median ${s.shortfall.median.toFixed(2)})`);
+  return `set "${e.set}" chain "${e.chain}": the target out of the arm's reach from the shoulder — ${runs.join('; ')}; the wrist placed at the reach limit along the ${w.relative} direction (the farthest target ${e.reach.farthest.toFixed(1)} units from the shoulder). Not ART-RANGE: the rig's proportions, not the art's range, were the limit`;
 }

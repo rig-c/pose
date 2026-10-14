@@ -349,6 +349,35 @@ function retarget(c: Case, extra: string[] = [], cliPath = CLI): Ran {
 const fails = (r: Ran): string[] => r.stderr.split('\n').filter((l) => l.startsWith('FAIL  '));
 const linesOf = (r: Ran, tag: string): string[] => r.stdout.split('\n').map((l) => l.trim()).filter((l) => l.startsWith(`${tag} `));
 
+/**
+ * The report's documented top level (#83): the README's `--report` paragraph, its names outside its
+ * parentheses, and the demand lists below it. `conditional` holds the demand lists the README says are
+ * present only when a set of the map declares `place` (#93).
+ */
+const COND_PLACE = 'Present only when a set of the map declares `place`; a run without one writes no `byHip` key.';
+function documentedReport(): { para: string; all: string[]; conditional: string[] } {
+  const readme = readFileSync(join(import.meta.dir, '..', 'README.md'), 'utf8');
+  const para = readme.split('\n').find((l) => l.startsWith('`--report <file>` writes all of it as JSON (`rig-pose-report/1`)'))!;
+  let depth = 0;
+  const top: string[] = [];
+  for (const m of para.matchAll(/[()]|`([^`]*)`/g)) {
+    if (m[0] === '(') depth++;
+    else if (m[0] === ')') depth--;
+    else if (depth === 0 && /^[A-Za-z]+$/.test(m[1]!)) top.push(m[1]!);
+  }
+  const lines = readme.split('\n');
+  const from = lines.indexOf('The demand lists:');
+  if (from < 0) throw new Error('README has no "The demand lists:" line');
+  const conditional: string[] = [];
+  for (const l of lines.slice(from + 2)) {
+    const d = /^- `([A-Za-z]+)[`:]/.exec(l);
+    if (d === null) break;
+    top.push(d[1]!);
+    if (l.includes(COND_PLACE)) conditional.push(d[1]!);
+  }
+  return { para, all: [...new Set(top)].sort(), conditional };
+}
+
 // --- the independent check -------------------------------------------------
 
 function loadBuild(build: string): CompiledDocument {
@@ -2487,22 +2516,12 @@ describe('#47: --leg-scale and --plant-feet', () => {
     const documented = [...feetDoc.matchAll(/`([A-Za-z]+)`/g)].map((m) => m[1]!).sort();
     expect(Object.keys(rep.feet).sort()).toEqual(documented);
     // The report's top level: the paragraph's names outside its parentheses, and the demand lists below it.
-    let depth = 0;
-    const top: string[] = [];
-    for (const m of para.matchAll(/[()]|`([^`]*)`/g)) {
-      if (m[0] === '(') depth++;
-      else if (m[0] === ')') depth--;
-      else if (depth === 0 && /^[A-Za-z]+$/.test(m[1]!)) top.push(m[1]!);
-    }
-    const lines = readme.split('\n');
-    const from = lines.indexOf('The demand lists:');
-    expect(from).toBeGreaterThan(-1);
-    for (const l of lines.slice(from + 2)) {
-      const d = /^- `([A-Za-z]+)[`:]/.exec(l);
-      if (d === null) break;
-      top.push(d[1]!);
-    }
-    expect(Object.keys(rep).sort()).toEqual([...new Set(top)].sort());
+    // A list the README marks as present only with `place` (#93) is absent here: this map declares none.
+    // Its presence on a run that does is held by the "by-hip" block below.
+    const doc = documentedReport();
+    expect(doc.conditional).toEqual(['byHip']);
+    expect(Object.keys(rep).sort()).toEqual(doc.all.filter((k) => !doc.conditional.includes(k)));
+    expect('byHip' in rep).toBe(false);
     expect(para).toContain("`gate` (rig-c's gate summary, a string)");
     expect(typeof (rep as unknown as { gate: unknown }).gate).toBe('string');
   }, SLOW);
@@ -3873,5 +3892,339 @@ describe('--raised-by-head (#62): a raised arm\'s wrist placed against the head,
     expect(linesOf(r, 'SWITCH')[0]).toContain('frames 4–11');
     expect(linesOf(r, 'RAISED')).toEqual(['RAISED none — no set drawing an arm within 30° of straight up showed; no key moved']);
     expect(readFileSync(a.out).equals(first)).toBe(true);
+  }, SLOW);
+});
+
+describe('"place": "by-hip" (#93): a hand that meets the body placed by its offset from the hip, in hip widths', () => {
+  /**
+   * The stick rig's hips are its legs' roots, 30 units apart at (∓15, 300): the mid-hip (0, 300), its right
+   * shoulder at (−30, 440), the arm 70 + 60. The pose's hips are 30 px apart too, but its trunk is 100 px against
+   * the rig's 150 and its arm 60 + 50: the pose's angles put the rig's hand far from where the reference's is
+   * against the hip. The right wrist meets the body on frames 4–11 (the set's key skeleton) and is up elsewhere.
+   */
+  const RIG: RigOpts = { extra: { sleeve_r0: { seg_low: { image: 'seg.png', x: 30, y: 0, rotation: -90 } } } };
+  const ON = (i: number) => i >= 4 && i <= 11;
+  const RIG_SHOULDER: Pt = [-30, 440];
+  /** The pose's right shoulder, and its mid-hip, picture px (the trunk stands still at 90°, the hip does not travel). */
+  const SHOULDER: Pt = [180, 300];
+  const MID: Pt = [200, 400];
+  /** The pose's right arm angles that put its wrist at mid-hip + w (px, y up), the elbow out to the side. */
+  const armTo = (w: Pt): { ru: number; rf: number } => {
+    const v: Pt = [MID[0] + w[0] - SHOULDER[0], SHOULDER[1] - (MID[1] - w[1])];
+    const d = Math.hypot(v[0], v[1]);
+    const th = Math.atan2(v[1], v[0]) * DEG;
+    const al = Math.acos((60 * 60 + d * d - 50 * 50) / (2 * 60 * d)) * DEG;
+    const ru = th - al;
+    const e: Pt = [60 * Math.cos(ru * RAD), 60 * Math.sin(ru * RAD)];
+    return { ru, rf: Math.atan2(v[1] - e[1], v[0] - e[0]) * DEG };
+  };
+  /** The wrist at mid-hip + w(i) on the span, raised (30°, 50°) elsewhere. */
+  const handMotion = (w: (i: number) => Pt): Motion => ({ ...BASE, trunk: () => 90, hip: () => [0, 0], ru: (i) => (ON(i) ? armTo(w(i)).ru : 30), rf: (i) => (ON(i) ? armTo(w(i)).rf : 50) });
+  /** In front of the hips: (−0.6, 0.6) hip widths on frame 8, drifting. */
+  const CLASP = handMotion((i) => [-18 + (i - 8) * 0.8, 18 - (i - 8) * 0.4]);
+  /** The set's key skeleton: frame 8 of the motion at twice the scale, elsewhere; the hips are in it. */
+  const keySkeleton = (m: Motion): Record<string, Pt> => {
+    const p = positions(m, 8);
+    const at = (q: Pt): Pt => [1000 + 2 * (q[0] - 200), 1000 + 2 * (q[1] - 400)];
+    return Object.fromEntries(['r_shoulder', 'r_elbow', 'r_wrist', 'r_hip', 'l_hip'].map((j) => [j, at(p[j]!)]));
+  };
+  const set = (m: Motion, o: Record<string, unknown> = {}): Record<string, unknown> => ({ name: 'clasp', slots: { sleeve_r0: 'seg_low' }, chains: ['arm_r'], pose: keySkeleton(m), place: 'by-hip', ...o });
+  const mapOf = (sets: Array<Record<string, unknown>>, chains: ChainSpec[] = baseChains()): Record<string, unknown> => ({ ...baseMap(), chains, alternates: sets });
+  /** The reference's wrist − mid-hip on frame i, in `width` px (picture y turned up). */
+  const refOffset = (m: Motion, i: number, width = 30): Pt => {
+    const p = positions(m, i);
+    return [(p.r_wrist![0] - (p.r_hip![0] + p.l_hip![0]) / 2) / width, -(p.r_wrist![1] - (p.r_hip![1] + p.l_hip![1]) / 2) / width];
+  };
+  const posedBones = (build: string, m: Motion) => poseRawAnimation(loadBuild(build), 'dance', Array.from({ length: m.n - 1 }, () => m.dt)).map((p) => byName(p.bones));
+  const tipOf = (b: Map<string, RawBone>): Pt => {
+    const f = b.get('sleeve_r1')!;
+    return [f.worldX + f.a * 60, f.worldY + f.c * 60];
+  };
+  /** The rig's wrist − mid-hip (the legs' roots) in its hip widths (30 units), posed by rig-c from the gated build. */
+  const rigOffsets = (build: string, m: Motion): Pt[] =>
+    posedBones(build, m).map((b) => {
+      const r = b.get('leg_r0')!;
+      const l = b.get('leg_l0')!;
+      const w = tipOf(b);
+      return [(w[0] - (r.worldX + l.worldX) / 2) / 30, (w[1] - (r.worldY + l.worldY) / 2) / 30];
+    });
+  /** Every frame of the span where the rig's wrist is more than `tol` hip widths from the reference's offset, or on the other side of the mid-hip. */
+  const offBy = (build: string, m: Motion, tol: number): string[] => {
+    const rig = rigOffsets(build, m);
+    const out: string[] = [];
+    for (let i = 0; i < m.n; i++) {
+      if (!ON(i)) continue;
+      const r = refOffset(m, i);
+      const g = rig[i]!;
+      if (!(Math.hypot(g[0] - r[0], g[1] - r[1]) <= tol) || Math.sign(g[0]) !== Math.sign(r[0])) out.push(`frame ${i}: rig (${g[0].toFixed(3)}, ${g[1].toFixed(3)}) want (${r[0].toFixed(3)}, ${r[1].toFixed(3)})`);
+    }
+    return out;
+  };
+  type ReportOut = { raised: unknown[]; byHip: Array<{ set: string; chain: string; hips: { rig: number; reference: number }; worst: { before: Pt; after: Pt; placed: number }; short: Array<{ frames: [number, number]; how: string; shortfall: { max: number } }>; upperHeld: number[] }>; artRange: Array<{ bone: string; shortfall?: number; anchor?: string }> };
+  const reportOf = (path: string): ReportOut => JSON.parse(readFileSync(path, 'utf8')) as ReportOut;
+  const tracksOf = (path: string): Map<string, string[]> => new Map(motionOf(path).animations.dance!.tracks.map((t) => [`${t.bone}.${t.property}`, t.keys.map((k) => JSON.stringify(k))]));
+
+  /** The card's synthetic bar, against a given CLI: written, and the wrist within 0.05 hip widths of the reference's offset on every frame of the span. */
+  function byHipTest(cliPath = CLI): { ran: Ran; off: string[]; c: Case } {
+    const c = setup({ rig: RIG, map: mapOf([set(CLASP)]), pose: poseDoc(CLASP) });
+    const ran = retarget(c, ['--report', join(c.dir, 'report.json')], cliPath);
+    return { ran, off: ran.status === 0 ? offBy(c.build, CLASP, 0.05) : [], c };
+  }
+
+  test('the wrist lands on the reference\'s offset from the mid-hip within 0.05 hip widths; every key outside the span is the run without "place"\'s', () => {
+    const { ran, off, c } = byHipTest();
+    expect(ran.stderr).toBe('');
+    expect(ran.status).toBe(0);
+    expect(off).toEqual([]);
+    expect(linesOf(ran, 'SWITCH')[0]).toContain('frames 4–11');
+    const line = linesOf(ran, 'BY-HIP');
+    expect(line).toHaveLength(1);
+    expect(line[0]).toStartWith('BY-HIP set "clasp" chain "arm_r" frames 4–11 (t=0.500–1.375s): the wrist placed against the hip; hip width (median) rig 30.00 units, reference 30.00 px; wrist − mid-hip in hip widths (x right, y up),');
+    expect(line[0]).toEndWith('the upper arm within its turn on every frame; every target in reach');
+    expect(linesOf(ran, 'RAISED')).toEqual([]);
+    expect(linesOf(ran, 'REACH')).toEqual([]);
+    expect(linesOf(ran, 'ART-RANGE')).toEqual([]);
+    const rep = reportOf(join(c.dir, 'report.json'));
+    expect(rep.raised).toEqual([]);
+    expect(rep.byHip).toHaveLength(1);
+    // The other direction of #84's control: with `place` declared, the report carries every documented key, `byHip` included.
+    const doc = documentedReport();
+    expect(doc.conditional).toEqual(['byHip']);
+    expect(Object.keys(rep).sort()).toEqual(doc.all);
+    expect(rep.byHip[0]!.hips).toEqual({ rig: 30, reference: 30 });
+    expect(Math.max(...rep.byHip[0]!.worst.after)).toBeLessThanOrEqual(0.05);
+    // Control: the same set without "place" — the pose's angles, on these proportions, miss by more than the bar on every frame.
+    const plain = setup({ rig: RIG, map: mapOf([set(CLASP, { place: undefined })]), pose: poseDoc(CLASP) });
+    const pr = retarget(plain, ['--report', join(plain.dir, 'report.json')]);
+    expect(pr.status).toBe(0);
+    // ... and its report has no `byHip` key, and is otherwise the documented set.
+    const plainRep = JSON.parse(readFileSync(join(plain.dir, 'report.json'), 'utf8')) as Record<string, unknown>;
+    expect('byHip' in plainRep).toBe(false);
+    expect(Object.keys(plainRep).sort()).toEqual(doc.all.filter((k) => k !== 'byHip'));
+    expect(linesOf(pr, 'BY-HIP')).toEqual([]);
+    expect(Math.max(...rep.byHip[0]!.worst.before)).toBeGreaterThan(0.5);
+    expect(offBy(plain.build, CLASP, 0.05).length).toBe(8);
+    // Outside the span, and on every other track, the keys are the run without "place"'s, byte for byte.
+    const a = tracksOf(plain.out);
+    const b = tracksOf(c.out);
+    expect([...b.keys()]).toEqual([...a.keys()]);
+    let moved = 0;
+    for (const [track, keys] of a) {
+      keys.forEach((k, i) => {
+        if ((track === 'sleeve_r0.rotate' || track === 'sleeve_r1.rotate') && ON(i)) moved += b.get(track)![i] === k ? 0 : 1;
+        else expect(`${track} ${i} ${b.get(track)![i]}`).toBe(`${track} ${i} ${k}`);
+      });
+    }
+    expect(moved).toBe(16);
+  }, SLOW);
+
+  test('mutant: a solve that keeps the pose\'s angles fails the 0.05 bar', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const from = '          t0[i] = a0;\n          t1[i] = a1;\n';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, ''));
+      const { ran, off } = byHipTest(join(d, 'cli.ts'));
+      expect(ran.status).toBe(0);
+      expect(off.length).toBe(8);
+      console.log(`  mutant "the by-hip solve keeps the pose's angles": exit ${ran.status}, ${off.length} frame(s) off, first: ${off[0]}`);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+
+  test('mutant: the offset measured in the reference\'s px scaled by the figure, not in hip widths, fails the 0.05 bar', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      // The target off the mid-hip by the reference's px times the figure scale (the trunk's, 1.5), as the pose's angles would put it.
+      const from = 'const target: Pt = [h.centre[0] + ref[0] * rigEye, h.centre[1] + ref[1] * rigEye];';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'const target: Pt = [h.centre[0] + ref[0] * refEye * (scale?.factor ?? 1), h.centre[1] + ref[1] * refEye * (scale?.factor ?? 1)];'));
+      const { ran, off } = byHipTest(join(d, 'cli.ts'));
+      expect(ran.status).toBe(0);
+      expect(off.length).toBe(8);
+      console.log(`  mutant "the offset in figure-scaled px, not hip widths": exit ${ran.status}, ${off.length} frame(s) off, first: ${off[0]}`);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+
+  test('the hips may be a pelvis chain\'s "a>b" points: the same placement', () => {
+    const pelvis: ChainSpec = { name: 'pelvis', bones: ['hip'], joints: ['r_hip', 'l_hip'], aim: ['leg_r0>leg_l0'] };
+    const a = setup({ rig: RIG, map: mapOf([set(CLASP)]), pose: poseDoc(CLASP) });
+    const b = setup({ rig: RIG, map: mapOf([set(CLASP)], [...baseChains(), pelvis]), pose: poseDoc(CLASP) });
+    const ra = retarget(a);
+    const rb = retarget(b);
+    expect(rb.stderr).toBe('');
+    expect(rb.status).toBe(0);
+    expect(linesOf(rb, 'BY-HIP')).toEqual(linesOf(ra, 'BY-HIP'));
+    expect(offBy(b.build, CLASP, 0.05)).toEqual([]);
+  }, SLOW);
+
+  test('out of reach below the shoulder: the ray from the mid-hip points away from the arm, so the wrist goes to the reach\'s point nearest the target; REACH in hip widths, not ART-RANGE', () => {
+    // Just above the hips' line: on the rig, about 146 units from the shoulder, past its 130 units of arm. The ray
+    // from the mid-hip through that target runs down and away from the shoulder and never enters the reach
+    // ("missed"), the case #62's head-relative rule keeps for last; here it is the usual one.
+    const m = handMotion((i) => [-10 + (i - 8) * 0.5, -5]);
+    const c = setup({ rig: RIG, map: mapOf([set(m)]), pose: poseDoc(m) });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'BY-HIP')[0]).toEndWith('out of reach on 8 frame(s) (REACH)');
+    const reach = linesOf(r, 'REACH');
+    expect(reach).toHaveLength(1);
+    expect(reach[0]).toMatch(/^REACH {2}set "clasp" chain "arm_r": the target out of the arm's reach from the shoulder — frames 4–11 \(t=0\.500–1\.375s\) out of reach, and the ray from the mid-hip never enters the reach; placed at the reach's point nearest it: up to [0-9.]+ hip widths short \(median [0-9.]+\); the wrist placed at the reach limit along the hip-relative direction/);
+    expect(linesOf(r, 'ART-RANGE')).toEqual([]);
+    const rep = reportOf(report);
+    expect(rep.byHip[0]!.short.map((s) => s.how)).toEqual(['missed']);
+    const bones = posedBones(c.build, m);
+    for (let i = 4; i <= 11; i++) {
+      const ref = refOffset(m, i);
+      // The target: the rig's mid-hip (0, 300) + the reference's offset × 30. The wrist on the line from the shoulder to it, the arm straight.
+      const target: Pt = [ref[0] * 30, 300 + ref[1] * 30];
+      const w = tipOf(bones[i]!);
+      const toTarget = Math.atan2(target[1] - RIG_SHOULDER[1], target[0] - RIG_SHOULDER[0]);
+      expect(Math.abs(wrap((Math.atan2(w[1] - RIG_SHOULDER[1], w[0] - RIG_SHOULDER[0]) - toTarget) * DEG))).toBeLessThanOrEqual(0.01);
+      expect(Math.abs(Math.hypot(w[0] - RIG_SHOULDER[0], w[1] - RIG_SHOULDER[1]) - 130)).toBeLessThanOrEqual(ORIGIN_TOL);
+    }
+    // Control: the in-reach clasp prints no REACH (the first test).
+  }, SLOW);
+
+  test('turn holds the upper arm and the re-aimed forearm leaves the wrist short: ART-RANGE on the upper arm, in hip widths', () => {
+    const c = setup({ rig: RIG, map: mapOf([set(CLASP, { drawn: { sleeve_r0: -160, sleeve_r1: -40 }, turn: { sleeve_r0: [-5, 5], sleeve_r1: [-90, 90] } })]), pose: poseDoc(CLASP) });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--report', report]);
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'BY-HIP')[0]).toContain('the upper arm held by the set\'s turn on 8 frame(s) (4–11), the forearm re-aimed');
+    const art = linesOf(r, 'ART-RANGE');
+    expect(art).toHaveLength(1);
+    expect(art[0]).toMatch(/^ART-RANGE set "clasp" chain "arm_r" bone "sleeve_r0" held at its turn \(range \[-5, 5\]\) frames 4–11 \(t=0\.500–1\.375s\): 1\.000s the re-aimed forearm leaves the wrist up to [0-9.]+ hip widths short of its placed point/);
+    const entry = reportOf(report).artRange;
+    expect(entry).toHaveLength(1);
+    expect(entry[0]!.anchor).toBe('hip');
+    // Control: a turn wide enough holds nothing, and no ART-RANGE.
+    const wide = setup({ rig: RIG, map: mapOf([set(CLASP, { drawn: { sleeve_r0: -160, sleeve_r1: -40 }, turn: { sleeve_r0: [-90, 90], sleeve_r1: [-90, 90] } })]), pose: poseDoc(CLASP) });
+    const rw = retarget(wide);
+    expect(rw.status).toBe(0);
+    expect(linesOf(rw, 'ART-RANGE')).toEqual([]);
+    expect(offBy(wide.build, CLASP, 0.05)).toEqual([]);
+  }, SLOW);
+
+  test('a "by-hip" set that never shows: BY-HIP none, and the same bytes as without "place"', () => {
+    // Its key skeleton is the clasp's, but the arm never leaves the raised pose.
+    const still: Motion = { ...BASE, trunk: () => 90, hip: () => [0, 0], ru: () => 30, rf: () => 50 };
+    const a = setup({ rig: RIG, map: mapOf([set(CLASP, { place: undefined })]), pose: poseDoc(still) });
+    expect(retarget(a).status).toBe(0);
+    const first = readFileSync(a.out);
+    rmSync(a.out);
+    writeFileSync(a.map, JSON.stringify(mapOf([set(CLASP)]), null, 2));
+    const r = retarget(a);
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'BY-HIP')).toEqual(['BY-HIP none — no set with "place": "by-hip" showed; no key moved']);
+    expect(readFileSync(a.out).equals(first)).toBe(true);
+  }, SLOW);
+
+  test('MAP_ALT_PLACE: a placement other than "by-hip", a key skeleton without a hip or the wrist, hips that meet, or no wrist within one hip width — refused by name', () => {
+    const without = (...js: string[]): Record<string, Pt> => {
+      const k = keySkeleton(CLASP);
+      for (const j of js) delete k[j];
+      return k;
+    };
+    const far = keySkeleton(CLASP);
+    far.r_wrist = [far.r_hip![0] - 80, far.r_hip![1]];
+    const met = keySkeleton(CLASP);
+    met.l_hip = [met.r_hip![0], met.r_hip![1]];
+    for (const [o, says] of [
+      [{ place: 'by-head' }, '"place" is "by-head"; the one placement a set may ask for is "by-hip"'],
+      [{ pose: without('l_hip') }, 'its "pose" has no "l_hip"'],
+      [{ pose: without('r_hip') }, 'its "pose" has no "r_hip"'],
+      [{ pose: without('r_hip', 'l_hip') }, 'its "pose" has no "r_hip" or "l_hip"'],
+      [{ pose: without('r_wrist') }, 'its "pose" has no "r_wrist", the wrist of chain "arm_r"'],
+      [{ pose: met }, 'its "pose" puts r_hip and l_hip at the same point'],
+      [{ pose: far }, 'its "pose" puts no wrist within one hip width of the mid-hip (chain "arm_r" r_wrist '],
+    ] as const) {
+      const c = setup({ rig: RIG, map: mapOf([set(CLASP, o)]), pose: poseDoc(CLASP) });
+      const r = retarget(c);
+      expect(r.status).toBe(1);
+      expect(fails(r).some((l) => l.includes('MAP_ALT_PLACE') && l.includes('set "clasp"') && l.includes(says))).toBe(true);
+      expect(existsSync(c.out)).toBe(false);
+      // Control: the same key skeleton without "place" — a hip missing is no refusal there (the chains do not use it).
+      if ('pose' in o && !says.includes('r_wrist')) {
+        writeFileSync(c.map, JSON.stringify(mapOf([set(CLASP, { ...o, place: undefined })]), null, 2));
+        expect(retarget(c).status).toBe(0);
+      }
+    }
+    // Control: the clasp's own key skeleton is read.
+    const c = setup({ rig: RIG, map: mapOf([set(CLASP)]), pose: poseDoc(CLASP) });
+    expect(retarget(c).status).toBe(0);
+  }, SLOW);
+
+  test('PLACE_HIP: a map with neither a hip line aimed "a>b" nor two chains from the hips is refused; nothing written', () => {
+    const noLegs = baseChains().filter((c) => !c.name.startsWith('leg'));
+    const c = setup({ rig: RIG, map: mapOf([set(CLASP)], noLegs), pose: poseDoc(CLASP) });
+    const r = retarget(c);
+    expect(r.status).toBe(1);
+    expect(fails(r)).toHaveLength(1);
+    expect(fails(r)[0]).toStartWith('FAIL  PLACE_HIP: "place": "by-hip" places a wrist against the hip in hip widths');
+    expect(fails(r)[0]).toEndWith('the map has neither (no chain starts at r_hip or l_hip)');
+    expect(existsSync(c.out)).toBe(false);
+    // Control: the same map without "place" runs.
+    writeFileSync(c.map, JSON.stringify(mapOf([set(CLASP, { place: undefined })], noLegs), null, 2));
+    expect(retarget(c).status).toBe(0);
+  }, SLOW);
+
+  test('PLACE_HIPS: a reference whose hips meet over the span (no unit) is refused', () => {
+    const together = (i: number, j: JointsDoc): void => {
+      if (!ON(i)) return;
+      const r = j.r_hip!.at as Pt;
+      const l = j.l_hip!.at as Pt;
+      const mid: Pt = [(r[0] + l[0]) / 2, (r[1] + l[1]) / 2];
+      j.r_hip = { state: 'observed', at: mid, score: 0.9 };
+      j.l_hip = { state: 'observed', at: [mid[0], mid[1]], score: 0.9 };
+    };
+    const c = setup({ rig: RIG, map: mapOf([set(CLASP)], baseChains().map((x) => (x.name.startsWith('leg') ? { ...x, bend: 'free' } : x))), pose: poseDoc(CLASP, together) });
+    const r = retarget(c);
+    expect(r.status).toBe(1);
+    expect(fails(r).some((l) => l.startsWith('FAIL  PLACE_HIPS: "place": "by-hip": set "clasp" places chain "arm_r"\'s wrist against the hip: over frames 4–11 the median hip width is 0px in the reference (r_hip, l_hip)'))).toBe(true);
+    expect(existsSync(c.out)).toBe(false);
+  }, SLOW);
+
+  test('PLACE_CHAIN: a placed chain the two-bone solve cannot turn is refused', () => {
+    const chains = baseChains().map((x) => (x.name === 'arm_r' ? { ...x, aim: ['x', 'sleeve_r1>sleeve_r1:tip'] } : x));
+    const c = setup({ rig: RIG, map: mapOf([set(CLASP)], chains), pose: poseDoc(CLASP) });
+    const r = retarget(c);
+    expect(r.status).toBe(1);
+    expect(fails(r).some((l) => l.startsWith('FAIL  PLACE_CHAIN: "place": "by-hip": set "clasp" places chain "arm_r"\'s wrist against the hip, and it aims ["x","sleeve_r1>sleeve_r1:tip"]'))).toBe(true);
+    // Control: without "place" the same aims run.
+    writeFileSync(c.map, JSON.stringify(mapOf([set(CLASP, { place: undefined })], chains), null, 2));
+    expect(retarget(c).status).toBe(0);
+  }, SLOW);
+
+  test('PLACE_BOTH: with --raised-by-head, a chain drawn raised that "by-hip" also places is refused', () => {
+    const head = (b: BoneSpec[]): BoneSpec[] => [...b, { name: 'head', parent: 'neck', x: 0, y: 20 }, { name: 'eye_r', parent: 'head', x: -6, y: 10 }, { name: 'eye_l', parent: 'head', x: 6, y: 10 }];
+    const rig: RigOpts = { ...RIG, bones: head };
+    const chains = [...baseChains(), { name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: ['eye_r>eye_l'] }];
+    const c = setup({ rig, map: mapOf([set(CLASP, { drawn: { sleeve_r0: 100 } })], chains), pose: poseDoc(CLASP) });
+    const r = retarget(c, ['--raised-by-head']);
+    expect(r.status).toBe(1);
+    expect(fails(r).some((l) => l.startsWith('FAIL  PLACE_BOTH: set "clasp" chain "arm_r": --raised-by-head places its wrist against the head'))).toBe(true);
+    expect(existsSync(c.out)).toBe(false);
+    // Control: without the flag, "by-hip" alone places it.
+    const ok = retarget(c);
+    expect(ok.status).toBe(0);
+    expect(linesOf(ok, 'BY-HIP')).toHaveLength(1);
   }, SLOW);
 });
