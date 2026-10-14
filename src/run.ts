@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { readMap, resolveMap, type JointMap, type Rest } from './map.ts';
 import { cleanLine, inferredSource } from './clean.ts';
-import { convertCoco17, personTrack, readPoseSequence, type CameraFrame } from './pose.ts';
+import { convertCoco17, personTrack, readPoseSequence, TRAVEL_IN_PLACE, type CameraFrame } from './pose.ts';
 import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './problems.ts';
 import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, readIdle, targetOf, trackLabel, type IdleReading, type RigcTrack, type Target } from './idle.ts';
 import { bendLine, endOnLine, flipLine, holdLine, rangeLine, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions } from './retarget.ts';
@@ -18,7 +18,7 @@ import { artRangeLine, chainsMoving, raisedLine, RAISED_WITHIN, reachLine, switc
 import { landed, measureFeet, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
 import { legsOf } from './legs.ts';
 import { reduceKeys, type ReduceBone, type Reduced } from './reduce.ts';
-import type { BlendHold, Floor, LegScale, Stance } from './legs.ts';
+import type { BlendHold, Closure, Floor, LegScale, Stance } from './legs.ts';
 
 export interface RetargetArgs extends RetargetOptions {
   rig: string;
@@ -107,7 +107,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     const slots = slotsOf(doc0);
     resolveMap(map, rest, a.map, slots);
 
-    const r = retarget(rest, map, frames, times, a, slots);
+    const r = retarget(rest, map, frames, times, { ...a, ...(seq.travel !== undefined ? { travel: seq.travel } : {}) }, slots);
     say(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)${a.legScale !== undefined && a.legScale !== 'off' ? `, leg-scale ${a.legScale[0]}–${a.legScale[1]}` : ''}${a.plantFeet === true ? ', plant-feet' : ''}${a.stance !== undefined && a.stance !== 'off' ? `, stance ${a.stance}` : ''}${a.raisedByHead === true ? ', raised-by-head' : ''}${a.carryIdle === true ? ', carry-idle' : ''}${a.merge !== undefined ? `, merge ${a.merge}` : ''}${a.reduce !== undefined ? `, reduce ${a.reduce}°${a.reduceHip !== undefined ? ` (hip ${a.reduceHip} units)` : ''}` : ''}`);
     say(`  RIGC   rig-c ${rigc.version} (${rigc.entry}) gates and poses this run`);
     say(`  CLEAN  ${cleanLine(seq.cleaned!)}`);
@@ -142,7 +142,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       say(`  FEET   ${r.planted ? 'planted' : 'read, not planted (no --plant-feet)'}: leg length (median hip → ankle) r ${f.legLength.r.toFixed(1)}px, l ${f.legLength.l.toFixed(1)}px; ${f.supports.length} support span(s), ${f.changes.filter((c) => c.from !== null).length} change(s) of support, ${f.jumps.length} jump(s), ${f.steps.length} step(s)`);
       say(`  FEET   supports: ${f.supports.map((x) => `${x.side} ${span(x.frames)}`).join(', ') || 'none'}`);
       say(`  FEET   jumps (both ankles and mid_hip > 0.05 leg lengths above their rolling floor, ≥ 2 frames): ${f.jumps.map(span).join(', ') || 'none'}`);
-      say(`  FEET   steps (the supporting ankle > 0.03 leg lengths a frame; re-planted after 2 frames < 0.01): ${f.steps.map((x) => `${x.side} ${span(x.frames)} → ${x.to === null ? 'the pose\'s travel' : `${x.to} supports`}, ${x.replant === null ? 'never re-planted' : `re-planted at ${x.replant}`}`).join('; ') || 'none'}`);
+      if (r.closure !== null) say(`  FEET   ${travelLine(r.closure)}`);
+      else say(`  FEET   steps (the supporting ankle > 0.03 leg lengths a frame; re-planted after 2 frames < 0.01): ${f.steps.map((x) => `${x.side} ${span(x.frames)} → ${x.to === null ? 'the pose\'s travel' : `${x.to} supports`}, ${x.replant === null ? 'never re-planted' : `re-planted at ${x.replant}`}`).join('; ') || 'none'}`);
       if (r.floor !== null) {
         const legBones = legBonesOf(map);
         if (legBones !== null) say(`  FEET   ${floorLine(r.floor, setupLegs(rest, legBones))}`);
@@ -302,7 +303,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         legScale: r.legScale.map(({ scale: _scale, ...rest }) => rest),
         pivot: r.pivot,
         stance: r.stance === null ? null : { tolerance: r.stance.tolerance, release: r.stance.release, minSeconds: r.stance.minSeconds, bounds: r.stance.bounds, runs: r.stance.runs, over: r.stance.over },
-        feet: r.feet === null ? null : { planted: r.planted, legLength: r.feet.legLength, supports: r.feet.supports, jumps: r.feet.jumps, steps: r.feet.steps, changes: r.feet.changes, floor: r.floor?.y ?? null, shifts: r.floor?.shifts ?? [], blend: r.blendHold === null ? null : { bounds: r.blendHold.bounds, runs: r.blendHold.runs, over: r.blendHold.over }, reading: feetReading },
+        feet: r.feet === null ? null : { planted: r.planted, legLength: r.feet.legLength, supports: r.feet.supports, jumps: r.feet.jumps, steps: r.feet.steps, changes: r.feet.changes, floor: r.floor?.y ?? null, shifts: r.floor?.shifts ?? [], blend: r.blendHold === null ? null : { bounds: r.blendHold.bounds, runs: r.blendHold.runs, over: r.blendHold.over }, reading: feetReading, closure: r.closure },
         shear,
         idleDropped: idle === null ? null : idle.dropped,
         idleKeptOut: idle === null ? null : idle.keptOut,
@@ -462,6 +463,12 @@ export function floorLine(floor: Floor, leg: { r: number; l: number }): string {
  * was stretched to keep its ankle on the floor, with the stretch keyed; one per
  * run whose stretch fell past its bounds (`past the bounds`, as STANCE says it).
  */
+/** The in-place line (rig-c/pose#92): what --plant-feet did instead of holding the foot, and the loop's closure. */
+export function travelLine(c: Closure): string {
+  const per = c.frames > 1 ? Math.abs(c.drift) / (c.frames - 1) : 0;
+  return `in place (the sequence's travel "${TRAVEL_IN_PLACE}"): each supporting foot follows its own ankle's picture x, scaled, instead of being held where it planted, and no step releases it; the hip's x travelled ${c.drift >= 0 ? '+' : ''}${c.drift.toFixed(2)} units from the first frame to the last, closed — spread back over the ${c.frames} frames (${per.toFixed(3)} units a frame), so the last frame's hip x is the first's`;
+}
+
 export function blendLines(h: BlendHold, times: readonly number[]): string[] {
   const span = (x: [number, number]) => (x[0] === x[1] ? `frame ${x[0]} (t=${times[x[0]]!.toFixed(3)}s)` : `frames ${x[0]}–${x[1]} (t=${times[x[0]]!.toFixed(3)}–${times[x[1]]!.toFixed(3)}s)`);
   const out: string[] = [];

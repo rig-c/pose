@@ -30,7 +30,8 @@ clean (required before retarget; rig-c/pose#67)
   --coco                read --pose as coco17-sequence/1 and convert it first (neck = the shoulders' midpoint)
   --person <id>         the person to clean when the sequence holds more than one; only that person is written
   --loop                the sequence is one cycle (a gait's strike to strike): every window wraps, last frame
-                        to first, and the floor is re-pinned
+                        to first, and the floor is re-pinned; the sequence is written with "travel": "in-place"
+                        (rig-c/pose#92)
   --legs <n>            Savitzky–Golay window over the legs — both hips, knees and ankles (default: 5)
   --rest <n>            Savitzky–Golay window over every other joint (default: 7)
                         n is 1 (none), or odd and ≥ 5: a quadratic through 3 points passes through all three
@@ -104,7 +105,10 @@ retarget
                         supporting ankle moved in y onto the median of the spans' planted heights (world y on
                         the rig, posed by rig-c), the hip and everything above with it; FEET lists each span's
                         shift. On the 3 blend frames the supporting leg's scalex is stretched (k within
-                        [0.92, 1.08], past it listed) so its ankle stays on the floor (rig-c/pose#85)
+                        [0.92, 1.08], past it listed) so its ankle stays on the floor (rig-c/pose#85).
+                        On a sequence with "travel": "in-place" (rig-c/pose#92) each supporting foot follows its
+                        own ankle's picture x, scaled, instead of being held, no step releases it, and the hip's x
+                        drift from the first frame to the last is spread back over the frames, closing the loop
   --floor <y>           with --plant-feet: the floor's world y (rig units, y up) instead of the median
   --stance <leg lengths> with --plant-feet: on a frame outside the jumps, a free ankle within this many
                         leg lengths (FEET's) of the supporting one in the picture is planted too — its leg's
@@ -424,6 +428,7 @@ function runClean(argv: string[], say: (l: string) => void): void {
   if (params.loop) {
     if (c.floor === null) say('  FLOOR  no ankle has a position on any frame; not re-pinned');
     else say(`  FLOOR  the lowest ankle over the cycle: y ${fmt(c.floor.before)} before smoothing, ${fmt(c.floor.after)} after; every joint moved ${c.floor.shift >= 0 ? '+' : ''}${fmt(c.floor.shift, 3)} px in y`);
+    say('  TRAVEL "in-place" written (rig-c/pose#92): a loop is one cycle repeated, so the figure does not travel; retarget --plant-feet holds the hip\'s x over the loop and lets the supporting foot follow its own track');
   }
   const jit = (v: number | null) => (v === null ? 'not measured' : `${fmt(v, 3)}`);
   say(`  JITTER mean |second difference| of y over ${c.triples} joint-frame triple(s): ${jit(c.record.jitter.before)} → ${jit(c.record.jitter.after)} px/f²${c.record.jitter.before !== null && c.record.jitter.after !== null && c.record.jitter.before > 0 ? ` (${fmt(100 * (1 - c.record.jitter.after / c.record.jitter.before), 1)}% lower)` : ''}`);
