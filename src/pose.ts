@@ -150,6 +150,7 @@ export interface HoldParams {
 export interface CleanHold {
   joint: Body18;
   frames: [number, number];
+  excursion?: [number, number];
   jitter: { before: number | null; after: number | null };
 }
 /**
@@ -432,10 +433,16 @@ function readCleaned(p: Problems, where: string, c: unknown, frames: number | nu
         p.add('POSE_CLEANED', `${hw} is ${typeName(h)}; a hold is { joint, frames: [first, last], jitter: { before, after } }`);
         return;
       }
-      refuseUnknownKeys(p, 'POSE_CLEANED', hw, h, ['joint', 'frames', 'jitter']);
+      refuseUnknownKeys(p, 'POSE_CLEANED', hw, h, ['joint', 'frames', 'excursion', 'jitter']);
       if (typeof h.joint !== 'string' || !isBody18(h.joint)) p.add('POSE_CLEANED', `${hw} "joint" is ${typeName(h.joint)}; it must be a body-18 joint: ${BODY18.join(', ')}`);
       const f = h.frames;
-      if (!(Array.isArray(f) && f.length === 2 && frameOk(f[0]) && frameOk(f[1]) && (f[0] as number) <= (f[1] as number))) p.add('POSE_CLEANED', `${hw} "frames" is ${typeName(f)}; it must be [first, last], frame indices in ${frameRange}, first ≤ last`);
+      const fOk = Array.isArray(f) && f.length === 2 && frameOk(f[0]) && frameOk(f[1]) && (f[0] as number) <= (f[1] as number);
+      if (!fOk) p.add('POSE_CLEANED', `${hw} "frames" is ${typeName(f)}; it must be [first, last], frame indices in ${frameRange}, first ≤ last`);
+      if ('excursion' in h) {
+        const ex = h.excursion;
+        const exOk = Array.isArray(ex) && ex.length === 2 && frameOk(ex[0]) && frameOk(ex[1]) && (ex[0] as number) <= (ex[1] as number) && (!fOk || ((f[0] as number) < (ex[0] as number) && (ex[1] as number) < (f[1] as number)));
+        if (!exOk) p.add('POSE_CLEANED', `${hw} "excursion" is ${typeName(ex)}; it must be [first, last], frame indices strictly inside "frames", first ≤ last`);
+      }
       const j = h.jitter;
       if (!isObject(j)) p.add('POSE_CLEANED', `${hw} "jitter" is ${typeName(j)}; it must be { before, after }`);
       else {
@@ -642,7 +649,7 @@ function readHipsInferred(p: Problems, hw: string, h: unknown, frames: number | 
   if (undeclared.length > 0) p.add('POSE_CLEANED', `${hw}: frame(s) ${spans(undeclared)} are ${filledLabel} but not declined; only a frame the reading declined is filled, and "declined" says why`);
 }
 const holdParamsOf = (h: HoldParams | 'off'): HoldParams | 'off' => (h === 'off' ? 'off' : { speed: h.speed, reach: h.reach, minSeconds: h.minSeconds, blend: h.blend });
-const copyHold = (h: CleanHold): CleanHold => ({ joint: h.joint, frames: [h.frames[0], h.frames[1]], jitter: { before: h.jitter.before, after: h.jitter.after } });
+const copyHold = (h: CleanHold): CleanHold => ({ joint: h.joint, frames: [h.frames[0], h.frames[1]], ...(h.excursion !== undefined ? { excursion: [h.excursion[0], h.excursion[1]] as [number, number] } : {}), jitter: { before: h.jitter.before, after: h.jitter.after } });
 const copyUnheld = (u: CleanUnheld): CleanUnheld => ({ joint: u.joint, frames: [u.frames[0], u.frames[1]], test: u.test, value: u.value });
 
 function readJoints(p: Problems, pw: string, joints: unknown): Partial<Record<Body18, Joint>> {
@@ -836,7 +843,7 @@ export function writePoseSequence(seq: PoseSequence): string {
     params: { loop: c.params.loop, legs: c.params.legs, rest: c.params.rest, ...(c.params.hipsInferred !== undefined ? { hipsInferred: copyHipsInferred(c.params.hipsInferred) } : {}), ...(c.params.hold !== undefined ? { hold: holdParamsOf(c.params.hold) } : {}) },
     spikes: { found: c.spikes.found.map((s) => ({ frame: s.frame, joint: s.joint })), untested: [...c.spikes.untested] },
     jitter: { before: jit(c.jitter.before), after: jit(c.jitter.after) },
-    ...(c.holds !== undefined ? { holds: c.holds.map((h) => ({ joint: h.joint, frames: [h.frames[0], h.frames[1]], jitter: { before: jit(h.jitter.before), after: jit(h.jitter.after) } })) } : {}),
+    ...(c.holds !== undefined ? { holds: c.holds.map((h) => ({ joint: h.joint, frames: [h.frames[0], h.frames[1]], ...(h.excursion !== undefined ? { excursion: [h.excursion[0], h.excursion[1]] } : {}), jitter: { before: jit(h.jitter.before), after: jit(h.jitter.after) } })) } : {}),
     ...(c.seams !== undefined ? { seams: c.seams.map((x) => ({ joint: x.joint, frame: x.frame, step: round(x.step, 4), gap: x.gap })) } : {}),
     ...(c.unheld !== undefined ? { unheld: c.unheld.map((u) => ({ joint: u.joint, frames: [u.frames[0], u.frames[1]], test: u.test, value: u.value === null ? null : round(u.value, 4) })) } : {}),
   };

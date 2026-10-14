@@ -1149,5 +1149,69 @@ describe('the stillness hold (#91): a joint that has stopped is written at one p
       'POSE_CLEANED: p.json "cleaned" unheld[0] "test" is the string "drift"; it must be "speed", "reach", "short" or "span"',
       'POSE_CLEANED: p.json "cleaned" unheld[0] "value" is null; it must be a figure ≥ 0 (trunk lengths, or seconds for "short"), or null for a speed not known',
     ]);
+    expect(refuse((c) => {
+      (c.holds as Array<Record<string, unknown>>)[0]!.excursion = [21, 25];
+    })).toEqual([
+      'POSE_CLEANED: p.json "cleaned" holds[0] "excursion" is an array; it must be [first, last], frame indices strictly inside "frames", first ≤ last',
+    ]);
   });
+
+  /** Still over 24 frames (0.8 s at 30 fps), except r_wrist steps +6 px on `len` interior frames starting at frame 9 (9 frames before, 15 − len after: neither side ≥ 0.5 s alone). */
+  const withExcursion = (len: number): Wave => travel(() => 0, (k, i) => (k === R_WRIST && i >= 9 && i < 9 + len ? 6 : 0));
+
+  test('short excursion (#108): a still joint with a 6-frame excursion stays held around it and keeps the dip; a 7-frame excursion releases it', () => {
+    const six = runClean(seqDoc(24, withExcursion(6)), HOLD);
+    const wrist6 = six.holds.find((h) => h.joint === 'r_wrist');
+    expect(wrist6).toBeDefined();
+    expect(wrist6!.frames).toEqual([0, 23]);
+    expect(wrist6!.excursion).toEqual([9, 14]);
+    expect(six.unheld).toEqual([]);
+    expect(six.record.holds!.find((h) => h.joint === 'r_wrist')!.excursion).toEqual([9, 14]);
+    // Outside the excursion (frames 0–8 and 15–23) the joint is held at its span median; inside (9–14) the excursion is kept, blended from either held side.
+    const heldAt = atOf(six.seq, 0, 'r_wrist')!;
+    for (let i = 0; i <= 8; i++) expect(atOf(six.seq, i, 'r_wrist')).toEqual(heldAt);
+    for (let i = 15; i <= 23; i++) expect(atOf(six.seq, i, 'r_wrist')).toEqual(heldAt);
+    const dipPeak = Math.max(...Array.from({ length: 6 }, (_, u) => atOf(six.seq, 9 + u, 'r_wrist')![0] - heldAt[0]));
+    expect(dipPeak).toBeGreaterThan(1.5);
+    expect(cleanLine(six.record)).toContain('r_wrist 0–23 (excursion 9–14 kept)');
+    expect(writePoseSequence(readPoseSequence(writePoseSequence(six.seq), 'mem'))).toBe(writePoseSequence(six.seq));
+
+    // Control: a 7-frame excursion (frames 9–15) exceeds HOLD_EXCURSION (6) and releases the joint.
+    const seven = runClean(seqDoc(24, withExcursion(7)), HOLD);
+    expect(seven.holds.find((h) => h.joint === 'r_wrist')).toBeUndefined();
+    expect(seven.unheld.map((u) => [u.joint, u.frames, u.test])).toEqual([['r_wrist', [0, 23], 'reach']]);
+  });
+
+  test('mutant (#108): without the excursion rule a 6-frame excursion releases the joint, and the excursion test is red', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'clean.ts');
+      const from = 'export const HOLD_EXCURSION = 6;';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'export const HOLD_EXCURSION = 0;'));
+      const dir = tempDir();
+      const input = join(dir, 'pose.json');
+      const out = join(dir, 'out.json');
+      const wristHoldOf = (cliPath: string) => {
+        writeFileSync(input, JSON.stringify(seqDoc(24, withExcursion(6))));
+        const ran = cli(['clean', '--pose', input, '--out', out, '--legs', '1', '--rest', '1'], cliPath);
+        expect(ran.status).toBe(0);
+        const seq = readPoseSequence(readFileSync(out, 'utf8'), out);
+        return seq.cleaned!.holds!.find((h) => h.joint === 'r_wrist') ?? null;
+      };
+      const mutant = wristHoldOf(join(d, 'cli.ts'));
+      console.log(`  mutant "no excursion rule": r_wrist hold on 6-frame excursion is ${JSON.stringify(mutant)}`);
+      if (mutant !== null) throw new Error('mutant "no excursion rule" survived: r_wrist stayed held on the 6-frame excursion');
+      expect(mutant).toBeNull();
+      // Control: the real source keeps r_wrist held around the 6-frame excursion.
+      expect(wristHoldOf(CLI)?.excursion).toEqual([9, 14]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
