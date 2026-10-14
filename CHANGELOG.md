@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.18.0](https://github.com/rig-c/pose/compare/v0.17.0...v0.18.0) (2026-10-14)
+
+
+### Features
+
+* **retarget:** --plant-feet under an in-place gait holds the hip's travel and closes the loop ([#92](https://github.com/rig-c/pose/issues/92)) ([#104](https://github.com/rig-c/pose/issues/104)) ([ed8bff7](https://github.com/rig-c/pose/commit/ed8bff78fadbbe6edea2bbf90aec770942b4d2e9))
+* **retarget:** --reduce composes with --leg-scale, --plant-feet and --stance ([#94](https://github.com/rig-c/pose/issues/94)) ([#117](https://github.com/rig-c/pose/issues/117)) ([041cf3e](https://github.com/rig-c/pose/commit/041cf3ef20b930fd888135d641133b7661bf1977))
+* **retarget:** --stance's stretch bound is derived from the leg's own range in the sequence ([#95](https://github.com/rig-c/pose/issues/95)) ([#115](https://github.com/rig-c/pose/issues/115)) ([397ff75](https://github.com/rig-c/pose/commit/397ff75e4e57ce64d1c57b2a9c5d28fe07712ff8))
+* **retarget:** a hand that meets the body is placed by its offset from the hip (place: "by-hip") ([#93](https://github.com/rig-c/pose/issues/93)) ([#112](https://github.com/rig-c/pose/issues/112)) ([eb40ad8](https://github.com/rig-c/pose/commit/eb40ad8f38b6c0c970ed0e5ab70addf69d1872d5))
+
+
+### Bug Fixes
+
+* **retarget:** --stance's tolerance is a distance, so a free ankle far below the supporting one is reported, not planted ([#114](https://github.com/rig-c/pose/issues/114)) ([#120](https://github.com/rig-c/pose/issues/120)) ([5959fcf](https://github.com/rig-c/pose/commit/5959fcfff3ecae2f466ebb8bced69fd5af0d465a))
+* **retarget:** on a run not declared in place, the supporting foot is the lower ankle in the picture ([#113](https://github.com/rig-c/pose/issues/113)) ([#118](https://github.com/rig-c/pose/issues/118)) ([a7d0e16](https://github.com/rig-c/pose/commit/a7d0e1696091bfc5c7bfff075b7367a28bcfd121))
+
 ## [0.17.0](https://github.com/rig-c/pose/compare/v0.16.0...v0.17.0) (2026-10-14)
 
 
