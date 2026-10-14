@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.17.0](https://github.com/rig-c/pose/compare/v0.16.0...v0.17.0) (2026-10-14)
+
+
+### Features
+
+* **clean:** a stillness hold writes a still joint as one position, per joint, cross-faded where two holds meet ([#91](https://github.com/rig-c/pose/issues/91)) ([#99](https://github.com/rig-c/pose/issues/99)) ([0218bf1](https://github.com/rig-c/pose/commit/0218bf149bdda8680d4b77da329bad159117c04e))
+* **pose:** hips measured off the skirt's waistband (tools/pelvis.py), hipsInferred by "measured", and POSTURE reads the measured tilt ([#86](https://github.com/rig-c/pose/issues/86)) ([#96](https://github.com/rig-c/pose/issues/96)) ([8eee843](https://github.com/rig-c/pose/commit/8eee843da531b2fcb487589fc862a2edf2e54f91))
+* **retarget:** --plant-feet puts every support span on one floor, the supporting leg carrying the blend ([#85](https://github.com/rig-c/pose/issues/85)) ([#100](https://github.com/rig-c/pose/issues/100)) ([4af5cd0](https://github.com/rig-c/pose/commit/4af5cd00a456329f75265c998f07a0afdbadfbe4))
+* **scan:** the camera snapped on the floor at hand-labelled zoom windows (--camera-windows) ([#82](https://github.com/rig-c/pose/issues/82)) ([#90](https://github.com/rig-c/pose/issues/90)) ([0b3e9ff](https://github.com/rig-c/pose/commit/0b3e9fff3e383be2d2535f21825ba8109817b0da))
+
+
+### Bug Fixes
+
+* **pose:** the pelvis misread guard reads both neighbours, and a long declined run holds the earlier read ([#86](https://github.com/rig-c/pose/issues/86)) ([#97](https://github.com/rig-c/pose/issues/97)) ([29e6289](https://github.com/rig-c/pose/commit/29e62899651945e2e8ab3341224cbdf3458c5849))
+* **readme:** the --report paragraph lists feet and gate as written ([#83](https://github.com/rig-c/pose/issues/83)) ([#84](https://github.com/rig-c/pose/issues/84)) ([d67bdd0](https://github.com/rig-c/pose/commit/d67bdd021bdaa18c9b4199c38332c1c8c381b2ab))
+* **retarget:** --stance reads its tolerance with hysteresis, and a crossing shorter than 0.1 s is absorbed ([#87](https://github.com/rig-c/pose/issues/87)) ([#89](https://github.com/rig-c/pose/issues/89)) ([81de6d1](https://github.com/rig-c/pose/commit/81de6d192e073eb6f8cf09ab86978f843b471261))
+* **scan:** a cleaned input is refused by name; the order is scan → clean → retarget ([#80](https://github.com/rig-c/pose/issues/80)) ([#81](https://github.com/rig-c/pose/issues/81)) ([a3099dd](https://github.com/rig-c/pose/commit/a3099ddfa1953f4023b1d6b41a627ffcc043c622))
+
 ## [0.16.0](https://github.com/rig-c/pose/compare/v0.15.0...v0.16.0) (2026-10-14)
 
 
