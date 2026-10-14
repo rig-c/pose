@@ -29,7 +29,13 @@ The hand-written camera (`--camera-file`, rig-pose-camera/1):
 - a malformed file (wrong spec, frames not increasing, s <= 0, a missing ty, an
   unknown key) is refused by name, every fault in one run, and nothing written.
 
-Exit 0 when the moving, still, hand and malformed cases pass; the planted outcome is reported.
+The order (rig-c/pose#80), scan -> clean -> retarget:
+- the control: the moving case's scanned output goes through `rig-pose clean`
+  (exit 0, the written sequence carries both `camera` and `cleaned`);
+- the refusal: the raw sequence cleaned first and then scanned (with the hand
+  keys) is refused by name (SCAN_AFTER_CLEAN), and nothing is written.
+
+Exit 0 when the moving, still, hand, malformed and order cases pass; the planted outcome is reported.
 Deterministic: seeded RNGs, no clock.
 """
 import json
@@ -182,6 +188,28 @@ def malformed(dir_, pose):
             'pass': p.returncode == 1 and named and len(fails) == len(MALFORMED_WANT) and not os.path.exists(out)}
 
 
+def clean(src, out):
+    cli = os.path.join(HERE, '..', 'cli.ts')
+    return subprocess.run([shutil.which('bun') or 'bun', cli, 'clean', '--pose', src, '--out', out], capture_output=True, text=True)
+
+
+def order(dir_, pose, truth):
+    scanned = os.path.join(dir_, 'moving.out.json')
+    ok_out = os.path.join(dir_, 'scan-then-clean.json')
+    c = clean(scanned, ok_out)
+    kept = c.returncode == 0 and all(k in json.load(open(ok_out)) for k in ('camera', 'cleaned'))
+    cleaned_raw = os.path.join(dir_, 'raw.cleaned.json')
+    c0 = clean(pose, cleaned_raw)
+    keys = [{'frame': i, 's': truth[i][0], 'tx': truth[i][1][0], 'ty': truth[i][1][1]} for i in (0, 39)]
+    p, out = scan_hand(dir_, 'clean-then-scan', cleaned_raw, keys) if c0.returncode == 0 else (None, None)
+    fails = [line for line in p.stderr.strip().split('\n') if line.startswith('FAIL  SCAN_AFTER_CLEAN: ')] if p else []
+    refused = p is not None and p.returncode == 1 and len(fails) == 1 and 'scan -> clean -> retarget' in fails[0] and not os.path.exists(out)
+    return {'case': 'order', 'scan_then_clean_exit': c.returncode, 'scan_then_clean_kept_camera_and_cleaned': kept,
+            'clean_raw_exit': c0.returncode, 'clean_then_scan_exit': p.returncode if p else None, 'refusal': fails,
+            'written': bool(out) and os.path.exists(out), 'pass': kept and refused,
+            'stderr': [] if c.returncode == 0 and c0.returncode == 0 else (c.stderr + c0.stderr).strip().split('\n')[:3]}
+
+
 def main(argv):
     keep = argv[argv.index('--keep') + 1] if '--keep' in argv else None
     d = keep or tempfile.mkdtemp(prefix='scan-selftest-')
@@ -195,16 +223,19 @@ def main(argv):
             if name == 'moving':
                 hand = hand_vs_tracked(d, pose, truth)
                 bad = malformed(d, pose)
+                order_ = order(d, pose, truth)
         for r in rows:
             print(json.dumps(r))
         print(json.dumps(hand))
         print(json.dumps(bad))
-        ok = all(r['pass'] for r in rows if not r['case'].endswith('planted')) and hand['pass'] and bad['pass']
+        print(json.dumps(order_))
+        ok = all(r['pass'] for r in rows if not r['case'].endswith('planted')) and hand['pass'] and bad['pass'] and order_['pass']
         print(f"selftest: moving {'PASS' if rows[0]['pass'] else 'FAIL'}, still {'PASS' if rows[2]['pass'] else 'FAIL'} "
               f"(bars: |s'/s - 1| <= {S_TOL}, |t' - t| <= {T_TOL} px on every frame); planted, no person mask: "
               f"moving {'within' if rows[1]['pass'] else 'OUTSIDE'} the bars (worst s {rows[1]['worst_s_rel']:.4f}, t {rows[1]['worst_t_px']:.2f} px, inliers min {rows[1]['inliers_min']}), "
               f"still {'within' if rows[3]['pass'] else 'OUTSIDE'} the bars (worst s {rows[3]['worst_s_rel']:.4f}, t {rows[3]['worst_t_px']:.2f} px, inliers min {rows[3]['inliers_min']}); "
-              f"hand keys = truth {'PASS' if hand['pass'] else 'FAIL'}; malformed camera file refused {'PASS' if bad['pass'] else 'FAIL'}")
+              f"hand keys = truth {'PASS' if hand['pass'] else 'FAIL'}; malformed camera file refused {'PASS' if bad['pass'] else 'FAIL'}; "
+              f"scan -> clean kept, clean -> scan refused {'PASS' if order_['pass'] else 'FAIL'}")
         return 0 if ok else 1
     finally:
         if keep is None:

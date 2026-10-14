@@ -11,7 +11,10 @@ camera itself beside them:
       [--person <id>] [--plot <camera.png> [--mark a-b ...]]
 
 The input is a `rig-pose-sequence/1` or `rig-c-pose-frames/0` with one frame per
-video frame (a different count is refused). It is left unchanged.
+video frame (a different count is refused). It is left unchanged. The order is
+scan -> clean -> retarget: a sequence `rig-pose clean` already wrote (it carries a
+`cleaned` record) is refused by name (SCAN_AFTER_CLEAN), since clean's spike and
+smoothing steps would have read the camera's steps as motion of the body.
 
 The camera model, per frame i against frame 0: a point p0 of frame 0's picture
 appears at p_i = s_i * p0 + (tx_i, ty_i) on frame i. Scale and translation only
@@ -105,6 +108,11 @@ def read_pose(path, person):
     doc = json.load(open(path))
     if doc.get('spec') not in (POSE_SPEC, FRAMES0):
         raise Refusal(f'{path} "spec" is {doc.get("spec")!r}; this tool reads "{POSE_SPEC}" or "{FRAMES0}"')
+    if 'cleaned' in doc:
+        # The camera comes out before the body is cleaned: a zoom step is a jump of the picture, and clean's
+        # spike median and smoothing window would read it as motion of the body (rig-c/pose#80).
+        raise Refusal(f'SCAN_AFTER_CLEAN: {path} already carries a "cleaned" record; the order is scan -> clean -> retarget, '
+                      f'so scan the sequence clean read (the uncleaned one) and run `rig-pose clean` on what scan writes')
     if 'camera' in doc:
         raise Refusal(f'{path} already carries a "camera"; scan the unnormalised sequence')
     ids = sorted({q['id'] for f in doc['frames'] for q in f['people']})
