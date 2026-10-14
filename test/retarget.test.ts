@@ -2679,7 +2679,7 @@ describe('#47: --leg-scale and --plant-feet', () => {
       expect(k.status).toBe(0);
       expect(k.stance).toHaveLength(3);
       expect(k.stance[0]).toStartWith('STANCE planted both: free foot l frames 0–7 (t=0.000–0.292s)');
-      expect(k.stance[1]).toStartWith('STANCE lifted: free foot l frames 8–15 (t=0.333–0.625s) — its ankle up to 0.1500 leg lengths above the supporting one in the picture, over the tolerance 0.07 leg lengths; the pose\'s height kept');
+      expect(k.stance[1]).toStartWith('STANCE lifted: free foot l frames 8–15 (t=0.333–0.625s) — its ankle up to 0.1500 leg lengths above the supporting one in the picture, over the tolerance 0.07 leg lengths (planted again under 0.8 of it, 0.0560); the pose\'s height kept');
       expect(k.stance[2]).toStartWith('STANCE planted both: free foot l frames 16–23');
       expect(k.worst).toBeLessThan(1e-3);
       // The lift shows on the rig (the shin scaled 0.8 at its clamp: 0.2 of its 70 units, along a near-vertical shin).
@@ -2754,10 +2754,10 @@ describe('#47: --leg-scale and --plant-feet', () => {
         cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
         cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
         const path = join(d, 'src', 'legs.ts');
-        const from = 'if (height > tolerance) {';
+        const from = "(state === 'both' ? read[k]!.height > tolerance :";
         const before = readFileSync(path, 'utf8');
         expect(before.split(from)).toHaveLength(2);
-        writeFileSync(path, before.replace(from, 'if (height > Infinity) {'));
+        writeFileSync(path, before.replace(from, "(state === 'both' ? read[k]!.height > Infinity :"));
         const k = liftKept(join(d, 'cli.ts'));
         const red = k.worst >= 1e-3 || !k.stance.some((l) => l.startsWith('STANCE lifted: free foot l frames 8–15'));
         console.log(`  mutant "no tolerance check": exit ${k.status}, lifted foot moved ${k.worst.toFixed(3)} units; STANCE ${k.stance.join(' | ').slice(0, 160)}`);

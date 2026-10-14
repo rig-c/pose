@@ -492,6 +492,11 @@ export function plantHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel:
 /** A free leg is scaled within these factors to reach the floor (raised from below or lowered from above); past them the frame is reported, not forced. */
 export const STANCE_BOUNDS: readonly [number, number] = [0.92, 1.08];
 
+/** A lifted free foot is planted again only when its height comes back under this fraction of the tolerance (#87): hysteresis, a stated factor, not tuned. */
+export const STANCE_RELEASE = 0.8;
+/** A run of one state shorter than this many seconds, between two runs of the other state, takes their state (#87): a foot cannot take a stance for one frame. */
+export const STANCE_MIN_SECONDS = 0.1;
+
 /** A run of frames with one free side in one state. */
 export interface StanceRun {
   /** `both`: the free ankle within the tolerance of the floor, so both feet are planted; `lifted`: above it, the pose's height kept. */
@@ -503,6 +508,8 @@ export interface StanceRun {
   maxHeight: number;
   /** `both`: the smallest and largest stretch keyed (bounded); `lifted`: null. */
   k: { min: number; max: number } | null;
+  /** #87: a run read in `state`, shorter than `STANCE_MIN_SECONDS` between two runs of the other state, which took their state; its frames are in their run too, and `k` is null. */
+  absorbed?: true;
 }
 
 /** A run of planted-both frames whose stretch needed a factor past the bounds (or could not reach: `needed` null). */
@@ -518,6 +525,10 @@ export interface StanceOver {
 export interface Stance {
   /** The tolerance, in leg lengths (FEET's: the median picture hip → ankle of the free side). */
   tolerance: number;
+  /** A lifted foot is planted again under `release × tolerance` (#87). */
+  release: number;
+  /** The shortest run kept as its own state, seconds (#87). */
+  minSeconds: number;
   bounds: readonly [number, number];
   runs: StanceRun[];
   over: StanceOver[];
@@ -542,18 +553,75 @@ export interface StancePosed {
  * `STANCE_BOUNDS` (a free ankle below the floor shortens its leg, one above
  * lengthens it), and a frame past them is listed in `over`. Above the tolerance
  * the foot is lifted and keeps the pose's height.
+ *
+ * The state is read with hysteresis (#87): a planted foot is lifted when its
+ * height goes past `tolerance`, and a lifted one is planted again only under
+ * `STANCE_RELEASE × tolerance`, so noise at the threshold does not flip it. A
+ * run of one state shorter than `STANCE_MIN_SECONDS` (`secondsOf`, the
+ * retarget's timing of a run) between two runs of the other state, on the same
+ * free side and with no frame between, takes their state, and is listed with
+ * `absorbed`.
  */
-export function stanceOf(feet: Feet, ankle: Record<Side, readonly Pt[]>, tolerance: number, posed: (i: number) => StancePosed): Stance {
+export function stanceOf(feet: Feet, ankle: Record<Side, readonly Pt[]>, tolerance: number, posed: (i: number) => StancePosed, secondsOf: (run: [number, number]) => number): Stance {
   const n = feet.support.length;
   const stretch: Stance['stretch'] = new Array(n).fill(null);
-  type Row = { state: 'both' | 'lifted'; side: Side; height: number; k: number | null; needed: number | null; over: boolean; left: number };
-  const rows: Array<Row | null> = new Array<Row | null>(n).fill(null);
+  type Read = { state: 'both' | 'lifted'; side: Side; height: number };
+  const read: Array<Read | null> = new Array<Read | null>(n).fill(null);
   for (let i = 0; i < n; i++) {
     const s = feet.support[i] ?? null;
     if (s === null) continue;
     const f: Side = s === 'r' ? 'l' : 'r';
-    const height = (ankle[s][i]![1] - ankle[f][i]![1]) / feet.legLength[f];
-    if (height > tolerance) {
+    read[i] = { state: 'both', side: f, height: (ankle[s][i]![1] - ankle[f][i]![1]) / feet.legLength[f] };
+  }
+  // Blocks of consecutive frames with one free side. Inside a block the state changes only when the
+  // other state's condition (lifted: past the tolerance; planted again: under STANCE_RELEASE of it)
+  // holds for STANCE_MIN_SECONDS; a shorter crossing with the current state on both sides of it is
+  // absorbed. A crossing that runs to the block's end is taken: nothing of the current state follows it.
+  const absorbed: StanceRun[] = [];
+  for (let i = 0; i < n; ) {
+    const r0 = read[i];
+    if (r0 === null || r0 === undefined) {
+      i++;
+      continue;
+    }
+    let end = i;
+    while (end + 1 < n && read[end + 1] !== null && read[end + 1]!.side === r0.side) end++;
+    let state: 'both' | 'lifted' = r0.height > tolerance ? 'lifted' : 'both';
+    let j = i;
+    while (j <= end) {
+      const crosses = (k: number) => (state === 'both' ? read[k]!.height > tolerance : read[k]!.height <= STANCE_RELEASE * tolerance);
+      if (!crosses(j)) {
+        read[j]!.state = state;
+        j++;
+        continue;
+      }
+      let k = j;
+      while (k + 1 <= end && crosses(k + 1)) k++;
+      const other = state === 'both' ? 'lifted' : 'both';
+      if (k < end && secondsOf([j, k]) < STANCE_MIN_SECONDS) {
+        let maxHeight = -Infinity;
+        for (let x = j; x <= k; x++) {
+          read[x]!.state = state;
+          maxHeight = Math.max(maxHeight, read[x]!.height);
+        }
+        absorbed.push({ state: other, side: r0.side, frames: [j, k], maxHeight, k: null, absorbed: true });
+      } else {
+        state = other;
+        for (let x = j; x <= k; x++) read[x]!.state = state;
+      }
+      j = k + 1;
+    }
+    i = end + 1;
+  }
+  type Row = { state: 'both' | 'lifted'; side: Side; height: number; k: number | null; needed: number | null; over: boolean; left: number };
+  const rows: Array<Row | null> = new Array<Row | null>(n).fill(null);
+  for (let i = 0; i < n; i++) {
+    const r = read[i];
+    if (r === null || r === undefined) continue;
+    const s: Side = r.side === 'r' ? 'l' : 'r';
+    const f = r.side;
+    const height = r.height;
+    if (r.state === 'lifted') {
       rows[i] = { state: 'lifted', side: f, height, k: null, needed: null, over: false, left: 0 };
       continue;
     }
@@ -588,5 +656,7 @@ export function stanceOf(feet: Feet, ankle: Record<Side, readonly Pt[]>, toleran
       o.left = Math.max(o.left, r.left);
     } else over.push({ side: r.side, frames: [i, i], needed: r.needed, left: r.left });
   }
-  return { tolerance, bounds: STANCE_BOUNDS, runs, over, stretch };
+  for (const x of absorbed) runs.push(x);
+  runs.sort((a, b) => a.frames[0] - b.frames[0] || (a.absorbed === true ? 1 : 0) - (b.absorbed === true ? 1 : 0));
+  return { tolerance, release: STANCE_RELEASE, minSeconds: STANCE_MIN_SECONDS, bounds: STANCE_BOUNDS, runs, over, stretch };
 }

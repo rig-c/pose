@@ -295,7 +295,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         raised: r.raised,
         legScale: r.legScale.map(({ scale: _scale, ...rest }) => rest),
         pivot: r.pivot,
-        stance: r.stance === null ? null : { tolerance: r.stance.tolerance, bounds: r.stance.bounds, runs: r.stance.runs, over: r.stance.over },
+        stance: r.stance === null ? null : { tolerance: r.stance.tolerance, release: r.stance.release, minSeconds: r.stance.minSeconds, bounds: r.stance.bounds, runs: r.stance.runs, over: r.stance.over },
         feet: r.feet === null ? null : { planted: r.planted, legLength: r.feet.legLength, supports: r.feet.supports, jumps: r.feet.jumps, steps: r.feet.steps, changes: r.feet.changes, reading: feetReading },
         shear,
         idleDropped: idle === null ? null : idle.dropped,
@@ -433,9 +433,13 @@ function legBonesOf(map: JointMap): { r: { root: string; ankle: string }; l: { r
 export function stanceLines(st: Stance, times: readonly number[]): string[] {
   const span = (x: [number, number]) => (x[0] === x[1] ? `frame ${x[0]} (t=${times[x[0]]!.toFixed(3)}s)` : `frames ${x[0]}–${x[1]} (t=${times[x[0]]!.toFixed(3)}–${times[x[1]]!.toFixed(3)}s)`);
   const tol = `the tolerance ${st.tolerance} leg lengths`;
-  const out = st.runs.map((r) => (r.state === 'both'
+  const release = `planted again under ${st.release} of it, ${(st.release * st.tolerance).toFixed(4)}`;
+  const other = (r: Stance['runs'][number]) => (r.state === 'both' ? 'lifted' : 'planted-both');
+  const out = st.runs.map((r) => (r.absorbed === true
+    ? `absorbed: free foot ${r.side} ${span(r.frames)} — read ${r.state === 'both' ? 'planted both' : 'lifted'} (its ankle up to ${r.maxHeight.toFixed(4)} leg lengths above the supporting one in the picture; ${tol}, ${release}) for ${r.frames[1] - r.frames[0] + 1} frame(s), under ${st.minSeconds} s between two ${other(r)} runs; it takes their state`
+    : r.state === 'both'
     ? `planted both: free foot ${r.side} ${span(r.frames)} — its ankle up to ${r.maxHeight.toFixed(4)} leg lengths above the supporting one in the picture, within ${tol}; its leg stretched by k ${r.k!.min === r.k!.max ? r.k!.max.toFixed(4) : `${r.k!.min.toFixed(4)} … ${r.k!.max.toFixed(4)}`} (largest ${r.k!.max.toFixed(4)})`
-    : `lifted: free foot ${r.side} ${span(r.frames)} — its ankle up to ${r.maxHeight.toFixed(4)} leg lengths above the supporting one in the picture, over ${tol}; the pose's height kept`));
+    : `lifted: free foot ${r.side} ${span(r.frames)} — its ankle up to ${r.maxHeight.toFixed(4)} leg lengths above the supporting one in the picture, over ${tol} (${release}); the pose's height kept`));
   for (const o of st.over) out.push(`past the bounds: free foot ${o.side} ${span(o.frames)} — ${o.needed === null ? 'its ankle is not below its leg\'s root, so no stretch reaches the floor' : `the floor needed k ${o.needed.toFixed(4)}, past [${st.bounds[0]}, ${st.bounds[1]}]; held at the bound`}, the foot left up to ${o.left.toFixed(2)} units from the floor`);
   return out;
 }
