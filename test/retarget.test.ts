@@ -2427,6 +2427,23 @@ describe('#47: --leg-scale and --plant-feet', () => {
     const feetDoc = /`feet` \(([^;)]*)/.exec(para)![1]!;
     const documented = [...feetDoc.matchAll(/`([A-Za-z]+)`/g)].map((m) => m[1]!).sort();
     expect(Object.keys(rep.feet).sort()).toEqual(documented);
+    // The report's top level: the paragraph's names outside its parentheses, and the demand lists below it.
+    let depth = 0;
+    const top: string[] = [];
+    for (const m of para.matchAll(/[()]|`([^`]*)`/g)) {
+      if (m[0] === '(') depth++;
+      else if (m[0] === ')') depth--;
+      else if (depth === 0 && /^[A-Za-z]+$/.test(m[1]!)) top.push(m[1]!);
+    }
+    const lines = readme.split('\n');
+    const from = lines.indexOf('The demand lists:');
+    expect(from).toBeGreaterThan(-1);
+    for (const l of lines.slice(from + 2)) {
+      const d = /^- `([A-Za-z]+)[`:]/.exec(l);
+      if (d === null) break;
+      top.push(d[1]!);
+    }
+    expect(Object.keys(rep).sort()).toEqual([...new Set(top)].sort());
     expect(para).toContain("`gate` (rig-c's gate summary, a string)");
     expect(typeof (rep as unknown as { gate: unknown }).gate).toBe('string');
   }, SLOW);
