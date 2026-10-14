@@ -94,6 +94,8 @@ export const HOLD_REACH = 0.03;
 export const HOLD_MIN_SECONDS = 0.5;
 /** The frames before a hold over which the positions blend into it. */
 export const HOLD_BLEND = 6;
+/** The longest excursion inside a hold (#108), frames: a run over the reach that is kept while the span around it stays held. */
+export const HOLD_EXCURSION = 6;
 /** The speed's median window, frames. */
 export const HOLD_SPEED_WINDOW = 5;
 
@@ -144,6 +146,8 @@ export interface HoldFound {
   joint: Body18;
   /** The span, inclusive. */
   frames: [number, number];
+  /** A short run inside the span that left the reach and was kept, not held (#108); null when every frame was held. */
+  excursion: [number, number] | null;
   /** First frame's time to the end of the last, seconds. */
   seconds: number;
   /** The joint's largest 5-frame median speed on the span, trunk lengths per frame. */
@@ -346,10 +350,16 @@ export function jitterOf(all: readonly Series[], loop: boolean): { value: number
  * from a start it grows one frame at a time while the reach holds on the grown
  * span (its median re-read each time) and stops at the first frame that breaks
  * it; if what it reached lasts long enough it is a hold and the next start is
- * the frame after it, else the start moves one frame on. A span never crosses
- * the loop's seam.
+ * the frame after it, else the start moves one frame on. A still run not held
+ * by that greedy pass that lasts at least `HOLD_MIN_SECONDS` and fails `reach`
+ * only on one interior run of at most `HOLD_EXCURSION` (6) frames stays held
+ * around that excursion (#108), provided the held frames themselves last at
+ * least `HOLD_MIN_SECONDS` and stay within `reach` of their own median; the
+ * excursion's frames blend from their cleaned positions toward the span median
+ * over the `HOLD_BLEND` frames from either held side. A span never crosses the
+ * loop's seam.
  *
- * On every frame of a hold the joint takes its span median. It blends in over
+ * On every held frame of a hold the joint takes its span median. It blends in over
  * the `HOLD_BLEND` (6) frames before (p + w (held − p), w = (6 − k)/6 on the
  * k-th frame before: the 6th stays as cleaned, the frame before is 5/6 of the
  * way) and out over the 6 frames after, mirrored (the frame after is 5/6 of the
@@ -424,7 +434,7 @@ export function holdStill(series: ReadonlyMap<Body18, Series>, times: readonly n
     const xs = series.get(name)!;
     const sp = med.get(name)!;
     const still = xs.map((p, i) => p !== null && sp[i] !== null && sp[i] !== undefined && sp[i]! < speed);
-    const spans: Array<[number, number]> = [];
+    const spans: Array<{ a: number; b: number; exc: [number, number] | null }> = [];
     let s = 0;
     while (s < n) {
       if (!still[s]) {
@@ -434,16 +444,54 @@ export function holdStill(series: ReadonlyMap<Body18, Series>, times: readonly n
       let e = s;
       while (e + 1 < n && still[e + 1] && spanOf(name, s, e + 1)!.reach <= reach) e++;
       if (secondsOf(s, e) >= minSeconds - 1e-9) {
-        spans.push([s, e]);
+        spans.push({ a: s, b: e, exc: null });
         s = e + 1;
       } else s++;
     }
+    // #108: a still run not held above that fails the reach only on one interior run of ≤ HOLD_EXCURSION frames
+    // stays held around that excursion, provided the held frames themselves last ≥ minSeconds and stay within reach.
+    const coveredByPass1 = (i: number) => spans.some((x) => i >= x.a && i <= x.b);
+    let u = 0;
+    while (u < n) {
+      if (!still[u] || coveredByPass1(u)) {
+        u++;
+        continue;
+      }
+      let v = u;
+      while (v + 1 < n && still[v + 1] && !coveredByPass1(v + 1)) v++;
+      if (secondsOf(u, v) >= minSeconds - 1e-9) {
+        const { at } = spanOf(name, u, v)!;
+        let e0 = -1;
+        let e1 = -1;
+        let single = true;
+        for (let i = u; i <= v; i++) {
+          const p = xs[i]!;
+          if (Math.hypot(p[0] - at[0], p[1] - at[1]) / trunk > reach) {
+            if (e0 === -1) e0 = i;
+            else if (i > e1 + 1) {
+              single = false;
+              break;
+            }
+            e1 = i;
+          }
+        }
+        if (single && e0 > u && e1 < v && e1 - e0 + 1 <= HOLD_EXCURSION && secondsOf(u, e0 - 1) + secondsOf(e1 + 1, v) >= minSeconds - 1e-9) {
+          const kept = xs.slice(u, v + 1).filter((p, k): p is Pt => p !== null && (u + k < e0 || u + k > e1));
+          const km: Pt = [median1(kept.map((p) => p[0])), median1(kept.map((p) => p[1]))];
+          if (kept.every((p) => Math.hypot(p[0] - km[0], p[1] - km[1]) / trunk <= reach)) {
+            spans.push({ a: u, b: v, exc: [e0, e1] });
+          }
+        }
+      }
+      u = v + 1;
+    }
+    spans.sort((x, y) => x.a - y.a);
     const out: Series = xs.map((p) => (p === null ? null : [p[0], p[1]] as Pt));
-    const inHold = (i: number) => spans.some(([a, b]) => i >= a && i <= b);
+    const inHold = (i: number) => spans.some(({ a, b, exc }) => i >= a && i <= b && (exc === null || i < exc[0] || i > exc[1]));
     // The blends: on each frame outside a hold, the largest weight any hold of this joint gives it (the earlier hold on a tie).
     const blend = new Map<number, { w: number; at: Pt }>();
-    const found: Array<{ a: number; b: number; at: Pt; in: number[]; out: number[] }> = [];
-    for (const [a, b] of spans) {
+    const found: Array<{ a: number; b: number; exc: [number, number] | null; at: Pt; in: number[]; out: number[] }> = [];
+    for (const { a, b, exc } of spans) {
       const { at } = spanOf(name, a, b)!;
       const ins: number[] = [];
       const outs: number[] = [];
@@ -456,9 +504,25 @@ export function holdStill(series: ReadonlyMap<Body18, Series>, times: readonly n
           if (was === undefined || w > was.w) blend.set(i, { w, at });
         }
       }
-      found.push({ a, b, at, in: ins, out: outs });
+      if (exc !== null) {
+        const [e0, e1] = exc;
+        for (let k = 1; k < HOLD_BLEND; k++) {
+          const w = (HOLD_BLEND - k) / HOLD_BLEND;
+          for (const i of [e0 - 1 + k, e1 + 1 - k]) {
+            if (i < e0 || i > e1) continue;
+            const was = blend.get(i);
+            if (was === undefined || w > was.w) blend.set(i, { w, at });
+          }
+        }
+      }
+      found.push({ a, b, exc, at, in: ins, out: outs });
     }
-    for (const { a, b, at } of found) for (let i = a; i <= b; i++) if (out[i] !== null) out[i] = [at[0], at[1]];
+    for (const { a, b, exc, at } of found) {
+      for (let i = a; i <= b; i++) {
+        if (exc !== null && i >= exc[0] && i <= exc[1]) continue;
+        if (out[i] !== null) out[i] = [at[0], at[1]];
+      }
+    }
     for (const [i, { w, at }] of blend) {
       const p = xs[i];
       if (p === null || p === undefined) continue;
@@ -488,6 +552,7 @@ export function holdStill(series: ReadonlyMap<Body18, Series>, times: readonly n
       holds.push({
         joint: name,
         frames: [f.a, f.b],
+        excursion: f.exc,
         seconds: secondsOf(f.a, f.b),
         speed: fastest,
         reach: spanOf(name, f.a, f.b)!.reach,
@@ -673,7 +738,12 @@ export function clean(seq: PoseSequence, params: CleanParams, wanted: string | u
     spikes: { found: spikes.map((s) => ({ frame: s.frame, joint: s.joint })), untested },
     jitter: { before: before.value, after: after.value },
     ...(hold === undefined || hold === 'off' ? {} : {
-      holds: holds.map((h) => ({ joint: h.joint, frames: [h.frames[0], h.frames[1]] as [number, number], jitter: { before: h.jitter.before, after: h.jitter.after } })),
+      holds: holds.map((h) => ({
+        joint: h.joint,
+        frames: [h.frames[0], h.frames[1]] as [number, number],
+        ...(h.excursion === null ? {} : { excursion: [h.excursion[0], h.excursion[1]] as [number, number] }),
+        jitter: { before: h.jitter.before, after: h.jitter.after },
+      })),
       unheld: unheld.map((u) => ({ joint: u.joint, frames: [u.frames[0], u.frames[1]] as [number, number], test: u.test, value: u.value })),
       seams: seams.map((x) => ({ joint: x.joint, frame: x.frame, step: x.step, gap: x.gap })),
     }),
@@ -748,13 +818,14 @@ function holdText(r: CleanRecord): string {
     const groups = new Map<string, string[]>();
     for (const x of holds) {
       if (x.frames[0] > b || x.frames[1] < a) continue;
-      const k = `${x.frames[0]}–${x.frames[1]}`;
+      const exc = x.excursion === undefined ? '' : ` (excursion ${x.excursion[0] === x.excursion[1] ? `${x.excursion[0]}` : `${x.excursion[0]}–${x.excursion[1]}`} kept)`;
+      const k = `${x.frames[0]}–${x.frames[1]}${exc}`;
       groups.set(k, [...(groups.get(k) ?? []), x.joint]);
     }
     const held = [...groups].map(([k, js]) => `${js.join(', ')} ${k}`).join('; ');
     const not = (r.unheld ?? []).filter((u) => u.frames[0] >= a && u.frames[1] <= b).map(unheldText(h));
     const sm = (r.seams ?? []).filter((x) => x.frame >= a && x.frame <= b).map((x) => `${x.joint} ${x.frame} (step ${x.step.toFixed(4)}${x.gap > 0 ? `, gap ${x.gap}` : ''})`);
-    const ramps = holds.filter((x) => x.frames[0] <= b && x.frames[1] >= a && x.jitter.after !== null && x.jitter.after > 0).map((x) => `${x.joint} ${x.frames[0]}–${x.frames[1]} ${x.jitter.after!.toFixed(4)} px/f² (ramp)`);
+    const ramps = holds.filter((x) => x.frames[0] <= b && x.frames[1] >= a && x.jitter.after !== null && x.jitter.after > 0).map((x) => `${x.joint} ${x.frames[0]}–${x.frames[1]} ${x.jitter.after!.toFixed(4)} px/f² (${x.excursion !== undefined ? 'excursion' : 'ramp'})`);
     return `; HOLD frames ${a}–${b}: held ${held}${sm.length === 0 ? '' : `; seams cross-faded: ${sm.join(', ')}`}${ramps.length === 0 ? '' : `; jitter after ${ramps.join(', ')}`}${not.length === 0 ? '; every joint held' : `; not held: ${not.join(', ')}`}`;
   }).join('');
 }
