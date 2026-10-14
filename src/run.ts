@@ -628,19 +628,26 @@ export function blendLines(h: BlendHold, times: readonly number[]): string[] {
 }
 
 /**
- * The STANCE lines (#60): one per run of planted-both or lifted frames, with
- * the tolerance and the stretch keyed; one per run a stretch was capped.
+ * The STANCE lines (#60): one per run of planted-both, lifted or (#114) below
+ * frames, with the tolerance and the stretch keyed; one per run a stretch was
+ * capped.
  */
 export function stanceLines(st: Stance, times: readonly number[]): string[] {
   const span = (x: [number, number]) => (x[0] === x[1] ? `frame ${x[0]} (t=${times[x[0]]!.toFixed(3)}s)` : `frames ${x[0]}–${x[1]} (t=${times[x[0]]!.toFixed(3)}–${times[x[1]]!.toFixed(3)}s)`);
   const tol = `the tolerance ${st.tolerance} leg lengths`;
   const release = `planted again under ${st.release} of it, ${(st.release * st.tolerance).toFixed(4)}`;
-  const other = (r: Stance['runs'][number]) => (r.state === 'both' ? 'lifted' : 'planted-both');
+  const NAME: Record<Stance['runs'][number]['state'], string> = { both: 'planted-both', lifted: 'lifted', below: 'below' };
+  // An absorbed run lies inside a run of the state it took; the line names that state.
+  const around = (r: Stance['runs'][number]) => st.runs.find((x) => x.absorbed !== true && x.side === r.side && x.frames[0] <= r.frames[0] && r.frames[1] <= x.frames[1]);
+  const other = (r: Stance['runs'][number]) => NAME[around(r)?.state ?? (r.state === 'both' ? 'lifted' : 'both')];
+  const where = (r: Stance['runs'][number]) => (r.state === 'below' ? `its ankle up to ${r.maxDepth!.toFixed(4)} leg lengths below the supporting one in the picture` : `its ankle up to ${r.maxHeight.toFixed(4)} leg lengths above the supporting one in the picture`);
   const out = st.runs.map((r) => (r.absorbed === true
-    ? `absorbed: free foot ${r.side} ${span(r.frames)} — read ${r.state === 'both' ? 'planted both' : 'lifted'} (its ankle up to ${r.maxHeight.toFixed(4)} leg lengths above the supporting one in the picture; ${tol}, ${release}) for ${r.frames[1] - r.frames[0] + 1} frame(s), under ${st.minSeconds} s between two ${other(r)} runs; it takes their state`
+    ? `absorbed: free foot ${r.side} ${span(r.frames)} — read ${r.state === 'both' ? 'planted both' : r.state === 'below' ? 'past the tolerance below' : 'lifted'} (${where(r)}; ${tol}, ${release}) for ${r.frames[1] - r.frames[0] + 1} frame(s), under ${st.minSeconds} s between two ${other(r)} runs; it takes their state`
     : r.state === 'both'
     ? `planted both: free foot ${r.side} ${span(r.frames)} — its ankle up to ${r.maxHeight.toFixed(4)} leg lengths above the supporting one in the picture, within ${tol}; its leg stretched by k ${r.k!.min === r.k!.max ? r.k!.max.toFixed(4) : `${r.k!.min.toFixed(4)} … ${r.k!.max.toFixed(4)}`} (largest ${r.k!.max.toFixed(4)})`
-    : `lifted: free foot ${r.side} ${span(r.frames)} — its ankle up to ${r.maxHeight.toFixed(4)} leg lengths above the supporting one in the picture, over ${tol} (${release}); the pose's height kept`));
+    : r.state === 'below'
+    ? `past the tolerance below: free foot ${r.side} ${span(r.frames)} — ${where(r)}, past ${tol} (${release}); a free foot that far below the supporting one is a support error, not a stance: never planted both, the pose's height kept`
+    : `lifted: free foot ${r.side} ${span(r.frames)} — ${where(r)}, over ${tol} (${release}); the pose's height kept`));
   if (st.range !== undefined) out.push(legRangeLine('free', st.range, st.bounds));
   for (const o of st.over) out.push(`past the bounds: free foot ${o.side} ${span(o.frames)} — ${o.needed === null ? 'its ankle is not below its leg\'s root, so no stretch reaches the floor' : `the floor needed k ${o.needed.toFixed(4)}, past ${boundText(o.bound ?? st.bounds)}; held at the bound`}, the foot left up to ${o.left.toFixed(2)} units from the floor`);
   return out;

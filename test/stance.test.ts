@@ -8,6 +8,7 @@ import { describe, expect, test } from 'bun:test';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { holdBlend, STANCE_BOUNDS, STANCE_MIN_SECONDS, STANCE_RELEASE, stanceOf, stanceRangeOf, type Feet, type Stance, type StancePosed } from '../src/legs.ts';
+import { stanceLines } from '../src/run.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const MUTANTS = join(ROOT, 'node_modules', '.cache', 'rig-pose-mutants');
@@ -172,6 +173,79 @@ describe('#95: --stance\'s stretch bound from the leg\'s own range', () => {
       expect(st.over).toHaveLength(1);
       // The control still passes on the mutant.
       expect(folding(1, m.stanceRangeOf, m.stanceOf).stretch[35]).toEqual({ side: 'l', k: 0.92 });
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * #114: the tolerance is a distance, not a signed gap. A free ankle farther than
+ * the tolerance below the supporting one is a support error, not a stance: it is
+ * read `below`, never planted both, keeps the pose's height and is named on a
+ * STANCE line. One within the tolerance below is planted, its k under 1, as #60
+ * intends for a foot slightly under the floor. The planted mutant reads the
+ * signed gap (h ≤ tolerance) and plants the far one.
+ */
+describe('#114: --stance\'s tolerance is a distance', () => {
+  /** 0.5 s level, then 0.5 s with the free ankle `h` leg lengths above (negative: below) the supporting one, then 0.5 s level. */
+  const DROP = (h: number) => [...flat(12, 0), ...flat(12, h), ...flat(12, 0)];
+  const TIMES = Array.from({ length: 36 }, (_, i) => i / FPS);
+
+  test('a free ankle 0.5 leg lengths below the supporting one is read below: not planted, the pose\'s height kept, and named', () => {
+    const st = run(DROP(-0.5));
+    expect(states(st)).toEqual([['both', 0, 11], ['below', 12, 23], ['both', 24, 35]]);
+    expect(st.stretch.slice(12, 24)).toEqual(new Array(12).fill(null));
+    expect(st.over).toEqual([]);
+    const below = st.runs.find((r) => r.state === 'below')!;
+    expect(below.k).toBeNull();
+    expect(below.maxDepth).toBeCloseTo(0.5, 9);
+    expect(stanceLines(st, TIMES)[1]).toBe('past the tolerance below: free foot l frames 12–23 (t=0.500–0.958s) — its ankle up to 0.5000 leg lengths below the supporting one in the picture, past the tolerance 0.07 leg lengths (planted again under 0.8 of it, 0.0560); a free foot that far below the supporting one is a support error, not a stance: never planted both, the pose\'s height kept');
+  });
+
+  test('control: one 0.03 below is planted both, its leg shortened (k under 1)', () => {
+    const st = run(DROP(-0.03));
+    expect(states(st)).toEqual([['both', 0, 35]]);
+    // World: root 150 above the floor, the free ankle 0.03 × 150 = 4.5 under it, so k = 150 / 154.5.
+    for (let i = 12; i < 24; i++) expect(st.stretch[i]).toEqual({ side: 'l', k: 150 / 154.5 });
+    expect(st.stretch[12]!.k).toBeLessThan(1);
+    expect(st.runs.some((r) => r.state === 'below')).toBe(false);
+  });
+
+  test('the hysteresis reads |h|: a foot at −tolerance ±1 % stays planted, and one below comes back only under 0.8 of it', () => {
+    const hover = [...flat(10, -0.03), ...Array.from({ length: 20 }, (_, i) => -TOL * (i % 2 === 0 ? 1.01 : 0.99)), ...flat(10, -0.03)];
+    expect(states(run(hover))).toEqual([['both', 0, 39]]);
+    // Below for 0.5 s, then at −0.06 (inside the tolerance, outside 0.8 of it): still below; then at −0.03: planted.
+    expect(states(run([...flat(10, 0), ...flat(12, -0.3), ...flat(6, -0.06), ...flat(10, -0.03)]))).toEqual([['both', 0, 9], ['below', 10, 27], ['both', 28, 37]]);
+  });
+
+  test('a one-frame dip far below is absorbed and named below; the stance holds through it', () => {
+    const st = run([...flat(10, 0), -0.4, ...flat(10, 0)]);
+    expect(states(st)).toEqual([['both', 0, 20]]);
+    const ab = st.runs.filter((r) => r.absorbed === true);
+    expect(ab.map((r) => [r.state, r.frames, r.maxDepth])).toEqual([['below', [10, 10], 0.4]]);
+    expect(stanceLines(st, TIMES).find((l) => l.startsWith('absorbed'))).toContain('read past the tolerance below (its ankle up to 0.4000 leg lengths below the supporting one in the picture;');
+  });
+
+  test('mutant: reading the signed gap (h ≤ tolerance) plants the ankle 0.5 below, and the distance test is red', async () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      const path = join(d, 'src', 'legs.ts');
+      let src = readFileSync(path, 'utf8');
+      for (const [from, to, count] of [['Math.abs(r0.height) <= tolerance', 'r0.height <= tolerance', 1], ['Math.abs(read[k]!.height)', 'read[k]!.height', 2]] as const) {
+        expect(src.split(from)).toHaveLength(count + 1);
+        src = src.split(from).join(to);
+      }
+      writeFileSync(path, src);
+      const m = (await import(path)) as { stanceOf: StanceOf };
+      const st = run(DROP(-0.5), m.stanceOf);
+      console.log(`  mutant "the signed gap": the ankle 0.5 below read ${states(st).map((x) => x.join(' ')).join(', ')}; frame 15 keyed ${JSON.stringify(st.stretch[15])}`);
+      expect(states(st)).toEqual([['both', 0, 35]]);
+      expect(st.stretch[15]).not.toBeNull();
+      // The control still passes on the mutant.
+      expect(states(run(DROP(-0.03), m.stanceOf))).toEqual([['both', 0, 35]]);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
