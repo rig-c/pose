@@ -313,7 +313,7 @@ const medianOf = (xs: number[]): number => {
  *
  * Measured hips (#86, `measured`): the hips are inferred on every frame, and
  * turned to a measured angle: read off the picture, interpolated between two
- * close reads, or held from the nearer read. Those three are the measurement,
+ * close reads, or held from the earlier read. Those three are the measurement,
  * so the tilt is read on them; any other frame with an inferred hip is left
  * out and counted, as above. The line names the held spans.
  */

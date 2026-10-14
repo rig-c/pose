@@ -31,8 +31,10 @@ falls back to the detector's hip line (the value known wrong under a skirt):
 - interpolated: a declined frame between two read frames at most
   FILL_MAX_GAP_S apart (by the frames' times) takes the linear interpolation,
   in time, of their angles;
-- held: any other declined frame (a longer gap, or a run to the clip's start
-  or end) holds the nearer read in time, the earlier on a tie.
+- held: any other declined frame (a longer gap, or a run to the clip's end)
+  carries the earlier read to the end of its run, and the next read starts
+  the new value; a run at the clip's start, with no earlier read, holds the
+  later read. The written angle never switches where nothing was read.
 
 A clip with no read frame is refused (PELVIS_NO_READING), nothing written.
 `cleaned.params.hipsInferred` becomes { by: "measured", method, read,
@@ -81,14 +83,18 @@ rig-c/pose#86 settled):
    waistband's columns, or the kept points' 1.4826 MAD about the line is over
    MAX_SPREAD_HIPW hipw. B's refusals stay (hipw < 1 px; an empty mask; under
    10 columns; over half the columns on the region's top row).
-8. Misread guard, over the clip in frame order: a reading with |angle| >
-   GUARD_MAX_ABS_DEG, or moving more than GUARD_MAX_DEG_PER_FRAME degrees per
-   frame from the previous accepted reading, is declined by name (and printed
-   with the value it read, MISREAD).
+8. Misread guard (v2.1), over the clip in frame order: a reading with |angle| >
+   GUARD_MAX_ABS_DEG is declined. Any other reading is declined as a misread
+   only when it is more than GUARD_MAX_DEG_PER_FRAME degrees per frame from BOTH
+   the previous read (the last one the guard accepted) and the next read (the
+   next frame passing every other test). A reading within the bound of its
+   next read is motion, not a misread; a lone outlier is far from both. Every
+   decline is printed with the value it read (MISREAD).
 
 The parameters were fixed before the run that scored them (rig-c/pose#86).
 
-`--no-cover-check` drops step 2 (the planted failure of tools/pelvis_selftest.py).
+`--no-cover-check` drops step 2 and `--one-neighbour-guard` tests step 8 against
+the previous read only (the planted failures of tools/pelvis_selftest.py).
 `--report` writes per frame: the region, the wrists tested, the waistband run,
 the columns, the spread, the reading or the reason, the class and the angle
 written. `--sheet` draws the listed frames with the region and the line
@@ -107,7 +113,7 @@ import numpy as np
 BODY18 = ['nose', 'neck', 'r_shoulder', 'r_elbow', 'r_wrist', 'l_shoulder', 'l_elbow', 'l_wrist', 'r_hip', 'r_knee', 'r_ankle',
           'l_hip', 'l_knee', 'l_ankle', 'r_eye', 'l_eye', 'r_ear', 'l_ear']
 POSE_SPEC = 'rig-pose-sequence/1'
-METHOD = "B' v2 skirt waistband (rig-c/pose#86)"
+METHOD = "B' v2.2 skirt waistband (rig-c/pose#86)"
 
 PARAMS = {
     'ROI_UP_TRUNK': 0.55,
@@ -129,7 +135,7 @@ PARAMS = {
 }
 
 WHY_COVERED = 'covered: a wrist in front of the waist'
-# Frame times are written to the microsecond: two spans within it are equal (a tie holds the earlier read).
+# Frame times are written to the microsecond: a gap within it of FILL_MAX_GAP_S counts as inside it.
 TIME_EPS = 1e-6
 
 
@@ -247,31 +253,43 @@ def read_frame(img, J, P=PARAMS, cover_check=True):
     return {**out, 'angle': math.degrees(math.atan(-a))}
 
 
-def guard(results, P=PARAMS):
-    """The misread guard, in frame order: a reading over the absolute limit, or moving faster than the
-    per-frame limit against the previous accepted reading, is declined by name. Mutates `results`."""
-    prev = None
-    for i, r in enumerate(results):
-        if 'angle' not in r:
-            continue
-        a = r['angle']
-        if abs(a) > P['GUARD_MAX_ABS_DEG']:
-            r['misread'] = a
+def guard(results, P=PARAMS, two_neighbour=True):
+    """The misread guard (v2.1), in frame order; mutates `results`.
+
+    A reading with |angle| over GUARD_MAX_ABS_DEG is declined. The others are candidates. A candidate is
+    declined as a misread only when it is more than GUARD_MAX_DEG_PER_FRAME degrees per frame (|difference| /
+    frames between) from BOTH the previous read (the last earlier candidate the guard accepted) AND the next
+    read (the next later candidate, accepted or not): a reading within the bound of its next read is motion.
+    A candidate with no previous or no next read cannot be far from both and is kept.
+    two_neighbour=False is the planted failure of the self-test (--one-neighbour-guard): the previous read
+    alone decides, as v2 did."""
+    for r in results:
+        if 'angle' in r and abs(r['angle']) > P['GUARD_MAX_ABS_DEG']:
+            r['misread'] = r.pop('angle')
             r['why'] = f"misread guard: |angle| over {P['GUARD_MAX_ABS_DEG']:g}°"
-            del r['angle']
-        elif prev is not None and abs(a - prev[1]) / (i - prev[0]) > P['GUARD_MAX_DEG_PER_FRAME']:
-            r['misread'] = a
-            r['why'] = f"misread guard: over {P['GUARD_MAX_DEG_PER_FRAME']:g}°/frame from the previous reading"
-            del r['angle']
+    cand = [i for i, r in enumerate(results) if 'angle' in r]
+    lim = P['GUARD_MAX_DEG_PER_FRAME']
+    angle = {i: results[i]['angle'] for i in cand}
+    prev = None
+    for k, i in enumerate(cand):
+        nxt = cand[k + 1] if k + 1 < len(cand) else None
+        far_prev = prev is not None and abs(angle[i] - angle[prev]) / (i - prev) > lim
+        far_next = nxt is not None and abs(angle[i] - angle[nxt]) / (nxt - i) > lim
+        if far_prev and (far_next or not two_neighbour):
+            r = results[i]
+            r['misread'] = r.pop('angle')
+            r['why'] = (f'misread guard: over {lim:g}°/frame from both the previous and the next reading' if two_neighbour
+                        else f'misread guard: over {lim:g}°/frame from the previous reading')
         else:
-            prev = (i, a)
+            prev = i
     return results
 
 
 def fill(times, results, P=PARAMS):
     """Per frame: ('read' | 'interpolated' | 'held', angle). Declined frames between two reads at most
-    FILL_MAX_GAP_S apart take the linear interpolation in time; others hold the nearer read in time
-    (the earlier on a tie, times equal within TIME_EPS). Raises Refusal when no frame was read."""
+    FILL_MAX_GAP_S apart take the linear interpolation in time; others carry the earlier read to the end of
+    their run (a run at the clip's start, with no earlier read, holds the later read), so the written angle
+    changes only at a read. Raises Refusal when no frame was read."""
     reads = [i for i, r in enumerate(results) if 'angle' in r]
     if not reads:
         raise Refusal('PELVIS_NO_READING: no frame gave a reading; there is no measured angle to interpolate or hold, so nothing is written')
@@ -288,8 +306,7 @@ def fill(times, results, P=PARAMS):
             u = (times[i] - times[before]) / (times[after] - times[before])
             out.append(('interpolated', results[before]['angle'] + u * (results[after]['angle'] - results[before]['angle'])))
         else:
-            near = before if after is None or (before is not None and times[i] - times[before] <= times[after] - times[i] + TIME_EPS) else after
-            out.append(('held', results[near]['angle']))
+            out.append(('held', results[before if before is not None else after]['angle']))
     return out
 
 
@@ -468,6 +485,7 @@ def main(argv):
     ap.add_argument('--report', help='per-frame readings as JSON')
     ap.add_argument('--sheet', help='a PNG of frames with the region, the band and the line')
     ap.add_argument('--sheet-frames', type=frames_list, help='a,b,...: the frames on --sheet (default: 12 spread evenly)')
+    ap.add_argument('--one-neighbour-guard', action='store_true', help="the planted failure: the misread guard tests the previous reading only (v2's rule)")
     ap.add_argument('--no-cover-check', action='store_true', help="the planted failure: a wrist in the waist band is not tested (the self-test's mutant)")
     opts = ap.parse_args(argv)
     try:
@@ -478,13 +496,14 @@ def main(argv):
         if opts.sheet and bad:
             raise Refusal(f'PELVIS_SHEET: --sheet-frames {", ".join(map(str, bad))} not in the sequence (frames 0 … {n - 1})')
         results, pictures = measure(opts.video, doc, person, set(which) if opts.sheet else None, not opts.no_cover_check)
-        guard(results)
+        guard(results, PARAMS, not opts.one_neighbour_guard)
         classes = fill([f['t'] for f in doc['frames']], results)
     except Refusal as e:
         for line in str(e).split('\n'):
             print(f'FAIL  {line}', file=sys.stderr)
         return 1
-    rec, count = apply(doc, person, results, classes, METHOD + (', NO COVER CHECK (planted failure)' if opts.no_cover_check else ''))
+    planted = (', NO COVER CHECK (planted failure)' if opts.no_cover_check else '') + (', ONE-NEIGHBOUR GUARD (planted failure)' if opts.one_neighbour_guard else '')
+    rec, count = apply(doc, person, results, classes, METHOD + planted)
     with open(opts.out, 'w') as fh:
         fh.write(json.dumps(doc, indent=2, ensure_ascii=False) + '\n')
     spans = lambda rs: ', '.join(f'{a}-{b}' if a != b else str(a) for a, b in rs) or 'none'
@@ -497,7 +516,7 @@ def main(argv):
         if 'misread' in r:
             print(f'  MISREAD  frame {i}: read {r["misread"]:+.1f}°, declined ({r["why"]})')
     print(f'  INTERPOLATED {count["interpolated"]} declined frame(s) between reads at most {PARAMS["FILL_MAX_GAP_S"]:g} s apart: {spans(rec["interpolated"])}')
-    print(f'  HELD     {count["held"]} declined frame(s) holding the nearer read: {spans(rec["held"])}')
+    print(f'  HELD     {count["held"]} declined frame(s) carrying the earlier read (the later one at the clip\'s start): {spans(rec["held"])}')
     print('  INFERRED r_hip and l_hip on every frame where they have a position, turned about their midpoint to the frame\'s angle (read, interpolated or held), midpoint and width kept')
     print(f'  wrote {opts.out}')
     if opts.report:

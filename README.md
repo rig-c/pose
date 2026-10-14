@@ -65,9 +65,9 @@ A frame gives no reading, declined with the reason, when:
 
 - a wrist lies in front of the waist (the picture under it is not the skirt's dark);
 - the edge is too broken or too far from a line;
-- the reading jumps further than a misread guard allows.
+- the reading is over 25° from level, or a lone outlier: further, per frame, than the misread guard allows from both the read before it and the reading after it.
 
-The tool never draws a line through a hand in front. A declined frame does not fall back to the detector's hip line, which is the value known to be wrong there. If two reads lie close in time on either side, the frame takes the interpolation between them; otherwise it holds the nearer read.
+The tool never draws a line through a hand in front. A declined frame does not fall back to the detector's hip line, which is the value known to be wrong there. If two reads lie close in time on either side, the frame takes the interpolation between them. Otherwise it holds the earlier read to the end of its run, so the written angle changes only at a read; at the clip's start, with no earlier read, it holds the later one.
 
 Both hips are marked `inferred` on every frame and turned about their midpoint to the frame's angle, keeping the midpoint and the width. The record says which frame is which: `"hipsInferred": { "by": "measured", "method", "read", "interpolated", "held": [[first, last], …], "declined": [{ "frames": [first, last], "why" }] }`. Every frame is in exactly one of `read`, `interpolated` and `held`, and `declined` lists exactly the interpolated and held frames. Runs are frame indices inside the sequence, increasing and disjoint. A malformed record is refused by name (`POSE_CLEANED`).
 
