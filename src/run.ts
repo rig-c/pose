@@ -18,7 +18,7 @@ import { artRangeLine, chainsMoving, raisedLine, RAISED_WITHIN, reachLine, switc
 import { landed, measureFeet, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
 import { legsOf, PLANT_SWITCH, STANCE_BOUNDS } from './legs.ts';
 import { M2_IDENTITY, mulM2, reduceKeys, reduceScale, reduceUnderScale, SCALE_REDUCE, setupLocal, type M2, type ReduceBone, type Reduced, type ReduceRow, type UnderBone } from './reduce.ts';
-import type { BlendHold, Closure, Floor, LegScale, Lowered, Side, Stance } from './legs.ts';
+import type { BlendHold, Closure, Floor, LegScale, Lowered, Side, Stance, SupportScaleRun } from './legs.ts';
 
 export interface RetargetArgs extends RetargetOptions {
   rig: string;
@@ -138,6 +138,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     for (const e of r.byHip) if (e.short.length > 0) say(`  REACH  ${reachLine(e, r.times)}`);
     for (const e of r.artRange) say(`  ART-RANGE ${artRangeLine(e, r.times)}`);
     for (const l of r.legScale) say(`  LEG-SCALE ${legScaleLine(l, r.times)}`);
+    for (const l of r.legScale) for (const s of l.support ?? []) say(`  LEG-SCALE ${supportScaleLine(l, s, r.times)}`);
     if (r.pivot !== null) say(`  PIVOT  bone "${r.pivot.bone}"'s origin is ${r.pivot.distance.toFixed(2)} units (${r.pivot.hipWidths.toFixed(3)} hip widths) from its thigh roots' midpoint (${r.pivot.roots.join(' + ')}): dx ${r.pivot.offset[0].toFixed(2)}, dy ${r.pivot.offset[1].toFixed(2)}, at setup — the pivot every hip turn swings the legs about`);
     if (r.feet !== null) {
       const f = r.feet;
@@ -671,6 +672,16 @@ function legScaleLine(l: LegScale, times: readonly number[]): string {
   const count = (rs: Array<[number, number]>) => rs.reduce((k, x) => k + x[1] - x[0] + 1, 0);
   const clamp = (rs: Array<[number, number]>, at: number, how: string) => (rs.length === 0 ? `none ${how} ${at}` : `${count(rs)} frame(s) ${how} ${at}, clamped (frames ${rs.map(span).join(', ')})`);
   return `chain "${l.chain}" bone "${l.bone}" (${l.joints[0]} → ${l.joints[1]}): straight length ${l.straight.toFixed(1)}px (95th percentile of ${times.length} frames); picture length ÷ straight ${l.ratio.min.toFixed(3)} … ${l.ratio.max.toFixed(3)} (median ${l.ratio.median.toFixed(3)}); scalex keyed in [${l.limits[0]}, ${l.limits[1]}]: ${clamp(l.low, l.limits[0], 'under')}; ${clamp(l.high, l.limits[1], 'over')}`;
+}
+
+/** A LEG-SCALE past the floor (support) line (rig-c/pose#133): the supporting leg segment scaled below `--leg-scale`'s floor down to #95's bound. */
+export function supportScaleLine(l: LegScale, s: SupportScaleRun, times: readonly number[]): string {
+  const span = (x: [number, number]) => (x[0] === x[1] ? `frame ${x[0]} (t=${times[x[0]]!.toFixed(3)}s)` : `frames ${x[0]}–${x[1]} (t=${times[x[0]]!.toFixed(3)}–${times[x[1]]!.toFixed(3)}s)`);
+  const val = (r: { min: number; max: number }) => (r.min === r.max ? r.min.toFixed(4) : `${r.min.toFixed(4)}–${r.max.toFixed(4)}`);
+  if (s.clamped !== undefined) {
+    return `past the floor (support): chain "${l.chain}" bone "${l.bone}" (supporting foot ${s.side}) ${span(s.frames)} — asked ${val(s.asked)} under ${l.limits[0]}, clamped at the leg's own range ${s.clamped.bound.toFixed(4)} (#95), used ${val(s.used)}; hip rose by up to +${s.clamped.hipRise.toFixed(2)} units (never sinks)`;
+  }
+  return `past the floor (support): chain "${l.chain}" bone "${l.bone}" (supporting foot ${s.side}) ${span(s.frames)} — asked ${val(s.asked)} under ${l.limits[0]}, used ${val(s.used)} (within the leg's own range, #95; ankle stays on the floor)`;
 }
 
 /**

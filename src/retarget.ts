@@ -82,7 +82,7 @@ import { Problems, Refusal } from './problems.ts';
 import type { ArtRange, ByHip, Raised, ReachShort, SlotTrack, Switch, SwitchOptions } from './switch.ts';
 import { clampArt, coveredChains, isRaised, measureArt, overflow, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
 import type { BlendHold, Closure, Feet, Floor, LegScale, PathPose, Posing, Side, Stance } from './legs.ts';
-import { holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, plantHip, posePath, rootOf, SIDES, stanceOf, stanceRangeOf, supportsOf, tipOf } from './legs.ts';
+import { holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, plantHip, posePath, rootOf, scaleSupport, SIDES, stanceOf, stanceRangeOf, supportsOf, tipOf } from './legs.ts';
 
 const DEG = 180 / Math.PI;
 
@@ -739,8 +739,13 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     const hip = planted.hip;
     floor = planted.floor;
     closure = planted.closure;
-    for (let i = 0; i < n; i++) travel[i] = [hip[i]![0] - tb.worldX, hip[i]![1] - tb.worldY];
     const L = (legs as { legs: Record<Side, { chain: Chain; ankleBone: string }> }).legs;
+    // #133: on a frame where the supporting leg asks under --leg-scale's floor, its scalex follows the asked
+    // value down to #95's bound so the ankle stays on #85's floor; the free leg keeps the configured clamp.
+    if (legScaleOn && feet !== null) {
+      scaleSupport(legScale, scales, feet, L, hip, (i, s) => offsets[i]![s], (i, s) => tipOf(rest, poseLegs(i), L[s].ankleBone));
+    }
+    for (let i = 0; i < n; i++) travel[i] = [hip[i]![0] - tb.worldX, hip[i]![1] - tb.worldY];
     const world = (i: number, v: Pt): Pt => [hip[i]![0] + v[0], hip[i]![1] + v[1]];
     /** Both legs posed on frame i by the scales as they stand, world (y up): each chain's root and ankle. */
     const posedFeet = (i: number) => {

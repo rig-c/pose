@@ -253,6 +253,17 @@ export function rootOf(rest: Rest, b: string): string {
 
 // --- leg scale -------------------------------------------------------------
 
+export interface SupportScaleRun {
+  side: Side;
+  frames: [number, number];
+  /** The lowest and highest scale asked on the run's frames. */
+  asked: { min: number; max: number };
+  /** The lowest and highest scale keyed on the run's frames (clamped at `bound` when `asked` went under #95's bound). */
+  used: { min: number; max: number };
+  /** Present when `asked` went under #95's bound on any frame of the run: the lowest bound on the run, and the largest hip rise (world units, ≥ 0). */
+  clamped?: { bound: number; hipRise: number };
+}
+
 export interface LegScale {
   chain: string;
   bone: string;
@@ -270,6 +281,13 @@ export interface LegScale {
   scale: number[];
   /** The scale the pose asked for on each frame before the clamp floor (`min(ratio, limits[1])`, rig-c/pose#107). */
   asked: number[];
+  /**
+   * rig-c/pose#133: under `--plant-feet`, runs of supporting frames on this
+   * segment where the asked scale went under `limits[0]` and followed `asked`
+   * down to the bound #95 derives from the leg's own range (`min(limits[0], r(i))`).
+   * Absent when no supporting frame on this segment asked under `limits[0]`.
+   */
+  support?: SupportScaleRun[];
 }
 
 /** One segment's scale per frame: picture length ÷ its 95th percentile, clamped; its asked scale without the clamp floor (#107); and the runs clamped. */
@@ -798,6 +816,96 @@ export function stanceRangeOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Si
     out[s] = len.map((l) => (straight > 1e-9 && Number.isFinite(l) ? Math.min(STANCE_BOUNDS[0], l / straight) : STANCE_BOUNDS[0]));
   }
   return out;
+}
+
+/**
+ * Under `--plant-feet` and `--leg-scale`, a supporting leg segment that asks a
+ * scale under `--leg-scale`'s floor (`limits[0]`) follows its asked scale down
+ * to the bound #95 derives from the leg's own range (`min(limits[0], r(i))`) so
+ * the supporting ankle stays on #85's floor after #107 (rig-c/pose#133). The
+ * free leg keeps the configured clamp. When an asked scale goes under #95's
+ * bound (`lower`, defaulting to the segment's own range `asked[i]`), it is
+ * clamped there and the hip rises by the vertical remainder (`askedOffset −
+ * usedOffset`), never sinks.
+ */
+export function scaleSupport(
+  legScale: LegScale[],
+  scales: Map<string, number[]>,
+  feet: Feet,
+  legs: Record<Side, { chain: Chain; ankleBone: string }>,
+  hip: Pt[],
+  askedOffset: (i: number, s: Side) => Pt,
+  usedOffset: (i: number, s: Side) => Pt,
+  lower?: StanceLower,
+): void {
+  const n = feet.support.length;
+  const tracked = new Array<Side | null>(n).fill(null);
+  for (const t of feet.tracked ?? []) for (let i = t.frames[0]; i <= t.frames[1]; i++) tracked[i] = t.side;
+  const byBone = new Map(legScale.map((ls) => [ls.bone, ls]));
+  const copied = new Set<string>();
+  const ensureCopy = (b: string): number[] => {
+    const cur = scales.get(b)!;
+    if (copied.has(b)) return cur;
+    const copy = [...cur];
+    scales.set(b, copy);
+    copied.add(b);
+    return copy;
+  };
+  const perBone = new Map<string, Array<{ frame: number; side: Side; asked: number; used: number; bound: number; clamped: boolean; hipRise: number }>>();
+  for (let i = 0; i < n; i++) {
+    const s = feet.support[i] ?? tracked[i] ?? null;
+    if (s === null) continue;
+    const touched: Array<{ bone: string; asked: number; used: number; bound: number; clamped: boolean }> = [];
+    for (const b of legs[s].chain.bones) {
+      const ls = byBone.get(b);
+      if (ls === undefined) continue;
+      const asked = ls.asked[i]!;
+      const floor = ls.limits[0];
+      if (!(asked < floor)) continue;
+      const r = lower !== undefined ? lower[s][i]! : asked;
+      const bound = Math.min(floor, r);
+      const used = Math.max(asked, bound);
+      const clamped = used > asked + 1e-12;
+      ensureCopy(b)[i] = used;
+      touched.push({ bone: b, asked, used, bound, clamped });
+    }
+    if (touched.length === 0) continue;
+    let hipRise = 0;
+    if (touched.some((t) => t.clamped)) {
+      hipRise = Math.max(0, askedOffset(i, s)[1] - usedOffset(i, s)[1]);
+      hip[i]![1] += hipRise;
+    }
+    for (const t of touched) {
+      const list = perBone.get(t.bone) ?? [];
+      list.push({ frame: i, side: s, ...t, hipRise });
+      perBone.set(t.bone, list);
+    }
+  }
+  for (const ls of legScale) {
+    const entries = perBone.get(ls.bone);
+    if (entries === undefined || entries.length === 0) continue;
+    const out: SupportScaleRun[] = [];
+    for (const e of entries) {
+      const last = out[out.length - 1];
+      if (last !== undefined && last.side === e.side && last.frames[1] === e.frame - 1 && (last.clamped !== undefined) === e.clamped) {
+        last.frames[1] = e.frame;
+        last.asked = { min: Math.min(last.asked.min, e.asked), max: Math.max(last.asked.max, e.asked) };
+        last.used = { min: Math.min(last.used.min, e.used), max: Math.max(last.used.max, e.used) };
+        if (last.clamped !== undefined) {
+          last.clamped = { bound: Math.min(last.clamped.bound, e.bound), hipRise: Math.max(last.clamped.hipRise, e.hipRise) };
+        }
+      } else {
+        out.push({
+          side: e.side,
+          frames: [e.frame, e.frame],
+          asked: { min: e.asked, max: e.asked },
+          used: { min: e.used, max: e.used },
+          ...(e.clamped ? { clamped: { bound: e.bound, hipRise: e.hipRise } } : {}),
+        });
+      }
+    }
+    ls.support = out;
+  }
 }
 
 /** The lower bound on frame i for side s: the leg's own (#95), or the default. */
