@@ -150,7 +150,7 @@ describe('spikes: a joint more than 0.2 trunk lengths from its 5-frame median ta
     expect(linesOf(r, 'CLEAN')[0]).toStartWith('CLEAN  rig-pose-clean/1: legs 1, rest 1 — no smoothing, no loop; 5 spike(s) replaced (frame 4 r_wrist, frame 11 l_ankle, frame 12 l_ankle, frame 20 nose, frame 27 r_knee), frames 0, 1, 30, 31 untested (a clip end cuts the 5-frame window); jitter');
     const doc = JSON.parse(readFileSync(out, 'utf8')) as { cleaned: { spec: string; params: unknown; spikes: unknown } };
     expect(doc.cleaned.spec).toBe('rig-pose-clean/1');
-    expect(doc.cleaned.params).toEqual({ loop: false, legs: 1, rest: 1 });
+    expect(doc.cleaned.params).toEqual({ loop: false, legs: 1, rest: 1, hold: { speed: 0.015, reach: 0.03, minSeconds: 0.5, blend: 6 } });
     expect(doc.cleaned.spikes).toEqual({
       found: [{ frame: 4, joint: 'r_wrist' }, { frame: 11, joint: 'l_ankle' }, { frame: 12, joint: 'l_ankle' }, { frame: 20, joint: 'nose' }, { frame: 27, joint: 'r_knee' }],
       untested: [0, 1, 30, 31],
@@ -334,7 +334,7 @@ describe('--hips-inferred (#63): the hips marked inferred, the record says who d
     expect(linesOf(r, 'INFERRED')).toEqual(['INFERRED r_hip on 12 frame(s), l_hip on 12 frame(s) of 12 marked "inferred" (every frame where it has a position): declared at clean (--hips-inferred); positions and scores unchanged']);
     expect(linesOf(r, 'CLEAN')[0]).toEndWith('; hips inferred (declared at clean)');
     const flagged = JSON.parse(readFileSync(out, 'utf8')) as { cleaned: { params: Record<string, unknown> } };
-    expect(flagged.cleaned.params).toEqual({ loop: false, legs: 5, rest: 7, hipsInferred: { by: 'declared' } });
+    expect(flagged.cleaned.params).toEqual({ loop: false, legs: 5, rest: 7, hipsInferred: { by: 'declared' }, hold: { speed: 0.015, reach: 0.03, minSeconds: 0.5, blend: 6 } });
     const out0 = join(dir, 'plain.json');
     const r0 = cli(['clean', '--pose', input, '--out', out0]);
     expect(r0.status).toBe(0);
@@ -668,7 +668,7 @@ describe('refusals, each beside its control', () => {
     }
     expect(err.split('\n')).toEqual([
       'POSE_CLEANED: p.json "cleaned" "spec" is the string "rig-pose-clean/0"; this reader reads "rig-pose-clean/1"',
-      'POSE_CLEANED: p.json "cleaned" "params" has a key this reader does not know: "extra"; the keys it reads are loop, legs, rest, hipsInferred',
+      'POSE_CLEANED: p.json "cleaned" "params" has a key this reader does not know: "extra"; the keys it reads are loop, legs, rest, hipsInferred, hold',
       'POSE_CLEANED: p.json "cleaned" "params" "loop" is the string "yes"; it must be true or false',
       'POSE_CLEANED: p.json "cleaned" "params" "legs" is number 3; it must be 1 (none) or an odd whole number ≥ 5',
       'POSE_CLEANED: p.json "cleaned" spikes.found[0] "frame" is number 12; it must be a frame index in [0, 11]',
@@ -690,7 +690,432 @@ describe('refusals, each beside its control', () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('(COCO-17)');
     const seq = readPoseSequence(readFileSync(out, 'utf8'), out);
-    expect(seq.cleaned!.params).toEqual({ loop: false, legs: 5, rest: 7 });
+    expect(seq.cleaned!.params).toEqual({ loop: false, legs: 5, rest: 7, hold: { speed: 0.015, reach: 0.03, minSeconds: 0.5, blend: 6 } });
     expect(seq.source).toStartWith('converted from COCO-17');
+  });
+});
+
+// ===========================================================================
+
+/**
+ * The stillness hold (#91), per joint. A figure whose mid-hip travels
+ * `path(i)` px in x, every joint carrying its own small deterministic
+ * "detector noise" (under 0.4 px a coordinate, so a still joint's 5-frame
+ * median speed stays under the 1.5 px/frame that 0.015 trunk lengths is at a
+ * 100 px trunk). 30 frames a second.
+ */
+const noise = (k: number, i: number): Pt => [0.4 * Math.sin(k * 7.13 + i * 3.71), 0.4 * Math.cos(k * 5.27 + i * 2.93)];
+const travel = (path: (i: number) => number, own?: (k: number, i: number) => number): Wave => (k, i) => {
+  const e = noise(k, i);
+  return [path(i) + (own?.(k, i) ?? 0) + e[0], e[1]];
+};
+const HOLD = { speed: 0.015, reach: 0.03 };
+const runClean = (doc: Record<string, unknown>, hold?: { speed: number; reach: number } | 'off') => clean(seqOf(doc), { loop: false, legs: 1, rest: 1, ...(hold !== undefined ? { hold } : {}) }, undefined, 'mem');
+const R_WRIST = BODY18.indexOf('r_wrist');
+
+/** Moves 3 px a frame (0.03 trunk) for 20 frames, then stands still to the end. */
+const STOPS = travel((i) => 3 * Math.min(i, 20));
+/** As STOPS, but the right wrist keeps drifting 0.7 px a frame (0.007 trunk, under the speed limit) after the stop. */
+const WRIST_DRIFTS = travel((i) => 3 * Math.min(i, 20), (k, i) => (k === R_WRIST ? 0.7 * Math.max(0, i - 20) : 0));
+/** Moves 3 px a frame to frame 20, stands still to frame 44, moves again from 45. */
+const STOPS_AND_GOES = travel((i) => 3 * (i <= 20 ? i : i <= 44 ? 20 : i - 24));
+/** Moves 3 px a frame to frame 20, then drifts 0.3 px a frame: still by speed, and a 3 px reach chops it into holds back to back. */
+const CHOPPED = travel((i) => (i <= 20 ? 3 * i : 60 + 0.3 * (i - 20)));
+/** Per seam, the largest frame-to-frame movement of its joint over the frames of its two holds, px, beside the step between their medians, px. */
+const seamSteps = (seq: PoseSequence, holds: ReadonlyArray<{ joint: string; frames: readonly [number, number] }>, seams: ReadonlyArray<{ joint: string; frame: number; gap: number }>): Array<{ moved: number; step: number; gap: number }> => seams.map((s) => {
+  const one = holds.find((h) => h.joint === s.joint && h.frames[1] === s.frame - s.gap - 1)!;
+  const two = holds.find((h) => h.joint === s.joint && h.frames[0] === s.frame)!;
+  const m1 = atOf(seq, one.frames[0], s.joint)!;
+  const m2 = atOf(seq, two.frames[1], s.joint)!;
+  let moved = 0;
+  for (let i = one.frames[0] + 1; i <= two.frames[1]; i++) {
+    const p = atOf(seq, i - 1, s.joint)!;
+    const q = atOf(seq, i, s.joint)!;
+    moved = Math.max(moved, Math.hypot(q[0] - p[0], q[1] - p[1]));
+  }
+  return { moved, step: Math.hypot(m2[0] - m1[0], m2[1] - m1[1]), gap: s.gap };
+});
+/** As `travel`, with a quieter noise (under 0.25 px a coordinate), so a 2.5 px step stays over the 1.5 px speed limit on every joint. */
+const quiet = (path: (i: number) => number): Wave => (k, i) => {
+  const e = noise(k, i);
+  return [path(i) + 0.625 * e[0], 0.625 * e[1]];
+};
+/** Still, then three 2.5 px steps (frames 28, 30, 32: over the speed limit) with stops between, then still: only frame 30's 5-frame median speed fails — a 1-frame gap between two holds. */
+const GAP1 = quiet((i) => 2.5 * (i < 28 ? 0 : i < 30 ? 1 : i < 32 ? 2 : 3));
+/** Still, then three 2.5 px steps on frames 29, 30, 31, then still: frames 29–31 fail the speed — a 3-frame gap. */
+const GAP3 = quiet((i) => 2.5 * (i < 29 ? 0 : i < 32 ? i - 28 : 3));
+/** Drifts 1 px a frame (0.01 trunk, under the speed limit) for the whole clip: a 0.5 s span spans 14 px. */
+const DRIFT = travel((i) => 1 * i);
+/** Moves 3 px a frame, stopping on one frame (30 repeats 29). */
+const ONE_FRAME_PAUSE = travel((i) => 3 * (i < 30 ? i : i - 1));
+/** Moves 3 px a frame, stopping for 0.2 s (frames 30–35 repeat 29): a pause, under the 0.5 s minimum. */
+const SHORT_PAUSE = travel((i) => 3 * (i < 30 ? i : i <= 35 ? 29 : i - 6));
+
+const spansOf = (c: ReturnType<typeof runClean>): Record<string, Array<[number, number]>> => {
+  const out: Record<string, Array<[number, number]>> = {};
+  for (const h of c.holds) (out[h.joint] ??= []).push(h.frames);
+  return out;
+};
+
+describe('the stillness hold (#91): a joint that has stopped is written at one position', () => {
+  test('a still figure with planted detector noise: every joint is held, its jitter goes to 0, the frames before the blend are bit-identical, the blend in is linear', () => {
+    const off = runClean(seqDoc(60, STOPS), 'off');
+    const on = runClean(seqDoc(60, STOPS), HOLD);
+    // Frame 20 is the first still position, but its speed window (18–22) still reads three moving frames.
+    expect(spansOf(on)).toEqual(Object.fromEntries(BODY18.map((name) => [name, [[21, 59]]])));
+    expect(on.unheld).toEqual([]);
+    expect(on.record.unheld).toEqual([]);
+    for (const h of on.holds) {
+      expect(h.jitter.after).toBe(0);
+      expect(h.jitter.before!).toBeGreaterThan(0);
+      expect(h.blendIn).toEqual([16, 20]);
+      expect(h.blendOut).toBeNull();
+    }
+    for (const name of BODY18) {
+      const held = atOf(on.seq, 21, name)!;
+      for (let i = 21; i < 60; i++) expect(atOf(on.seq, i, name)).toEqual(held);
+      for (let i = 0; i <= 15; i++) expect(atOf(on.seq, i, name)).toEqual(atOf(off.seq, i, name)!);
+      for (let k = 1; k <= 5; k++) {
+        const was = atOf(off.seq, 21 - k, name)!;
+        const now = atOf(on.seq, 21 - k, name)!;
+        const w = (6 - k) / 6;
+        expect(now[0]).toBeCloseTo(was[0] + w * (held[0] - was[0]), 9);
+        expect(now[1]).toBeCloseTo(was[1] + w * (held[1] - was[1]), 9);
+      }
+    }
+    // The held position is the joint's per-coordinate median of its cleaned positions over the span.
+    const xs = Array.from({ length: 39 }, (_, u) => atOf(off.seq, 21 + u, 'r_wrist')![0]).sort((a, b) => a - b);
+    expect(atOf(on.seq, 30, 'r_wrist')![0]).toBe(xs[19]!);
+  });
+
+  test('one joint drifting while the rest are still: the rest are held, the drifting one keeps its track and is named with its reach', () => {
+    const off = runClean(seqDoc(60, WRIST_DRIFTS), 'off');
+    const on = runClean(seqDoc(60, WRIST_DRIFTS), HOLD);
+    const spans = spansOf(on);
+    expect(spans.r_wrist).toBeUndefined();
+    expect(Object.keys(spans).sort()).toEqual(BODY18.filter((n) => n !== 'r_wrist').sort());
+    for (const name of BODY18) if (name !== 'r_wrist') expect(spans[name]).toEqual([[21, 59]]);
+    for (let i = 0; i < 60; i++) expect(atOf(on.seq, i, 'r_wrist')).toEqual(atOf(off.seq, i, 'r_wrist')!);
+    expect(on.unheld).toHaveLength(1);
+    expect(on.unheld[0]!.joint).toBe('r_wrist');
+    expect(on.unheld[0]!.frames).toEqual([21, 59]);
+    expect(on.unheld[0]!.test).toBe('reach');
+    expect(on.unheld[0]!.value!).toBeGreaterThan(0.1);
+    const line = cleanLine(on.record);
+    expect(line).toContain('; HOLD frames 21–59: held nose, neck, r_shoulder, r_elbow, l_shoulder,');
+    expect(line).toMatch(/; not held: r_wrist 21–59 \(reach 0\.\d{4} > 0\.03\)/);
+  });
+
+  test('the blend out: a hold that ends before the clip does blends out over the 6 frames after it, mirroring the blend in', () => {
+    const off = runClean(seqDoc(70, STOPS_AND_GOES), 'off');
+    const on = runClean(seqDoc(70, STOPS_AND_GOES), HOLD);
+    expect(on.unheld).toEqual([]);
+    for (const name of BODY18) {
+      const h = on.holds.filter((x) => x.joint === name);
+      expect(h).toHaveLength(1);
+      const [a, b] = h[0]!.frames;
+      expect(a).toBe(21);
+      expect(b).toBe(44);
+      expect(h[0]!.blendOut).toEqual([45, 49]);
+      const held = atOf(on.seq, a, name)!;
+      for (let k = 1; k <= 5; k++) {
+        const was = atOf(off.seq, b + k, name)!;
+        const now = atOf(on.seq, b + k, name)!;
+        const w = (6 - k) / 6;
+        expect(now[0]).toBeCloseTo(was[0] + w * (held[0] - was[0]), 9);
+        expect(now[1]).toBeCloseTo(was[1] + w * (held[1] - was[1]), 9);
+      }
+      for (let i = b + 6; i < 70; i++) expect(atOf(on.seq, i, name)).toEqual(atOf(off.seq, i, name)!);
+    }
+  });
+
+  test('a slow drift chopped into back-to-back holds: each seam is recorded and cross-faded, and no frame inside the holds moves more than a sixth of a step', () => {
+    const r = runClean(seqDoc(60, CHOPPED), HOLD);
+    expect(r.seams.length).toBeGreaterThan(0);
+    expect(r.record.seams).toEqual(r.seams);
+    const worst = seamSteps(r.seq, r.holds, r.seams);
+    for (const w of worst) expect(w.moved).toBeLessThanOrEqual(w.step / 6 + 1e-9);
+    // The cross-fade's frames: the 6 centred on the seam take 1/12, 3/12, … 11/12 of the way.
+    const s0 = r.seams[0]!;
+    const one = r.holds.find((h) => h.joint === s0.joint && h.frames[1] === s0.frame - 1)!;
+    const two = r.holds.find((h) => h.joint === s0.joint && h.frames[0] === s0.frame)!;
+    const m1 = atOf(r.seq, one.frames[0], s0.joint)!;
+    const m2 = atOf(r.seq, two.frames[1], s0.joint)!;
+    for (let j = 0; j < 6; j++) {
+      const now = atOf(r.seq, s0.frame - 3 + j, s0.joint)!;
+      const w = (2 * j + 1) / 12;
+      expect(now[0]).toBeCloseTo(m1[0] + w * (m2[0] - m1[0]), 9);
+    }
+    expect(cleanLine(r.record)).toContain(`seams cross-faded: ${r.seams[0]!.joint} ${r.seams[0]!.frame} (step `);
+  });
+
+  test('a 1-frame and a 3-frame gap between two holds are two holds meeting: each is a seam with its gap, cross-faded over 6 + gap frames, no frame moving more than 1/(6 + gap) of the step', () => {
+    for (const [doc, gap] of [[GAP1, 1], [GAP3, 3]] as const) {
+      const r = runClean(seqDoc(60, doc), HOLD);
+      expect(r.seams.length).toBe(18);
+      for (const s of r.seams) expect(s.gap).toBe(gap);
+      for (const s of r.seams) expect(s.frame).toBe(gap === 1 ? 31 : 32);
+      for (const w of seamSteps(r.seq, r.holds, r.seams)) expect(w.moved).toBeLessThanOrEqual(w.step / (6 + gap) + 1e-9);
+      // The cross-fade's frames: 6 + gap, symmetric about the gap's centre, (2j + 1)/(2(6 + gap)) of the way.
+      const s0 = r.seams[0]!;
+      const one = r.holds.find((h) => h.joint === s0.joint && h.frames[1] === s0.frame - gap - 1)!;
+      const two = r.holds.find((h) => h.joint === s0.joint && h.frames[0] === s0.frame)!;
+      const m1 = atOf(r.seq, one.frames[0], s0.joint)!;
+      const m2 = atOf(r.seq, two.frames[1], s0.joint)!;
+      for (let j = 0; j < 6 + gap; j++) {
+        const now = atOf(r.seq, one.frames[1] - 2 + j, s0.joint)!;
+        const w = (2 * j + 1) / (2 * (6 + gap));
+        expect(now[0]).toBeCloseTo(m1[0] + w * (m2[0] - m1[0]), 9);
+        expect(now[1]).toBeCloseTo(m1[1] + w * (m2[1] - m1[1]), 9);
+      }
+      expect(cleanLine(r.record)).toContain(`(step ${s0.step.toFixed(4)}, gap ${gap})`);
+      expect(cleanLine(r.record)).toMatch(/; jitter after [^;]* px\/f² \(ramp\)/);
+    }
+  });
+
+  test('mutant: without the gap rule a 1-frame and a 3-frame gap step, and the gap test is red', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'clean.ts');
+      const from = 'if (gap < 0 || gap >= HOLD_BLEND) continue;';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'if (gap !== 0) continue;'));
+      const dir = tempDir();
+      const input = join(dir, 'pose.json');
+      const out = join(dir, 'out.json');
+      // The largest frame-to-frame movement of any joint from its first hold's start to its second hold's end, as a share of the step between their medians.
+      const worstShare = (cliPath: string, doc: Wave): number => {
+        writeFileSync(input, JSON.stringify(seqDoc(60, doc)));
+        const ran = cli(['clean', '--pose', input, '--out', out, '--legs', '1', '--rest', '1'], cliPath);
+        expect(ran.status).toBe(0);
+        const seq = readPoseSequence(readFileSync(out, 'utf8'), out);
+        let worst = 0;
+        for (const name of BODY18) {
+          const hs = seq.cleaned!.holds!.filter((h) => h.joint === name);
+          if (hs.length < 2) continue;
+          const m1 = atOf(seq, hs[0]!.frames[0], name)!;
+          const m2 = atOf(seq, hs[1]!.frames[1], name)!;
+          const step = Math.hypot(m2[0] - m1[0], m2[1] - m1[1]);
+          for (let i = hs[0]!.frames[0] + 1; i <= hs[1]!.frames[1]; i++) {
+            const p = atOf(seq, i - 1, name)!;
+            const q = atOf(seq, i, name)!;
+            worst = Math.max(worst, Math.hypot(q[0] - p[0], q[1] - p[1]) / step);
+          }
+        }
+        return worst;
+      };
+      const mutant = [worstShare(join(d, 'cli.ts'), GAP1), worstShare(join(d, 'cli.ts'), GAP3)];
+      console.log(`  mutant "no gap rule": the largest frame-to-frame move is ${mutant.map((x) => x.toFixed(3)).join(' (1-frame gap) and ')} (3-frame gap) of the step`);
+      if (!(mutant[0]! > 1 / 6 + 0.01 && mutant[1]! > 1 / 6 + 0.01)) throw new Error('mutant "no gap rule" survived: the gaps did not step');
+      expect(mutant[0]!).toBeGreaterThan(1 / 6 + 0.01);
+      expect(mutant[1]!).toBeGreaterThan(1 / 6 + 0.01);
+      // Control: the real source; the writer's 0.01 px rounding is the slack.
+      expect(worstShare(CLI, GAP1)).toBeLessThan(1 / 7 + 0.01);
+      expect(worstShare(CLI, GAP3)).toBeLessThan(1 / 9 + 0.01);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  test('mutant: without the cross-fade a seam steps in one frame, and the seam test is red', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'clean.ts');
+      const from = 'out[i] = [one.at[0] + w * (two.at[0] - one.at[0]), one.at[1] + w * (two.at[1] - one.at[1])];';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'void w;'));
+      const dir = tempDir();
+      const input = join(dir, 'pose.json');
+      const out = join(dir, 'out.json');
+      const stepsOf = (cliPath: string) => {
+        writeFileSync(input, JSON.stringify(seqDoc(60, CHOPPED)));
+        const ran = cli(['clean', '--pose', input, '--out', out, '--legs', '1', '--rest', '1'], cliPath);
+        expect(ran.status).toBe(0);
+        const seq = readPoseSequence(readFileSync(out, 'utf8'), out);
+        const holds = seq.cleaned!.holds!;
+        return seamSteps(seq, holds, seq.cleaned!.seams!);
+      };
+      // The writer rounds to 0.01 px, so the bar here carries 0.02 px of slack.
+      const over = (ws: Array<{ moved: number; step: number }>) => ws.filter((w) => w.moved > w.step / 6 + 0.02);
+      const mutant = stepsOf(join(d, 'cli.ts'));
+      console.log(`  mutant "no cross-fade": ${over(mutant).length} of ${mutant.length} seam(s) step by more than a sixth, the largest ${Math.max(...mutant.map((w) => w.moved / w.step)).toFixed(3)} of the step in one frame`);
+      if (over(mutant).length === 0) throw new Error('mutant "no cross-fade" survived: no seam stepped');
+      expect(over(mutant).length).toBeGreaterThan(0);
+      // Control: the real source.
+      expect(over(stepsOf(CLI))).toEqual([]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  test('a slow drift of the whole figure under the speed limit is NOT held: it leaves its median by more than the reach; control: with a reach of 1 trunk it is', () => {
+    const drift = runClean(seqDoc(60, DRIFT), HOLD);
+    expect(drift.holds).toEqual([]);
+    expect(drift.record.holds).toEqual([]);
+    const wide = runClean(seqDoc(60, DRIFT), { speed: 0.015, reach: 1 });
+    // Each joint is held over most of the clip (the noise puts a few edge frames' speed over the limit).
+    expect(new Set(wide.holds.map((h) => h.joint)).size).toBe(18);
+    for (const h of wide.holds) expect(h.seconds).toBeGreaterThan(1);
+    // Control on the speed: moving 3 px a frame is never still, whatever the reach.
+    expect(runClean(seqDoc(60, travel((i) => 3 * i)), { speed: 0.015, reach: 1 }).holds).toEqual([]);
+  });
+
+  test('a one-frame pause is not held, nor a 0.2 s one (under the 0.5 s minimum)', () => {
+    // A one-frame stop never passes a 5-frame median speed: the median reads the motion either side.
+    expect(runClean(seqDoc(60, ONE_FRAME_PAUSE), HOLD).holds).toEqual([]);
+    // The 0.2 s pause (frames 30–35) does pass the speed test on a few frames, and the 0.5 s minimum refuses it.
+    expect(runClean(seqDoc(60, SHORT_PAUSE), HOLD).holds).toEqual([]);
+  });
+
+  test('mutant: without the 0.5 s minimum the 0.2 s pause is held, and the pause test is red', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'clean.ts');
+      const from = 'export const HOLD_MIN_SECONDS = 0.5;';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'export const HOLD_MIN_SECONDS = 0;'));
+      const dir = tempDir();
+      const input = join(dir, 'pose.json');
+      const out = join(dir, 'out.json');
+      const holdsOf = (cliPath: string): Array<{ joint: string; frames: [number, number] }> => {
+        writeFileSync(input, JSON.stringify(seqDoc(60, SHORT_PAUSE)));
+        const r = cli(['clean', '--pose', input, '--out', out, '--legs', '1', '--rest', '1'], cliPath);
+        expect(r.status).toBe(0);
+        return (JSON.parse(readFileSync(out, 'utf8')) as { cleaned: { holds: Array<{ joint: string; frames: [number, number] }> } }).cleaned.holds;
+      };
+      const mutant = holdsOf(join(d, 'cli.ts'));
+      console.log(`  mutant "no 0.5 s minimum": ${mutant.length} joint hold(s) on the 0.2 s pause, e.g. ${mutant.slice(0, 3).map((h) => `${h.joint} ${h.frames.join('–')}`).join(', ') || 'none'}`);
+      if (mutant.length === 0) throw new Error('mutant "no 0.5 s minimum" survived: the pause was not held');
+      expect(mutant.length).toBeGreaterThan(0);
+      // Control: the same input through the real source holds nothing.
+      expect(holdsOf(CLI)).toEqual([]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  test('the CLI: a HOLD line per joint and span, UNHELD names the joints not held, the CLEAN line and the record carry both', () => {
+    const dir = tempDir();
+    const input = join(dir, 'pose.json');
+    const out = join(dir, 'out.json');
+    writeFileSync(input, JSON.stringify(seqDoc(60, WRIST_DRIFTS)));
+    const r = cli(['clean', '--pose', input, '--out', out, '--legs', '1', '--rest', '1']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    const hold = linesOf(r, 'HOLD');
+    expect(hold).toHaveLength(17);
+    expect(hold[0]).toStartWith('HOLD   joint "nose" frames 21–59 (t=0.700s–t=1.967s, 1.300 s): 5-frame median speed under 0.015 trunk/frame (largest ');
+    expect(hold[0]).toContain('written as that median, blended in over before frames 16–20, out over nothing after it; jitter inside ');
+    expect(hold[0]).toEndWith('→ 0.000 px/f²');
+    expect(linesOf(r, 'UNHELD')).toHaveLength(1);
+    expect(linesOf(r, 'UNHELD')[0]).toMatch(/^UNHELD frames 21–59, where other joints are held: r_wrist 21–59 \(reach 0\.\d{4} > 0\.03\)$/);
+    expect(linesOf(r, 'HOLDS')).toEqual(['HOLDS  17 found over 17 joint(s) (per joint: a span ≥ 0.5 s still by speed < 0.015 trunk/frame and reach ≤ 0.03 trunk; 6-frame blend in and out)']);
+    expect(linesOf(r, 'CLEAN')[0]).toContain('; not held: r_wrist 21–59 (reach ');
+    const doc = JSON.parse(readFileSync(out, 'utf8')) as { cleaned: { params: Record<string, unknown>; holds: Array<{ joint: string; frames: number[] }>; unheld: Array<Record<string, unknown>> } };
+    expect(doc.cleaned.params.hold).toEqual({ speed: 0.015, reach: 0.03, minSeconds: 0.5, blend: 6 });
+    expect(doc.cleaned.holds.map((h) => h.joint)).toEqual(BODY18.filter((n) => n !== 'r_wrist'));
+    expect(doc.cleaned.unheld.map((u) => [u.joint, u.frames, u.test])).toEqual([['r_wrist', [21, 59], 'reach']]);
+    // No hold found is said so; the thresholds are recorded as given.
+    writeFileSync(input, JSON.stringify(seqDoc(60, DRIFT)));
+    const none = cli(['clean', '--pose', input, '--out', out, '--legs', '1', '--rest', '1']);
+    expect(linesOf(none, 'HOLDS')[0]).toStartWith('HOLDS  0 found');
+    expect(linesOf(none, 'CLEAN')[0]).toEndWith('; no HOLD (speed < 0.015 trunk/frame, within 0.03 trunk, ≥ 0.5 s)');
+    const wide = cli(['clean', '--pose', input, '--out', out, '--legs', '1', '--rest', '1', '--hold-reach', '1', '--hold-speed', '0.02']);
+    expect(wide.status).toBe(0);
+    expect((JSON.parse(readFileSync(out, 'utf8')) as { cleaned: { params: Record<string, unknown> } }).cleaned.params.hold).toEqual({ speed: 0.02, reach: 1, minSeconds: 0.5, blend: 6 });
+  });
+
+  test('--hold off writes the positions of a clean without the step, byte for byte; the record differs by "hold": "off" alone', () => {
+    const dir = tempDir();
+    const input = join(dir, 'pose.json');
+    const out = join(dir, 'out.json');
+    const doc = seqDoc(60, STOPS);
+    writeFileSync(input, JSON.stringify(doc));
+    const r = cli(['clean', '--pose', input, '--out', out, '--hold', 'off']);
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'HOLD')).toEqual(['HOLD   off (--hold off): no stillness hold']);
+    expect(linesOf(r, 'CLEAN')[0]).toEndWith('; hold off');
+    const written = readFileSync(out, 'utf8');
+    const without = writePoseSequence(clean(seqOf(doc), { loop: false, legs: 5, rest: 7 }, undefined, 'mem').seq);
+    expect(written).not.toBe(without);
+    expect(written.split(',\n      "hold": "off"')).toHaveLength(2);
+    expect(written.replace(',\n      "hold": "off"', '')).toBe(without);
+    const rec = (JSON.parse(written) as { cleaned: Record<string, unknown> }).cleaned;
+    expect(rec.holds).toBeUndefined();
+    expect(rec.unheld).toBeUndefined();
+  });
+
+  test('refusals: --hold takes "off" only; a threshold with --hold off; a threshold ≤ 0 — each beside its control', () => {
+    const dir = tempDir();
+    const input = join(dir, 'pose.json');
+    const out = join(dir, 'out.json');
+    writeFileSync(input, JSON.stringify(seqDoc(12)));
+    const on = cli(['clean', '--pose', input, '--out', out, '--hold', 'on']);
+    expect(on.status).toBe(2);
+    expect(on.stderr).toContain('--hold is "on"; the hold runs by default, and the only value is "off"');
+    const both = cli(['clean', '--pose', input, '--out', out, '--hold', 'off', '--hold-speed', '0.02']);
+    expect(both.status).toBe(2);
+    expect(both.stderr).toContain('--hold-speed with --hold off: the hold does not run, so it changes nothing');
+    const zero = cli(['clean', '--pose', input, '--out', out, '--hold-reach', '0']);
+    expect(zero.status).toBe(2);
+    expect(zero.stderr).toContain('--hold-reach is "0"; it must be a number > 0 (trunk lengths)');
+    expect(cli(['clean', '--pose', input, '--out', out, '--hold', 'off']).status).toBe(0);
+    expect(cli(['clean', '--pose', input, '--out', out, '--hold-reach', '0.05']).status).toBe(0);
+  });
+
+  test('the record: "hold", "holds" and "unheld" are read by name, each malformed one refused; a valid one round-trips', () => {
+    const good = runClean(seqDoc(60, WRIST_DRIFTS), HOLD).seq;
+    const written = writePoseSequence(good);
+    const back = readPoseSequence(written, 'mem');
+    expect(back.cleaned!.holds!).toHaveLength(17);
+    expect(back.cleaned!.unheld!.map((u) => u.joint)).toEqual(['r_wrist']);
+    expect(writePoseSequence(back)).toBe(written);
+    const refuse = (edit: (c: Record<string, unknown>) => void): string[] => {
+      const doc = JSON.parse(written) as { cleaned: Record<string, unknown> };
+      edit(doc.cleaned);
+      try {
+        readPoseSequence(JSON.stringify(doc), 'p.json');
+      } catch (e) {
+        return (e as Error).message.split('\n');
+      }
+      return [];
+    };
+    expect(refuse(() => {})).toEqual([]);
+    expect(refuse((c) => delete c.holds)).toEqual(['POSE_CLEANED: p.json "cleaned" has "params" "hold" and no "holds"; a record whose hold ran lists its holds, the joints it did not hold and its seams (an empty array when none)']);
+    expect(refuse((c) => { (c.params as Record<string, unknown>).hold = 'off'; })).toEqual(['holds', 'unheld', 'seams'].map((k) => `POSE_CLEANED: p.json "cleaned" has "${k}" with "params" "hold" "off"; a record lists holds only when the hold ran`));
+    expect(refuse((c) => delete (c.params as Record<string, unknown>).hold)).toEqual(['holds', 'unheld', 'seams'].map((k) => `POSE_CLEANED: p.json "cleaned" has "${k}" and no "params" "hold"; the holds' figures are recorded in "params" "hold"`));
+    expect(refuse((c) => { c.seams = [{ joint: 'neck', frame: 60, step: -1, gap: 1.5 }]; })).toEqual([
+      'POSE_CLEANED: p.json "cleaned" seams[0] "gap" is number 1.5; it must be a whole number of frames ≥ 0',
+      'POSE_CLEANED: p.json "cleaned" seams[0] "frame" is number 60; it must be a frame index in [0, 59]',
+      'POSE_CLEANED: p.json "cleaned" seams[0] "step" is number -1; it must be trunk lengths ≥ 0',
+    ]);
+    expect(refuse((c) => {
+      (c.params as Record<string, unknown>).hold = { speed: 0, reach: 0.03, minSeconds: 0.5, blend: 1.5 };
+      c.holds = [{ joint: 'r_toe', frames: [59, 21], jitter: { before: 1, after: -1 } }];
+      c.unheld = [{ joint: 'r_wrist', frames: [21, 59], test: 'drift', value: null }];
+    })).toEqual([
+      'POSE_CLEANED: p.json "cleaned" "params" "hold" "speed" is number 0; it must be a number > 0 (trunk lengths per frame)',
+      'POSE_CLEANED: p.json "cleaned" "params" "hold" "blend" is number 1.5; it must be a whole number of frames ≥ 0',
+      'POSE_CLEANED: p.json "cleaned" holds[0] "joint" is the string "r_toe"; it must be a body-18 joint: nose, neck, r_shoulder, r_elbow, r_wrist, l_shoulder, l_elbow, l_wrist, r_hip, r_knee, r_ankle, l_hip, l_knee, l_ankle, r_eye, l_eye, r_ear, l_ear',
+      'POSE_CLEANED: p.json "cleaned" holds[0] "frames" is an array; it must be [first, last], frame indices in [0, 59], first ≤ last',
+      'POSE_CLEANED: p.json "cleaned" holds[0] "jitter" "after" is number -1; it must be px/f² ≥ 0, or null (not measured)',
+      'POSE_CLEANED: p.json "cleaned" unheld[0] "test" is the string "drift"; it must be "speed", "reach", "short" or "span"',
+      'POSE_CLEANED: p.json "cleaned" unheld[0] "value" is null; it must be a figure ≥ 0 (trunk lengths, or seconds for "short"), or null for a speed not known',
+    ]);
   });
 });

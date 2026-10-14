@@ -8,7 +8,7 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import pkg from './package.json' with { type: 'json' };
-import { clean, cleanLine, untestedText, LEGS, OCCLUSION_SCORE, OCCLUSION_WINDOW, SPIKE_TRUNKS, SPIKE_WINDOW, windowProblem } from './src/clean.ts';
+import { clean, cleanLine, holdRegions, unheldText, untestedText, HOLD_BLEND, HOLD_MIN_SECONDS, HOLD_REACH, HOLD_SPEED, HOLD_SPEED_WINDOW, LEGS, OCCLUSION_SCORE, OCCLUSION_WINDOW, SPIKE_TRUNKS, SPIKE_WINDOW, windowProblem } from './src/clean.ts';
 import { convertCoco17, readPoseSequence, writePoseSequence } from './src/pose.ts';
 import { parseWindows } from './src/compare.ts';
 import { lineOf, Refusal } from './src/problems.ts';
@@ -18,7 +18,7 @@ import { runRetarget, type RetargetArgs } from './src/run.ts';
 const HELP = `rig-pose ${pkg.version} — motion from a pose sequence onto a rig-c rig
 
 Usage:
-  rig-pose clean --pose <pose.json> --out <pose.clean.json> [--loop] [--legs 5] [--rest 7] [--coco] [--person <id>]
+  rig-pose clean --pose <pose.json> --out <pose.clean.json> [--loop] [--legs 5] [--rest 7] [--hold off] [--coco] [--person <id>]
   rig-pose retarget --rig <rig> --map <map.json> --pose <pose.json> --out <motion.json> [--name dance] [flags]
   rig-pose convert --coco <coco17.json> --out <pose.json>
   rig-pose compare --reference <pose.json> --render <pose.json> --map <map.json> [flags]
@@ -38,6 +38,9 @@ clean (required before retarget; rig-c/pose#67)
                         position the detector supplied but did not see — on every frame where they have one, and
                         the record says so (hipsInferred: { by: "declared" }). Positions are unchanged, so retarget's
                         keys are too; its POSTURE line does not read the hip tilt ("hip tilt not read: hips inferred")
+  --hold off            turn the stillness hold off (rig-c/pose#91); recorded as hold: "off"
+  --hold-speed <n>      the hold's speed limit, trunk lengths per frame (default: 0.015)
+  --hold-reach <n>      how far a held joint may lie from its span median, trunk lengths (default: 0.03)
 
   In order, each step printed with its figures: (1) spikes — a joint more than 0.2 trunk lengths
   (neck → mid_hip, the median over the clip) from its 5-frame median takes the median, each listed by
@@ -48,6 +51,12 @@ clean (required before retarget; rig-c/pose#67)
   A median is per coordinate over the window's frames where the joint has a position. A joint with no
   position on a frame is left without one (retarget holds it). States and scores are written as read.
   Jitter: the mean |second difference| of y over every joint, px/f², before and after.
+  (5) the stillness hold (rig-c/pose#91), per joint, on the cleaned positions: a span of ≥ 0.5 s where the
+  joint's 5-frame median speed (its movement from the frame before, in trunk lengths) is under --hold-speed and
+  it stays within --hold-reach of its own span median is written as that median, blended in linearly over the
+  6 frames before and out over the 6 after (two holds of a joint back to back, or under 6 frames apart, cross-fade
+  over the 6 frames plus the gap, centred on it, SEAM); each hold is printed (HOLD) and recorded with its jitter before and
+  after, and the joints not held where others are are named with the test each fails (UNHELD).
 
 retarget
   --rig <path>          the rig spec rigc builds from: a rig.json, or a directory holding one
@@ -334,6 +343,21 @@ function compareArgs(argv: string[]): CompareArgs {
   };
 }
 
+/** The stillness hold's flags (#91): `--hold off`, or the thresholds (defaults 0.015 and 0.03). */
+function holdOf(f: Map<string, string>): { speed: number; reach: number } | 'off' {
+  const v = f.get('hold');
+  if (v !== undefined && v !== 'off') throw new Usage(`--hold is "${v}"; the hold runs by default, and the only value is "off"`);
+  if (v === 'off') {
+    const given = ['hold-speed', 'hold-reach'].filter((k) => f.has(k));
+    if (given.length > 0) throw new Usage(`${given.map((k) => `--${k}`).join(' and ')} with --hold off: the hold does not run, so ${given.length === 1 ? 'it changes' : 'they change'} nothing — drop ${given.length === 1 ? 'it' : 'them'} or the --hold off`);
+    return 'off';
+  }
+  return {
+    speed: num(f, 'hold-speed', HOLD_SPEED, (n) => n > 0, 'a number > 0 (trunk lengths per frame)'),
+    reach: num(f, 'hold-reach', HOLD_REACH, (n) => n > 0, 'a number > 0 (trunk lengths)'),
+  };
+}
+
 /** A window flag of clean: 1, or odd and ≥ 5 (`windowProblem`). */
 function windowOf(f: Map<string, string>, name: string, dflt: number): number {
   const v = f.get(name);
@@ -363,10 +387,10 @@ function runsOf(frames: number[]): string {
 
 /** `rig-pose clean` (#67): read, clean, print each step's figures, write. */
 function runClean(argv: string[], say: (l: string) => void): void {
-  const f = parseFlags(argv, ['pose', 'out', 'legs', 'rest', 'person'], ['loop', 'coco', 'hips-inferred']);
+  const f = parseFlags(argv, ['pose', 'out', 'legs', 'rest', 'person', 'hold', 'hold-speed', 'hold-reach'], ['loop', 'coco', 'hips-inferred']);
   const input = need(f, 'pose');
   const out = need(f, 'out');
-  const params = { loop: f.has('loop'), legs: windowOf(f, 'legs', 5), rest: windowOf(f, 'rest', 7), hipsInferred: f.has('hips-inferred') };
+  const params = { loop: f.has('loop'), legs: windowOf(f, 'legs', 5), rest: windowOf(f, 'rest', 7), hipsInferred: f.has('hips-inferred'), hold: holdOf(f) };
   const text = readFileSync(input, 'utf8');
   const seq = f.has('coco') ? convertCoco17(text, input) : readPoseSequence(text, input);
   const c = clean(seq, params, f.get('person'), input);
@@ -389,6 +413,18 @@ function runClean(argv: string[], say: (l: string) => void): void {
   }
   const jit = (v: number | null) => (v === null ? 'not measured' : `${fmt(v, 3)}`);
   say(`  JITTER mean |second difference| of y over ${c.triples} joint-frame triple(s): ${jit(c.record.jitter.before)} → ${jit(c.record.jitter.after)} px/f²${c.record.jitter.before !== null && c.record.jitter.after !== null && c.record.jitter.before > 0 ? ` (${fmt(100 * (1 - c.record.jitter.after / c.record.jitter.before), 1)}% lower)` : ''}`);
+  if (params.hold === 'off') say('  HOLD   off (--hold off): no stillness hold');
+  else {
+    const h = params.hold;
+    const span = (r: [number, number] | null, what: string) => (r === null ? `nothing ${what}` : `${what} ${r[0] === r[1] ? `frame ${r[0]}` : `frames ${r[0]}–${r[1]}`}`);
+    for (const x of c.holds) say(`  HOLD   joint "${x.joint}" frames ${x.frames[0]}–${x.frames[1]} (${tOf(x.frames[0])}–${tOf(x.frames[1])}, ${fmt(x.seconds, 3)} s): ${HOLD_SPEED_WINDOW}-frame median speed under ${h.speed} trunk/frame (largest ${fmt(x.speed, 4)}), within ${h.reach} trunk of its span median (largest ${fmt(x.reach, 4)}); written as that median, blended in over ${span(x.blendIn, 'before').replace('nothing before', 'nothing before it')}, out over ${span(x.blendOut, 'after').replace('nothing after', 'nothing after it')}; jitter inside ${jit(x.jitter.before)} → ${jit(x.jitter.after)} px/f²${x.jitter.after !== null && x.jitter.after > 0 ? ' (ramp)' : ''}`);
+    for (const x of c.seams) say(`  SEAM   joint "${x.joint}" frame ${x.frame} (${tOf(x.frame)}): two holds ${x.gap === 0 ? 'back to back' : `${x.gap} frame(s) apart`}, their medians ${fmt(x.step, 4)} trunk (${fmt(x.step * c.trunk.length)} px) apart; cross-faded over frames ${x.frame - x.gap - HOLD_BLEND / 2}–${x.frame + HOLD_BLEND / 2 - 1}, no frame moving more than 1/${HOLD_BLEND + x.gap} of it`);
+    for (const [a, b] of holdRegions(c.holds)) {
+      const not = c.unheld.filter((u) => u.frames[0] >= a && u.frames[1] <= b);
+      if (not.length > 0) say(`  UNHELD frames ${a}–${b}, where other joints are held: ${not.map(unheldText({ ...h, minSeconds: HOLD_MIN_SECONDS })).join(', ')}`);
+    }
+    say(`  HOLDS  ${c.holds.length} found over ${new Set(c.holds.map((x) => x.joint)).size} joint(s) (per joint: a span ≥ ${HOLD_MIN_SECONDS} s still by speed < ${h.speed} trunk/frame and reach ≤ ${h.reach} trunk; ${HOLD_BLEND}-frame blend in and out)`);
+  }
   if (c.inferred !== null) say(`  INFERRED r_hip on ${c.inferred.r_hip} frame(s), l_hip on ${c.inferred.l_hip} frame(s) of ${n} marked "inferred" (every frame where it has a position): declared at clean (--hips-inferred); positions and scores unchanged`);
   writeFileSync(out, writePoseSequence(c.seq));
   say(`  CLEAN  ${cleanLine(c.record)}`);
