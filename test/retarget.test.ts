@@ -19,6 +19,8 @@ import { clampArt } from '../src/switch.ts';
 import { clean } from '../src/clean.ts';
 import { loopTrack, type RigcTrack } from '../src/idle.ts';
 import { readPoseSequence, writePoseSequence } from '../src/pose.ts';
+import { scaleSupport, type Feet, type LegScale } from '../src/legs.ts';
+import type { Chain } from '../src/map.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const CLI = join(ROOT, 'cli.ts');
@@ -4608,10 +4610,14 @@ describe('#107: --leg-scale clamp floor does not lift the hip, and POSTURE reads
     const hip0 = byName(poses[0]!.bones).get('hip')!;
     for (let i = 0; i < N; i++) {
       const b = byName(poses[i]!.bones);
-      // The bone is held at the clamp floor 0.85 when askF(i) < 0.85.
-      const wantScale = Math.max(0.85, askF(i));
-      for (const seg of ['leg_r0', 'leg_r1', 'leg_l0', 'leg_l1']) {
-        expect(Math.abs(Math.hypot(b.get(seg)!.a, b.get(seg)!.c) - wantScale)).toBeLessThan(1e-4);
+      // The supporting leg (r) scales to askF(i) so its ankle stays on #85's floor (#133); the free leg (l) is held at the 0.85 clamp floor.
+      const wantSupport = askF(i);
+      const wantFree = Math.max(0.85, askF(i));
+      for (const seg of ['leg_r0', 'leg_r1']) {
+        expect(Math.abs(Math.hypot(b.get(seg)!.a, b.get(seg)!.c) - wantSupport)).toBeLessThan(1e-4);
+      }
+      for (const seg of ['leg_l0', 'leg_l1']) {
+        expect(Math.abs(Math.hypot(b.get(seg)!.a, b.get(seg)!.c) - wantFree)).toBeLessThan(1e-4);
       }
       // The hip is placed from the asked scale askF(i), not lifted by the 0.85 clamp floor.
       const wantHip: Pt = [hip0.worldX + (1 - askF(i)) * W[0], hip0.worldY + (1 - askF(i)) * W[1]];
@@ -4764,3 +4770,194 @@ describe('#111: the head chain nods from the eyes\' vertical travel against the 
     }
   }, SLOW);
 });
+
+describe('#133: a supporting leg that asks under --leg-scale\'s floor is scaled to its own range so its ankle stays on #85\'s floor', () => {
+  const THIGH = -90;
+  const SHIN = -90;
+  const N = 24;
+  const DT = 1 / 24;
+  /** Knee bend asks down to 0.60 on frame 12, below the 0.80 clamp floor. */
+  const askF = (i: number): number => (i < 6 || i > 18 ? 1 : 1 - 0.40 * Math.sin(((i - 6) / 12) * Math.PI));
+  const STILL: Motion = { ...BASE, n: N, dt: DT, trunk: () => 90, rt: () => THIGH, rs: () => SHIN, lt: () => THIGH, ls: () => SHIN, hip: () => [0, 0] };
+  const V = add(dir(THIGH, 80), dir(SHIN, 70));
+  const BONE_LEN = 80 + 70;
+
+  /** Right foot is planted as the supporting leg on the floor; left foot is lifted in the air as the free leg; both legs ask askF(i) down to 0.60. */
+  function supportAndFreeBendPose(): Record<string, unknown> {
+    return poseDoc(STILL, (i, j) => {
+      const drop: Pt = [(1 - askF(i)) * V[0], (1 - askF(i)) * V[1]];
+      for (const [name, at] of Object.entries(j)) {
+        const a = at.at as Pt;
+        if (name.endsWith('_ankle') || name.endsWith('_knee')) continue;
+        j[name] = { ...at, at: [a[0] + drop[0], a[1] + drop[1]] };
+      }
+      for (const s of ['r', 'l'] as const) {
+        const hip = j[`${s}_hip`]!.at as Pt;
+        const knee = add(hip, dir(THIGH, 80 * askF(i)));
+        const ankle = add(knee, dir(SHIN, 70 * askF(i)));
+        j[`${s}_knee`] = { state: 'observed', at: knee, score: 0.9 };
+        j[`${s}_ankle`] = { state: 'observed', at: ankle, score: 0.9 };
+      }
+    });
+  }
+
+  function mapWithPelvis(): Record<string, unknown> {
+    return {
+      ...baseMap(),
+      chains: [
+        { name: 'pelvis', bones: ['hip'], joints: ['r_hip', 'l_hip'], aim: ['leg_r0>leg_l0'] },
+        ...baseChains(),
+      ],
+    };
+  }
+
+  test('supporting leg asking 0.6 with floor 0.8 scales to 0.6 and plants on #85\'s floor, while free leg asking 0.6 stays clamped at 0.8', () => {
+    const c = setup({ map: mapWithPelvis(), pose: supportAndFreeBendPose() });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--leg-scale', '0.8,1.05', '--plant-feet', '--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+
+    // Summary lines print LEG-SCALE past the floor (support) for leg_r0 and leg_r1, and not for free leg_l0/leg_l1.
+    const supportLines = r.stdout.split('\n').filter((l) => l.includes('LEG-SCALE past the floor (support):'));
+    expect(supportLines).toHaveLength(2);
+    expect(supportLines[0]).toContain('chain "leg_r" bone "leg_r0" (supporting foot r) frames 9–15');
+    expect(supportLines[0]).toContain('asked 0.6000–0.7172 under 0.8, used 0.6000–0.7172');
+    expect(supportLines[1]).toContain('chain "leg_r" bone "leg_r1" (supporting foot r) frames 9–15');
+    expect(supportLines.some((l) => l.includes('leg_l0') || l.includes('leg_l1'))).toBe(false);
+
+    const poses = poseRawAnimation(loadBuild(c.build), 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+    const b0 = byName(poses[0]!.bones);
+    const ankleY = (b: Map<string, RawBone>): number => {
+      const s1 = b.get('leg_r1')!;
+      return s1.worldY + s1.c * 70;
+    };
+    const floorAnkleY = ankleY(b0);
+
+    for (let i = 0; i < N; i++) {
+      const b = byName(poses[i]!.bones);
+      const wantSupport = askF(i);
+      const wantFree = Math.max(0.8, askF(i));
+      // Supporting right leg scales down to 0.60 (its own range) and its ankle stays on #85's floor.
+      for (const seg of ['leg_r0', 'leg_r1']) {
+        expect(Math.abs(Math.hypot(b.get(seg)!.a, b.get(seg)!.c) - wantSupport)).toBeLessThan(1e-4);
+      }
+      expect(Math.abs(ankleY(b) - floorAnkleY)).toBeLessThan(0.05);
+      // Free left leg asking 0.60 stays clamped at 0.80.
+      for (const seg of ['leg_l0', 'leg_l1']) {
+        expect(Math.abs(Math.hypot(b.get(seg)!.a, b.get(seg)!.c) - wantFree)).toBeLessThan(1e-4);
+      }
+    }
+
+    // Report JSON records support runs on leg_r0 and leg_r1, and not on leg_l0 or leg_l1.
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as {
+      legScale: Array<{ chain: string; bone: string; support?: Array<{ side: string; frames: [number, number]; asked: { min: number; max: number }; used: { min: number; max: number } }> }>;
+    };
+    const r0 = rep.legScale.find((ls) => ls.bone === 'leg_r0')!;
+    const r1 = rep.legScale.find((ls) => ls.bone === 'leg_r1')!;
+    const l0 = rep.legScale.find((ls) => ls.bone === 'leg_l0')!;
+    const l1 = rep.legScale.find((ls) => ls.bone === 'leg_l1')!;
+    expect(r0.support).toBeDefined();
+    expect(r0.support).toHaveLength(1);
+    expect(r0.support![0]!.side).toBe('r');
+    expect(r0.support![0]!.frames).toEqual([9, 15]);
+    expect(r0.support![0]!.asked.min).toBeCloseTo(0.6, 3);
+    expect(r0.support![0]!.used.min).toBeCloseTo(0.6, 3);
+    expect(r1.support).toBeDefined();
+    expect(l0.support).toBeUndefined();
+    expect(l1.support).toBeUndefined();
+  }, SLOW);
+
+  test('when the lower bound is above asked on a supporting frame, scaleSupport clamps at the bound and lifts the hip by the remainder', () => {
+    const legScale: LegScale[] = [
+      {
+        chain: 'leg_r',
+        bone: 'leg_r0',
+        joints: ['r_hip', 'r_knee'],
+        straight: 80,
+        ratio: { min: 0.6, median: 0.6, max: 0.6 },
+        limits: [0.8, 1.05],
+        low: [[0, 0]],
+        high: [],
+        scale: [0.8],
+        asked: [0.6],
+      },
+      {
+        chain: 'leg_r',
+        bone: 'leg_r1',
+        joints: ['r_knee', 'r_ankle'],
+        straight: 70,
+        ratio: { min: 0.6, median: 0.6, max: 0.6 },
+        limits: [0.8, 1.05],
+        low: [[0, 0]],
+        high: [],
+        scale: [0.8],
+        asked: [0.6],
+      },
+    ];
+    const scales = new Map<string, number[]>([
+      ['leg_r0', [0.8]],
+      ['leg_r1', [0.8]],
+    ]);
+    const feet: Feet = {
+      legLength: { r: 150, l: 150 },
+      support: ['r'],
+      supports: [{ side: 'r', frames: [0, 0] }],
+      jumps: [],
+      steps: [],
+      changes: [],
+    };
+    const rChain: Chain = { name: 'leg_r', bones: ['leg_r0', 'leg_r1'], joints: ['r_hip', 'r_knee', 'r_ankle'], aim: ['x', 'x'], reach: false, bend: 'free', range: {} };
+    const lChain: Chain = { name: 'leg_l', bones: ['leg_l0', 'leg_l1'], joints: ['l_hip', 'l_knee', 'l_ankle'], aim: ['x', 'x'], reach: false, bend: 'free', range: {} };
+    const hip: Pt[] = [[0, 100]];
+    // Supporting leg asks 0.60, floor is 0.80, and an explicit lower bound of 0.70 clamps at max(0.60, min(0.80, 0.70)) = 0.70.
+    // The remaining (0.70 - 0.60) = 0.10 of downward leg vector (0, -150) lifts the hip by +15u so the ankle still meets the floor.
+    scaleSupport(
+      legScale,
+      scales,
+      feet,
+      { r: { chain: rChain, ankleBone: 'leg_r1' }, l: { chain: lChain, ankleBone: 'leg_l1' } },
+      hip,
+      () => [0, -0.6 * BONE_LEN],
+      () => [0, -(scales.get('leg_r0')![0]! * 80 + scales.get('leg_r1')![0]! * 70)],
+      { r: [0.7], l: [1.0] },
+    );
+    expect(scales.get('leg_r0')![0]).toBeCloseTo(0.7, 6);
+    expect(scales.get('leg_r1')![0]).toBeCloseTo(0.7, 6);
+    expect(hip[0]![1]).toBeCloseTo(115, 6);
+    expect(legScale[0]!.support).toEqual([
+      { side: 'r', frames: [0, 0], asked: { min: 0.6, max: 0.6 }, used: { min: 0.7, max: 0.7 }, clamped: { bound: 0.7, hipRise: 15 } },
+    ]);
+  });
+
+  test('mutant (#133): clamping the supporting leg at 0.8 puts the ankle 0.2 * bone below #85\'s floor', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm133-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const from = 'scaleSupport(legScale, scales, feet, L, hip, (i, s) => offsets[i]![s], (i, s) => tipOf(rest, poseLegs(i), L[s].ankleBone));';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, ''));
+      const c = setup({ map: mapWithPelvis(), pose: supportAndFreeBendPose() });
+      const r = retarget(c, ['--leg-scale', '0.8,1.05', '--plant-feet'], join(d, 'cli.ts'));
+      expect(r.status).toBe(0);
+      const poses = poseRawAnimation(loadBuild(c.build), 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+      const ankleY = (b: Map<string, RawBone>): number => {
+        const s1 = b.get('leg_r1')!;
+        return s1.worldY + s1.c * 70;
+      };
+      const floorAnkleY = ankleY(byName(poses[0]!.bones));
+      const ankle12Y = ankleY(byName(poses[12]!.bones));
+      const dropBelowFloor = floorAnkleY - ankle12Y;
+      console.log(`  mutant "supporting leg clamped at 0.8": frame 12 ankle is ${dropBelowFloor.toFixed(2)}u below floor (0.2 * ${BONE_LEN} = ${(0.2 * BONE_LEN).toFixed(2)}u)`);
+      expect(Math.abs(dropBelowFloor - 0.2 * BONE_LEN)).toBeLessThan(0.05);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
