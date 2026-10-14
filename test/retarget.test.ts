@@ -3056,7 +3056,8 @@ describe('#47: --leg-scale and --plant-feet', () => {
       expect(st[0]).toContain('(largest 1.0800)');
       const over = st.filter((l) => l.startsWith('STANCE past the bounds: free foot l frames 8–15'));
       expect(over).toHaveLength(1);
-      expect(over[0]).toMatch(/the floor needed k 1\.(0[89]|[1-9])\d*, past \[0\.92, 1\.08\]; held at the bound, the foot left up to [1-9][0-9.]* units from the floor/);
+      // #95: the lifted picture leg is folded, so its frames' lower bound is that fold (below 0.92); the upper stays 1.08.
+      expect(over[0]).toMatch(/the floor needed k 1\.(0[89]|[1-9])\d*, past \[0\.\d{4}, 1\.08\]; held at the bound, the foot left up to [1-9][0-9.]* units from the floor/);
       const after = posedLegs(c.build);
       for (const i of LIFT) expect(after.ankle.l[i]![1] - after.ankle.r[i]![1]).toBeGreaterThan(PLANT_TOL);
     }, SLOW);

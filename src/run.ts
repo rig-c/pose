@@ -16,7 +16,7 @@ import { bendLine, endOnLine, flipLine, holdLine, rangeLine, retarget, shortLine
 import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, readBuild, resolveRig, restOf, slotsOf } from './rigc.ts';
 import { artRangeLine, chainsMoving, raisedLine, RAISED_WITHIN, reachLine, switchLine, uncoveredFolds } from './switch.ts';
 import { landed, measureFeet, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
-import { legsOf } from './legs.ts';
+import { legsOf, STANCE_BOUNDS } from './legs.ts';
 import { reduceKeys, type ReduceBone, type Reduced } from './reduce.ts';
 import type { BlendHold, Closure, Floor, LegScale, Stance } from './legs.ts';
 
@@ -307,8 +307,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         ...(map.alternates.some((x) => x.place !== undefined && x.place !== null) ? { byHip: r.byHip } : {}),
         legScale: r.legScale.map(({ scale: _scale, ...rest }) => rest),
         pivot: r.pivot,
-        stance: r.stance === null ? null : { tolerance: r.stance.tolerance, release: r.stance.release, minSeconds: r.stance.minSeconds, bounds: r.stance.bounds, runs: r.stance.runs, over: r.stance.over },
-        feet: r.feet === null ? null : { planted: r.planted, legLength: r.feet.legLength, supports: r.feet.supports, jumps: r.feet.jumps, steps: r.feet.steps, changes: r.feet.changes, floor: r.floor?.y ?? null, shifts: r.floor?.shifts ?? [], blend: r.blendHold === null ? null : { bounds: r.blendHold.bounds, runs: r.blendHold.runs, over: r.blendHold.over }, reading: feetReading, closure: r.closure },
+        stance: r.stance === null ? null : { tolerance: r.stance.tolerance, release: r.stance.release, minSeconds: r.stance.minSeconds, bounds: r.stance.bounds, ...(r.stance.range === undefined ? {} : { range: r.stance.range }), runs: r.stance.runs, over: r.stance.over },
+        feet: r.feet === null ? null : { planted: r.planted, legLength: r.feet.legLength, supports: r.feet.supports, jumps: r.feet.jumps, steps: r.feet.steps, changes: r.feet.changes, floor: r.floor?.y ?? null, shifts: r.floor?.shifts ?? [], blend: r.blendHold === null ? null : { bounds: r.blendHold.bounds, ...(r.blendHold.range === undefined ? {} : { range: r.blendHold.range }), runs: r.blendHold.runs, over: r.blendHold.over }, reading: feetReading, closure: r.closure },
         shear,
         idleDropped: idle === null ? null : idle.dropped,
         idleKeptOut: idle === null ? null : idle.keptOut,
@@ -477,9 +477,10 @@ export function travelLine(c: Closure): string {
 export function blendLines(h: BlendHold, times: readonly number[]): string[] {
   const span = (x: [number, number]) => (x[0] === x[1] ? `frame ${x[0]} (t=${times[x[0]]!.toFixed(3)}s)` : `frames ${x[0]}–${x[1]} (t=${times[x[0]]!.toFixed(3)}–${times[x[1]]!.toFixed(3)}s)`);
   const out: string[] = [];
-  for (const r of h.runs) out.push(`blend held on the floor: supporting foot ${r.side} ${span(r.frames)} — the hip blends between two derivations there, so its leg is stretched by k ${r.k.min.toFixed(4)}–${r.k.max.toFixed(4)} within [${h.bounds[0]}, ${h.bounds[1]}] to keep the ankle on the floor`);
+  for (const r of h.runs) out.push(`blend held on the floor: supporting foot ${r.side} ${span(r.frames)} — the hip blends between two derivations there, so its leg is stretched by k ${r.k.min.toFixed(4)}–${r.k.max.toFixed(4)} within ${boundText([r.lower ?? h.bounds[0], h.bounds[1]])} to keep the ankle on the floor`);
   if (h.runs.length === 0) out.push('blend held on the floor: no blend frame left a supporting ankle off the floor');
-  for (const o of h.over) out.push(`past the bounds: supporting foot ${o.side} ${span(o.frames)} — ${o.needed === null ? 'its ankle is not below its leg\'s root, so no stretch reaches the floor' : `the floor needed k ${o.needed.toFixed(4)}, past [${h.bounds[0]}, ${h.bounds[1]}]; held at the bound`}, the foot left up to ${o.left.toFixed(2)} units from the floor`);
+  if (h.range !== undefined) out.push(legRangeLine('supporting', h.range, h.bounds));
+  for (const o of h.over) out.push(`past the bounds: supporting foot ${o.side} ${span(o.frames)} — ${o.needed === null ? 'its ankle is not below its leg\'s root, so no stretch reaches the floor' : `the floor needed k ${o.needed.toFixed(4)}, past ${boundText(o.bound ?? h.bounds)}; held at the bound`}, the foot left up to ${o.left.toFixed(2)} units from the floor`);
   return out;
 }
 
@@ -497,8 +498,20 @@ export function stanceLines(st: Stance, times: readonly number[]): string[] {
     : r.state === 'both'
     ? `planted both: free foot ${r.side} ${span(r.frames)} — its ankle up to ${r.maxHeight.toFixed(4)} leg lengths above the supporting one in the picture, within ${tol}; its leg stretched by k ${r.k!.min === r.k!.max ? r.k!.max.toFixed(4) : `${r.k!.min.toFixed(4)} … ${r.k!.max.toFixed(4)}`} (largest ${r.k!.max.toFixed(4)})`
     : `lifted: free foot ${r.side} ${span(r.frames)} — its ankle up to ${r.maxHeight.toFixed(4)} leg lengths above the supporting one in the picture, over ${tol} (${release}); the pose's height kept`));
-  for (const o of st.over) out.push(`past the bounds: free foot ${o.side} ${span(o.frames)} — ${o.needed === null ? 'its ankle is not below its leg\'s root, so no stretch reaches the floor' : `the floor needed k ${o.needed.toFixed(4)}, past [${st.bounds[0]}, ${st.bounds[1]}]; held at the bound`}, the foot left up to ${o.left.toFixed(2)} units from the floor`);
+  if (st.range !== undefined) out.push(legRangeLine('free', st.range, st.bounds));
+  for (const o of st.over) out.push(`past the bounds: free foot ${o.side} ${span(o.frames)} — ${o.needed === null ? 'its ankle is not below its leg\'s root, so no stretch reaches the floor' : `the floor needed k ${o.needed.toFixed(4)}, past ${boundText(o.bound ?? st.bounds)}; held at the bound`}, the foot left up to ${o.left.toFixed(2)} units from the floor`);
   return out;
+}
+
+/** A bound as the lines print it: the default's figures as written, a derived lower bound to 4 places (#95). */
+function boundText(b: readonly [number, number]): string {
+  return `[${b[0] === STANCE_BOUNDS[0] ? `${b[0]}` : b[0].toFixed(4)}, ${b[1]}]`;
+}
+
+/** The #95 line: where the picture folds a leg below the default lower bound, that fold is the frame's lower bound. */
+function legRangeLine(which: 'free' | 'supporting', range: Partial<Record<'r' | 'l', number>>, bounds: readonly [number, number]): string {
+  const sides = (['r', 'l'] as const).filter((s) => range[s] !== undefined).map((s) => `${s} ${range[s]!.toFixed(4)}`);
+  return `bound from the leg's own range: on a frame where the picture folds the ${which} leg below ${bounds[0]} of its straight length (hip → ankle, its 95th percentile), the lower bound is that fold — lowest ${sides.join(', ')}; the upper stays ${bounds[1]}`;
 }
 
 /** A LEG-SCALE line: the segment, its straight length, its ratio's spread, and the frames clamped. */
