@@ -161,7 +161,9 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     if (reduced !== null) {
       for (const row of reduced.rows) {
         const [who, track, what, unit] = row.kind === 'angle' ? ['bone', 'rotate', 'aim', '°'] : row.kind === 'origin' ? ['hip', 'translate', 'origin', ' units'] : ['bone', 'scalex', 'scale', ' of its setup length'];
-        say(`  REDUCE ${who} "${row.bone}" ${track}: ${row.before} → ${row.after} key(s); worst ${what} error ${row.worst.toPrecision(3)}${unit} at frame ${row.frame} (t=${r.times[row.frame]!.toFixed(3)}s)`);
+        const local = row.local === undefined ? '' : `fitted in its parent's axes, worst local error ${row.local.worst.toPrecision(3)}° at frame ${row.local.frame} (t=${r.times[row.local.frame]!.toFixed(3)}s); `;
+        const carried = row.carried === undefined ? '' : `; "${row.carried.from}" above hands it up to ${row.carried.worst.toPrecision(3)}° (its reduction error), so its landing tolerance adds ${a.reduce}° + ${carriedTolerance(row.carried.worst)}°`;
+        say(`  REDUCE ${who} "${row.bone}" ${track}: ${row.before} → ${row.after} key(s); ${local}worst ${what} error ${row.worst.toPrecision(3)}${unit} at frame ${row.frame} (t=${r.times[row.frame]!.toFixed(3)}s)${carried}`);
       }
       const sum = (kind: ReduceRow['kind'], k: 'before' | 'after') => reduced.rows.filter((x) => x.kind === kind).reduce((t, x) => t + x[k], 0);
       const scales = reduced.rows.some((x) => x.kind === 'scale') ? `; scalex keys ${sum('scale', 'before')} → ${sum('scale', 'after')} within ${SCALE_REDUCE} of the setup length` : '';
@@ -220,8 +222,10 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     const posed = poseFrames(doc, a.name, r.times);
     // A reduced track is held to the dense target plus its tolerance (#32); an ankle, to what the
     // reduced bones above it may move it by (#94, `footReduce`). A scale keeps its own: it is reduced within half of it.
+    // A bone fitted in its parent's axes (#116) also turns with the reduction error of the chain above it (`carried`).
+    const carriedOf = new Map((reduced?.rows ?? []).filter((x) => x.kind === 'angle' && x.carried !== undefined).map((x) => [x.bone, carriedTolerance(x.carried!.worst)]));
     const landings = measureLanding(doc, a.name, map, r, posed).map((l) => (a.reduce === undefined ? l
-      : l.kind === 'angle' ? { ...l, tolerance: l.tolerance + a.reduce }
+      : l.kind === 'angle' ? { ...l, tolerance: carriedOf.has(l.bone) ? Math.round((l.tolerance + a.reduce + carriedOf.get(l.bone)!) * 1e6) / 1e6 : l.tolerance + a.reduce }
       : l.kind === 'origin' && a.reduceHip !== undefined ? { ...l, tolerance: l.tolerance + a.reduceHip }
       : l.kind === 'foot' ? { ...l, tolerance: l.tolerance + footReduce(rest, r, l.bone.replace(/:tip$/, ''), a.reduce, a.reduceHip) }
       : l));
@@ -348,6 +352,12 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
  * aim and length it lands on (`reduceUnderScale`). With none, this is #32's
  * reduction, unchanged.
  */
+/** What a reduced bone fitted in local axes adds to its landing tolerance for the chain above it (#116): its carried error, rounded up to 0.001°. */
+const carriedTolerance = (worst: number): number => Math.ceil(worst * 1000) / 1000;
+
+/** The chains `--reduce` fits in local axes (#116): the map's trunk and head. */
+const TRUNK_CHAINS: readonly string[] = ['trunk', 'head'];
+
 function reduceTracks(r: ReturnType<typeof retarget>, map: JointMap, rest: Rest, tolerance: number, hipTolerance: number | undefined): Reduced {
   const n = r.times.length;
   const keep = new Map<string, Set<number>>();
@@ -378,7 +388,9 @@ function reduceTracks(r: ReturnType<typeof retarget>, map: JointMap, rest: Rest,
     return false;
   };
   const dense = new Map([...rotate].map(([b, tr]) => [b, tr.keys.map((k) => k.v[0]!)]));
-  const bones: ReduceBone[] = [...rotate.values()].filter((tr) => !under(tr.bone)).map((tr) => ({ bone: tr.bone, above: above(tr.bone), dense: dense.get(tr.bone)!, keep: keep.get(tr.bone) ?? new Set<number>() }));
+  // #116: the trunk and head chains are fitted in their parents' axes; the limbs keep #32's world fit.
+  const trunk = new Set(map.chains.filter((c) => TRUNK_CHAINS.includes(c.name)).flatMap((c) => c.bones));
+  const bones: ReduceBone[] = [...rotate.values()].filter((tr) => !under(tr.bone)).map((tr) => ({ bone: tr.bone, above: above(tr.bone), dense: dense.get(tr.bone)!, keep: keep.get(tr.bone) ?? new Set<number>(), ...(trunk.has(tr.bone) ? { axes: 'local' as const } : {}) }));
   const hipTrack = r.origin === null || hipTolerance === undefined ? undefined : r.animation.tracks.find((tr): tr is MotionTrack => 'bone' in tr && tr.property === 'translate' && tr.bone === r.origin!.bone && tr.keys.every((k) => k.ease === undefined));
   const parent = hipTrack === undefined ? null : rest.get(hipTrack.bone)!.parent;
   const pm = parent === null ? null : rest.get(parent)!;

@@ -18,6 +18,15 @@
  * target is its world error: errors do not pile up down a chain. A knot's value
  * is the target's, not the dense key's.
  *
+ * The trunk in local axes (rig-c/pose#116). A bone given `axes: 'local'` (the
+ * map's `trunk` and `head` chains) is fitted to its own dense key — its angle
+ * in its parent's axes, which is what a rig draws — not to its world aim
+ * against the reduced above. A child then carries none of its parent's
+ * leftover error in its own track, so the fit does not follow the sequence's
+ * noise twice down the trunk. Its world error is its own fit error plus the
+ * above's (`carried`, the parent chain's reduction error), and the bones below
+ * it are fitted top-down against that world error as before.
+ *
  * Scaled bones (rig-c/pose#94). A `scalex` track is thinned in value space
  * within `SCALE_REDUCE` (`reduceScale`). A bone under a scaled bone is not
  * keyed by the formula above but through its parent's posed matrix (legs.ts
@@ -47,6 +56,8 @@ export interface ReduceBone {
   dense: number[];
   /** Frame indices that must keep a key regardless (the first and last always do). */
   keep: ReadonlySet<number>;
+  /** `local` (#116): fitted to its dense key in its parent's axes, not to its world aim; absent, #32's top-down world fit. */
+  axes?: 'local';
 }
 export interface ReduceHip {
   bone: string;
@@ -69,6 +80,10 @@ export interface ReduceRow {
   worst: number;
   /** The first frame where it is. */
   frame: number;
+  /** A bone fitted in its parent's axes (#116): its worst error against its own dense key, degrees, and the first frame where it is. */
+  local?: { worst: number; frame: number };
+  /** With `local` under a mapped bone: the largest world-aim error the reduced bones above it hand it (the parent chain's reduction error), degrees, and the bone that hands it. Its world error is within the tolerance plus this. */
+  carried?: { worst: number; from: string };
 }
 export interface Reduced {
   rotate: Map<string, ReducedKey[]>;
@@ -344,18 +359,27 @@ export function reduceKeys(times: readonly number[], bones: readonly ReduceBone[
     if (at < 0) throw new Error(`reduce: bones ${pending.map((b) => `"${b.bone}"`).join(', ')} each add to another of them — a loop, not a tree`);
     const b = pending.splice(at, 1)[0]!;
     const eAbove = b.above === null ? null : errors.get(b.above)!;
-    const targets = b.dense.map((d, i) => [eAbove === null ? d : d - eAbove[i]!]);
+    const local = b.axes === 'local';
+    // World (#32): the dense key less the above's error. Local (#116): the dense key itself.
+    const targets = b.dense.map((d, i) => [eAbove === null || local ? d : d - eAbove[i]!]);
     const keys = fitTrack(times, samples, {
       targets,
       keep: keptFrames(b.keep, n, `bone "${b.bone}"`),
       tolerance,
       error: (i, v) => Math.abs(v[0]! - targets[i]![0]!),
     });
-    const e = trackAt(keys, samples, 1).map((v, i) => v[0]! - targets[i]![0]!);
+    const own = trackAt(keys, samples, 1).map((v, i) => v[0]! - targets[i]![0]!);
+    // Its world error: its own, plus (fitted locally) the above's, which it turns with.
+    const e = local && eAbove !== null ? own.map((x, i) => x + eAbove[i]!) : own;
     errors.set(b.bone, e);
     rotate.set(b.bone, keys);
     const worst = worstOf(e.map((_, i) => i), (i) => Math.abs(e[i]!))!;
-    rowOf.set(b.bone, { bone: b.bone, kind: 'angle', before: n, after: keys.length, worst: worst.worst, frame: worst.frame });
+    const row: ReduceRow = { bone: b.bone, kind: 'angle', before: n, after: keys.length, worst: worst.worst, frame: worst.frame };
+    if (local) {
+      row.local = worstOf(own.map((_, i) => i), (i) => Math.abs(own[i]!))!;
+      if (eAbove !== null) row.carried = { worst: eAbove.reduce((m, x) => Math.max(m, Math.abs(x)), 0), from: b.above! };
+    }
+    rowOf.set(b.bone, row);
   }
   const rows = bones.map((b) => rowOf.get(b.bone)!);
   const errorsOrdered = new Map(bones.map((b) => [b.bone, errors.get(b.bone)!]));
