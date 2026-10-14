@@ -82,8 +82,8 @@ export interface CleanSpike {
  * sequence, first ≤ last, increasing and not overlapping within each list.
  * Every frame of the sequence is in exactly one of `read` (the frame's own
  * reading), `interpolated` (a declined frame between two reads close in time,
- * the angle interpolated) and `held` (any other declined frame, the nearer read
- * held). `declined` lists, with the reason, exactly the frames that are
+ * the angle interpolated) and `held` (any other declined frame, the earlier
+ * read carried to the end of its run; at the clip's start, the later read). `declined` lists, with the reason, exactly the frames that are
  * interpolated or held. Anything else is refused by name (POSE_CLEANED).
  */
 export type Run = [number, number];
