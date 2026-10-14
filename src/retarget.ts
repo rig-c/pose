@@ -57,6 +57,10 @@
  * are posed from the final targets of the bones above. A target out of reach
  * goes to the reach limit along the head-relative direction (REACH); the set's
  * `turn` is part of the solve, and only a forearm it still holds is ART-RANGE.
+ * A set with `place: "by-hip"` (rig-c/pose#93) gets the same solve against the
+ * hip, in the same pass: each of its chains whose key skeleton puts the wrist
+ * within one hip width of the mid-hip lands where the reference's wrist is from
+ * its mid-hip, in hip widths.
  *
  * The lines across the body — hips, shoulders, eyes — are read from the pose
  * after holds, whether the map uses them or not: a line under
@@ -75,7 +79,7 @@ import { aimAngle, aimEnds, descends, partBone, pointParts, rigPoint } from './m
 import type { Joint, Travel } from './pose.ts';
 import { TRAVEL_IN_PLACE } from './pose.ts';
 import { Problems, Refusal } from './problems.ts';
-import type { ArtRange, Raised, ReachShort, SlotTrack, Switch, SwitchOptions } from './switch.ts';
+import type { ArtRange, ByHip, Raised, ReachShort, SlotTrack, Switch, SwitchOptions } from './switch.ts';
 import { clampArt, coveredChains, isRaised, measureArt, overflow, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
 import type { BlendHold, Closure, Feet, Floor, LegScale, PathPose, Posing, Side, Stance } from './legs.ts';
 import { holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, plantHip, posePath, rootOf, SIDES, stanceOf, supportsOf, tipOf } from './legs.ts';
@@ -305,6 +309,8 @@ export interface Retarget {
   pivot: Pivot | null;
   /** With --raised-by-head: each raised set's span on each raised chain, its wrist placed against the head. */
   raised: Raised[];
+  /** Each span of a `place: "by-hip"` set on each chain it places, its wrist placed against the hip (#93). */
+  byHip: ByHip[];
 }
 
 /** The hip's pivot against the thigh roots, at setup (rig-c/pose#47). */
@@ -405,6 +411,9 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   // eye line with an "a>b" aim, whose two ends are the rig's eyes.
   const head = opts.raisedByHead === true ? headOf(map) : null;
   if (head !== null && 'problem' in head) p.add('RAISED_HEAD', head.problem);
+  // `place: "by-hip"` (#93) measures against the hip in hip widths: the map must name the rig's two hip points.
+  const hips = map.alternates.some((a) => a.place !== undefined && a.place !== null) ? hipOf(map) : null;
+  if (hips !== null && 'problem' in hips) p.add('PLACE_HIP', hips.problem);
 
   // Every point the map reads, held where it is not good.
   const needed = new Set<string>();
@@ -892,44 +901,60 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   // neither. A target out of reach is placed at the reach limit along the head-relative direction
   // (`reachLimit`, a REACH line). The set's `turn` is part of the solve: a held upper arm has its forearm
   // re-aimed at the placed wrist, and only a forearm the turn still holds is ART-RANGE.
+  // `place: "by-hip"` (#93) is the same solve against the hip: while a set that asks for it shows, each chain
+  // its key skeleton puts the wrist within one hip width of the mid-hip (`byHipChains`) has its wrist placed
+  // at the rig's mid-hip + the reference's offset from its mid-hip, in hip widths (each side's median over the
+  // span). The rig's hips are the two points `hipOf` reads off the map, posed as the eyes are.
   const raised: Raised[] = [];
+  const byHip: ByHip[] = [];
   const raisedArt: Array<{ sw: Switch; entries: ArtRange[] }> = [];
-  const raisedJobs: Array<{ sw: Switch; chain: Chain; wrist: (i: number) => Pt; before: Pt[]; reference: Pt[]; placed: Pt[]; refEye: number; rigEye: number; short: Array<{ i: number; how: 'far' | 'near' | 'missed'; shortfall: number }>; upperHeld: number[]; l0: number; l1: number; farthest: number; eyePoints: [string, string] }> = [];
-  if (head !== null && !('problem' in head)) {
-    const eyesOn = (i: number): { centre: Pt; dist: number } => {
-      const a = posedPoint(head.points[0], i);
-      const b = posedPoint(head.points[1], i);
+  const raisedJobs: Array<{ anchor: Anchor; sw: Switch; chain: Chain; wrist: (i: number) => Pt; before: Pt[]; reference: Pt[]; placed: Pt[]; refEye: number; rigEye: number; short: Array<{ i: number; how: 'far' | 'near' | 'missed'; shortfall: number }>; upperHeld: number[]; l0: number; l1: number; farthest: number }> = [];
+  const headOk: Anchor | null = head !== null && !('problem' in head) ? { kind: 'head', joints: head.joints, points: head.points } : null;
+  const hipsOk: Anchor | null = hips !== null && !('problem' in hips) ? { kind: 'hip', joints: hips.joints, points: hips.points } : null;
+  if (headOk !== null || hipsOk !== null) {
+    /** The anchor's two rig points posed on frame i: their midpoint and their distance apart. */
+    const pairOn = (an: Anchor, i: number): { centre: Pt; dist: number } => {
+      const a = posedPoint(an.points[0], i);
+      const b = posedPoint(an.points[1], i);
       return { centre: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], dist: Math.hypot(b[0] - a[0], b[1] - a[1]) };
     };
-    const headBones = new Set([...head.points.flatMap((x) => pointParts(x).map(partBone))]);
-    const ra = series.get(head.joints[0])!;
-    const rb = series.get(head.joints[1])!;
-    const refCentre = (i: number): Pt => [(ra[i]![0] + rb[i]![0]) / 2, (ra[i]![1] + rb[i]![1]) / 2];
     for (const s of sw.switches) {
       const set = map.alternates.find((a) => a.name === s.set)!;
       const art: ArtRange[] = [];
       for (const cn of s.chains) {
         const c = map.chains.find((x) => x.name === cn)!;
         const drawn = set.drawn[c.bones[0]!];
-        if (drawn === undefined || !isRaised(drawn)) continue;
-        const label = `--raised-by-head: set "${set.name}" draws chain "${c.name}" raised (bone "${c.bones[0]}" at ${drawn}°)`;
+        const up = headOk !== null && drawn !== undefined && isRaised(drawn);
+        const low = hipsOk !== null && set.place?.chains.includes(c.name) === true;
+        if (up && low) {
+          p.add('PLACE_BOTH', `set "${set.name}" chain "${c.name}": --raised-by-head places its wrist against the head (bone "${c.bones[0]}" drawn at ${drawn}°, raised), and "place": "by-hip" against the hip (its key skeleton's wrist within one hip width of the mid-hip); a wrist is placed against one — drop "place" from the set or the flag`);
+          continue;
+        }
+        const anchor = up ? headOk : low ? hipsOk : null;
+        if (anchor === null) continue;
+        const ra = series.get(anchor.joints[0])!;
+        const rb = series.get(anchor.joints[1])!;
+        const refCentre = (i: number): Pt => [(ra[i]![0] + rb[i]![0]) / 2, (ra[i]![1] + rb[i]![1]) / 2];
+        const anchorBones = new Set([...anchor.points.flatMap((x) => pointParts(x).map(partBone))]);
+        const label = up ? `--raised-by-head: set "${set.name}" draws chain "${c.name}" raised (bone "${c.bones[0]}" at ${drawn}°)` : `"place": "by-hip": set "${set.name}" places chain "${c.name}"'s wrist against the hip`;
+        const CHAIN = up ? 'RAISED_CHAIN' : 'PLACE_CHAIN';
         if (c.bones.length !== 2) {
-          p.add('RAISED_CHAIN', `${label}, and the chain has ${c.bones.length} bone(s); the wrist is placed by a two-bone solve, so it must have two (upper arm, forearm)`);
+          p.add(CHAIN, `${label}, and the chain has ${c.bones.length} bone(s); the wrist is placed by a two-bone solve, so it must have two (upper arm, forearm)`);
           continue;
         }
         if (c.reach || c.aim.some((x) => x.includes('>'))) {
-          p.add('RAISED_CHAIN', `${label}, and it aims ${JSON.stringify(c.aim)}${c.reach ? ' with "reach"' : ''}; the solve turns each bone about its own origin toward the next point, so each must aim "x" or at one point`);
+          p.add(CHAIN, `${label}, and it aims ${JSON.stringify(c.aim)}${c.reach ? ' with "reach"' : ''}; the solve turns each bone about its own origin toward the next point, so each must aim "x" or at one point`);
           continue;
         }
         const [b0, b1] = c.bones as [string, string];
-        const moved = [...headBones].filter((h) => h === b0 || h === b1 || descends(rest, h, b0));
+        const moved = [...anchorBones].filter((h) => h === b0 || h === b1 || descends(rest, h, b0));
         if (moved.length > 0) {
-          p.add('RAISED_CHAIN', `${label}, and the head's eye point ${moved.map((h) => `"${h}"`).join(', ')} turns with it; the wrist cannot be placed against a head the arm moves`);
+          p.add(CHAIN, up ? `${label}, and the head's eye point ${moved.map((h) => `"${h}"`).join(', ')} turns with it; the wrist cannot be placed against a head the arm moves` : `${label}, and the hip point ${moved.map((h) => `"${h}"`).join(', ')} turns with it; the wrist cannot be placed against a hip the arm moves`);
           continue;
         }
         const wristSpec = c.aim[1] === 'x' ? `${b1}:tip` : c.aim[1]!;
         if (c.aim[1] === 'x' && !(rest.get(b1)!.length > 1e-9)) {
-          p.add('RAISED_CHAIN', `${label}, and its last bone "${b1}" aims "x" with no length; its wrist (the tip) is its origin, so there is nothing to place`);
+          p.add(CHAIN, `${label}, and its last bone "${b1}" aims "x" with no length; its wrist (the tip) is its origin, so there is nothing to place`);
           continue;
         }
         const wristOf = (i: number): Pt => posedPoint(wristSpec, i);
@@ -938,9 +963,10 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         const span: number[] = [];
         for (let i = s.frames[0]; i <= s.frames[1]; i++) span.push(i);
         const refEye = median(span.map((i) => Math.hypot(rb[i]![0] - ra[i]![0], rb[i]![1] - ra[i]![1])));
-        const rigEye = median(span.map((i) => eyesOn(i).dist));
+        const rigEye = median(span.map((i) => pairOn(anchor, i).dist));
         if (!(refEye > 1e-9) || !(rigEye > 1e-9)) {
-          p.add('RAISED_EYES', `${label}: over frames ${s.frames[0]}–${s.frames[1]} the median eye distance is ${refEye > 1e-9 ? `${rigEye} units on the rig (points "${head.points[0]}", "${head.points[1]}")` : `${refEye}px in the reference (${head.joints[0]}, ${head.joints[1]})`}; an eye distance of 0 is no unit`);
+          if (up) p.add('RAISED_EYES', `${label}: over frames ${s.frames[0]}–${s.frames[1]} the median eye distance is ${refEye > 1e-9 ? `${rigEye} units on the rig (points "${anchor.points[0]}", "${anchor.points[1]}")` : `${refEye}px in the reference (${anchor.joints[0]}, ${anchor.joints[1]})`}; an eye distance of 0 is no unit`);
+          else p.add('PLACE_HIPS', `${label}: over frames ${s.frames[0]}–${s.frames[1]} the median hip width is ${refEye > 1e-9 ? `${rigEye} units on the rig (points "${anchor.points[0]}", "${anchor.points[1]}")` : `${refEye}px in the reference (${anchor.joints[0]}, ${anchor.joints[1]})`}; a hip width of 0 is no unit`);
           continue;
         }
         // The rig's own lengths, and each bone's aim against the vector it carries, at setup.
@@ -955,7 +981,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         const t1 = targets.get(b1)!;
         const turn0 = set.turn[b0];
         const turn1 = set.turn[b1];
-        const job: (typeof raisedJobs)[number] = { sw: s, chain: c, wrist: wristOf, before: [], reference: [], placed: [], refEye, rigEye, short: [], upperHeld: [], l0, l1, farthest: 0, eyePoints: head.points };
+        const job: (typeof raisedJobs)[number] = { anchor, sw: s, chain: c, wrist: wristOf, before: [], reference: [], placed: [], refEye, rigEye, short: [], upperHeld: [], l0, l1, farthest: 0 };
         /** Per frame of the span: the forearm's art turn the re-aim asked, and how far past its turn. */
         const foreAsked: number[] = [];
         const foreOver: number[] = [];
@@ -964,7 +990,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         const upperOver: number[] = [];
         const heldMiss: number[] = [];
         for (const i of span) {
-          const h = eyesOn(i);
+          const h = pairOn(anchor, i);
           const rc = refCentre(i);
           // The reference's wrist from its head centre, in its eye distances, y turned up.
           const ref: Pt = [(refWrist[i]![0] - rc[0]) / refEye, -(refWrist[i]![1] - rc[1]) / refEye];
@@ -1029,7 +1055,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
             for (let k = a; k <= b; k++) if (heldMiss[k]! > heldMiss[worst]!) worst = k;
             const first = s.frames[0] + a;
             const last = s.frames[0] + b;
-            art.push({ set: set.name, chain: c.name, bone: b0, frames: [first, last], seconds: r6(endOf(last) - keyTimes[first]!), maxOverflow: r3(upperOver[worst]!), turn: r3(upperAsked[worst]!), limits: turn0, clamped: true, shortfall: r3(heldMiss[worst]!) });
+            art.push({ set: set.name, chain: c.name, bone: b0, frames: [first, last], seconds: r6(endOf(last) - keyTimes[first]!), maxOverflow: r3(upperOver[worst]!), turn: r3(upperAsked[worst]!), limits: turn0, clamped: true, shortfall: r3(heldMiss[worst]!), ...(up ? {} : { anchor: 'hip' as const }) });
           }
         }
         if (turn1 !== undefined) {
@@ -1061,8 +1087,8 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   for (const job of raisedJobs) {
     const after: Pt[] = [];
     for (let i = job.sw.frames[0]; i <= job.sw.frames[1]; i++) {
-      const a = posedPoint(job.eyePoints[0], i);
-      const b = posedPoint(job.eyePoints[1], i);
+      const a = posedPoint(job.anchor.points[0], i);
+      const b = posedPoint(job.anchor.points[1], i);
       const w = job.wrist(i);
       after.push([(w[0] - (a[0] + b[0]) / 2) / job.rigEye, (w[1] - (a[1] + b[1]) / 2) / job.rigEye]);
     }
@@ -1076,12 +1102,12 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       short.push({ frames: [job.short[k]!.i, job.short[m]!.i], how: job.short[k]!.how, shortfall: { max: r6(Math.max(...fs)), median: r6(median(fs)) } });
       k = m + 1;
     }
-    raised.push({
+    const unit = { rig: r6(job.rigEye), reference: r6(job.refEye) };
+    const entry = {
       set: job.sw.set,
       chain: job.chain.name,
       frames: job.sw.frames,
       seconds: secondsOf(job.sw.frames),
-      eyes: { rig: r6(job.rigEye), reference: r6(job.refEye) },
       reference: round(job.reference),
       placed: round(job.placed),
       before: round(job.before),
@@ -1090,7 +1116,11 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       short,
       upperHeld: job.upperHeld,
       reach: { min: r6(Math.abs(job.l0 - job.l1)), max: r6(job.l0 + job.l1), farthest: r6(job.farthest) },
-    });
+    };
+    // The unit sits after `seconds`, as the report has always written it.
+    const { set, chain, frames, seconds, ...body } = entry;
+    if (job.anchor.kind === 'head') raised.push({ set, chain, frames, seconds, eyes: unit, ...body });
+    else byHip.push({ set, chain, frames, seconds, hips: unit, ...body });
   }
 
   // The legs on their final targets: a bone under a scaled bone is keyed through
@@ -1151,8 +1181,47 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     animation: { duration: keyTimes[n - 1]!, tracks },
     times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale,
     switches: sw.switches, shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
-    legScale, scales, feet, planted: plantOn, stance, floor, blendHold, closure, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs), raised,
+    legScale, scales, feet, planted: plantOn, stance, floor, blendHold, closure, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs), raised, byHip,
   };
+}
+
+/** What a placed wrist is measured against: the head (#62, the eyes) or the hip (#93, the hips) — two pose joints and the rig's two points. */
+interface Anchor {
+  kind: 'head' | 'hip';
+  joints: [string, string];
+  points: [string, string];
+}
+
+/** The hips as `place: "by-hip"` reads them: two pose joints (r_hip, l_hip) and the rig's two hip points. */
+interface Hips {
+  joints: [string, string];
+  points: [string, string];
+}
+
+/**
+ * The rig's hip points for `place: "by-hip"` (#93): the two points a chain
+ * carrying the hip line (r_hip → l_hip, either way round) names with an "a>b"
+ * aim — a pelvis turned by its hip line; else the origins of the first bones of
+ * the two chains that start at r_hip and at l_hip — the legs, whose roots are
+ * the hip joints; or why the map names neither.
+ */
+function hipOf(map: JointMap): Hips | { problem: string } {
+  for (const c of map.chains) {
+    for (let k = 0; k + 1 < c.joints.length; k++) {
+      const a = c.joints[k]!;
+      const b = c.joints[k + 1]!;
+      if (!((a === 'r_hip' && b === 'l_hip') || (a === 'l_hip' && b === 'r_hip'))) continue;
+      const aim = c.aim[k]!;
+      if (!aim.includes('>')) continue;
+      const [pa, pb] = aimEnds(c.bones[k]!, aim);
+      return { joints: [a, b], points: [pa, pb] };
+    }
+  }
+  const from = (j: string, other: string) => map.chains.find((c) => c.joints[0] === j && c.joints[1] !== other);
+  const r = from('r_hip', 'l_hip');
+  const l = from('l_hip', 'r_hip');
+  if (r !== undefined && l !== undefined) return { joints: ['r_hip', 'l_hip'], points: [r.bones[0]!, l.bones[0]!] };
+  return { problem: `"place": "by-hip" places a wrist against the hip in hip widths, read on the rig between two hip points: the two a chain carrying the hip line (r_hip → l_hip) names with an "a>b" aim, or else the first bones' origins of the two chains starting at r_hip and l_hip (the legs); the map has neither (${r === undefined && l === undefined ? 'no chain starts at r_hip or l_hip' : `no chain starts at ${r === undefined ? 'r_hip' : 'l_hip'}`})` };
 }
 
 /** The head as --raised-by-head reads it: the chain carrying the eye line, its two pose joints and the rig's two eye points. */

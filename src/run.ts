@@ -133,6 +133,9 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     if (a.raisedByHead === true && r.raised.length === 0) say(`  RAISED none — no set drawing an arm within ${RAISED_WITHIN}° of straight up showed; no key moved`);
     for (const e of r.raised) say(`  RAISED ${raisedLine(e, r.times)}`);
     for (const e of r.raised) if (e.short.length > 0) say(`  REACH  ${reachLine(e, r.times)}`);
+    if (map.alternates.some((x) => x.place !== undefined && x.place !== null) && r.byHip.length === 0) say(`  BY-HIP none — no set with "place": "by-hip" showed; no key moved`);
+    for (const e of r.byHip) say(`  BY-HIP ${raisedLine(e, r.times)}`);
+    for (const e of r.byHip) if (e.short.length > 0) say(`  REACH  ${reachLine(e, r.times)}`);
     for (const e of r.artRange) say(`  ART-RANGE ${artRangeLine(e, r.times)}`);
     for (const l of r.legScale) say(`  LEG-SCALE ${legScaleLine(l, r.times)}`);
     if (r.pivot !== null) say(`  PIVOT  bone "${r.pivot.bone}"'s origin is ${r.pivot.distance.toFixed(2)} units (${r.pivot.hipWidths.toFixed(3)} hip widths) from its thigh roots' midpoint (${r.pivot.roots.join(' + ')}): dx ${r.pivot.offset[0].toFixed(2)}, dy ${r.pivot.offset[1].toFixed(2)}, at setup — the pivot every hip turn swings the legs about`);
@@ -300,6 +303,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         range: r.range,
         artRange: r.artRange,
         raised: r.raised,
+        // Only when a set declares `place` (#93): a map without one writes the report it always has.
+        ...(map.alternates.some((x) => x.place !== undefined && x.place !== null) ? { byHip: r.byHip } : {}),
         legScale: r.legScale.map(({ scale: _scale, ...rest }) => rest),
         pivot: r.pivot,
         stance: r.stance === null ? null : { tolerance: r.stance.tolerance, release: r.stance.release, minSeconds: r.stance.minSeconds, bounds: r.stance.bounds, runs: r.stance.runs, over: r.stance.over },
