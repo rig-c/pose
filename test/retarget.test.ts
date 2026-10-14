@@ -3441,36 +3441,67 @@ describe('--raised-by-head (#62): a raised arm\'s wrist placed against the head,
     }
   }, SLOW);
 
-  test('turn holds the upper arm: the forearm is re-aimed at the placed wrist, and no ART-RANGE while it stays within its own turn', () => {
+  test('turn holds the upper arm and the re-aimed forearm leaves the wrist short: ART-RANGE on the upper arm with the shortfall in eye distances', () => {
     const c = setup({ rig: RIG, map: mapOf({ sets: [set({ drawn: { sleeve_r0: 70, sleeve_r1: 30 }, turn: { sleeve_r0: [-5, 5], sleeve_r1: [-90, 90] } })] }), pose: poseDoc(RAISED) });
     const report = join(c.dir, 'report.json');
     const r = retarget(c, ['--raised-by-head', '--report', report]);
     expect(r.status).toBe(0);
-    expect(linesOf(r, 'ART-RANGE')).toEqual([]);
     expect(linesOf(r, 'RAISED')[0]).toContain('the upper arm held by the set\'s turn on 8 frame(s) (4–11), the forearm re-aimed');
     expect(reportOf(report).raised[0]!.upperHeld).toEqual([4, 5, 6, 7, 8, 9, 10, 11]);
+    const art = linesOf(r, 'ART-RANGE');
+    expect(art).toHaveLength(1);
+    expect(art[0]).toMatch(/^ART-RANGE set "up" chain "arm_r" bone "sleeve_r0" held at its turn \(range \[-5, 5\]\) frames 4–11 \(t=0\.500–1\.375s\): 1\.000s the re-aimed forearm leaves the wrist up to [0-9.]+ eye distances short of its placed point \(the upper arm asked \+[0-9.]+° from drawn, [0-9.]+° past\) — demand for another drawing of the set$/);
+    const entry = (JSON.parse(readFileSync(report, 'utf8')) as { artRange: Array<{ bone: string; shortfall?: number; clamped: boolean }> }).artRange;
+    expect(entry).toHaveLength(1);
+    expect(entry[0]!.bone).toBe('sleeve_r0');
+    expect(entry[0]!.clamped).toBe(true);
     const bones = posedBones(c.build, RAISED);
+    let worst = 0;
     for (let i = 4; i <= 11; i++) {
       const b = bones[i]!;
       // The upper arm at its limit.
-      expect(Math.abs(wrap(worldAngle(b, 'sleeve_r0') - 70))).toBeLessThanOrEqual(5 + ANGLE_TOL);
-      expect(Math.abs(wrap(worldAngle(b, 'sleeve_r0') - 70))).toBeGreaterThanOrEqual(5 - ANGLE_TOL);
+      expect(Math.abs(Math.abs(wrap(worldAngle(b, 'sleeve_r0') - 70)) - 5)).toBeLessThanOrEqual(ANGLE_TOL);
       // The forearm pointing from the elbow at the target (in reach here: head centre + the reference's offset × 12).
       const ref = refOffset(RAISED, i);
       const target: Pt = [RIG_CENTRE[0] + ref[0] * 12, RIG_CENTRE[1] + ref[1] * 12];
       const e = b.get('sleeve_r1')!;
       const toTarget = Math.atan2(target[1] - e.worldY, target[0] - e.worldX) * DEG;
       expect(Math.abs(wrap(worldAngle(b, 'sleeve_r1') - toTarget))).toBeLessThanOrEqual(ANGLE_TOL);
+      // ... and still short of it: the shortfall, read on rig-c's poser.
+      const w = tipOf(b);
+      worst = Math.max(worst, Math.hypot(w[0] - target[0], w[1] - target[1]) / 12);
     }
+    expect(worst).toBeGreaterThan(0.01);
+    expect(Math.abs(entry[0]!.shortfall! - worst)).toBeLessThanOrEqual(0.001);
   }, SLOW);
 
-  test('ART-RANGE only where the re-aimed forearm is past its own turn: listed for the forearm and held there, never for the held upper arm', () => {
+  test('control: turn holds the upper arm where the re-aimed forearm still reaches (the other elbow of the two-bone solve) — no ART-RANGE', () => {
+    // A still arm, so the target is one point; the turn admits exactly the mirror elbow, which reaches it too.
+    const m = raisedMotion(() => 115, () => 65);
+    const ref = refOffset(m, 4);
+    const target: Pt = [RIG_CENTRE[0] + ref[0] * 12, RIG_CENTRE[1] + ref[1] * 12];
+    const d = Math.hypot(target[0] - RIG_SHOULDER[0], target[1] - RIG_SHOULDER[1]);
+    const theta = Math.atan2(target[1] - RIG_SHOULDER[1], target[0] - RIG_SHOULDER[0]) * DEG;
+    const alpha = Math.acos((70 * 70 + d * d - 60 * 60) / (2 * 70 * d)) * DEG;
+    // The pose bends clockwise, so the solve's own elbow is at θ + α; the mirror at θ − α.
+    const mirror = wrap(theta - alpha - 100);
+    const c = setup({ rig: RIG, map: mapOf({ sets: [set({ pose: keySkeleton(115, 65), drawn: { sleeve_r0: 100, sleeve_r1: 60 }, turn: { sleeve_r0: [mirror, mirror], sleeve_r1: [-180, 180] } })] }), pose: poseDoc(m) });
+    const r = retarget(c, ['--raised-by-head']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'RAISED')[0]).toContain('the upper arm held by the set\'s turn on 8 frame(s) (4–11), the forearm re-aimed');
+    expect(linesOf(r, 'ART-RANGE')).toEqual([]);
+    expect(offBy(c.build, m, 0.01)).toEqual([]);
+  }, SLOW);
+
+  test('a forearm past its own turn after the re-aim: ART-RANGE on the forearm, held there; the upper arm only as a held arm leaving the wrist short', () => {
     const c = setup({ rig: RIG, map: mapOf({ sets: [set({ drawn: { sleeve_r0: 70, sleeve_r1: 30 }, turn: { sleeve_r0: [-5, 5], sleeve_r1: [-5, 5] } })] }), pose: poseDoc(RAISED) });
     const r = retarget(c, ['--raised-by-head']);
     expect(r.status).toBe(0);
     const art = linesOf(r, 'ART-RANGE');
-    expect(art.length).toBeGreaterThan(0);
-    expect(art.every((l) => l.startsWith('ART-RANGE set "up" chain "arm_r" bone "sleeve_r1"') && l.includes('held at the limit'))).toBe(true);
+    // The forearm past its own turn, held there; the upper arm appears only as a held arm leaving the wrist short.
+    expect(art.some((l) => l.startsWith('ART-RANGE set "up" chain "arm_r" bone "sleeve_r1" turned') && l.includes('held at the limit'))).toBe(true);
+    expect(art.every((l) => l.startsWith('ART-RANGE set "up" chain "arm_r" bone "sleeve_r1" turned') || (l.startsWith('ART-RANGE set "up" chain "arm_r" bone "sleeve_r0" held at its turn') && l.includes('eye distances short of its placed point')))).toBe(true);
     const bones = posedBones(c.build, RAISED);
     const out: string[] = [];
     for (let i = 4; i <= 11; i++) {

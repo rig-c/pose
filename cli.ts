@@ -104,10 +104,12 @@ retarget
                         reference's, per frame; each eye distance is its median over the span. The head centre is
                         the eyes' midpoint; the rig's eyes are the two points the head chain's "a>b" aim names
                         (refused without one, RAISED_HEAD), posed from the targets of the bones above. A target out
-                        of the arm's reach goes to the reach limit on the ray from the head centre toward it (REACH
-                        lines, in eye distances). A two-bone solve on the rig's own lengths keeps the pose's elbow
-                        side; when the set's "turn" holds the upper arm the forearm is re-aimed at the wrist, and
-                        only a forearm still past its turn is ART-RANGE. RAISED lines (default: off; rig-c/pose#62)
+                        of the arm's reach, too far or too near, goes to the reach limit on the ray from the head
+                        centre toward it and is graded at that placed distance (REACH lines, in eye distances). A
+                        two-bone solve on the rig's own lengths keeps the pose's elbow side; when the set's "turn"
+                        holds the upper arm the forearm is re-aimed at the wrist. ART-RANGE: a forearm still past
+                        its turn, or a held arm leaving the wrist > 0.01 eye distances short of its placed point
+                        (the shortfall listed). RAISED lines (default: off; rig-c/pose#62)
   --idle <name>         the rig's animation read as its idle (default: idle). Every idle track the new
                         animation does not key, on any channel, is listed as IDLE-DROPPED (a blink, a
                         breath); one it keys is IDLE-KEPT-OUT, naming the track that keys it, and so is a

@@ -129,6 +129,8 @@ export interface ArtRange {
   limits: [number, number];
   /** Whether the bone was held at the limit (the set's `turn`) or followed the pose (its chain's `range` only). */
   clamped: boolean;
+  /** --raised-by-head (#62): on a held upper arm, the most the re-aimed forearm left the wrist short of its placed point, eye distances; `turn` and `maxOverflow` are then the upper arm's on that frame. */
+  shortfall?: number;
 }
 
 export interface Uncovered {
@@ -580,6 +582,9 @@ function moveText(m: Move): string {
 }
 
 export function artRangeLine(e: ArtRange, times: readonly number[]): string {
+  if (e.shortfall !== undefined) {
+    return `set "${e.set}" chain "${e.chain}" bone "${e.bone}" held at its turn (range [${e.limits[0]}, ${e.limits[1]}]) ${spanOf(e.frames, times)}: ${e.seconds.toFixed(3)}s the re-aimed forearm leaves the wrist up to ${e.shortfall.toFixed(2)} eye distances short of its placed point (the upper arm asked ${sg(e.turn)} from drawn, ${deg(e.maxOverflow)} past) — demand for another drawing of the set`;
+  }
   return `set "${e.set}" chain "${e.chain}" bone "${e.bone}" turned ${sg(e.turn)} from drawn (range [${e.limits[0]}, ${e.limits[1]}]) ${spanOf(e.frames, times)}: ${e.seconds.toFixed(3)}s, up to ${deg(e.maxOverflow)} past it; ${e.clamped ? 'held at the limit' : 'the bone follows the pose'} — demand for another drawing of the set`;
 }
 

@@ -81,6 +81,16 @@ import { isLegSegment, legScaleOf, legsOf, pathFrom, plantHip, posePath, rootOf,
 
 const DEG = 180 / Math.PI;
 
+/**
+ * --raised-by-head (#62): a held upper arm whose re-aimed forearm leaves the
+ * wrist farther than this from its placed point, in eye distances, "cannot
+ * reach within turn" — ART-RANGE. It sits at the float and rounding scale, so
+ * any real miss counts: the solve itself closes to ~1e-12, and the writer's
+ * 0.001° rounding of two keys moves a wrist by ≤ 2 × 1.75e-5 × (l0 + l1), which
+ * is 0.0004 eye distances on the tests' stick rig (a 130-unit arm, 12-unit eyes).
+ */
+export const HELD_MISS = 0.01;
+
 export interface RetargetOptions extends SwitchOptions {
   /** A joint with a score below this is not good on that frame (a joint with no score is). */
   minScore: number;
@@ -908,6 +918,10 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         /** Per frame of the span: the forearm's art turn the re-aim asked, and how far past its turn. */
         const foreAsked: number[] = [];
         const foreOver: number[] = [];
+        /** Per frame of the span: the upper arm's art turn the solve asked, how far past its turn, and — where the turn held it — how far the wrist ends from its placed point, eye distances (0 elsewhere). */
+        const upperAsked: number[] = [];
+        const upperOver: number[] = [];
+        const heldMiss: number[] = [];
         for (const i of span) {
           const h = eyesOn(i);
           const rc = refCentre(i);
@@ -929,15 +943,22 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
           if (sol.upper === null) {
             foreAsked.push(wrap(t1[i]! - (set.drawn[b1] ?? 0)));
             foreOver.push(0);
+            upperAsked.push(0);
+            upperOver.push(0);
+            heldMiss.push(0);
             continue;
           }
           let a0 = wrap(sol.upper - d0);
           let a1 = wrap(sol.fore - d1);
           // The set's turn holds the upper arm; the forearm is then re-aimed at the placed wrist from where the held upper arm puts the elbow.
+          let held = false;
+          const tt = turn0 === undefined ? 0 : wrap(a0 - set.drawn[b0]!);
+          upperAsked.push(tt);
+          upperOver.push(turn0 === undefined ? 0 : overflow(tt, turn0));
           if (turn0 !== undefined) {
-            const tt = wrap(a0 - set.drawn[b0]!);
             const cl = Math.min(Math.max(tt, turn0[0]), turn0[1]);
             if (Math.abs(cl - tt) > RANGE_SLACK) {
+              held = true;
               a0 = wrap(set.drawn[b0]! + cl);
               job.upperHeld.push(i);
               const r = (a0 + d0) / DEG;
@@ -951,8 +972,24 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
           foreAsked.push(asked);
           foreOver.push(over);
           if (turn1 !== undefined && over > RANGE_SLACK) a1 = wrap(set.drawn[b1]! + Math.min(Math.max(asked, turn1[0]), turn1[1]));
+          // Where the held arm leaves the wrist: the re-aimed forearm points at the placed point, but from a held
+          // elbow its length need not reach it (rule 3, "cannot reach within turn").
+          const r0 = (a0 + d0) / DEG;
+          const r1 = (a1 + d1) / DEG;
+          const W: Pt = [shoulder[0] + l0 * Math.cos(r0) + l1 * Math.cos(r1), shoulder[1] + l0 * Math.sin(r0) + l1 * Math.sin(r1)];
+          heldMiss.push(held ? Math.hypot(W[0] - P[0], W[1] - P[1]) / rigEye : 0);
           t0[i] = a0;
           t1[i] = a1;
+        }
+        // A held upper arm whose re-aimed forearm leaves the wrist more than HELD_MISS short of its placed point: ART-RANGE on the upper arm, with the shortfall.
+        if (turn0 !== undefined) {
+          for (const [a, b] of runsOf(heldMiss.map((m) => m > HELD_MISS), RANGE_GAP)) {
+            let worst = a;
+            for (let k = a; k <= b; k++) if (heldMiss[k]! > heldMiss[worst]!) worst = k;
+            const first = s.frames[0] + a;
+            const last = s.frames[0] + b;
+            art.push({ set: set.name, chain: c.name, bone: b0, frames: [first, last], seconds: r6(endOf(last) - keyTimes[first]!), maxOverflow: r3(upperOver[worst]!), turn: r3(upperAsked[worst]!), limits: turn0, clamped: true, shortfall: r3(heldMiss[worst]!) });
+          }
         }
         if (turn1 !== undefined) {
           for (const [a, b] of runsOf(foreOver.map((o) => o > RANGE_SLACK), RANGE_GAP)) {
@@ -965,6 +1002,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         }
         raisedJobs.push(job);
       }
+      art.sort((x, y) => x.frames[0] - y.frames[0]);
       if (art.length > 0) raisedArt.push({ sw: s, entries: art });
     }
   }
