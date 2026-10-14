@@ -16,9 +16,9 @@ import { bendLine, endOnLine, flipLine, holdLine, rangeLine, retarget, shortLine
 import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, readBuild, resolveRig, restOf, slotsOf } from './rigc.ts';
 import { artRangeLine, chainsMoving, raisedLine, RAISED_WITHIN, reachLine, switchLine, uncoveredFolds } from './switch.ts';
 import { landed, measureFeet, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
-import { legsOf, STANCE_BOUNDS } from './legs.ts';
+import { legsOf, PLANT_SWITCH, STANCE_BOUNDS } from './legs.ts';
 import { M2_IDENTITY, mulM2, reduceKeys, reduceScale, reduceUnderScale, SCALE_REDUCE, setupLocal, type M2, type ReduceBone, type Reduced, type ReduceRow, type UnderBone } from './reduce.ts';
-import type { BlendHold, Closure, Floor, LegScale, Stance } from './legs.ts';
+import type { BlendHold, Closure, Floor, LegScale, Lowered, Side, Stance } from './legs.ts';
 
 export interface RetargetArgs extends RetargetOptions {
   rig: string;
@@ -145,6 +145,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       say(`  FEET   ${r.planted ? 'planted' : 'read, not planted (no --plant-feet)'}: leg length (median hip → ankle) r ${f.legLength.r.toFixed(1)}px, l ${f.legLength.l.toFixed(1)}px; ${f.supports.length} support span(s), ${f.changes.filter((c) => c.from !== null).length} change(s) of support, ${f.jumps.length} jump(s), ${f.steps.length} step(s)`);
       say(`  FEET   supports: ${f.supports.map((x) => `${x.side} ${span(x.frames)}`).join(', ') || 'none'}`);
       say(`  FEET   jumps (both ankles and mid_hip > 0.05 leg lengths above their rolling floor, ≥ 2 frames): ${f.jumps.map(span).join(', ') || 'none'}`);
+      if (f.lowered !== undefined) say(`  FEET   ${loweredLine(f.lowered)}`);
       if (r.closure !== null) say(`  FEET   ${travelLine(r.closure)}`);
       else say(`  FEET   steps (the supporting ankle > 0.03 leg lengths a frame; re-planted after 2 frames < 0.01): ${f.steps.map((x) => `${x.side} ${span(x.frames)} → ${x.to === null ? 'the pose\'s travel' : `${x.to} supports`}, ${x.replant === null ? 'never re-planted' : `re-planted at ${x.replant}`}`).join('; ') || 'none'}`);
       if (r.floor !== null) {
@@ -317,7 +318,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         legScale: r.legScale.map(({ scale: _scale, ...rest }) => rest),
         pivot: r.pivot,
         stance: r.stance === null ? null : { tolerance: r.stance.tolerance, release: r.stance.release, minSeconds: r.stance.minSeconds, bounds: r.stance.bounds, ...(r.stance.range === undefined ? {} : { range: r.stance.range }), runs: r.stance.runs, over: r.stance.over },
-        feet: r.feet === null ? null : { planted: r.planted, legLength: r.feet.legLength, supports: r.feet.supports, jumps: r.feet.jumps, steps: r.feet.steps, changes: r.feet.changes, floor: r.floor?.y ?? null, shifts: r.floor?.shifts ?? [], blend: r.blendHold === null ? null : { bounds: r.blendHold.bounds, ...(r.blendHold.range === undefined ? {} : { range: r.blendHold.range }), runs: r.blendHold.runs, over: r.blendHold.over }, reading: feetReading, closure: r.closure },
+        feet: r.feet === null ? null : { planted: r.planted, legLength: r.feet.legLength, supports: r.feet.supports, jumps: r.feet.jumps, steps: r.feet.steps, changes: r.feet.changes, ...(r.feet.lowered === undefined ? {} : { lowered: r.feet.lowered }), floor: r.floor?.y ?? null, shifts: r.floor?.shifts ?? [], blend: r.blendHold === null ? null : { bounds: r.blendHold.bounds, ...(r.blendHold.range === undefined ? {} : { range: r.blendHold.range }), runs: r.blendHold.runs, over: r.blendHold.over }, reading: feetReading, closure: r.closure },
         shear,
         idleDropped: idle === null ? null : idle.dropped,
         idleKeptOut: idle === null ? null : idle.keptOut,
@@ -591,6 +592,21 @@ export function floorLine(floor: Floor, leg: { r: number; l: number }): string {
  * was stretched to keep its ankle on the floor, with the stretch keyed; one per
  * run whose stretch fell past its bounds (`past the bounds`, as STANCE says it).
  */
+/**
+ * The lower-ankle line (rig-c/pose#113): under --plant-feet on a sequence not
+ * declared in place, the frames whose supporting foot differs from the reading
+ * before #113 — today's side, then the side read from the lower ankle ("none":
+ * no foot supports, the hip follows the pose).
+ */
+function loweredLine(lowered: readonly Lowered[]): string {
+  const side = (s: Side | null) => s ?? 'none';
+  const span = (x: [number, number]) => (x[0] === x[1] ? `${x[0]}` : `${x[0]}–${x[1]}`);
+  const head = `support read from the lower ankle (a foot ≥ ${PLANT_SWITCH} leg lengths higher than the other does not take support, rig-c/pose#113)`;
+  if (lowered.length === 0) return `${head}: no frame reads differently from before`;
+  const frames = lowered.reduce((k, x) => k + x.frames[1] - x.frames[0] + 1, 0);
+  return `${head}: ${frames} frame(s) read differently from before — ${lowered.map((x) => `frames ${span(x.frames)} ${side(x.was)} → ${side(x.now)}`).join(', ')}`;
+}
+
 /** The in-place line (rig-c/pose#92): what --plant-feet did instead of holding the foot, and the loop's closure. */
 export function travelLine(c: Closure): string {
   const per = c.frames > 1 ? Math.abs(c.drift) / (c.frames - 1) : 0;
