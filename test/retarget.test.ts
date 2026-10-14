@@ -4440,3 +4440,109 @@ describe('#110: clampArt eases at set edges, and capShortSteps caps foreshortene
   });
 });
 
+// --- #107: --leg-scale clamp floor does not lift the hip, and POSTURE bounce -----
+
+describe('#107: --leg-scale clamp floor does not lift the hip, and POSTURE reads the bounce per support span', () => {
+  const THIGH = -95;
+  const SHIN = -97;
+  const N = 24;
+  const DT = 1 / 24;
+  /** Knee bend asks down to 0.70 on frame 12, below the 0.85 clamp floor. */
+  const askF = (i: number): number => (i < 6 || i > 18 ? 1 : 1 - 0.30 * Math.sin(((i - 6) / 12) * Math.PI));
+  const STILL: Motion = { ...BASE, n: N, dt: DT, trunk: () => 90, rt: () => THIGH, rs: () => SHIN, lt: () => THIGH, ls: () => SHIN, hip: () => [0, 0] };
+  const V = add(dir(THIGH, 80), dir(SHIN, 70));
+  const W: Pt = [80 * Math.cos(THIGH * RAD) + 70 * Math.cos(SHIN * RAD), 80 * Math.sin(THIGH * RAD) + 70 * Math.sin(SHIN * RAD)];
+
+  function bendPose(): Record<string, unknown> {
+    return poseDoc(STILL, (i, j) => {
+      const drop: Pt = [(1 - askF(i)) * V[0], (1 - askF(i)) * V[1]];
+      for (const [name, at] of Object.entries(j)) {
+        const a = at.at as Pt;
+        if (name.endsWith('_ankle') || name.endsWith('_knee')) continue;
+        j[name] = { ...at, at: [a[0] + drop[0], a[1] + drop[1]] };
+      }
+      for (const s of ['r', 'l'] as const) {
+        const hip = j[`${s}_hip`]!.at as Pt;
+        const knee = add(hip, dir(THIGH, 80 * askF(i)));
+        const ankle = add(knee, dir(SHIN, 70 * askF(i)));
+        j[`${s}_knee`] = { state: 'observed', at: knee, score: 0.9 };
+        j[`${s}_ankle`] = { state: 'observed', at: ankle, score: 0.9 };
+      }
+    });
+  }
+
+  function mapWithPelvis(): Record<string, unknown> {
+    return {
+      ...baseMap(),
+      chains: [
+        { name: 'pelvis', bones: ['hip'], joints: ['r_hip', 'l_hip'], aim: ['leg_r0>leg_l0'] },
+        ...baseChains(),
+      ],
+    };
+  }
+
+  test('a leg asking below the clamp floor holds the bone at the floor without lifting the hip, every scale lands, and POSTURE prints the bounce per support span', () => {
+    const c = setup({ map: mapWithPelvis(), pose: bendPose() });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--leg-scale', '0.85,1.05', '--plant-feet', '--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    // Landing holds every scale.
+    const lands = linesOf(r, 'LAND');
+    expect(lands.filter((l) => l.includes(' scale — '))).toHaveLength(4);
+    const poses = poseRawAnimation(loadBuild(c.build), 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+    const hip0 = byName(poses[0]!.bones).get('hip')!;
+    for (let i = 0; i < N; i++) {
+      const b = byName(poses[i]!.bones);
+      // The bone is held at the clamp floor 0.85 when askF(i) < 0.85.
+      const wantScale = Math.max(0.85, askF(i));
+      for (const seg of ['leg_r0', 'leg_r1', 'leg_l0', 'leg_l1']) {
+        expect(Math.abs(Math.hypot(b.get(seg)!.a, b.get(seg)!.c) - wantScale)).toBeLessThan(1e-4);
+      }
+      // The hip is placed from the asked scale askF(i), not lifted by the 0.85 clamp floor.
+      const wantHip: Pt = [hip0.worldX + (1 - askF(i)) * W[0], hip0.worldY + (1 - askF(i)) * W[1]];
+      const h = b.get('hip')!;
+      expect(Math.hypot(h.worldX - wantHip[0], h.worldY - wantHip[1])).toBeLessThan(0.05);
+    }
+    const posture = linesOf(r, 'POSTURE');
+    const bounceLine = posture.find((l) => l.startsWith('POSTURE bounce r 0–23'));
+    expect(bounceLine).toBeDefined();
+    expect(bounceLine).toContain('r=1.000');
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as { posture: { bounce: Array<{ side: string; frames: [number, number]; hip: { ratio: number; corr: number }; neck: { ratio: number; corr: number }; eyesNeck: { ratio: number; corr: number | null } }> } };
+    expect(rep.posture.bounce).toHaveLength(1);
+    expect(rep.posture.bounce[0]!.side).toBe('r');
+    expect(rep.posture.bounce[0]!.frames).toEqual([0, 23]);
+    expect(rep.posture.bounce[0]!.hip.corr).toBeCloseTo(1, 5);
+    expect(rep.posture.bounce[0]!.neck.corr).toBeCloseTo(1, 5);
+    expect(rep.posture.bounce[0]!.eyesNeck.ratio).toBeNull();
+  }, SLOW);
+
+  test('mutant (#107): placing the hip from the clamped scale lifts the hip when the leg asks below the floor', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm107-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const from = 'const lp = poseLegsWith(i, askedScales);';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'const lp = poseLegs(i);'));
+      const c = setup({ map: mapWithPelvis(), pose: bendPose() });
+      const r = retarget(c, ['--leg-scale', '0.85,1.05', '--plant-feet'], join(d, 'cli.ts'));
+      expect(r.status).toBe(0);
+      const poses = poseRawAnimation(loadBuild(c.build), 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+      const hip0 = byName(poses[0]!.bones).get('hip')!;
+      const hip12 = byName(poses[12]!.bones).get('hip')!;
+      const wantY = hip0.worldY + (1 - askF(12)) * W[1];
+      const lift = hip12.worldY - wantY;
+      console.log(`  mutant "plantHip from clamped scale": frame 12 hip lifted by +${lift.toFixed(2)} units`);
+      expect(lift).toBeGreaterThan(20);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
+

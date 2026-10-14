@@ -706,12 +706,16 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   if (opts.floor !== undefined && !plantOn) p.add('FLOOR', `--floor ${opts.floor} is the floor --plant-feet plants every support span on, and --plant-feet is not given`);
   if (opts.floor !== undefined && !Number.isFinite(opts.floor)) p.add('FLOOR', `--floor is ${opts.floor}; it must be a finite world y`);
   p.throwIfAny();
-  /** Every bone on the legs' path posed on frame i, by the targets as they stand. */
-  const poseLegs = (i: number): PathPose => {
-    const r = posePath(rest, legPath!, (b): Posing | null => (targets.has(b) ? { turn: restTurn(b, i), target: targets.get(b)![i]!, aimX: aimX.get(b)! } : null), (b) => scales.get(b)?.[i] ?? null);
+  const askedScales = new Map<string, number[]>();
+  for (const ls of legScale) askedScales.set(ls.bone, ls.asked);
+  /** Every bone on the legs' path posed on frame i, by the targets and the given scale series. */
+  const poseLegsWith = (i: number, sc: ReadonlyMap<string, number[]>): PathPose => {
+    const r = posePath(rest, legPath!, (b): Posing | null => (targets.has(b) ? { turn: restTurn(b, i), target: targets.get(b)![i]!, aimX: aimX.get(b)! } : null), (b) => sc.get(b)?.[i] ?? null);
     if (typeof r === 'string') throw new Refusal([{ code: 'LEGS_MAP', text: r }]);
     return r;
   };
+  /** Every bone on the legs' path posed on frame i, by the targets as they stand. */
+  const poseLegs = (i: number): PathPose => poseLegsWith(i, scales);
   if (plantOn) {
     // The plant is derived from the targets before the range clamp, so nothing after may turn a bone on the legs' path.
     const onPath = new Set(legPath!);
@@ -720,8 +724,9 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       for (const b of [...Object.keys(a.turn), ...Object.keys(a.offsets)]) if (onPath.has(b)) p.add('LEGS_RANGE', `--plant-feet places the hip through bone "${b}", which set "${a.name}" turns or offsets; that would move the planted foot — drop it from the set or --plant-feet`);
     }
     p.throwIfAny();
+    // #107: the clamp floor holds the bone, not the hip; the plant places the hip from the scale the pose asked for.
     const offsets = Array.from({ length: n }, (_, i) => {
-      const lp = poseLegs(i);
+      const lp = poseLegsWith(i, askedScales);
       return { r: tipOf(rest, lp, legs !== null && 'legs' in legs ? legs.legs.r.ankleBone : ''), l: tipOf(rest, lp, legs !== null && 'legs' in legs ? legs.legs.l.ankleBone : '') };
     });
     const tb = rest.get(t!.bone)!;

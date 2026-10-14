@@ -315,7 +315,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         raised: r.raised,
         // Only when a set declares `place` (#93): a map without one writes the report it always has.
         ...(map.alternates.some((x) => x.place !== undefined && x.place !== null) ? { byHip: r.byHip } : {}),
-        legScale: r.legScale.map(({ scale: _scale, ...rest }) => rest),
+        legScale: r.legScale.map(({ scale: _scale, asked: _asked, ...rest }) => rest),
         pivot: r.pivot,
         stance: r.stance === null ? null : { tolerance: r.stance.tolerance, release: r.stance.release, minSeconds: r.stance.minSeconds, bounds: r.stance.bounds, ...(r.stance.range === undefined ? {} : { range: r.stance.range }), runs: r.stance.runs, over: r.stance.over },
         feet: r.feet === null ? null : { planted: r.planted, legLength: r.feet.legLength, supports: r.feet.supports, jumps: r.feet.jumps, steps: r.feet.steps, changes: r.feet.changes, ...(r.feet.lowered === undefined ? {} : { lowered: r.feet.lowered }), floor: r.floor?.y ?? null, shifts: r.floor?.shifts ?? [], blend: r.blendHold === null ? null : { bounds: r.blendHold.bounds, ...(r.blendHold.range === undefined ? {} : { range: r.blendHold.range }), runs: r.blendHold.runs, over: r.blendHold.over }, reading: feetReading, closure: r.closure },

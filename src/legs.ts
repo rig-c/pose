@@ -266,13 +266,16 @@ export interface LegScale {
   high: Array<[number, number]>;
   /** The scale keyed on each frame (clamped). */
   scale: number[];
+  /** The scale the pose asked for on each frame before the clamp floor (`min(ratio, limits[1])`, rig-c/pose#107). */
+  asked: number[];
 }
 
-/** One segment's scale per frame: picture length ÷ its 95th percentile, clamped; and the runs clamped. */
+/** One segment's scale per frame: picture length ÷ its 95th percentile, clamped; its asked scale without the clamp floor (#107); and the runs clamped. */
 export function legScaleOf(lengths: readonly number[], limits: [number, number]): Omit<LegScale, 'chain' | 'bone' | 'joints'> {
   const straight = percentile(lengths, STRAIGHT_PERCENTILE);
   const ratio = lengths.map((l) => l / straight);
   const scale = ratio.map((r) => Math.min(Math.max(r, limits[0]), limits[1]));
+  const asked = ratio.map((r) => Math.min(r, limits[1]));
   const sorted = [...ratio].sort((a, b) => a - b);
   const mid = sorted.length >> 1;
   const median = sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
@@ -283,6 +286,7 @@ export function legScaleOf(lengths: readonly number[], limits: [number, number])
     low: runs(ratio.map((r) => r < limits[0])),
     high: runs(ratio.map((r) => r > limits[1])),
     scale,
+    asked,
   };
 }
 
