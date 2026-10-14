@@ -10,7 +10,7 @@
  */
 import { poseRawAnimation, poseRawSetup, type CompiledDocument, type RawBone } from 'rig-c/core';
 import type { Body18 } from './joints.ts';
-import { aimAngle, pointAt, type JointMap } from './map.ts';
+import { aimAngle, aimEnds, pointAt, type JointMap } from './map.ts';
 import type { HipsInferred, Joint, PelvisFit, Run } from './pose.ts';
 import type { Retarget } from './retarget.ts';
 import { pictureAngle, pointOn, wrap } from './retarget.ts';
@@ -289,6 +289,81 @@ export interface Posture {
     ratio: number | null;
     ratioSw: number | null;
   } | null;
+  /**
+   * Present with `--plant-feet` when there is at least one support span (#107):
+   * per support span, the detrended (centred ±12-frame moving mean removed)
+   * vertical sd, rig/reference ratio and correlation for the hip, the neck, and
+   * eyes − neck.
+   */
+  bounce?: BounceSpan[];
+}
+
+export interface BounceMetric {
+  reference: number;
+  rig: number;
+  ratio: number | null;
+  corr: number | null;
+}
+
+export interface BounceSpan {
+  side: 'r' | 'l';
+  frames: [number, number];
+  hip: BounceMetric;
+  neck: BounceMetric;
+  eyesNeck: BounceMetric;
+}
+
+/** Half-window (frames each side; 25-frame centred window at 24 fps ≈ 1 s) for detrending a support span's bounce (#107). */
+export const POSTURE_DETREND_HALF_WINDOW = 12;
+
+function detrend(xs: readonly number[], w = POSTURE_DETREND_HALF_WINDOW): number[] {
+  const n = xs.length;
+  return xs.map((x, i) => {
+    const lo = Math.max(0, i - w);
+    const hi = Math.min(n - 1, i + w);
+    let sum = 0;
+    for (let k = lo; k <= hi; k++) sum += xs[k]!;
+    return x - sum / (hi - lo + 1);
+  });
+}
+
+function sdOf(xs: readonly number[]): number {
+  if (xs.length === 0) return 0;
+  const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
+  let s2 = 0;
+  for (const x of xs) s2 += (x - mean) * (x - mean);
+  return Math.sqrt(s2 / xs.length);
+}
+
+function corrOf(a: readonly number[], b: readonly number[]): number | null {
+  if (a.length < 2 || a.length !== b.length) return null;
+  const ma = a.reduce((x, y) => x + y, 0) / a.length;
+  const mb = b.reduce((x, y) => x + y, 0) / b.length;
+  let num = 0;
+  let da = 0;
+  let db = 0;
+  for (let i = 0; i < a.length; i++) {
+    const xa = a[i]! - ma;
+    const xb = b[i]! - mb;
+    num += xa * xb;
+    da += xa * xa;
+    db += xb * xb;
+  }
+  const den = Math.sqrt(da * db);
+  return den > 1e-9 ? num / den : null;
+}
+
+function bounceMetric(ref: readonly number[], rig: readonly number[]): BounceMetric {
+  const dr = detrend(ref);
+  const dg = detrend(rig);
+  const sr = sdOf(dr);
+  const sg = sdOf(dg);
+  return {
+    reference: sr,
+    rig: sg,
+    ratio: sr > 1e-9 ? sg / sr : null,
+    corr: corrOf(dr, dg),
+  };
 }
 
 function rangeOf(xs: number[]): Range {
@@ -407,6 +482,78 @@ export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: Read
       ratioSw: rig === null || rig.rangeSw === null ? null : rig.rangeSw / reference.rangeSw,
     };
   }
+  const bounce: BounceSpan[] = [];
+  if (r.planted && r.feet !== null && r.feet.supports.length > 0) {
+    const scaleNeckIdx = map.translate.scale.pose.indexOf('neck');
+    const neckChain = map.chains.find((c) => c.joints.includes('neck'));
+    const neckJointIdx = neckChain === undefined ? -1 : neckChain.joints.indexOf('neck');
+    const rigNeck = posed[0]?.has('neck')
+      ? 'neck'
+      : scaleNeckIdx >= 0
+        ? map.translate.scale.rig[scaleNeckIdx]!
+        : neckChain !== undefined && neckJointIdx > 0
+          ? (neckChain.aim[neckJointIdx - 1] === 'x' ? `${neckChain.bones[neckJointIdx - 1]}:tip` : neckChain.aim[neckJointIdx - 1]!)
+          : rigShoulder;
+    const headChain = map.chains.find((c) => c.joints.includes('r_eye') && c.joints.includes('l_eye'));
+    const rigNeckY = (b: Map<string, RawBone>): number | null => (rigNeck === null ? null : (pointAt(b, lengths, rigNeck)?.[1] ?? null));
+    const rigEyesY = (b: Map<string, RawBone>): number | null => {
+      if (headChain !== undefined) {
+        const k = headChain.joints.findIndex((j, idx) => idx + 1 < headChain.joints.length && ((j === 'r_eye' && headChain.joints[idx + 1] === 'l_eye') || (j === 'l_eye' && headChain.joints[idx + 1] === 'r_eye')));
+        if (k >= 0) {
+          const ha = headChain.aim[k]!;
+          const hb = headChain.bones[k]!;
+          if (ha.includes('>')) {
+            const [pa, pb] = aimEnds(hb, ha);
+            const ya = pointAt(b, lengths, pa);
+            const yb = pointAt(b, lengths, pb);
+            if (ya !== null && yb !== null) return (ya[1] + yb[1]) / 2;
+          }
+          const p = pointAt(b, lengths, ha === 'x' ? hb : ha);
+          if (p !== null) return p[1];
+        }
+      }
+      if (b.has('eye_r') && b.has('eye_l')) return (b.get('eye_r')!.worldY + b.get('eye_l')!.worldY) / 2;
+      if (b.has('head')) return b.get('head')!.worldY;
+      return rigNeckY(b);
+    };
+    for (const sp of r.feet.supports) {
+      const refHip: number[] = [];
+      const rigHipY: number[] = [];
+      const refNeck: number[] = [];
+      const rigNeckS: number[] = [];
+      const refEyesNeck: number[] = [];
+      const rigEyesNeck: number[] = [];
+      for (let i = sp.frames[0]; i <= sp.frames[1]; i++) {
+        const b = posed[i]!;
+        const rh = at(i, 'r_hip');
+        const lh = at(i, 'l_hip');
+        if (rh !== null && lh !== null) {
+          refHip.push(-((rh[1] + lh[1]) / 2) * s);
+          rigHipY.push(b.get(r.origin.bone)!.worldY);
+        }
+        const nk = at(i, 'neck');
+        const ny = rigNeckY(b);
+        if (nk !== null && ny !== null) {
+          refNeck.push(-nk[1] * s);
+          rigNeckS.push(ny);
+          const re = at(i, 'r_eye');
+          const le = at(i, 'l_eye');
+          const ey = rigEyesY(b);
+          if (re !== null && le !== null && ey !== null) {
+            refEyesNeck.push(-((re[1] + le[1]) / 2 - nk[1]) * s);
+            rigEyesNeck.push(ey - ny);
+          }
+        }
+      }
+      bounce.push({
+        side: sp.side,
+        frames: [sp.frames[0], sp.frames[1]],
+        hip: bounceMetric(refHip, rigHipY),
+        neck: bounceMetric(refNeck, rigNeckS),
+        eyesNeck: bounceMetric(refEyesNeck, rigEyesNeck),
+      });
+    }
+  }
   const has106 = measured !== null && (measured.scaled !== undefined || measured.unmeasured !== undefined || measured.fit !== undefined);
   return {
     pelvis: pelvis.name,
@@ -438,6 +585,7 @@ export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: Read
         }
       : {}),
     sway,
+    ...(bounce.length > 0 ? { bounce } : {}),
   };
 }
 
@@ -476,6 +624,12 @@ export function postureLines(q: Posture): string[] {
       const sw = w.rig.rangeSw === null ? 'no shoulder width' : `${f3(w.rig.rangeSw)} shoulder widths`;
       const ratioSw = w.ratioSw === null ? '' : `, ${f3(w.ratioSw)} in shoulder widths`;
       out.push(`sway, x-range of mid_hip − mid_shoulder: ${ref}, rig ${f1(w.rig.range)} units (${sw}; mid_hip = "${q.rigHip}", mid_shoulder = "${q.rigShoulder}") — rig/reference ${f3(w.ratio!)} in units${ratioSw}`);
+    }
+  }
+  if (q.bounce !== undefined) {
+    const fmt = (bm: BounceMetric) => `${bm.ratio === null ? 'n/a' : f3(bm.ratio)} (${f1(bm.rig)}/${f1(bm.reference)}u, r=${bm.corr === null ? 'none' : f3(bm.corr)})`;
+    for (const b of q.bounce) {
+      out.push(`bounce ${b.side} ${b.frames[0]}–${b.frames[1]} (detrended y sd, rig/reference): hip ${fmt(b.hip)}, neck ${fmt(b.neck)}, eyes − neck ${fmt(b.eyesNeck)}`);
     }
   }
   return out;
