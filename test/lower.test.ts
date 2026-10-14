@@ -10,7 +10,7 @@
 import { describe, expect, test } from 'bun:test';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { supportsOf, type Side } from '../src/legs.ts';
+import { plantHip, supportsOf, type Side } from '../src/legs.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const MUTANTS = join(ROOT, 'node_modules', '.cache', 'rig-pose-mutants');
@@ -60,7 +60,7 @@ describe('#113: --plant-feet reads the support from the lower ankle', () => {
     // The step still releases the right foot (frame 10, re-planted on 12); the lifted left may not take support.
     expect(feet.steps.map((s) => [s.side, s.frames, s.replant, s.to])).toEqual([['r', [10, 11], 12, null]]);
     expect(sides(feet.support)).toBe('rrrrrrrrrr--rrrrrrrrrrrrrrrrrr');
-    // Frames 10–11: the lifted leg wins the rule before #113; read from the lower ankle, neither foot supports.
+    // Frames 10–11: the lifted leg wins the rule before #113; read from the lower ankle, neither foot is planted.
     for (const i of [10, 11]) {
       expect(before.support[i]).toBe('l');
       expect(feet.support[i]).toBeNull();
@@ -68,6 +68,9 @@ describe('#113: --plant-feet reads the support from the lower ankle', () => {
     }
     expect(feet.lowered).toEqual([
       { frames: [10, 11], was: 'l', now: null, cause: 'higher' },
+    ]);
+    expect(feet.tracked).toEqual([
+      { side: 'r', frames: [10, 11] },
     ]);
     // On every frame with a supporting foot, its ankle is the lower one.
     feet.support.forEach((s, i) => {
@@ -97,6 +100,7 @@ describe('#113: --plant-feet reads the support from the lower ankle', () => {
     expect(feet.support).toEqual(before.support);
     expect(feet.supports).toEqual([{ side: 'r', frames: [0, N - 1] }]);
     expect(feet.lowered).toEqual([]);
+    expect(feet.tracked).toBeUndefined();
   });
 
   test('in place (#92) the rule does not apply: the reading is #92\'s, and lowered is absent', () => {
@@ -129,4 +133,44 @@ describe('#113: --plant-feet reads the support from the lower ankle', () => {
       rmSync(d, { recursive: true, force: true });
     }
   });
+
+  test('#119: a release followed by frames where only the higher foot is free tracks the lower foot on the floor; mutant following the pose\'s travel is red', async () => {
+    const a = stepUnderLift();
+    const feet = supportsOf(a, hips, times, secondsOf, false, true);
+    expect(feet.tracked).toEqual([{ side: 'r', frames: [10, 11] }]);
+    const offset = (i: number, s: Side): Pt => [a[s][i]![0], -a[s][i]![1]];
+    // Pose travel dips 25 units down and slides 30 units right on the released frames 10–11.
+    const travel = (i: number): Pt => (i >= 10 && i <= 11 ? [30, -25] : [0, 0]);
+    const track = (i: number, s: Side): number => a[s][i]![0];
+    const p = plantHip(feet, offset, travel, [0, 0], undefined, undefined, track);
+    expect(p.floor?.y).toBe(-100);
+    // On tracked frames 10–11, the lower foot r stays on the floor (-100) and follows its own ankle track (+5 px from frame 9),
+    // not the pose's travel; on frame 12 the normal plant takes over at that position with no vertical step.
+    for (const i of [10, 11, 12]) {
+      const footX = p.hip[i]![0] + offset(i, 'r')[0];
+      const footY = p.hip[i]![1] + offset(i, 'r')[1];
+      expect(footY).toBeCloseTo(-100, 9);
+      expect(footX - (p.hip[9]![0] + offset(9, 'r')[0])).toBeCloseTo(5, 9);
+    }
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      const path = join(d, 'src', 'legs.ts');
+      const src = readFileSync(path, 'utf8');
+      const from = 'const tr = s === null ? (tracked[i] ?? null) : null;';
+      expect(src.split(from)).toHaveLength(2);
+      writeFileSync(path, src.replace(from, 'const tr = null;'));
+      const m = (await import(path)) as { plantHip: typeof plantHip };
+      const mp = m.plantHip(feet, offset, travel, [0, 0], undefined, undefined, track);
+      const mutFootY = mp.hip[10]![1] + offset(10, 'r')[1];
+      const mutFootX = mp.hip[10]![0] + offset(10, 'r')[0] - (mp.hip[9]![0] + offset(9, 'r')[0]);
+      console.log(`  mutant "tracked follows travel": frame 10 lower foot y=${mutFootY.toFixed(2)} (floor -100), dx=${mutFootX.toFixed(2)} (track +5)`);
+      expect(mutFootY).toBeCloseTo(-125, 9);
+      expect(mutFootX).toBeCloseTo(35, 9);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
 });
+
