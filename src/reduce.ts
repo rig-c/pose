@@ -18,6 +18,13 @@
  * target is its world error: errors do not pile up down a chain. A knot's value
  * is the target's, not the dense key's.
  *
+ * Scaled bones (rig-c/pose#94). A `scalex` track is thinned in value space
+ * within `SCALE_REDUCE` (`reduceScale`). A bone under a scaled bone is not
+ * keyed by the formula above but through its parent's posed matrix (legs.ts
+ * `posePath`), so `reduceUnderScale` solves its keys again through its parent
+ * as reduced and reads each error as the world aim, and the world length, it
+ * lands on.
+ *
  * Every error is read after the numbers are rounded as written and evaluated as
  * rig-c's poser evaluates them (`curveAt`): the curve is the poser's ten-piece
  * polyline, not the cubic. The poser is the judge — run.ts measures the landing
@@ -52,12 +59,13 @@ export interface ReduceHip {
 }
 export interface ReduceRow {
   bone: string;
-  kind: 'angle' | 'origin';
+  /** `scale`: a `scalex` track (#94), its error the bone's world x-axis length against its setup length times the scale asked. */
+  kind: 'angle' | 'origin' | 'scale';
   /** Dense key count. */
   before: number;
   /** Reduced key count. */
   after: number;
-  /** The largest error over all frames: degrees of world aim for a bone, world units for the hip. */
+  /** The largest error over all frames: degrees of world aim for a bone, world units for the hip, a fraction of the setup length for a scale. */
   worst: number;
   /** The first frame where it is. */
   frame: number;
@@ -67,6 +75,8 @@ export interface Reduced {
   hip: ReducedKey[] | null;
   /** The bones in the order given, then the hip. */
   rows: ReduceRow[];
+  /** Each bone's world-aim error on every frame (reduced less dense, degrees), as the poser evaluates the reduced keys. */
+  errors: Map<string, number[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +196,11 @@ const r3 = (v: number): number => {
   const r = Math.round(v * 1000) / 1000;
   return Object.is(r, -0) ? 0 : r;
 };
+/** A scale as the retarget writes one (retarget.ts `r6`). */
+const r6 = (v: number): number => {
+  const r = Math.round(v * 1e6) / 1e6;
+  return Object.is(r, -0) ? 0 : r;
+};
 
 /** One track to reduce: its targets per frame (one array per frame, a value per channel) and how a frame's error is read. */
 interface Fit {
@@ -194,6 +209,8 @@ interface Fit {
   tolerance: number;
   /** The error at frame `i` of `values` against the target. */
   error: (i: number, values: readonly number[]) => number;
+  /** How a written value is rounded: 0.001 (an angle, a translate) unless given. */
+  round?: (v: number) => number;
 }
 
 /** The frame with the largest error over `frames` (the first, on a tie), or null when there is none. */
@@ -242,7 +259,8 @@ function solveHandles(a: ReducedKey, b: ReducedKey, channel: number, hx1: number
 function fitTrack(times: readonly number[], samples: readonly number[], fit: Fit): ReducedKey[] {
   const n = times.length;
   const channels = fit.targets[0]!.length;
-  const keyOn = (i: number): ReducedKey => ({ t: times[i]!, v: fit.targets[i]!.map(r3) });
+  const round = fit.round ?? r3;
+  const keyOn = (i: number): ReducedKey => ({ t: times[i]!, v: fit.targets[i]!.map(round) });
   const knots = [...new Set([0, n - 1, ...fit.keep])].sort((x, y) => x - y);
   const curves = new Map<number, number[]>();
   const done: number[] = [];
@@ -266,7 +284,7 @@ function fitTrack(times: readonly number[], samples: readonly number[], fit: Fit
     const hx2 = times[k0]! + (2 * (times[k1]! - times[k0]!)) / 3;
     const handles = Array.from({ length: channels }, (_, c) => solveHandles(a, b, c, hx1, hx2, interior, samples, (i) => fit.targets[i]![c]!));
     if (handles.every((h) => h !== null)) {
-      const curve = handles.flatMap(([cy1, cy2]) => [hx1, r3(cy1), hx2, r3(cy2)]);
+      const curve = handles.flatMap(([cy1, cy2]) => [hx1, round(cy1), hx2, round(cy2)]);
       const bent = errorWith({ ...a, curve });
       if (bent.worst <= fit.tolerance) {
         curves.set(k0, curve);
@@ -304,8 +322,7 @@ export function reduceKeys(times: readonly number[], bones: readonly ReduceBone[
   if (!(Number.isFinite(tolerance) && tolerance > 0)) throw new Error(`reduce: the tolerance is ${tolerance}°, not a positive number`);
   if (hip !== null && !(Number.isFinite(hip.tolerance) && hip.tolerance > 0)) throw new Error(`reduce: the hip's tolerance is ${hip.tolerance} units, not a positive number`);
   // The poser samples at the running sum of the frame steps (verify.ts `poseFrames`).
-  const samples: number[] = [times[0]!];
-  for (let i = 1; i < n; i++) samples.push(samples[i - 1]! + (times[i]! - times[i - 1]!));
+  const samples = samplesOf(times);
 
   const byName = new Map<string, ReduceBone>();
   for (const b of bones) {
@@ -341,6 +358,7 @@ export function reduceKeys(times: readonly number[], bones: readonly ReduceBone[
     rowOf.set(b.bone, { bone: b.bone, kind: 'angle', before: n, after: keys.length, worst: worst.worst, frame: worst.frame });
   }
   const rows = bones.map((b) => rowOf.get(b.bone)!);
+  const errorsOrdered = new Map(bones.map((b) => [b.bone, errors.get(b.bone)!]));
   const ordered = new Map(bones.map((b) => [b.bone, rotate.get(b.bone)!]));
 
   let hipKeys: ReducedKey[] | null = null;
@@ -357,5 +375,147 @@ export function reduceKeys(times: readonly number[], bones: readonly ReduceBone[
     const worst = worstOf(at.map((_, i) => i), (i) => world(i, at[i]!))!;
     rows.push({ bone: hip.bone, kind: 'origin', before: n, after: hipKeys.length, worst: worst.worst, frame: worst.frame });
   }
-  return { rotate: ordered, hip: hipKeys, rows };
+  return { rotate: ordered, hip: hipKeys, rows, errors: errorsOrdered };
+}
+
+/** The times the poser samples a track at: the running sum of the frame steps (verify.ts `poseFrames`). */
+export function samplesOf(times: readonly number[]): number[] {
+  const samples: number[] = [times[0]!];
+  for (let i = 1; i < times.length; i++) samples.push(samples[i - 1]! + (times[i]! - times[i - 1]!));
+  return samples;
+}
+
+// ---------------------------------------------------------------------------
+// scales, and bones keyed through a scaled parent (rig-c/pose#94)
+// ---------------------------------------------------------------------------
+
+/**
+ * The tolerance a reduced `scalex` track is held to: half of the landing
+ * check's scale tolerance (verify.ts `SCALE_TOLERANCE`, 1e-4 of the setup
+ * length), so a reduced curve cannot fail the check it is re-run against.
+ */
+export const SCALE_REDUCE = 5e-5;
+
+/**
+ * One `scalex` track of a bone with no scaled bone above it, reduced: its world
+ * x-axis length over setup is its own scale, so the error is the value's
+ * distance from the scale asked.
+ */
+export function reduceScale(times: readonly number[], bone: string, asked: readonly number[], keep: ReadonlySet<number>, tolerance: number): { keys: ReducedKey[]; at: number[]; row: ReduceRow } {
+  const n = times.length;
+  if (asked.length !== n) throw new Error(`reduce: bone "${bone}" asks ${asked.length} scale(s) for ${n} frame(s)`);
+  const samples = samplesOf(times);
+  const keys = fitTrack(times, samples, { targets: asked.map((v) => [v]), keep: keptFrames(keep, n, `bone "${bone}" scalex`), tolerance, error: (i, v) => Math.abs(v[0]! - asked[i]!), round: r6 });
+  const at = trackAt(keys, samples, 1).map((v) => v[0]!);
+  const worst = worstOf(at.map((_, i) => i), (i) => Math.abs(at[i]! - asked[i]!))!;
+  return { keys, at, row: { bone, kind: 'scale', before: n, after: keys.length, worst: worst.worst, frame: worst.frame } };
+}
+
+/** A world 2×2: columns (a, c) — the x axis — and (b, d) — the y axis (legs.ts `M2`). */
+export type M2 = [number, number, number, number];
+const DEG = 180 / Math.PI;
+const mul = (p: M2, q: M2): M2 => [p[0] * q[0] + p[1] * q[2], p[0] * q[1] + p[1] * q[3], p[2] * q[0] + p[3] * q[2], p[2] * q[1] + p[3] * q[3]];
+const inv = (m: M2): M2 => {
+  const det = m[0] * m[3] - m[1] * m[2];
+  return [m[3] / det, -m[1] / det, -m[2] / det, m[0] / det];
+};
+const apply = (m: M2, v: [number, number]): [number, number] => [m[0] * v[0] + m[1] * v[1], m[2] * v[0] + m[3] * v[1]];
+const rot = (deg: number): M2 => {
+  const r = deg / DEG;
+  return [Math.cos(r), -Math.sin(r), Math.sin(r), Math.cos(r)];
+};
+const scaleX = (s: number): M2 => [s, 0, 0, 1];
+/** A bone's setup local 2×2 in its parent's axes: inv(parent's setup world) · its setup world (legs.ts `posePath`'s L0). */
+export const setupLocal = (parentWorld0: M2, world0: M2): M2 => mul(inv(parentWorld0), world0);
+/** `p · q`. */
+export const mulM2 = mul;
+const IDENTITY: M2 = [1, 0, 0, 1];
+export { IDENTITY as M2_IDENTITY };
+const wrap180 = (d: number): number => {
+  const x = ((d + 180) % 360 + 360) % 360 - 180;
+  return x === -180 ? 180 : x;
+};
+
+/**
+ * A mapped bone under a scaled bone (legs.ts `posePath`: keyed through its
+ * parent's posed matrix), reduced once the bones above it are. Its parent's
+ * world 2×2 is posed from keys already reduced — a bone the key formula holds
+ * for (`rigid`: R(turn) · its setup world · diag(scale, 1), its turn and scale
+ * the reduced ones), or another bone of the same call given before it — times
+ * the setup locals of the unmapped bones between (`via`).
+ */
+export interface UnderBone {
+  bone: string;
+  parent: { rigid: { turn: readonly number[]; world0: M2; scale: readonly number[] }; via: M2 } | { under: string; via: M2 };
+  /** Its setup local 2×2 in its parent's axes: inv(parent's setup world) · its setup world, by rig-c's setup. */
+  local: M2;
+  /** Its setup world x-axis length. */
+  len0: number;
+  /** The world angle its x axis is asked on every frame (degrees), and the scale of it asked (1: none). */
+  target: readonly number[];
+  asked: readonly number[];
+  /** The dense rotate keys (unwrapped, as written). */
+  dense: readonly number[];
+  keep: ReadonlySet<number>;
+}
+
+/**
+ * Each bone under a scaled bone, in the order given (parents first): its
+ * rotate and scalex keys re-solved through its parent's reduced posed matrix
+ * (the key that puts its x axis on the target, and the scale that gives it the
+ * length asked), then reduced — the rotate with its error read as the world aim
+ * it lands on through that matrix, the scale with its error read as the world
+ * length over setup against the scale asked, on the rotate as reduced. Its
+ * world error is its own fit error, as down a chain the key formula holds for.
+ */
+export function reduceUnderScale(times: readonly number[], bones: readonly UnderBone[], tolerance: number, scaleTolerance: number): { rotate: Map<string, ReducedKey[]>; scale: Map<string, ReducedKey[]>; rows: ReduceRow[] } {
+  const n = times.length;
+  const samples = samplesOf(times);
+  const world = new Map<string, M2[]>();
+  const rotate = new Map<string, ReducedKey[]>();
+  const scale = new Map<string, ReducedKey[]>();
+  const rows: ReduceRow[] = [];
+  for (const b of bones) {
+    for (const [what, xs] of [['target', b.target], ['asked', b.asked], ['dense', b.dense]] as const) {
+      if (xs.length !== n) throw new Error(`reduce: bone "${b.bone}" has ${xs.length} ${what} value(s) for ${n} frame(s)`);
+    }
+    const p = b.parent;
+    let parent: M2[];
+    if ('under' in p) {
+      const above = world.get(p.under);
+      if (above === undefined) throw new Error(`reduce: bone "${b.bone}" hangs from bone "${p.under}", which is not given before it`);
+      parent = above.map((m) => mul(m, p.via));
+    } else {
+      parent = Array.from({ length: n }, (_, i) => mul(mul(mul(rot(p.rigid.turn[i]!), p.rigid.world0), scaleX(p.rigid.scale[i]!)), p.via));
+    }
+    const l0: [number, number] = [b.local[0], b.local[2]];
+    const a0 = Math.atan2(l0[1], l0[0]) * DEG;
+    /** The x axis's world vector through the parent on frame i, at rotate key k, before its own scale. */
+    const axis = (i: number, k: number) => apply(parent[i]!, apply(rot(k), l0));
+    // The dense keys re-solved through the reduced parent (posePath's solve).
+    const solved = b.target.map((t, i) => {
+      const v = apply(inv(parent[i]!), [b.asked[i]! * b.len0 * Math.cos(t / DEG), b.asked[i]! * b.len0 * Math.sin(t / DEG)]);
+      const k = Math.atan2(v[1], v[0]) * DEG - a0;
+      return b.dense[i]! + wrap180(k - b.dense[i]!);
+    });
+    const aimError = (i: number, k: number) => {
+      const w = axis(i, k);
+      return Math.abs(wrap180(Math.atan2(w[1], w[0]) * DEG - b.target[i]!));
+    };
+    const keep = keptFrames(b.keep, n, `bone "${b.bone}"`);
+    const rk = fitTrack(times, samples, { targets: solved.map((k) => [k]), keep, tolerance, error: (i, v) => aimError(i, v[0]!) });
+    const kAt = trackAt(rk, samples, 1).map((v) => v[0]!);
+    const ae = worstOf(kAt.map((_, i) => i), (i) => aimError(i, kAt[i]!))!;
+    rows.push({ bone: b.bone, kind: 'angle', before: n, after: rk.length, worst: ae.worst, frame: ae.frame });
+    // The scale that gives it the length asked on the rotate as reduced.
+    const reach = kAt.map((k, i) => Math.hypot(...axis(i, k)) / b.len0);
+    const sk = fitTrack(times, samples, { targets: reach.map((r, i) => [b.asked[i]! / r]), keep, tolerance: scaleTolerance, error: (i, v) => Math.abs(v[0]! * reach[i]! - b.asked[i]!), round: r6 });
+    const sAt = trackAt(sk, samples, 1).map((v) => v[0]!);
+    const se = worstOf(sAt.map((_, i) => i), (i) => Math.abs(sAt[i]! * reach[i]! - b.asked[i]!))!;
+    rows.push({ bone: b.bone, kind: 'scale', before: n, after: sk.length, worst: se.worst, frame: se.frame });
+    world.set(b.bone, parent.map((m, i) => mul(mul(mul(m, rot(kAt[i]!)), b.local), scaleX(sAt[i]!))));
+    rotate.set(b.bone, rk);
+    scale.set(b.bone, sk);
+  }
+  return { rotate, scale, rows };
 }

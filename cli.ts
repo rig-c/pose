@@ -145,7 +145,10 @@ retarget
                         each bone against its parent's reduced error, so errors do not pile up down a chain.
                         Kept regardless: the first and last frame, the frames either side of a switch boundary
                         on the chains it changes, and the edges of every FLIP spread, SHORT span and RANGE run
-                        (REDUCE lines; default: off). Not with --leg-scale or --plant-feet (rig-c/pose#32)
+                        (REDUCE lines; default: off). It runs last, on the final keys: with --leg-scale,
+                        --plant-feet and --stance, a scaled bone's scalex is thinned within 5e-5 of its setup
+                        length, a bone under one is re-solved through its parent as reduced, and each ankle
+                        is held to what the reduced bones above it may move it by (rig-c/pose#94)
   --reduce-hip <units>  with --reduce, thin the hip's translate keys too, its world origin within units
                         of the dense keys (default: the hip stays dense)
   --switch-tolerance <d>  a set of alternate drawings (the map's "alternates") may show on a frame where
@@ -325,9 +328,6 @@ function reduceOf(f: Map<string, string>): { reduce?: number; reduceHip?: number
     return {};
   }
   const reduce = num(f, 'reduce', 0, (n) => n > 0 && n < 180, 'degrees in (0, 180)');
-  for (const other of ['leg-scale', 'plant-feet'] as const) {
-    if (f.has(other) && f.get(other) !== 'off') throw new Usage(`--reduce is given with --${other}; their keys land a bone through a scaled parent or an ankle's lever, which the reduction's tolerance does not bound (rig-c/pose#32 round 1)`);
-  }
   return f.has('reduce-hip') ? { reduce, reduceHip: num(f, 'reduce-hip', 0, (n) => n > 0, 'rig units > 0') } : { reduce };
 }
 

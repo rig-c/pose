@@ -3095,6 +3095,105 @@ describe('#47: --leg-scale and --plant-feet', () => {
       }
     }, SLOW);
   });
+
+  describe('#94: --reduce composes with --leg-scale, --plant-feet and --stance', () => {
+    /** The picture leg, hip → ankle at full length, px. */
+    const PIC = Math.hypot(V[0], V[1]);
+    /** Knees bending toward the camera (scaled legs, the hip planted over them) and the left, free ankle 0.03 leg lengths up on frames 8–15: --stance plants it, its leg stretched. */
+    const gait = () => legsPose(bendF, (i, s) => (s === 'l' && i >= 8 && i <= 15 ? 0.03 * PIC : 0));
+    const FLAGS = ['--leg-scale', '0.8,1.05', '--plant-feet', '--stance', '0.07'];
+    /** The landing check's foot tolerance without --reduce: 0.01 units plus 1e-4 of the 150-unit leg. */
+    const PLANT_TOL = 0.01 + 1e-4 * LEG;
+    /** Every key of every track of the animation. */
+    const keysIn = (path: string) => motionOf(path).animations.dance!.tracks.reduce((s, t) => s + t.keys.length, 0);
+    /** The free (left) ankle against the supporting (right) one on the stance frames, world y: the floor the stance plants it on. */
+    const floorGap = (p: Posed) => Math.max(...Array.from({ length: N }, (_, i) => Math.abs(p.ankle.l[i]![1] - p.ankle.r[i]![1])));
+
+    test('reduced last, on the final keys: the gate green; every bone, scale and ankle lands; the keys drop; each ankle and scale within its stated bound of the dense run', () => {
+      const c = setup({ pose: gait() });
+      const plain = retarget(c, FLAGS);
+      expect(plain.status).toBe(0);
+      expect(linesOf(plain, 'STANCE')[0]).toStartWith('STANCE planted both: free foot l frames 0–23');
+      const dense = posedLegs(c.build);
+      const before = keysIn(c.out);
+      expect(floorGap(dense)).toBeLessThan(PLANT_TOL);
+      const r = retarget(c, [...FLAGS, '--reduce', '1', '--reduce-hip', '0.5']);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      expect(linesOf(r, 'GATE')[0]).toContain('green');
+      const red = linesOf(r, 'REDUCE');
+      // A rotate row per mapped bone, the hip, a scalex row per scaled bone, and the total.
+      for (const b of ['leg_r0', 'leg_r1', 'leg_l0', 'leg_l1']) {
+        expect(red.some((l) => l.startsWith(`REDUCE bone "${b}" rotate: 24 → `))).toBe(true);
+        expect(red.some((l) => l.startsWith(`REDUCE bone "${b}" scalex: 24 → `))).toBe(true);
+      }
+      expect(red.some((l) => l.startsWith('REDUCE hip "hip" translate: 24 → '))).toBe(true);
+      expect(red.at(-1)).toMatch(/^REDUCE rotate keys \d+ → \d+ \([0-9.]+×\) within 1°; scalex keys 96 → \d+ within 0\.00005 of the setup length$/);
+      const lands = linesOf(r, 'LAND');
+      expect(lands.filter((l) => l.includes(' scale — '))).toHaveLength(4);
+      expect(lands.filter((l) => l.includes(' ankle — '))).toHaveLength(2);
+      expect(keysIn(c.out)).toBeLessThan(before);
+      const after = posedLegs(c.build);
+      // Independently, posed by rig-c: every scaled bone's world length within 1e-4 of the dense run's …
+      for (let i = 0; i < N; i++) for (const n of Object.keys(after.len)) expect(Math.abs(after.len[n]![i]! - dense.len[n]![i]!)).toBeLessThan(1e-4);
+      // … each ankle within the stated bound of the dense run's (the hip's 0.5, plus the leg's 150 units × the largest scale × (1° + 5e-5)) …
+      const bound = 0.5 + 150 * 1.08 * (RAD + 5e-5);
+      for (const s of ['r', 'l'] as const) for (let i = 0; i < N; i++) expect(Math.hypot(after.ankle[s][i]![0] - dense.ankle[s][i]![0], after.ankle[s][i]![1] - dense.ankle[s][i]![1])).toBeLessThan(bound);
+      // … and the planted free foot still on the supporting one's floor, within the tolerance its two ankles carry.
+      expect(floorGap(after)).toBeLessThan(PLANT_TOL + 2 * bound);
+    }, SLOW);
+
+    test('the stated bound: the ankle\'s tolerance under --reduce is the plant\'s plus footReduce, printed on its LAND line', () => {
+      const c = setup({ pose: gait() });
+      const tolerances = (deg: string) => {
+        const r = retarget(c, [...FLAGS, '--reduce', deg]);
+        expect(r.status).toBe(0);
+        const ankle = linesOf(r, 'LAND').filter((l) => l.includes(' ankle — '));
+        expect(ankle).toHaveLength(2);
+        return ankle.map((l) => Number(/the tolerance is ([0-9.]+) units$/.exec(l)![1]) - PLANT_TOL);
+      };
+      const a = tolerances('0.1');
+      const b = tolerances('0.4');
+      for (const [k, x] of a.entries()) {
+        // A lever × the largest scale between the leg's 150 units and the hip-to-ankle path with its offset, …
+        const lever = x / (0.1 * RAD + 5e-5);
+        expect(lever).toBeGreaterThan(150);
+        expect(lever).toBeLessThan(200 * 1.08);
+        // … the same lever at four times the angle (the three printed digits allow 0.5 %).
+        expect(Math.abs(b[k]! / (0.4 * RAD + 5e-5) / lever - 1)).toBeLessThan(5e-3);
+      }
+    }, SLOW);
+
+    test('mutant: the scales reduced as they stood before the plant and the stance stretched them leave the free foot off the floor, and the run is refused naming that ankle', () => {
+      mkdirSync(MUTANTS, { recursive: true });
+      const d = mkdtempSync(join(MUTANTS, 'm-'));
+      try {
+        cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+        cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+        cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+        const path = join(d, 'src', 'run.ts');
+        const from = 'const red = reduceScale(r.times, bone, r.scales.get(bone) ?? ';
+        const before = readFileSync(path, 'utf8');
+        expect(before.split(from)).toHaveLength(2);
+        writeFileSync(path, before.replace(from, 'const red = reduceScale(r.times, bone, r.legScale.find((l) => l.bone === bone)?.scale ?? r.scales.get(bone) ?? '));
+        const c = setup({ pose: gait() });
+        const m = retarget(c, [...FLAGS, '--reduce', '0.1'], join(d, 'cli.ts'));
+        const foot = fails(m).find((l) => l.startsWith('FAIL  POSE_LANDS: bone "leg_l1:tip" ankle'));
+        const gap = foot === undefined ? 0 : Number(/worst \|reached − asked\| ([0-9.e-]+) units/.exec(foot)![1]);
+        console.log(`  mutant "reduce before the plant's stretch": exit ${m.status}; ${foot ?? fails(m)[0] ?? 'no refusal'}`);
+        expect(m.status).toBe(1);
+        // The floor row: the free ankle off where the stance planted it by more than the plant's tolerance and the reduction's bound together.
+        expect(gap).toBeGreaterThan(PLANT_TOL + 150 * 1.08 * (0.1 * RAD + 5e-5));
+        // Control: the package lands the same pose with the same flags.
+        const ok = retarget(c, [...FLAGS, '--reduce', '0.1']);
+        expect(ok.stderr).toBe('');
+        expect(ok.status).toBe(0);
+        expect(floorGap(posedLegs(c.build))).toBeLessThan(PLANT_TOL + 2 * 150 * 1.08 * (0.1 * RAD + 5e-5));
+      } finally {
+        rmSync(d, { recursive: true, force: true });
+      }
+    }, SLOW);
+  });
 });
 
 // ===========================================================================
@@ -3422,16 +3521,11 @@ describe('--reduce: few keys with curves within a stated tolerance (rig-c/pose#3
     expect(Math.max(...Object.keys(BONE_ANGLE).map((b) => worst.get(b)!))).toBeGreaterThan(1 + ANGLE_TOL);
   }, SLOW);
 
-  test('refused: --reduce-hip alone, and --reduce with --plant-feet or --leg-scale', () => {
+  test('refused: --reduce-hip alone (#94 lifted the refusal with --plant-feet and --leg-scale)', () => {
     const c = setup();
     const alone = retarget(c, ['--reduce-hip', '1']);
     expect(alone.status).toBe(2);
     expect(alone.stderr).toContain('--reduce-hip is given without --reduce');
-    for (const extra of [['--plant-feet'], ['--leg-scale', '0.8,1.05']]) {
-      const r = retarget(c, ['--reduce', '1', ...extra]);
-      expect(r.status).toBe(2);
-      expect(r.stderr).toContain(`--reduce is given with ${extra[0]}`);
-    }
     expect(existsSync(c.out)).toBe(false);
   });
 

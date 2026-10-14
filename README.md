@@ -247,7 +247,10 @@ The retarget writes one key per pose frame on every mapped bone. That is faithfu
 - **Kept regardless:** the first and last frame; the frames either side of a switch boundary, on the chains the switch changes; and the first and last frame of every `FLIP` spread, `SHORT` span and `RANGE` run, on that bone.
 - **The landing check holds the dense targets** with the tolerance added (0.01° + `deg`; 0.01 + `units`), and it is posed by rig-c as always.
 - **On HQ's dancer** (`--smooth 7 --flip 90 --short 0.35 --bends clamp`; 313 frames, 11 mapped bones): `--reduce 1 --reduce-hip 1` takes the rotate keys from 3443 to 588 (5.86×), 296 of the spans curved, and the hip's translate keys from 313 to 96. The gate is green. rig-c's poser lands every bone within 0.9998° of the dense target (head) and the hip within 0.901 units. At 0.5° the keys drop 3.92×; at 2°, 8.38×.
-- **Not combined with `--leg-scale` or `--plant-feet`.** Their keys land a bone through a scaled parent or an ankle's lever, which this tolerance does not bound (rig-c/pose#32).
+- **It runs last, on the final keys** (rig-c/pose#94): after `--plant-feet`'s plant, its one floor, the blend and `--stance` stretches and the in-place closure. Their keys are reduced like any other, and every landing check is run again on the reduced motion.
+  - A scaled bone's `scalex` track is thinned within 5e-5 of its setup length: half of the scale landing check's 1e-4, so a reduced curve cannot fail that check.
+  - A mapped bone under a scaled bone (keyed through its parent's posed matrix by `--leg-scale`) is solved again through its parent as reduced. Its rotate is then thinned with the error read as the world aim it lands on, and its `scalex` with the error read as the world length it lands on. Its world error is its own fit error, as down any other chain.
+  - Each ankle is held to the plant's tolerance plus the most the reduction may move it: the hip's tolerance (with `--reduce-hip`), plus the leg from the hip to the ankle (each bone's setup offset from its parent and the last bone's length) times the largest scale asked, times the angle tolerance in radians plus 5e-5. The ankle's `LAND` line prints that tolerance.
 
 Exit codes: `0` written, `1` refused (every reason printed, nothing written), `2` bad invocation. `rig-pose --help` has every flag.
 
