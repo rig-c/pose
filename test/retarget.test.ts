@@ -3206,12 +3206,12 @@ describe('#63: the camera a scan read, carried by the sequence', () => {
 
   test('cameraSource: the CAMERA line names it, the writer keeps it, and a malformed one is refused by name', () => {
     const tail = ': the sequence carries the picture\'s camera against frame 0\'s; its joints are normalised by it (p′ = (p − t) / s): s 0.9080 (frame 14) … 1.0100 (frame 5) over 16 frames; s changes fastest at frame 5→6 (t=0.750s) −0.0480, frame 10→11 (t=1.375s) −0.0380, frame 13→14 (t=1.750s) −0.0280; fewest background inliers 40';
-    for (const source of ['tracked', 'hand-labelled, 6 keys']) {
+    for (const source of ['tracked', 'hand-labelled, 6 keys', 'hand windows, floor-snapped: 5-6 (r+l, l/r 0.4 %)']) {
       const c = setup({ pose: { ...withCamera(camera(BASE.n)), cameraSource: source } });
       const r = retarget(c);
       expect(r.stderr).toBe('');
       expect(r.status).toBe(0);
-      // A hand-labelled camera fitted nothing, so the line states no inlier count.
+      // A camera by hand (a file or windows snapped on the floor) fitted no feature, so the line states no inlier count.
       expect(linesOf(r, 'CAMERA')).toEqual([`CAMERA ${source}${source === 'tracked' ? tail : tail.replace('; fewest background inliers 40', '')}`]);
       const seq = readPoseSequence(readFileSync(c.pose, 'utf8'), c.pose);
       expect(seq.cameraSource).toBe(source);
