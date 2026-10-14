@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.15.0](https://github.com/rig-c/pose/compare/v0.14.0...v0.15.0) (2026-10-14)
+
+
+### Features
+
+* **pose:** an `inferred` joint state, declared at clean (--hips-inferred), and POSTURE leaves out a tilt read from inferred hips ([#63](https://github.com/rig-c/pose/issues/63)) ([#77](https://github.com/rig-c/pose/issues/77)) ([610a06c](https://github.com/rig-c/pose/commit/610a06ca0bfbb050540feaf36b64ff278e9874a2))
+
+
+### Bug Fixes
+
+* **readme:** the idle and alternates examples in generic names ([#74](https://github.com/rig-c/pose/issues/74)) ([376f524](https://github.com/rig-c/pose/commit/376f524fb9aeecb3da5af2a70efff921b7706d3c))
+
 ## [0.14.0](https://github.com/rig-c/pose/compare/v0.13.0...v0.14.0) (2026-10-13)
 
 
