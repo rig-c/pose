@@ -596,7 +596,8 @@ let trackFn: ((i: number, s: Side) => number) | undefined;
  * support still blends the two derivations' y over `PLANT_BLEND` frames, now
  * between two spans on the floor, while holding the planted foot's x from the
  * frame it lands on (#102); a jump follows the pose's travel from the hip
- * it left (on the floor) and lands on the floor. On a blend frame the hip is
+ * it left (on the floor), carried so the landing frame meets the floor and no
+ * frame inside the flight puts a foot below it (#103). On a blend frame the hip is
  * between the two derivations, so the supporting ankle is off its anchor:
  * `blends` lists those frames with the anchor's y, and `holdBlend` stretches
  * the supporting leg to keep it there. Null `floor` in the result: there is no
@@ -664,11 +665,11 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
   const tracked = new Array<Side | null>(n).fill(null);
   for (const t of feet.tracked ?? []) for (let i = t.frames[0]; i <= t.frames[1]; i++) tracked[i] = t.side;
   const trkX = trackFn ?? follow;
-  /** How the hip is derived on a frame: held over a foot's anchor, tracking the lower foot on the floor (#119), or carried by the pose's travel from a frame's hip. */
+  /** How the hip is derived on a frame: held over a foot's anchor, tracking the lower foot on the floor (#119), or carried by the pose's travel from a frame's hip (and for a jump against `floorY`, carried so the landing frame meets the floor and frames inside the flight never go below it, #103). */
   type Mode =
     | { kind: 'plant'; side: Side; anchor: Pt; from: number }
     | { kind: 'track'; side: Side; anchor: Pt; from: number; at: Pt }
-    | { kind: 'travel'; from: number; at: Pt };
+    | { kind: 'travel'; from: number; at: Pt; end?: number; land?: number; carry?: number };
   const of = (mode: Mode, i: number): Pt => {
     if (mode.kind === 'plant') {
       const o = offset(i, mode.side);
@@ -684,7 +685,32 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
     }
     const a = travel(i);
     const b = travel(mode.from);
-    return [mode.at[0] + a[0] - b[0], mode.at[1] + a[1] - b[1]];
+    let y = mode.at[1] + a[1] - b[1];
+    if (mode.carry !== undefined && mode.land !== undefined && mode.end !== undefined && floorY !== null) {
+      if (mode.land < n && i <= mode.land && mode.land > mode.from) {
+        y += mode.carry * ((i - mode.from) / (mode.land - mode.from));
+      }
+      if (i <= mode.end) {
+        y = Math.max(y, floorY - Math.min(offset(i, 'r')[1], offset(i, 'l')[1]));
+      }
+    }
+    return [mode.at[0] + a[0] - b[0], y];
+  };
+  /** A travel span from `startFrame` off frame `from`'s hip `at`: carried to meet `floorY` at landing when it contains a jump (#103). */
+  const makeTravel = (startFrame: number, from: number, at: Pt): Mode => {
+    let end = startFrame;
+    while (end + 1 < n && (feet.support[end + 1] ?? null) === null && (tracked[end + 1] ?? null) === null) end++;
+    const isJump = floorY !== null && feet.jumps.some(([ja, jb]) => ja <= end && jb >= startFrame);
+    if (!isJump) return { kind: 'travel', from, at };
+    const land = end + 1;
+    let carry = 0;
+    if (land < n) {
+      const landSide = (feet.support[land] ?? tracked[land] ?? null)!;
+      const rawLandY = at[1] + travel(land)[1] - travel(from)[1];
+      const targetLandY = floorY - offset(land, landSide)[1];
+      carry = targetLandY - rawLandY;
+    }
+    return { kind: 'travel', from, at, end, land, carry };
   };
   /** A plant from frame i: its anchor's x where the foot is, its y there or on the floor. */
   const plant = (i: number, side: Side, at: Pt): Mode => {
@@ -705,7 +731,7 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
         const o = offset(0, tr);
         mode = { kind: 'track', side: tr, anchor: [start[0] + o[0], floorY ?? (start[1] + o[1])], from: 0, at: start };
       } else {
-        mode = { kind: 'travel', from: 0, at: start };
+        mode = makeTravel(0, 0, start);
       }
     } else if (s !== null) {
       if (mode!.kind !== 'plant' || mode!.side !== s) {
@@ -725,7 +751,7 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
         blendAt = -1;
       }
     } else if (mode!.kind !== 'travel') {
-      mode = { kind: 'travel', from: i - 1, at: hip[i - 1]! };
+      mode = makeTravel(i, i - 1, hip[i - 1]!);
       from = null;
       blendAt = -1;
     }
