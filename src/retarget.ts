@@ -732,8 +732,10 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     const tb = rest.get(t!.bone)!;
     // #85: every support span on one floor — the median of their planted heights, or --floor.
     // #92: in place, the supporting ankle's own picture x, scaled, is the track its anchor follows.
-    const follow = inPlace ? (i: number, s: Side) => series.get(`${s}_ankle`)![i]![0] * scale!.factor : undefined;
-    const planted = plantHip(feet!, (i, s) => offsets[i]![s], (i) => poseTravel[i]!, [tb.worldX, tb.worldY], opts.floor, follow);
+    // #119: a tracked support follows the lower ankle's own picture x, scaled, on the floor until it is still.
+    const track = (i: number, s: Side) => series.get(`${s}_ankle`)![i]![0] * scale!.factor;
+    const follow = inPlace ? track : undefined;
+    const planted = plantHip(feet!, (i, s) => offsets[i]![s], (i) => poseTravel[i]!, [tb.worldX, tb.worldY], opts.floor, follow, track);
     const hip = planted.hip;
     floor = planted.floor;
     closure = planted.closure;

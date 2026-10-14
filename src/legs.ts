@@ -343,10 +343,18 @@ export interface Feet {
   /**
    * rig-c/pose#113, read from the lower ankle: each run of frames whose
    * supporting side differs from the reading before #113 (`was`, `now`; null:
-   * no foot supports). Absent where the rule does not apply (in place, or
+   * no foot is planted). Absent where the rule does not apply (in place, or
    * without `lowerAnkle`).
    */
   lowered?: Lowered[];
+  /**
+   * rig-c/pose#119: runs of frames after a jump or a release where no foot is
+   * planted because the only foot free under #113 is the higher one, and the
+   * lower foot supports as a tracked foot (its x follows its own scaled ankle
+   * track, its y sits on #85's floor) until a foot plants. Absent where the
+   * rule does not apply.
+   */
+  tracked?: Array<{ side: Side; frames: [number, number] }>;
 }
 
 /** A run of frames whose support the lower-ankle rule (rig-c/pose#113) reads differently from the reading before it. */
@@ -387,7 +395,9 @@ export function rollingFloor(ys: readonly number[], times: readonly number[]): n
  * other ankle has been that much lower for `PLANT_SWITCH_SECONDS` hands support
  * to it when it is free (as before) and is otherwise released (the hip follows
  * the pose until a foot may take support). Steps and jumps are read as before.
- * The frames whose support this changes are `lowered`.
+ * The frames whose support this changes are `lowered`. On a frame where no foot
+ * is planted because the only foot free is the higher one (rig-c/pose#119), the
+ * lower foot is tracked (`tracked`).
  */
 export function supportsOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, times: readonly number[], secondsOf: (run: [number, number]) => number, inPlace = false, lowerAnkle = false): Feet {
   if (inPlace || !lowerAnkle) return readSupports(ankle, hip, times, secondsOf, inPlace, false).feet;
@@ -436,6 +446,7 @@ function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, read
     return true;
   };
   const support: Array<Side | null> = new Array<Side | null>(n).fill(null);
+  const trkAt: Array<Side | null> = new Array<Side | null>(n).fill(null);
   const changes: Feet['changes'] = [];
   const steps: Step[] = [];
   const open: Partial<Record<Side, Step>> = {};
@@ -509,6 +520,9 @@ function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, read
         freeFrom = -1;
       }
     }
+    if (lowerAnkle && cur === null && released[released.length - 1] !== i && SIDES.some((x) => free(x) && higher(x))) {
+      trkAt[i] = lower(['r', 'l'], i);
+    }
     support[i] = cur;
   }
   const supports: Feet['supports'] = [];
@@ -519,7 +533,15 @@ function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, read
     if (last !== undefined && last.side === s && last.frames[1] === i - 1) last.frames[1] = i;
     else supports.push({ side: s, frames: [i, i] });
   }
-  return { feet: { legLength, support, supports, jumps, steps, changes }, released };
+  const tracked: Array<{ side: Side; frames: [number, number] }> = [];
+  for (let i = 0; i < n; i++) {
+    const s = trkAt[i];
+    if (s === null || s === undefined) continue;
+    const last = tracked[tracked.length - 1];
+    if (last !== undefined && last.side === s && last.frames[1] === i - 1) last.frames[1] = i;
+    else tracked.push({ side: s, frames: [i, i] });
+  }
+  return { feet: { legLength, support, supports, jumps, steps, changes, ...(tracked.length > 0 ? { tracked } : {}) }, released };
 }
 
 /** One support span's shift onto the floor (rig-c/pose#85): its side, its frames, and floor − its planted height, world units. */
@@ -535,6 +557,8 @@ export interface Floor {
   given: boolean;
   shifts: FloorShift[];
 }
+
+let trackFn: ((i: number, s: Side) => number) | undefined;
 
 /**
  * The hip's world origin on every frame, from the supporting foot (header),
@@ -561,18 +585,24 @@ export interface Floor {
  * `follow(i, side)` (#92, an in-place sequence): the supporting ankle's track,
  * world x. A plant's anchor x then moves by follow(i) − follow(the frame it
  * planted), and the loop is closed (`closeLoop`, `closure` in the result; null
- * without `follow`).
+ * without `follow`). `track(i, side)` (#119): the same world-x ankle track for
+ * `feet.tracked` frames on a sequence not declared in place.
  */
-export function plantHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: number) => Pt, start: Pt, floor?: number, follow?: (i: number, s: Side) => number): { hip: Pt[]; floor: Floor | null; blends: BlendFrame[]; closure: Closure | null } {
-  const picture = placeHip(feet, offset, travel, start, null, follow);
-  const heights = feet.supports.map((sp) => picture.anchors.get(sp.frames[0]));
-  if (heights.length === 0) return { hip: picture.hip, floor: null, blends: picture.blends, closure: null };
-  if (heights.some((h) => h === undefined)) throw new Error('plantHip: a support span starts on a frame no plant started on');
-  const y = floor ?? percentile(heights as number[], 0.5);
-  const shifts = feet.supports.map((sp, k) => ({ side: sp.side, frames: [sp.frames[0], sp.frames[1]] as [number, number], shift: y - heights[k]! }));
-  const placed = placeHip(feet, offset, travel, start, y, follow);
-  const closure = follow === undefined ? null : closeLoop(placed.hip);
-  return { hip: placed.hip, floor: { y, given: floor !== undefined, shifts }, blends: placed.blends, closure };
+export function plantHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: number) => Pt, start: Pt, floor?: number, follow?: (i: number, s: Side) => number, track?: (i: number, s: Side) => number): { hip: Pt[]; floor: Floor | null; blends: BlendFrame[]; closure: Closure | null } {
+  trackFn = track;
+  try {
+    const picture = placeHip(feet, offset, travel, start, null, follow);
+    const heights = feet.supports.map((sp) => picture.anchors.get(sp.frames[0]));
+    if (heights.length === 0) return { hip: picture.hip, floor: null, blends: picture.blends, closure: null };
+    if (heights.some((h) => h === undefined)) throw new Error('plantHip: a support span starts on a frame no plant started on');
+    const y = floor ?? percentile(heights as number[], 0.5);
+    const shifts = feet.supports.map((sp, k) => ({ side: sp.side, frames: [sp.frames[0], sp.frames[1]] as [number, number], shift: y - heights[k]! }));
+    const placed = placeHip(feet, offset, travel, start, y, follow);
+    const closure = follow === undefined ? null : closeLoop(placed.hip);
+    return { hip: placed.hip, floor: { y, given: floor !== undefined, shifts }, blends: placed.blends, closure };
+  } finally {
+    trackFn = undefined;
+  }
 }
 
 /** In place (rig-c/pose#92): the hip's x travel from the first frame to the last before the loop was closed, world units, and the frames it was spread over. */
@@ -611,14 +641,26 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
   const hip: Pt[] = [];
   const anchors = new Map<number, number>();
   const blends: BlendFrame[] = [];
-  /** How the hip is derived on a frame: held over a foot's anchor, or carried by the pose's travel from a frame's hip. */
-  type Mode = { kind: 'plant'; side: Side; anchor: Pt; from: number } | { kind: 'travel'; from: number; at: Pt };
+  const tracked = new Array<Side | null>(n).fill(null);
+  for (const t of feet.tracked ?? []) for (let i = t.frames[0]; i <= t.frames[1]; i++) tracked[i] = t.side;
+  const trkX = trackFn ?? follow;
+  /** How the hip is derived on a frame: held over a foot's anchor, tracking the lower foot on the floor (#119), or carried by the pose's travel from a frame's hip. */
+  type Mode =
+    | { kind: 'plant'; side: Side; anchor: Pt; from: number }
+    | { kind: 'track'; side: Side; anchor: Pt; from: number; at: Pt }
+    | { kind: 'travel'; from: number; at: Pt };
   const of = (mode: Mode, i: number): Pt => {
     if (mode.kind === 'plant') {
       const o = offset(i, mode.side);
       // In place (#92) the anchor's x follows the supporting ankle's own track from the frame it planted.
       const dx = follow === undefined ? 0 : follow(i, mode.side) - follow(mode.from, mode.side);
       return [mode.anchor[0] + dx - o[0], mode.anchor[1] - o[1]];
+    }
+    if (mode.kind === 'track') {
+      const o = offset(i, mode.side);
+      const dx = trkX === undefined ? o[0] - offset(mode.from, mode.side)[0] : trkX(i, mode.side) - trkX(mode.from, mode.side);
+      const y = floorY === null ? mode.at[1] + travel(i)[1] - travel(mode.from)[1] : mode.anchor[1] - o[1];
+      return [mode.anchor[0] + dx - o[0], y];
     }
     const a = travel(i);
     const b = travel(mode.from);
@@ -634,23 +676,38 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
   let blendAt = -1;
   for (let i = 0; i < n; i++) {
     const s = feet.support[i] ?? null;
+    const tr = s === null ? (tracked[i] ?? null) : null;
     if (i === 0) {
-      if (s === null) mode = { kind: 'travel', from: 0, at: start };
-      else {
+      if (s !== null) {
         const o = offset(0, s);
         mode = plant(0, s, [start[0] + o[0], start[1] + o[1]]);
+      } else if (tr !== null) {
+        const o = offset(0, tr);
+        mode = { kind: 'track', side: tr, anchor: [start[0] + o[0], floorY ?? (start[1] + o[1])], from: 0, at: start };
+      } else {
+        mode = { kind: 'travel', from: 0, at: start };
       }
-    } else if (s === null && mode!.kind === 'plant') {
+    } else if (s !== null) {
+      if (mode!.kind !== 'plant' || mode!.side !== s) {
+        // The new support is held where it is on this frame, under the hip the old derivation gives here.
+        const here = of(mode!, i);
+        const o = offset(i, s);
+        from = mode;
+        mode = plant(i, s, [here[0] + o[0], here[1] + o[1]]);
+        blendAt = i;
+      }
+    } else if (tr !== null) {
+      if (mode!.kind !== 'track' || mode!.side !== tr) {
+        const prev = hip[i - 1]!;
+        const o = offset(i - 1, tr);
+        mode = { kind: 'track', side: tr, anchor: [prev[0] + o[0], floorY ?? (prev[1] + o[1])], from: i - 1, at: prev };
+        from = null;
+        blendAt = -1;
+      }
+    } else if (mode!.kind !== 'travel') {
       mode = { kind: 'travel', from: i - 1, at: hip[i - 1]! };
       from = null;
       blendAt = -1;
-    } else if (s !== null && (mode!.kind === 'travel' || (mode as { side: Side }).side !== s)) {
-      // The new support is held where it is on this frame, under the hip the old derivation gives here.
-      const here = of(mode!, i);
-      const o = offset(i, s);
-      from = mode;
-      mode = plant(i, s, [here[0] + o[0], here[1] + o[1]]);
-      blendAt = i;
     }
     const to = of(mode!, i);
     if (from !== null && i - blendAt < PLANT_BLEND) {
@@ -806,10 +863,12 @@ export interface StancePosed {
 export function stanceOf(feet: Feet, ankle: Record<Side, readonly Pt[]>, tolerance: number, posed: (i: number) => StancePosed, secondsOf: (run: [number, number]) => number, lower?: StanceLower): Stance {
   const n = feet.support.length;
   const stretch: Stance['stretch'] = new Array(n).fill(null);
+  const tracked = new Array<Side | null>(n).fill(null);
+  for (const t of feet.tracked ?? []) for (let i = t.frames[0]; i <= t.frames[1]; i++) tracked[i] = t.side;
   type Read = { state: StanceState; side: Side; height: number };
   const read: Array<Read | null> = new Array<Read | null>(n).fill(null);
   for (let i = 0; i < n; i++) {
-    const s = feet.support[i] ?? null;
+    const s = feet.support[i] ?? tracked[i] ?? null;
     if (s === null) continue;
     const f: Side = s === 'r' ? 'l' : 'r';
     read[i] = { state: 'both', side: f, height: (ankle[s][i]![1] - ankle[f][i]![1]) / feet.legLength[f] };
