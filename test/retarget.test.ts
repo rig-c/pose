@@ -3086,10 +3086,10 @@ describe('#47: --leg-scale and --plant-feet', () => {
         cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
         cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
         const path = join(d, 'src', 'legs.ts');
-        const from = "(state === 'both' ? read[k]!.height > tolerance :";
+        const from = '(planted ? Math.abs(read[k]!.height) > tolerance :';
         const before = readFileSync(path, 'utf8');
         expect(before.split(from)).toHaveLength(2);
-        writeFileSync(path, before.replace(from, "(state === 'both' ? read[k]!.height > Infinity :"));
+        writeFileSync(path, before.replace(from, '(planted ? Math.abs(read[k]!.height) > Infinity :'));
         const k = liftKept(join(d, 'cli.ts'));
         const red = k.worst >= 1e-3 || !k.stance.some((l) => l.startsWith('STANCE lifted: free foot l frames 8–15'));
         console.log(`  mutant "no tolerance check": exit ${k.status}, lifted foot moved ${k.worst.toFixed(3)} units; STANCE ${k.stance.join(' | ').slice(0, 160)}`);
