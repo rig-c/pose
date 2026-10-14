@@ -100,7 +100,12 @@ retarget
                         rolling floor — the 95th-percentile y over ±1 s — for ≥ 2 frames) follows the pose's
                         travel and re-plants on landing; a supporting ankle moving > 0.03 leg lengths a frame
                         releases its plant to the other foot, or to the pose's travel, until it is still
-                        (< 0.01 for 2 frames) (FEET lines)
+                        (< 0.01 for 2 frames) (FEET lines). Every support span is planted on one floor: its
+                        supporting ankle moved in y onto the median of the spans' planted heights (world y on
+                        the rig, posed by rig-c), the hip and everything above with it; FEET lists each span's
+                        shift. On the 3 blend frames the supporting leg's scalex is stretched (k within
+                        [0.92, 1.08], past it listed) so its ankle stays on the floor (rig-c/pose#85)
+  --floor <y>           with --plant-feet: the floor's world y (rig units, y up) instead of the median
   --stance <leg lengths> with --plant-feet: on a frame outside the jumps, a free ankle within this many
                         leg lengths (FEET's) of the supporting one in the picture is planted too — its leg's
                         scalex keys stretched by k = (root y − floor y) / (root y − ankle y) until the foot
@@ -249,7 +254,7 @@ function legScaleOf(f: Map<string, string>): [number, number] | 'off' {
 }
 
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head']);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head']);
   const bends = f.get('bends') ?? 'refuse';
   if (bends !== 'refuse' && bends !== 'clamp') throw new Usage(`--bends is "${bends}"; it must be refuse or clamp`);
   const switchAt = f.get('switch-at') ?? 'first';
@@ -275,6 +280,7 @@ function retargetArgs(argv: string[]): RetargetArgs {
     legScale: legScaleOf(f),
     plantFeet: f.has('plant-feet'),
     stance: stanceOf(f),
+    ...floorOf(f),
     raisedByHead: f.has('raised-by-head'),
     bends,
     bendTolerance: num(f, 'bend-tolerance', 0, (n) => n >= 0 && n < 180, 'degrees in [0, 180)'),
@@ -298,6 +304,14 @@ function stanceOf(f: Map<string, string>): number | 'off' {
   const v = num(f, 'stance', 0, (n) => n > 0 && n < 1, 'off, or leg lengths in (0, 1)');
   if (!f.has('plant-feet')) throw new Usage(`--stance is "${f.get('stance')}" without --plant-feet; it plants the free foot beside the supporting one that --plant-feet holds`);
   return v;
+}
+
+/** --floor (rig-c/pose#85): the floor's world y, only with --plant-feet; absent, the median of the spans' planted heights. */
+function floorOf(f: Map<string, string>): { floor?: number } {
+  if (!f.has('floor')) return {};
+  const v = num(f, 'floor', 0, () => true, 'a world y in rig units (a finite number)');
+  if (!f.has('plant-feet')) throw new Usage(`--floor is "${f.get('floor')}" without --plant-feet; it is the floor --plant-feet plants every support span on`);
+  return { floor: v };
 }
 
 /** --reduce and --reduce-hip (rig-c/pose#32): off unless given; the hip only with the bones. */

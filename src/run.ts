@@ -18,7 +18,7 @@ import { artRangeLine, chainsMoving, raisedLine, RAISED_WITHIN, reachLine, switc
 import { landed, measureFeet, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
 import { legsOf } from './legs.ts';
 import { reduceKeys, type ReduceBone, type Reduced } from './reduce.ts';
-import type { LegScale, Stance } from './legs.ts';
+import type { BlendHold, Floor, LegScale, Stance } from './legs.ts';
 
 export interface RetargetArgs extends RetargetOptions {
   rig: string;
@@ -143,6 +143,11 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       say(`  FEET   supports: ${f.supports.map((x) => `${x.side} ${span(x.frames)}`).join(', ') || 'none'}`);
       say(`  FEET   jumps (both ankles and mid_hip > 0.05 leg lengths above their rolling floor, ≥ 2 frames): ${f.jumps.map(span).join(', ') || 'none'}`);
       say(`  FEET   steps (the supporting ankle > 0.03 leg lengths a frame; re-planted after 2 frames < 0.01): ${f.steps.map((x) => `${x.side} ${span(x.frames)} → ${x.to === null ? 'the pose\'s travel' : `${x.to} supports`}, ${x.replant === null ? 'never re-planted' : `re-planted at ${x.replant}`}`).join('; ') || 'none'}`);
+      if (r.floor !== null) {
+        const legBones = legBonesOf(map);
+        if (legBones !== null) say(`  FEET   ${floorLine(r.floor, setupLegs(rest, legBones))}`);
+      }
+      if (r.blendHold !== null) for (const l of blendLines(r.blendHold, r.times)) say(`  FEET   ${l}`);
     }
     if (r.stance !== null) for (const l of stanceLines(r.stance, r.times)) say(`  STANCE ${l}`);
 
@@ -277,7 +282,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         frames: seq.frames.length,
         duration: r.animation.duration,
         cleaned: seq.cleaned,
-        options: { minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', raisedByHead: a.raisedByHead === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', reduceHip: a.reduceHip ?? 'off' },
+        options: { minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', floor: a.floor ?? null, raisedByHead: a.raisedByHead === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', reduceHip: a.reduceHip ?? 'off' },
         scale: r.scale,
         holds: r.holds,
         short: r.short,
@@ -297,7 +302,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         legScale: r.legScale.map(({ scale: _scale, ...rest }) => rest),
         pivot: r.pivot,
         stance: r.stance === null ? null : { tolerance: r.stance.tolerance, release: r.stance.release, minSeconds: r.stance.minSeconds, bounds: r.stance.bounds, runs: r.stance.runs, over: r.stance.over },
-        feet: r.feet === null ? null : { planted: r.planted, legLength: r.feet.legLength, supports: r.feet.supports, jumps: r.feet.jumps, steps: r.feet.steps, changes: r.feet.changes, reading: feetReading },
+        feet: r.feet === null ? null : { planted: r.planted, legLength: r.feet.legLength, supports: r.feet.supports, jumps: r.feet.jumps, steps: r.feet.steps, changes: r.feet.changes, floor: r.floor?.y ?? null, shifts: r.floor?.shifts ?? [], blend: r.blendHold === null ? null : { bounds: r.blendHold.bounds, runs: r.blendHold.runs, over: r.blendHold.over }, reading: feetReading },
         shear,
         idleDropped: idle === null ? null : idle.dropped,
         idleKeptOut: idle === null ? null : idle.keptOut,
@@ -425,6 +430,45 @@ function legBonesOf(map: JointMap): { r: { root: string; ankle: string }; l: { r
   const l = legsOf(map, 'reading the feet');
   if ('problems' in l) return null;
   return { r: { root: l.legs.r.chain.bones[0]!, ankle: l.legs.r.ankleBone }, l: { root: l.legs.l.chain.bones[0]!, ankle: l.legs.l.ankleBone } };
+}
+
+/** Each side's rig leg at setup, world units: its thigh's origin to its ankle (the leg's last bone's tip), by rig-c's setup pose. */
+export function setupLegs(rest: Rest, legs: { r: { root: string; ankle: string }; l: { root: string; ankle: string } }): { r: number; l: number } {
+  const of = (s: 'r' | 'l') => {
+    const o = rest.get(legs[s].root)!;
+    const b = rest.get(legs[s].ankle)!;
+    return Math.hypot(b.worldX + b.a * b.length - o.worldX, b.worldY + b.c * b.length - o.worldY);
+  };
+  return { r: of('r'), l: of('l') };
+}
+
+/**
+ * The FEET floor line (#85): the floor's world y and where it came from, each
+ * support span's shift onto it in world units and in that side's rig leg at
+ * setup, and the shifts' range in the two legs' mean.
+ */
+export function floorLine(floor: Floor, leg: { r: number; l: number }): string {
+  const span = (x: [number, number]) => (x[0] === x[1] ? `${x[0]}` : `${x[0]}–${x[1]}`);
+  const sign = (v: number, d: number) => `${v < 0 ? '−' : '+'}${Math.abs(v).toFixed(d)}`;
+  const ss = floor.shifts.map((x) => x.shift);
+  const lo = Math.min(...ss);
+  const hi = Math.max(...ss);
+  const mean = (leg.r + leg.l) / 2;
+  return `floor: world y ${floor.y.toFixed(2)} (${floor.given ? 'given by --floor' : `the median of the ${floor.shifts.length} support span(s)' planted heights`}); each span's supporting ankle moved onto it, the hip and everything above with it — shift per span in units (leg lengths: the rig's at setup, thigh origin → ankle, r ${leg.r.toFixed(1)}, l ${leg.l.toFixed(1)} units): ${floor.shifts.map((x) => `${x.side} ${span(x.frames)} ${sign(x.shift, 2)} (${sign(x.shift / leg[x.side], 4)})`).join(', ')}; range ${sign(lo, 2)} … ${sign(hi, 2)} units = ${((hi - lo) / mean).toFixed(4)} leg lengths`;
+}
+
+/**
+ * The FEET blend lines (#85): one per run of blend frames whose supporting leg
+ * was stretched to keep its ankle on the floor, with the stretch keyed; one per
+ * run whose stretch fell past its bounds (`past the bounds`, as STANCE says it).
+ */
+export function blendLines(h: BlendHold, times: readonly number[]): string[] {
+  const span = (x: [number, number]) => (x[0] === x[1] ? `frame ${x[0]} (t=${times[x[0]]!.toFixed(3)}s)` : `frames ${x[0]}–${x[1]} (t=${times[x[0]]!.toFixed(3)}–${times[x[1]]!.toFixed(3)}s)`);
+  const out: string[] = [];
+  for (const r of h.runs) out.push(`blend held on the floor: supporting foot ${r.side} ${span(r.frames)} — the hip blends between two derivations there, so its leg is stretched by k ${r.k.min.toFixed(4)}–${r.k.max.toFixed(4)} within [${h.bounds[0]}, ${h.bounds[1]}] to keep the ankle on the floor`);
+  if (h.runs.length === 0) out.push('blend held on the floor: no blend frame left a supporting ankle off the floor');
+  for (const o of h.over) out.push(`past the bounds: supporting foot ${o.side} ${span(o.frames)} — ${o.needed === null ? 'its ankle is not below its leg\'s root, so no stretch reaches the floor' : `the floor needed k ${o.needed.toFixed(4)}, past [${h.bounds[0]}, ${h.bounds[1]}]; held at the bound`}, the foot left up to ${o.left.toFixed(2)} units from the floor`);
+  return out;
 }
 
 /**
