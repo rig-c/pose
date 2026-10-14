@@ -348,6 +348,14 @@ export interface Lowered {
   frames: [number, number];
   was: Side | null;
   now: Side | null;
+  /**
+   * Why no foot supports, where `now` is null: `released` — the supporting foot
+   * was released on the run's first frame because the other ankle had been lower
+   * past the margin for `PLANT_SWITCH_SECONDS` and could not take support
+   * (released by a step, or moving); `higher` — the only foot free to take
+   * support was the higher one.
+   */
+  cause?: 'released' | 'higher';
 }
 
 /** Each frame's rolling floor of a picture-y series: its `FLOOR_PERCENTILE` over the frames within ± `FLOOR_SECONDS`. */
@@ -376,21 +384,22 @@ export function rollingFloor(ys: readonly number[], times: readonly number[]): n
  * The frames whose support this changes are `lowered`.
  */
 export function supportsOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, times: readonly number[], secondsOf: (run: [number, number]) => number, inPlace = false, lowerAnkle = false): Feet {
-  if (inPlace || !lowerAnkle) return readSupports(ankle, hip, times, secondsOf, inPlace, false);
-  const feet = readSupports(ankle, hip, times, secondsOf, false, true);
-  const before = readSupports(ankle, hip, times, secondsOf, false, false).support;
+  if (inPlace || !lowerAnkle) return readSupports(ankle, hip, times, secondsOf, inPlace, false).feet;
+  const { feet, released } = readSupports(ankle, hip, times, secondsOf, false, true);
+  const before = readSupports(ankle, hip, times, secondsOf, false, false).feet.support;
   const lowered: Lowered[] = [];
   feet.support.forEach((now, i) => {
     const was = before[i] ?? null;
     if (was === now) return;
     const last = lowered[lowered.length - 1];
     if (last !== undefined && last.frames[1] === i - 1 && last.was === was && last.now === now) last.frames[1] = i;
-    else lowered.push({ frames: [i, i], was, now });
+    else lowered.push({ frames: [i, i], was, now, ...(now === null ? { cause: released.includes(i) ? ('released' as const) : ('higher' as const) } : {}) });
   });
   return { ...feet, lowered };
 }
 
-function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, times: readonly number[], secondsOf: (run: [number, number]) => number, inPlace: boolean, lowerAnkle: boolean): Feet {
+/** The reader; `released` (#113): the frames a supporting foot was released because the lower foot could not take support. */
+function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, times: readonly number[], secondsOf: (run: [number, number]) => number, inPlace: boolean, lowerAnkle: boolean): { feet: Feet; released: number[] } {
   const n = ankle.r.length;
   const legLength = {} as Record<Side, number>;
   for (const s of SIDES) legLength[s] = percentile(ankle[s].map((a, i) => Math.hypot(a[0] - hip[s][i]![0], a[1] - hip[s][i]![1])), 0.5);
@@ -426,6 +435,7 @@ function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, read
   const open: Partial<Record<Side, Step>> = {};
   let cur: Side | null = null;
   let lowerFrom = -1;
+  const released: number[] = [];
   const lower = (cands: Side[], i: number): Side => (cands.length === 2 ? (ankle.l[i]![1] > ankle.r[i]![1] ? 'l' : 'r') : cands[0]!);
   for (let i = 0; i < n; i++) {
     // A released ankle re-plants once it has been still for STILL_FRAMES frames.
@@ -470,7 +480,10 @@ function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, read
           if (free(other)) {
             changes.push({ frame: i, from: cur, to: other });
             cur = other;
-          } else cur = null; // #113: the lower foot may not take support (released, or moving); neither foot supports
+          } else {
+            cur = null; // #113: the lower foot may not take support (released, or moving); neither foot supports
+            released.push(i);
+          }
           lowerFrom = -1;
         }
       } else lowerFrom = -1;
@@ -485,7 +498,7 @@ function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, read
     if (last !== undefined && last.side === s && last.frames[1] === i - 1) last.frames[1] = i;
     else supports.push({ side: s, frames: [i, i] });
   }
-  return { legLength, support, supports, jumps, steps, changes };
+  return { feet: { legLength, support, supports, jumps, steps, changes }, released };
 }
 
 /** One support span's shift onto the floor (rig-c/pose#85): its side, its frames, and floor − its planted height, world units. */

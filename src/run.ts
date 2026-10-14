@@ -598,13 +598,17 @@ export function floorLine(floor: Floor, leg: { r: number; l: number }): string {
  * before #113 — today's side, then the side read from the lower ankle ("none":
  * no foot supports, the hip follows the pose).
  */
+const CAUSE: Record<NonNullable<Lowered['cause']>, string> = {
+  released: 'released: the lower ankle could not take support, released by a step or moving',
+  higher: 'the only foot free to take support was the higher one',
+};
 function loweredLine(lowered: readonly Lowered[]): string {
   const side = (s: Side | null) => s ?? 'none';
   const span = (x: [number, number]) => (x[0] === x[1] ? `${x[0]}` : `${x[0]}–${x[1]}`);
   const head = `support read from the lower ankle (a foot ≥ ${PLANT_SWITCH} leg lengths higher than the other does not take support, rig-c/pose#113)`;
   if (lowered.length === 0) return `${head}: no frame reads differently from before`;
   const frames = lowered.reduce((k, x) => k + x.frames[1] - x.frames[0] + 1, 0);
-  return `${head}: ${frames} frame(s) read differently from before — ${lowered.map((x) => `frames ${span(x.frames)} ${side(x.was)} → ${side(x.now)}`).join(', ')}`;
+  return `${head}: ${frames} frame(s) read differently from before — ${lowered.map((x) => `frames ${span(x.frames)} ${side(x.was)} → ${side(x.now)}${x.cause === undefined ? '' : ` (${CAUSE[x.cause]})`}`).join(', ')}`;
 }
 
 /** The in-place line (rig-c/pose#92): what --plant-feet did instead of holding the foot, and the loop's closure. */

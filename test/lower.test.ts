@@ -67,7 +67,7 @@ describe('#113: --plant-feet reads the support from the lower ankle', () => {
       expect(a.r[i]![1] - a.l[i]![1]).toBe(20);
     }
     expect(feet.lowered).toEqual([
-      { frames: [10, 11], was: 'l', now: null },
+      { frames: [10, 11], was: 'l', now: null, cause: 'higher' },
       { frames: [12, 13], was: 'l', now: 'r' },
     ]);
     // On every frame with a supporting foot, its ankle is the lower one.
@@ -86,7 +86,7 @@ describe('#113: --plant-feet reads the support from the lower ankle', () => {
     // on frame 8; the left re-plants on 16 and is the lower foot, so it takes support there.
     expect(sides(feet.support)).toBe('lllllrrr--------llllllllllllll');
     expect(feet.lowered).toEqual([
-      { frames: [8, 15], was: 'r', now: null },
+      { frames: [8, 15], was: 'r', now: null, cause: 'released' },
       { frames: [16, 17], was: 'r', now: 'l' },
     ]);
   });
@@ -116,9 +116,9 @@ describe('#113: --plant-feet reads the support from the lower ankle', () => {
       cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
       const path = join(d, 'src', 'legs.ts');
       const src = readFileSync(path, 'utf8');
-      const from = 'const feet = readSupports(ankle, hip, times, secondsOf, false, true);';
+      const from = 'const { feet, released } = readSupports(ankle, hip, times, secondsOf, false, true);';
       expect(src.split(from)).toHaveLength(2);
-      writeFileSync(path, src.replace(from, 'const feet = readSupports(ankle, hip, times, secondsOf, false, false);'));
+      writeFileSync(path, src.replace(from, 'const { feet, released } = readSupports(ankle, hip, times, secondsOf, false, false);'));
       const m = (await import(path)) as { supportsOf: typeof supportsOf };
       const a = stepUnderLift();
       const feet = m.supportsOf(a, hips, times, secondsOf, false, true);
