@@ -147,7 +147,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       say(`  FEET   jumps (both ankles and mid_hip > 0.05 leg lengths above their rolling floor, ≥ 2 frames): ${f.jumps.map(span).join(', ') || 'none'}`);
       if (f.lowered !== undefined) say(`  FEET   ${loweredLine(f.lowered)}`);
       if (r.closure !== null) say(`  FEET   ${travelLine(r.closure)}`);
-      else say(`  FEET   steps (the supporting ankle > 0.03 leg lengths a frame; re-planted after 2 frames < 0.01): ${f.steps.map((x) => `${x.side} ${span(x.frames)} → ${x.to === null ? 'the pose\'s travel' : `${x.to} supports`}, ${x.replant === null ? 'never re-planted' : `re-planted at ${x.replant}`}`).join('; ') || 'none'}`);
+      else say(`  FEET   steps (the supporting ankle > 0.03 leg lengths a frame; re-planted after 2 frames < 0.01): ${f.steps.map((x) => `${x.side} ${span(x.frames)} → ${x.to !== null ? `${x.to} supports` : f.held?.includes(x.frames[0]) === true ? 'no foot (the other is higher, rig-c/pose#113): the hip keeps this plant' : 'the pose\'s travel'}, ${x.replant === null ? 'never re-planted' : `re-planted at ${x.replant}`}`).join('; ') || 'none'}`);
       if (r.floor !== null) {
         const legBones = legBonesOf(map);
         if (legBones !== null) say(`  FEET   ${floorLine(r.floor, setupLegs(rest, legBones))}`);
@@ -600,7 +600,7 @@ export function floorLine(floor: Floor, leg: { r: number; l: number }): string {
  */
 const CAUSE: Record<NonNullable<Lowered['cause']>, string> = {
   released: 'released: the lower ankle could not take support, released by a step or moving',
-  higher: 'the only foot free to take support was the higher one',
+  higher: 'the only foot free to take support was the higher one; the hip keeps the plant it held, if any',
 };
 function loweredLine(lowered: readonly Lowered[]): string {
   const side = (s: Side | null) => s ?? 'none';

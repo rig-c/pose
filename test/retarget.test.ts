@@ -2651,10 +2651,10 @@ describe('#47: --leg-scale and --plant-feet', () => {
     // #113: the old assertion here (`r 8–11 → l supports`, `l 8–13`) was the bug — a 6 px-higher ankle took support.
     // Still on frames 11 and 12 (< 0.01): re-planted at 12, and the lower foot, it takes support there. #113: the left
     // ankle is 6 px (0.04 leg lengths) higher, so it does not take support on the step — before #113 it did (l 8–13);
-    // the hip follows the pose's travel until the right foot is still.
-    expect(linesOf(r, 'FEET')).toContain('FEET   steps (the supporting ankle > 0.03 leg lengths a frame; re-planted after 2 frames < 0.01): r 8–11 → the pose\'s travel, re-planted at 12');
+    // the hip keeps the right foot's plant until the right foot is still, and it plants anew where it stepped to.
+    expect(linesOf(r, 'FEET')).toContain('FEET   steps (the supporting ankle > 0.03 leg lengths a frame; re-planted after 2 frames < 0.01): r 8–11 → no foot (the other is higher, rig-c/pose#113): the hip keeps this plant, re-planted at 12');
     expect(linesOf(r, 'FEET')).toContain('FEET   supports: r 0–7, r 12–23');
-    expect(linesOf(r, 'FEET')).toContain('FEET   support read from the lower ankle (a foot ≥ 0.02 leg lengths higher than the other does not take support, rig-c/pose#113): 6 frame(s) read differently from before — frames 8–11 l → none (the only foot free to take support was the higher one), frames 12–13 l → r');
+    expect(linesOf(r, 'FEET')).toContain('FEET   support read from the lower ankle (a foot ≥ 0.02 leg lengths higher than the other does not take support, rig-c/pose#113): 6 frame(s) read differently from before — frames 8–11 l → none (the only foot free to take support was the higher one; the hip keeps the plant it held, if any), frames 12–13 l → r');
     const p = posedLegs(c.build);
     expect(spread(p.ankle.r.slice(0, 8))).toBeLessThan(0.01);
     // Re-planted where it stepped to: held from the end of the blend on, well left of where it was (the rigid 70-unit
@@ -2700,7 +2700,7 @@ describe('#47: --leg-scale and --plant-feet', () => {
     const today = setup({ pose: doc });
     const rt = retarget(today, ['--plant-feet', '--report', report]);
     expect(rt.status).toBe(0);
-    expect(linesOf(rt, 'FEET')).toContain('FEET   steps (the supporting ankle > 0.03 leg lengths a frame; re-planted after 2 frames < 0.01): r 8–11 → the pose\'s travel, re-planted at 12');
+    expect(linesOf(rt, 'FEET')).toContain('FEET   steps (the supporting ankle > 0.03 leg lengths a frame; re-planted after 2 frames < 0.01): r 8–11 → no foot (the other is higher, rig-c/pose#113): the hip keeps this plant, re-planted at 12');
     expect((JSON.parse(readFileSync(report, 'utf8')) as { feet: { closure: unknown } }).feet.closure).toBeNull();
   }, SLOW);
 

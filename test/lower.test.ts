@@ -10,7 +10,7 @@
 import { describe, expect, test } from 'bun:test';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { supportsOf, type Side } from '../src/legs.ts';
+import { plantHip, supportsOf, type Feet, type Side } from '../src/legs.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const MUTANTS = join(ROOT, 'node_modules', '.cache', 'rig-pose-mutants');
@@ -116,9 +116,9 @@ describe('#113: --plant-feet reads the support from the lower ankle', () => {
       cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
       const path = join(d, 'src', 'legs.ts');
       const src = readFileSync(path, 'utf8');
-      const from = 'const { feet, released } = readSupports(ankle, hip, times, secondsOf, false, true);';
+      const from = 'const { feet, released, held } = readSupports(ankle, hip, times, secondsOf, false, true);';
       expect(src.split(from)).toHaveLength(2);
-      writeFileSync(path, src.replace(from, 'const { feet, released } = readSupports(ankle, hip, times, secondsOf, false, false);'));
+      writeFileSync(path, src.replace(from, 'const { feet, released, held } = readSupports(ankle, hip, times, secondsOf, false, false);'));
       const m = (await import(path)) as { supportsOf: typeof supportsOf };
       const a = stepUnderLift();
       const feet = m.supportsOf(a, hips, times, secondsOf, false, true);
@@ -127,6 +127,62 @@ describe('#113: --plant-feet reads the support from the lower ankle', () => {
       expect(feet.support[12]).toBe('l');
       expect(feet.support[13]).toBe('l');
       expect(feet.lowered).toEqual([]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+});
+
+/** Rig scale 1: world x = picture x, world y = −picture y; the ankle's posed offset from the hip is the picture's; no travel. */
+function plant(a: Record<Side, Pt[]>, feet: Feet, impl: typeof plantHip = plantHip) {
+  const offset = (i: number, s: Side): Pt => [a[s][i]![0], -a[s][i]![1]];
+  return impl(feet, offset, () => [0, 0], [0, 0]);
+}
+const worldAnkle = (a: Record<Side, Pt[]>, hip: Pt[], s: Side, i: number): Pt => [hip[i]![0] + a[s][i]![0], hip[i]![1] - a[s][i]![1]];
+
+describe('#113 round 3: a frame without support because the free foot is higher keeps the plant', () => {
+  test('"higher" frames after a plant (10–11, the step under a lifted leg) hold the right foot on its anchor', () => {
+    const a = stepUnderLift();
+    const feet = supportsOf(a, hips, times, secondsOf, false, true);
+    expect(feet.held).toEqual([10, 11]);
+    const p = plant(a, feet);
+    const anchor = worldAnkle(a, p.hip, 'r', 9);
+    for (const i of [10, 11]) {
+      const w = worldAnkle(a, p.hip, 'r', i);
+      expect(Math.hypot(w[0] - anchor[0], w[1] - anchor[1])).toBeLessThan(1e-9);
+    }
+    // The picture's 5 px step moves the hip 5 px back instead: the stepping foot is held where it was.
+    expect(p.hip[10]![0] - p.hip[9]![0]).toBeCloseTo(-5, 9);
+  });
+
+  test('"released" frames (8–15) follow the pose\'s travel: with no travel the hip stays where it was on frame 7', () => {
+    const a = liftedOverDrift();
+    const feet = supportsOf(a, hips, times, secondsOf, false, true);
+    // 8 is the release; 9–15 have the higher right free, but no plant is held after a release.
+    expect(feet.held).toEqual([9, 10, 11, 12, 13, 14, 15]);
+    const p = plant(a, feet);
+    for (let i = 8; i <= 15; i++) expect(p.hip[i]).toEqual(p.hip[7]!);
+  });
+
+  test('mutant: "higher" frames follow the pose (the hold dropped) and the first test is red', async () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      const path = join(d, 'src', 'legs.ts');
+      const src = readFileSync(path, 'utf8');
+      const from = "} else if (s === null && mode!.kind === 'plant' && !held.has(i)) {";
+      expect(src.split(from)).toHaveLength(2);
+      writeFileSync(path, src.replace(from, "} else if (s === null && mode!.kind === 'plant') {"));
+      const m = (await import(path)) as { plantHip: typeof plantHip };
+      const a = stepUnderLift();
+      const feet = supportsOf(a, hips, times, secondsOf, false, true);
+      const p = plant(a, feet, m.plantHip);
+      const anchor = worldAnkle(a, p.hip, 'r', 9);
+      const w = worldAnkle(a, p.hip, 'r', 10);
+      const off = Math.hypot(w[0] - anchor[0], w[1] - anchor[1]);
+      console.log(`  mutant "hold dropped": the right ankle ${off.toFixed(3)} px off its anchor on frame 10`);
+      expect(off).toBeGreaterThan(1);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }

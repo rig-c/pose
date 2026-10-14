@@ -341,6 +341,13 @@ export interface Feet {
    * without `lowerAnkle`).
    */
   lowered?: Lowered[];
+  /**
+   * rig-c/pose#113: the frames no foot supports because the only foot free to
+   * take support was the higher one. On them the hip keeps the plant it held on
+   * the frame before, if it held one (`placeHip`), instead of following the
+   * pose's travel. Absent where the rule does not apply.
+   */
+  held?: number[];
 }
 
 /** A run of frames whose support the lower-ankle rule (rig-c/pose#113) reads differently from the reading before it. */
@@ -385,7 +392,7 @@ export function rollingFloor(ys: readonly number[], times: readonly number[]): n
  */
 export function supportsOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, times: readonly number[], secondsOf: (run: [number, number]) => number, inPlace = false, lowerAnkle = false): Feet {
   if (inPlace || !lowerAnkle) return readSupports(ankle, hip, times, secondsOf, inPlace, false).feet;
-  const { feet, released } = readSupports(ankle, hip, times, secondsOf, false, true);
+  const { feet, released, held } = readSupports(ankle, hip, times, secondsOf, false, true);
   const before = readSupports(ankle, hip, times, secondsOf, false, false).feet.support;
   const lowered: Lowered[] = [];
   feet.support.forEach((now, i) => {
@@ -395,11 +402,15 @@ export function supportsOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side,
     if (last !== undefined && last.frames[1] === i - 1 && last.was === was && last.now === now) last.frames[1] = i;
     else lowered.push({ frames: [i, i], was, now, ...(now === null ? { cause: released.includes(i) ? ('released' as const) : ('higher' as const) } : {}) });
   });
-  return { ...feet, lowered };
+  return { ...feet, lowered, held };
 }
 
-/** The reader; `released` (#113): the frames a supporting foot was released because the lower foot could not take support. */
-function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, times: readonly number[], secondsOf: (run: [number, number]) => number, inPlace: boolean, lowerAnkle: boolean): { feet: Feet; released: number[] } {
+/**
+ * The reader; `released` (#113): the frames a supporting foot was released
+ * because the lower foot could not take support; `held`: the frames no foot
+ * supports because the only foot free to take support was the higher one.
+ */
+function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, times: readonly number[], secondsOf: (run: [number, number]) => number, inPlace: boolean, lowerAnkle: boolean): { feet: Feet; released: number[]; held: number[] } {
   const n = ankle.r.length;
   const legLength = {} as Record<Side, number>;
   for (const s of SIDES) legLength[s] = percentile(ankle[s].map((a, i) => Math.hypot(a[0] - hip[s][i]![0], a[1] - hip[s][i]![1])), 0.5);
@@ -436,6 +447,7 @@ function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, read
   let cur: Side | null = null;
   let lowerFrom = -1;
   const released: number[] = [];
+  const held: number[] = [];
   const lower = (cands: Side[], i: number): Side => (cands.length === 2 ? (ankle.l[i]![1] > ankle.r[i]![1] ? 'l' : 'r') : cands[0]!);
   for (let i = 0; i < n; i++) {
     // A released ankle re-plants once it has been still for STILL_FRAMES frames.
@@ -488,6 +500,7 @@ function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, read
         }
       } else lowerFrom = -1;
     }
+    if (lowerAnkle && cur === null && released[released.length - 1] !== i && SIDES.some((x) => free(x) && higher(x))) held.push(i);
     support[i] = cur;
   }
   const supports: Feet['supports'] = [];
@@ -498,7 +511,7 @@ function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, read
     if (last !== undefined && last.side === s && last.frames[1] === i - 1) last.frames[1] = i;
     else supports.push({ side: s, frames: [i, i] });
   }
-  return { feet: { legLength, support, supports, jumps, steps, changes }, released };
+  return { feet: { legLength, support, supports, jumps, steps, changes }, released, held };
 }
 
 /** One support span's shift onto the floor (rig-c/pose#85): its side, its frames, and floor − its planted height, world units. */
@@ -589,6 +602,7 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
   const hip: Pt[] = [];
   const anchors = new Map<number, number>();
   const blends: BlendFrame[] = [];
+  const held = new Set(feet.held ?? []);
   /** How the hip is derived on a frame: held over a foot's anchor, or carried by the pose's travel from a frame's hip. */
   type Mode = { kind: 'plant'; side: Side; anchor: Pt; from: number } | { kind: 'travel'; from: number; at: Pt };
   const of = (mode: Mode, i: number): Pt => {
@@ -618,11 +632,13 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
         const o = offset(0, s);
         mode = plant(0, s, [start[0] + o[0], start[1] + o[1]]);
       }
-    } else if (s === null && mode!.kind === 'plant') {
+    } else if (s === null && mode!.kind === 'plant' && !held.has(i)) {
+      // #113: a frame in `held` keeps the plant; any other frame without support follows the pose's travel.
       mode = { kind: 'travel', from: i - 1, at: hip[i - 1]! };
       from = null;
       blendAt = -1;
-    } else if (s !== null && (mode!.kind === 'travel' || (mode as { side: Side }).side !== s)) {
+    } else if (s !== null && (mode!.kind === 'travel' || (mode as { side: Side }).side !== s || feet.support[i - 1] === null)) {
+      // (#113: after held frames the support span starts again, so even the same foot plants anew, where it is now.)
       // The new support is held where it is on this frame, under the hip the old derivation gives here.
       const here = of(mode!, i);
       const o = offset(i, s);
