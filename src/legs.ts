@@ -25,7 +25,8 @@
  * every frame one foot supports: the one whose reference ankle is lower in the
  * picture, changing only when the other ankle has been ≥ `PLANT_SWITCH` leg
  * lengths lower for ≥ `PLANT_SWITCH_SECONDS`. The supporting foot is held where
- * it was on the frame it took support, and the hip is placed so it stays there,
+ * it was on the frame it took support, moved in y onto the one floor every span
+ * shares (rig-c/pose#85, `plantHip`), and the hip is placed so it stays there,
  * through the posed (scaled) legs. A change of support blends the two
  * derivations over `PLANT_BLEND` frames. A jump — both ankles and mid_hip more
  * than `JUMP_RISE` leg lengths above their rolling floor (the 95th-percentile
@@ -431,15 +432,69 @@ export function supportsOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side,
   return { legLength, support, supports, jumps, steps, changes };
 }
 
+/** One support span's shift onto the floor (rig-c/pose#85): its side, its frames, and floor − its planted height, world units. */
+export interface FloorShift {
+  side: Side;
+  frames: [number, number];
+  shift: number;
+}
+
+/** Where the planted feet were put (rig-c/pose#85): the floor's world y, whether `--floor` gave it, and each support span's shift. */
+export interface Floor {
+  y: number;
+  given: boolean;
+  shifts: FloorShift[];
+}
+
 /**
- * The hip's world origin on every frame, from the supporting foot (header).
- * `offset(i, side)` is the ankle's posed position relative to the hip's origin
- * on frame i; `travel(i)` the pose's own travel of the hip from frame 0, world.
- * `start` is the hip's origin on frame 0 (its setup origin).
+ * The hip's world origin on every frame, from the supporting foot (header),
+ * with every support span on one floor (rig-c/pose#85). `offset(i, side)` is
+ * the ankle's posed position relative to the hip's origin on frame i;
+ * `travel(i)` the pose's own travel of the hip from frame 0, world. `start` is
+ * the hip's origin on frame 0 (its setup origin).
+ *
+ * **One floor.** A span's planted height is the world y its supporting ankle is
+ * held at when it is held where the picture puts it on the frame it takes
+ * support. A 2D rig has one floor, so every span is planted on it instead: the
+ * floor is `floor` when given (`--floor`, world units), and otherwise the median
+ * of the spans' planted heights; each span's anchor moves in y by floor − its
+ * planted height, and the hip with it, so everything above follows. A change of
+ * support still blends the two derivations over `PLANT_BLEND` frames, now
+ * between two spans on the floor; a jump follows the pose's travel from the hip
+ * it left (on the floor) and lands on the floor. On a blend frame the hip is
+ * between the two derivations, so the supporting ankle is off its anchor:
+ * `blends` lists those frames with the anchor's y, and `holdBlend` stretches
+ * the supporting leg to keep it there. Null `floor` in the result: there is no
+ * support span.
  */
-export function plantHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: number) => Pt, start: Pt): Pt[] {
+export function plantHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: number) => Pt, start: Pt, floor?: number): { hip: Pt[]; floor: Floor | null; blends: BlendFrame[] } {
+  const picture = placeHip(feet, offset, travel, start, null);
+  const heights = feet.supports.map((sp) => picture.anchors.get(sp.frames[0]));
+  if (heights.length === 0) return { hip: picture.hip, floor: null, blends: picture.blends };
+  if (heights.some((h) => h === undefined)) throw new Error('plantHip: a support span starts on a frame no plant started on');
+  const y = floor ?? percentile(heights as number[], 0.5);
+  const shifts = feet.supports.map((sp, k) => ({ side: sp.side, frames: [sp.frames[0], sp.frames[1]] as [number, number], shift: y - heights[k]! }));
+  const placed = placeHip(feet, offset, travel, start, y);
+  return { hip: placed.hip, floor: { y, given: floor !== undefined, shifts }, blends: placed.blends };
+}
+
+/** A frame inside the blend after a change of support (or a landing): the side now supporting, and the world y its plant holds the ankle at. */
+export interface BlendFrame {
+  frame: number;
+  side: Side;
+  y: number;
+}
+
+/**
+ * The hip placed from the supporting foot, each plant's anchor held where the
+ * picture puts it (`floorY` null) or at world y `floorY`; and each plant's
+ * picture anchor y, by the frame its support span starts on.
+ */
+function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: number) => Pt, start: Pt, floorY: number | null): { hip: Pt[]; anchors: Map<number, number>; blends: BlendFrame[] } {
   const n = feet.support.length;
   const hip: Pt[] = [];
+  const anchors = new Map<number, number>();
+  const blends: BlendFrame[] = [];
   /** How the hip is derived on a frame: held over a foot's anchor, or carried by the pose's travel from a frame's hip. */
   type Mode = { kind: 'plant'; side: Side; anchor: Pt } | { kind: 'travel'; from: number; at: Pt };
   const of = (mode: Mode, i: number): Pt => {
@@ -451,6 +506,11 @@ export function plantHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel:
     const b = travel(mode.from);
     return [mode.at[0] + a[0] - b[0], mode.at[1] + a[1] - b[1]];
   };
+  /** A plant from frame i: its anchor's x where the foot is, its y there or on the floor. */
+  const plant = (i: number, side: Side, at: Pt): Mode => {
+    anchors.set(i, at[1]);
+    return { kind: 'plant', side, anchor: [at[0], floorY ?? at[1]] };
+  };
   let mode: Mode | null = null;
   let from: Mode | null = null;
   let blendAt = -1;
@@ -460,7 +520,7 @@ export function plantHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel:
       if (s === null) mode = { kind: 'travel', from: 0, at: start };
       else {
         const o = offset(0, s);
-        mode = { kind: 'plant', side: s, anchor: [start[0] + o[0], start[1] + o[1]] };
+        mode = plant(0, s, [start[0] + o[0], start[1] + o[1]]);
       }
     } else if (s === null && mode!.kind === 'plant') {
       mode = { kind: 'travel', from: i - 1, at: hip[i - 1]! };
@@ -471,7 +531,7 @@ export function plantHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel:
       const here = of(mode!, i);
       const o = offset(i, s);
       from = mode;
-      mode = { kind: 'plant', side: s, anchor: [here[0] + o[0], here[1] + o[1]] };
+      mode = plant(i, s, [here[0] + o[0], here[1] + o[1]]);
       blendAt = i;
     }
     const to = of(mode!, i);
@@ -479,12 +539,14 @@ export function plantHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel:
       const w = (i - blendAt + 1) / (PLANT_BLEND + 1);
       const f = of(from, i);
       hip.push([f[0] + (to[0] - f[0]) * w, f[1] + (to[1] - f[1]) * w]);
+      const m = mode!;
+      if (m.kind === 'plant') blends.push({ frame: i, side: m.side, y: m.anchor[1] });
     } else {
       from = null;
       hip.push(to);
     }
   }
-  return hip;
+  return { hip, anchors, blends };
 }
 
 // --- stance (rig-c/pose#60) --------------------------------------------------
@@ -659,4 +721,68 @@ export function stanceOf(feet: Feet, ankle: Record<Side, readonly Pt[]>, toleran
   for (const x of absorbed) runs.push(x);
   runs.sort((a, b) => a.frames[0] - b.frames[0] || (a.absorbed === true ? 1 : 0) - (b.absorbed === true ? 1 : 0));
   return { tolerance, release: STANCE_RELEASE, minSeconds: STANCE_MIN_SECONDS, bounds: STANCE_BOUNDS, runs, over, stretch };
+}
+
+// --- the blend held on the floor (rig-c/pose#85) ------------------------------
+
+/** A supporting ankle already within this many world units of its anchor on a blend frame is left as it is: the landing check's origin tolerance (`verify.ts` ORIGIN_TOLERANCE). */
+export const BLEND_HOLD_WITHIN = 0.01;
+
+/** A run of blend frames on one supporting side whose leg was stretched. */
+export interface BlendRun {
+  side: Side;
+  frames: [number, number];
+  /** The smallest and largest stretch keyed (bounded). */
+  k: { min: number; max: number };
+}
+
+export interface BlendHold {
+  bounds: readonly [number, number];
+  runs: BlendRun[];
+  /** Runs whose stretch needed a factor past the bounds: held at the bound, the remainder left to the blend. */
+  over: StanceOver[];
+  /** Per frame: the supporting side and the stretch keyed on it, or null. */
+  stretch: Array<{ side: Side; k: number } | null>;
+}
+
+/**
+ * The supporting foot does not leave the floor during a blend (rig-c/pose#85).
+ * On a blend frame the hip is between the old derivation and the new, so the
+ * supporting ankle is off the y its plant holds. Its leg is stretched along its
+ * chain about the chain's root, as `--stance` stretches a free leg (`stanceOf`):
+ * k = (root y − anchor y) / (root y − ankle y) on the posed rig (`posed`, world,
+ * y up), held within `STANCE_BOUNDS`; a frame past them is listed in `over`, and
+ * the remainder stays with the blend. An ankle within `BLEND_HOLD_WITHIN` of the
+ * anchor is not stretched.
+ */
+export function holdBlend(blends: readonly BlendFrame[], n: number, posed: (i: number) => StancePosed): BlendHold {
+  const stretch: BlendHold['stretch'] = new Array(n).fill(null);
+  const runs: BlendRun[] = [];
+  const over: StanceOver[] = [];
+  for (const b of blends) {
+    const p = posed(b.frame);
+    const root = p.root[b.side][1];
+    const a = p.ankle[b.side][1];
+    if (Math.abs(a - b.y) <= BLEND_HOLD_WITHIN) continue;
+    const ok = root - a > 1e-9 && root - b.y > 1e-9;
+    const needed = ok ? (root - b.y) / (root - a) : null;
+    const k = needed === null ? 1 : Math.min(Math.max(needed, STANCE_BOUNDS[0]), STANCE_BOUNDS[1]);
+    const left = Math.abs(root - k * (root - a) - b.y);
+    if (k !== 1) {
+      stretch[b.frame] = { side: b.side, k };
+      const last = runs[runs.length - 1];
+      if (last !== undefined && last.side === b.side && last.frames[1] === b.frame - 1) {
+        last.frames[1] = b.frame;
+        last.k = { min: Math.min(last.k.min, k), max: Math.max(last.k.max, k) };
+      } else runs.push({ side: b.side, frames: [b.frame, b.frame], k: { min: k, max: k } });
+    }
+    if (needed !== null && needed >= STANCE_BOUNDS[0] && needed <= STANCE_BOUNDS[1]) continue;
+    const o = over[over.length - 1];
+    if (o !== undefined && o.side === b.side && o.frames[1] === b.frame - 1) {
+      o.frames[1] = b.frame;
+      o.needed = o.needed === null || needed === null ? null : Math.abs(needed - 1) > Math.abs(o.needed - 1) ? needed : o.needed;
+      o.left = Math.max(o.left, left);
+    } else over.push({ side: b.side, frames: [b.frame, b.frame], needed, left });
+  }
+  return { bounds: STANCE_BOUNDS, runs, over, stretch };
 }

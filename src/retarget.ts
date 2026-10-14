@@ -76,8 +76,8 @@ import type { Joint } from './pose.ts';
 import { Problems, Refusal } from './problems.ts';
 import type { ArtRange, Raised, ReachShort, SlotTrack, Switch, SwitchOptions } from './switch.ts';
 import { clampArt, coveredChains, isRaised, measureArt, overflow, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
-import type { Feet, LegScale, PathPose, Posing, Side, Stance } from './legs.ts';
-import { isLegSegment, legScaleOf, legsOf, pathFrom, plantHip, posePath, rootOf, SIDES, stanceOf, supportsOf, tipOf } from './legs.ts';
+import type { BlendHold, Feet, Floor, LegScale, PathPose, Posing, Side, Stance } from './legs.ts';
+import { holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, plantHip, posePath, rootOf, SIDES, stanceOf, supportsOf, tipOf } from './legs.ts';
 
 const DEG = 180 / Math.PI;
 
@@ -108,6 +108,8 @@ export interface RetargetOptions extends SwitchOptions {
   plantFeet?: boolean;
   /** With plantFeet: a free ankle within this many leg lengths of the floor plants both feet, its leg stretched to reach it (`legs.ts` stanceOf, #60); 'off' (the default) plants one. */
   stance?: number | 'off';
+  /** With plantFeet: the floor's world y every support span is planted on (#85); absent, the median of the spans' planted heights. */
+  floor?: number;
   /** While a set whose arm is drawn raised shows, its wrist is placed against the rig's head in eye distances (rig-c/pose#62); false (the default) keeps the pose's angles. */
   raisedByHead?: boolean;
 }
@@ -288,6 +290,10 @@ export interface Retarget {
   planted: boolean;
   /** With --stance: the frames planted both and lifted, and the free leg's stretch (#60). */
   stance: Stance | null;
+  /** With --plant-feet: the one floor every support span was planted on, and each span's shift onto it (#85). */
+  floor: Floor | null;
+  /** With --plant-feet: the supporting leg stretched on the blend frames so its ankle stays on the floor (#85). */
+  blendHold: BlendHold | null;
   /** Each ankle's world position on every frame, as the keys put it, when legs are scaled or feet planted. */
   ankles: { bones: Record<Side, string>; at: Record<Side, Pt[]> } | null;
   /** The translated bone's origin against its thigh roots' midpoint, at setup. */
@@ -609,6 +615,8 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   const legScale: LegScale[] = [];
   const scales = new Map<string, number[]>();
   let stance: Stance | null = null;
+  let floor: Floor | null = null;
+  let blendHold: BlendHold | null = null;
   let feet: Feet | null = null;
   let legs: ReturnType<typeof legsOf> | null = null;
   let legPath: string[] | null = null;
@@ -664,6 +672,8 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     if (legScale.length === 0 && !p.any) p.add('LEGS_MAP', '--leg-scale scales the leg segments (two of one side\'s hip, knee and ankle), and the map aims none');
   }
   if (opts.stance !== undefined && opts.stance !== 'off' && !plantOn) p.add('STANCE', `--stance ${opts.stance} plants the free foot beside the supporting one that --plant-feet holds, and --plant-feet is not given`);
+  if (opts.floor !== undefined && !plantOn) p.add('FLOOR', `--floor ${opts.floor} is the floor --plant-feet plants every support span on, and --plant-feet is not given`);
+  if (opts.floor !== undefined && !Number.isFinite(opts.floor)) p.add('FLOOR', `--floor is ${opts.floor}; it must be a finite world y`);
   p.throwIfAny();
   /** Every bone on the legs' path posed on frame i, by the targets as they stand. */
   const poseLegs = (i: number): PathPose => {
@@ -684,32 +694,52 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       return { r: tipOf(rest, lp, legs !== null && 'legs' in legs ? legs.legs.r.ankleBone : ''), l: tipOf(rest, lp, legs !== null && 'legs' in legs ? legs.legs.l.ankleBone : '') };
     });
     const tb = rest.get(t!.bone)!;
-    const hip = plantHip(feet!, (i, s) => offsets[i]![s], (i) => poseTravel[i]!, [tb.worldX, tb.worldY]);
+    // #85: every support span on one floor — the median of their planted heights, or --floor.
+    const planted = plantHip(feet!, (i, s) => offsets[i]![s], (i) => poseTravel[i]!, [tb.worldX, tb.worldY], opts.floor);
+    const hip = planted.hip;
+    floor = planted.floor;
     for (let i = 0; i < n; i++) travel[i] = [hip[i]![0] - tb.worldX, hip[i]![1] - tb.worldY];
-    // --stance (#60): with the hip placed, a free ankle within the tolerance of the floor has its leg
-    // stretched (every bone of its chain's scalex, about the chain's root) until it reaches it.
-    if (opts.stance !== undefined && opts.stance !== 'off') {
-      const L = (legs as { legs: Record<Side, { chain: Chain; ankleBone: string }> }).legs;
-      const world = (i: number, v: Pt): Pt => [hip[i]![0] + v[0], hip[i]![1] + v[1]];
-      const ankleSeries = { r: series.get('r_ankle')!, l: series.get('l_ankle')! };
-      stance = stanceOf(feet!, ankleSeries, opts.stance, (i) => {
-        const lp = poseLegs(i);
-        return {
-          root: { r: world(i, lp.origin.get(L.r.chain.bones[0]!)!), l: world(i, lp.origin.get(L.l.chain.bones[0]!)!) },
-          ankle: { r: world(i, tipOf(rest, lp, L.r.ankleBone)), l: world(i, tipOf(rest, lp, L.l.ankleBone)) },
-        };
-      }, secondsOf);
+    const L = (legs as { legs: Record<Side, { chain: Chain; ankleBone: string }> }).legs;
+    const world = (i: number, v: Pt): Pt => [hip[i]![0] + v[0], hip[i]![1] + v[1]];
+    /** Both legs posed on frame i by the scales as they stand, world (y up): each chain's root and ankle. */
+    const posedFeet = (i: number) => {
+      const lp = poseLegs(i);
+      return {
+        root: { r: world(i, lp.origin.get(L.r.chain.bones[0]!)!), l: world(i, lp.origin.get(L.l.chain.bones[0]!)!) },
+        ankle: { r: world(i, tipOf(rest, lp, L.r.ankleBone)), l: world(i, tipOf(rest, lp, L.l.ankleBone)) },
+      };
+    };
+    /** Every bone of a side's chain has its scalex multiplied by the stretch keyed on that side. */
+    const stretchChain = (stretch: ReadonlyArray<{ side: Side; k: number } | null>) => {
       for (const side of SIDES) {
-        if (!stance.stretch.some((x) => x?.side === side)) continue;
+        if (!stretch.some((x) => x?.side === side)) continue;
         for (const b of L[side].chain.bones) {
           const own = scales.get(b);
           const s = own === undefined ? new Array<number>(n).fill(1) : [...own];
-          stance.stretch.forEach((x, i) => {
+          stretch.forEach((x, i) => {
             if (x?.side === side) s[i] = s[i]! * x.k;
           });
           scales.set(b, s);
         }
       }
+    };
+    // #85: on a blend frame the hip is between two derivations; the supporting leg is stretched
+    // (stanceOf's mechanism, its bounds) so its ankle stays on the floor. Before --stance, whose
+    // floor is that supporting ankle.
+    blendHold = holdBlend(planted.blends, n, posedFeet);
+    stretchChain(blendHold.stretch);
+    // --stance (#60): with the hip placed, a free ankle within the tolerance of the floor has its leg
+    // stretched (every bone of its chain's scalex, about the chain's root) until it reaches it.
+    if (opts.stance !== undefined && opts.stance !== 'off') {
+      const ankleSeries = { r: series.get('r_ankle')!, l: series.get('l_ankle')! };
+      stance = stanceOf(feet!, ankleSeries, opts.stance, posedFeet, secondsOf);
+      // The supporting leg (the blend's) and the free leg (the stance's) are different chains on a frame.
+      for (let i = 0; i < n; i++) {
+        const b = blendHold.stretch[i];
+        if (b !== null && b !== undefined && stance.stretch[i]?.side === b.side) p.add('LEGS_STRETCH', `frame ${i}: chain "${L[b.side].chain.name}" is stretched both as the supporting leg of a blend (k ${b.k}) and as the free leg of --stance (k ${stance.stretch[i]!.k}); one chain takes one stretch`);
+      }
+      p.throwIfAny();
+      stretchChain(stance.stretch);
     }
   }
   if (t !== null && scale !== null) {
@@ -1110,7 +1140,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     animation: { duration: keyTimes[n - 1]!, tracks },
     times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale,
     switches: sw.switches, shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
-    legScale, scales, feet, planted: plantOn, stance, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs), raised,
+    legScale, scales, feet, planted: plantOn, stance, floor, blendHold, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs), raised,
   };
 }
 

@@ -2706,6 +2706,220 @@ describe('#47: --leg-scale and --plant-feet', () => {
     expect(retarget(c).status).toBe(0);
   }, SLOW);
 
+  describe('#85: --plant-feet puts every support span on one floor', () => {
+    /** 36 frames: three support spans of 12, the figure still within each. */
+    const N85 = 36;
+    const M85: Motion = { ...STILL, n: N85 };
+    /**
+     * The whole figure moved by `at(i)` px: frames 0–11 by `a`, 12–23 by `b`, 24–35 by `c`. Each move is ≥ 5 px
+     * (0.033 leg lengths, a step: both ankles released, the hip on the pose's travel for a frame, then re-planted
+     * where the picture puts it); every pair is within 6 px, under the 0.05 leg lengths (7.5 px) a jump rises.
+     */
+    const moved = (a: Pt, b: Pt, c: Pt) => poseDoc(M85, (i, j) => {
+      const d = i < 12 ? a : i < 24 ? b : c;
+      for (const [name, at] of Object.entries(j)) j[name] = { ...at, at: [(at.at as Pt)[0] + d[0], (at.at as Pt)[1] + d[1]] };
+    });
+    /** Three picture heights: 0, 6 px lower, 1 px lower (y down). */
+    const threeHeights = () => moved([0, 0], [0, 6], [0, 1]);
+    /** One height: the same moves made sideways. */
+    const oneHeight = () => moved([0, 0], [6, 0], [1, 0]);
+    /** Each ankle's world position on every frame of the gated build, posed by rig-c. */
+    function ankles85(build: string): { r: Pt[]; l: Pt[] } {
+      const poses = poseRawAnimation(loadBuild(build), 'dance', Array.from({ length: N85 - 1 }, () => DT), {}, 'animation');
+      const out = { r: [] as Pt[], l: [] as Pt[] };
+      for (const p of poses) {
+        const b = byName(p.bones);
+        for (const s of ['r', 'l'] as const) {
+          const shin = b.get(`leg_${s}1`)!;
+          out[s].push([shin.worldX + shin.a * 70, shin.worldY + shin.c * 70]);
+        }
+      }
+      return out;
+    }
+    interface Report85 { feet: { supports: Array<{ side: 'r' | 'l'; frames: [number, number] }>; floor: number | null; shifts: Array<{ side: string; frames: number[]; shift: number }> } }
+    /** Each span's supporting ankle's world y on every frame of the span, blend frames included, posed by rig-c. */
+    function plantedYs(build: string, report: string): number[][] {
+      const rep = JSON.parse(readFileSync(report, 'utf8')) as Report85;
+      const a = ankles85(build);
+      return rep.feet.supports.map((sp) => {
+        const ys: number[] = [];
+        for (let i = sp.frames[0]; i <= sp.frames[1]; i++) ys.push(a[sp.side][i]![1]);
+        return ys;
+      });
+    }
+    const spreadOf = (yss: number[][]): number => Math.max(...yss.flat()) - Math.min(...yss.flat());
+    /** The tolerance the landing check holds an ankle to: 0.01 units plus 1e-4 of the 150-unit leg. */
+    const FLOOR_TOL = 0.01 + 1e-4 * LEG;
+
+    /** The three-heights test against a CLI: the spans read, and their planted ankles' spread across spans, world units. */
+    function threeHeightsRun(cliPath: string): { status: number; supports: string[]; spread: number; perSpan: number[] } {
+      const c = setup({ pose: threeHeights() });
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--plant-feet', '--report', report], cliPath);
+      if (r.status !== 0) return { status: r.status, supports: [], spread: NaN, perSpan: [] };
+      const yss = plantedYs(c.build, report);
+      return { status: r.status, supports: linesOf(r, 'FEET').filter((l) => l.startsWith('FEET   supports')), spread: spreadOf(yss), perSpan: yss.map((ys) => Math.max(...ys) - Math.min(...ys)) };
+    }
+
+    test('three picture heights: every span\'s supporting ankle lands on one floor, posed by rig-c; FEET and the report give the shifts', () => {
+      const c = setup({ pose: threeHeights() });
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--plant-feet', '--report', report]);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      // Three spans, each starting after a step (both ankles moved ≥ 5 px), and no jump.
+      expect(linesOf(r, 'FEET')).toContain('FEET   supports: r 0–11, l 13–23, r 25–35');
+      expect(linesOf(r, 'FEET')).toContain('FEET   jumps (both ankles and mid_hip > 0.05 leg lengths above their rolling floor, ≥ 2 frames): none');
+      // Held where the picture puts them, the spans would sit 0, 9 and 1.5 units lower (6 px and 1 px × the figure scale 1.5):
+      // the floor is their median, and each shift is floor − its height.
+      const rep = JSON.parse(readFileSync(report, 'utf8')) as Report85;
+      expect(rep.feet.shifts.map((x) => [x.side, x.frames])).toEqual([['r', [0, 11]], ['l', [13, 23]], ['r', [25, 35]]]);
+      const shifts = rep.feet.shifts.map((x) => x.shift);
+      expect(shifts[0]!).toBeCloseTo(-1.5, 3);
+      expect(shifts[1]!).toBeCloseTo(7.5, 3);
+      expect(shifts[2]!).toBeCloseTo(0, 3);
+      // Independently: every span's supporting ankle at one world y, and that y is the report's floor.
+      const yss = plantedYs(c.build, report);
+      expect(spreadOf(yss)).toBeLessThan(FLOOR_TOL);
+      for (const ys of yss) for (const y of ys) expect(Math.abs(y - rep.feet.floor!)).toBeLessThan(FLOOR_TOL);
+      // Both ankles land where the keys put them, by the package's own check.
+      expect(linesOf(r, 'LAND').filter((l) => l.includes(' ankle — '))).toHaveLength(2);
+      const line = linesOf(r, 'FEET').find((l) => l.startsWith('FEET   floor:'))!;
+      expect(line).toContain(`floor: world y ${rep.feet.floor!.toFixed(2)} (the median of the 3 support span(s)' planted heights)`);
+      expect(line).toContain('r 0–11 −1.50 (−0.0100), l 13–23 +7.50 (+0.0500), r 25–35 +0.00 (+0.0000); range −1.50 … +7.50 units = 0.0601 leg lengths');
+    }, SLOW);
+
+    test('--floor <y> puts every span on that world y; without --plant-feet, or not a number, it is exit 2', () => {
+      const c = setup({ pose: threeHeights() });
+      const report = join(c.dir, 'report.json');
+      const r0 = retarget(c, ['--plant-feet', '--report', report]);
+      expect(r0.status).toBe(0);
+      const y = (JSON.parse(readFileSync(report, 'utf8')) as Report85).feet.floor! + 10;
+      const r = retarget(c, ['--plant-feet', '--floor', String(y), '--report', report]);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      const rep = JSON.parse(readFileSync(report, 'utf8')) as Report85;
+      expect(rep.feet.floor).toBe(y);
+      expect(linesOf(r, 'FEET').find((l) => l.startsWith('FEET   floor:'))).toContain('(given by --floor)');
+      for (const ys of plantedYs(c.build, report)) for (const v of ys) expect(Math.abs(v - y)).toBeLessThan(FLOOR_TOL);
+      const no = retarget(c, ['--floor', '0']);
+      expect(no.status).toBe(2);
+      expect(no.stderr).toContain('--floor is "0" without --plant-feet');
+      const nan = retarget(c, ['--plant-feet', '--floor', 'low']);
+      expect(nan.status).toBe(2);
+      expect(nan.stderr).toContain('--floor is "low"; it must be a world y in rig units (a finite number)');
+    }, SLOW);
+
+    test('mutant: the shift forced to 0 leaves the spans where the picture puts them, and the three-heights test is red; control: one height writes the same bytes as the mutant', () => {
+      mkdirSync(MUTANTS, { recursive: true });
+      const d = mkdtempSync(join(MUTANTS, 'm-'));
+      try {
+        cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+        cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+        cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+        const path = join(d, 'src', 'legs.ts');
+        const from = 'const placed = placeHip(feet, offset, travel, start, y);';
+        const before = readFileSync(path, 'utf8');
+        expect(before.split(from)).toHaveLength(2);
+        writeFileSync(path, before.replace(from, 'const placed = placeHip(feet, offset, travel, start, null);'));
+        const mutant = threeHeightsRun(join(d, 'cli.ts'));
+        const pkg = threeHeightsRun(CLI);
+        console.log(`  mutant "shift forced to 0": exit ${mutant.status}, planted ankles spread ${mutant.spread.toFixed(3)} units across spans (package ${pkg.spread.toFixed(4)})`);
+        expect(pkg.spread).toBeLessThan(FLOOR_TOL);
+        // Red: the same spans read, each held flat, but at three heights 9 units apart.
+        expect(mutant.status).toBe(0);
+        expect(mutant.supports).toEqual(pkg.supports);
+        for (const s of mutant.perSpan) expect(s).toBeLessThan(FLOOR_TOL);
+        expect(mutant.spread >= FLOOR_TOL).toBe(true);
+        expect(mutant.spread).toBeCloseTo(9, 2);
+        // Control: one picture height (the same steps, made sideways) — the shifts are 0 within 1e-5 units, and the motion is
+        // byte-identical to the mutant's, which is the hip as it was before the floor.
+        const one = setup({ pose: oneHeight() });
+        const report = join(one.dir, 'report.json');
+        const r = retarget(one, ['--plant-feet', '--report', report]);
+        expect(r.status).toBe(0);
+        const rep = JSON.parse(readFileSync(report, 'utf8')) as Report85;
+        expect(rep.feet.shifts).toHaveLength(3);
+        for (const x of rep.feet.shifts) expect(Math.abs(x.shift)).toBeLessThan(1e-5);
+        const ours = readFileSync(one.out, 'utf8');
+        const rm = retarget(one, ['--plant-feet'], join(d, 'cli.ts'));
+        expect(rm.status).toBe(0);
+        expect(readFileSync(one.out, 'utf8')).toBe(ours);
+      } finally {
+        rmSync(d, { recursive: true, force: true });
+      }
+    }, SLOW);
+
+    test('the blend: the supporting ankle stays on the floor while the hip blends, its leg stretched and landing-checked; mutant: without the stretch it leaves the floor', () => {
+      const c = setup({ pose: threeHeights() });
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--plant-feet', '--report', report]);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      // The landing after each step blends the hip over frames 13–15 and 25–27, between two derivations 9 and 7.5 units apart.
+      const held = linesOf(r, 'FEET').filter((l) => l.startsWith('FEET   blend held on the floor:'));
+      expect(held).toHaveLength(2);
+      expect(held[0]).toStartWith('FEET   blend held on the floor: supporting foot l frames 13–15 (t=0.542–0.625s)');
+      expect(held[1]).toStartWith('FEET   blend held on the floor: supporting foot r frames 25–27');
+      expect(linesOf(r, 'FEET').filter((l) => l.startsWith('FEET   past the bounds'))).toEqual([]);
+      // The stretched scales are scale targets: the landing check holds all four.
+      expect(linesOf(r, 'LAND').filter((l) => l.includes(' scale — '))).toHaveLength(4);
+      const rep = JSON.parse(readFileSync(report, 'utf8')) as Report85 & { feet: { blend: { runs: Array<{ side: string; frames: number[] }>; over: unknown[] } } };
+      expect(rep.feet.blend.runs.map((x) => [x.side, x.frames])).toEqual([['l', [13, 15]], ['r', [25, 27]]]);
+      expect(rep.feet.blend.over).toEqual([]);
+      for (const ys of plantedYs(c.build, report)) for (const y of ys) expect(Math.abs(y - rep.feet.floor!)).toBeLessThan(FLOOR_TOL);
+      mkdirSync(MUTANTS, { recursive: true });
+      const d = mkdtempSync(join(MUTANTS, 'm-'));
+      try {
+        cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+        cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+        cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+        const path = join(d, 'src', 'retarget.ts');
+        const from = '    stretchChain(blendHold.stretch);\n';
+        const before = readFileSync(path, 'utf8');
+        expect(before.split(from)).toHaveLength(2);
+        writeFileSync(path, before.replace(from, ''));
+        const m = setup({ pose: threeHeights() });
+        const mreport = join(m.dir, 'report.json');
+        const rm = retarget(m, ['--plant-feet', '--report', mreport], join(d, 'cli.ts'));
+        expect(rm.status).toBe(0);
+        const floorY = (JSON.parse(readFileSync(mreport, 'utf8')) as Report85).feet.floor!;
+        const worst = Math.max(...plantedYs(m.build, mreport).flat().map((y) => Math.abs(y - floorY)));
+        console.log(`  mutant "no stretch on the blend": the supporting ankle up to ${worst.toFixed(3)} units off the floor`);
+        // Red: on the first blend frame the ankle is 0.75 of the 9 units off.
+        expect(worst >= FLOOR_TOL).toBe(true);
+        expect(worst).toBeCloseTo(6.75, 1);
+      } finally {
+        rmSync(d, { recursive: true, force: true });
+      }
+    }, SLOW);
+
+    test('past the bounds: a blend the stretch cannot cover within [0.92, 1.08] is held at the bound, listed, and the rest is left to the blend', () => {
+      /** Legs splayed straight 30° below the horizontal: the ankle 75 units under the root, so 7 px (10.5 units) between spans needs k past 1.08 on the first blend frame. */
+      const splayed: Motion = { ...M85, rt: () => -30, rs: () => -30, lt: () => -150, ls: () => -150 };
+      const pose = poseDoc(splayed, (i, j) => {
+        const d: Pt = i < 12 ? [0, 0] : i < 24 ? [0, 7] : [0, 0];
+        for (const [name, at] of Object.entries(j)) j[name] = { ...at, at: [(at.at as Pt)[0] + d[0], (at.at as Pt)[1] + d[1]] };
+      });
+      const c = setup({ pose });
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--plant-feet', '--report', report]);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      const past = linesOf(r, 'FEET').filter((l) => l.startsWith('FEET   past the bounds:'));
+      expect(past.length).toBeGreaterThan(0);
+      expect(past[0]).toMatch(/^FEET {3}past the bounds: supporting foot [rl] frame 1[3-5] \(t=[0-9.]+s\) — the floor needed k (1\.(0[89]|[1-9])|0\.([0-8]|9[01]))\d*, past \[0\.92, 1\.08\]; held at the bound, the foot left up to [0-9.]+ units from the floor$/);
+      const rep = JSON.parse(readFileSync(report, 'utf8')) as { feet: { blend: { runs: Array<{ k: { min: number; max: number } }>; over: Array<{ frames: number[]; left: number }> } } };
+      expect(rep.feet.blend.over.length).toBeGreaterThan(0);
+      expect(rep.feet.blend.over[0]!.left).toBeGreaterThan(FLOOR_TOL);
+      // Held at the bound, not forced: a run's stretch reaches the bound and goes no further.
+      const ks = rep.feet.blend.runs.flatMap((x) => [x.k.min, x.k.max]);
+      expect(ks.some((k) => k === 1.08 || k === 0.92)).toBe(true);
+      for (const k of ks) expect(k >= 0.92 && k <= 1.08).toBe(true);
+      expect(linesOf(r, 'LAND').filter((l) => l.includes(' scale — '))).toHaveLength(4);
+    }, SLOW);
+  });
+
   describe('#60: --stance plants both feet when the free ankle is within the tolerance of the floor', () => {
     /** The picture leg, hip → ankle at full length, px: FEET's leg length when most frames are unlifted. */
     const PIC = Math.hypot(V[0], V[1]);
