@@ -2699,6 +2699,65 @@ describe('#47: --leg-scale and --plant-feet', () => {
     }
   }, SLOW);
 
+  test('#103: a jump whose scaled travel from take-off would land under the floor is carried to land on it with no flight frame below the floor; mutant without the correction dips', () => {
+    /**
+     * Take-off on frame 7 with legs compressed to 0.85 (hip 22.5 units lower on the floor),
+     * flight on frames 8–11 with legs extended to 1.0 (rise 25, 28, 22, 10 px > 7.5 px threshold),
+     * landing on frame 12 at full leg length (in-place so frame 12 plants directly).
+     * Without #103, raw travel from frame 7 puts frame 11's foot > 10 units below the floor and frame 12's raw landing 22.5 units below it.
+     */
+    const f = (i: number): number => (i === 7 ? 0.85 : 1);
+    const rise = (i: number): number => (i === 7 ? 0.15 * V[1] : i === 8 ? 25 : i === 9 ? 28 : i === 10 ? 22 : i === 11 ? 8 : 0);
+    const doc = { ...legsPose(f, () => 0, rise), travel: 'in-place' };
+    const c = setup({ pose: doc });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--leg-scale', '0.8,1.05', '--plant-feet', '--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as { feet: { jumps: Array<[number, number]>; floor: number; blend: { over: unknown[] } } };
+    expect(rep.feet.jumps).toEqual([[8, 11]]);
+    expect(rep.feet.blend.over).toEqual([]);
+    const p = posedLegs(c.build);
+    const floorY = rep.feet.floor;
+    // Every flight frame 8–11 keeps both feet at or above the floor, and landing frame 12 sits on the floor.
+    for (let i = 8; i <= 11; i++) {
+      const minFoot = Math.min(p.ankle.r[i]![1], p.ankle.l[i]![1]);
+      expect(minFoot - floorY).toBeGreaterThanOrEqual(-0.05);
+    }
+    expect(Math.abs(Math.min(p.ankle.r[12]![1], p.ankle.l[12]![1]) - floorY)).toBeLessThan(0.05);
+
+    // Planted mutant without the #103 jump carry/clamp: frame 11's foot dips below the floor, and travel outside 8–12 is unchanged.
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm103-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'legs.ts');
+      const from = 'const isJump = floorY !== null && feet.jumps.some(([ja, jb]) => ja <= end && jb >= startFrame);';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'const isJump = false;'));
+      const m = setup({ pose: doc });
+      const mRep = join(m.dir, 'report.json');
+      const rm = retarget(m, ['--leg-scale', '0.8,1.05', '--plant-feet', '--report', mRep], join(d, 'cli.ts'));
+      expect(rm.status).toBe(0);
+      const mp = posedLegs(m.build);
+      const dip11 = Math.min(mp.ankle.r[11]![1], mp.ankle.l[11]![1]) - floorY;
+      console.log(`  mutant "without #103 jump carry": frame 11 foot is ${dip11.toFixed(2)} units relative to floor`);
+      expect(dip11).toBeLessThan(-10);
+      // Outside the jump and its landing frame (0..7 and 13..23), the hip's travel is unchanged.
+      const kOurs = motionOf(c.out).animations.dance!.tracks.find((t) => t.bone === 'hip' && t.property === 'translate')!.keys;
+      const kMut = motionOf(m.out).animations.dance!.tracks.find((t) => t.bone === 'hip' && t.property === 'translate')!.keys;
+      for (const i of [0, 1, 2, 3, 4, 5, 6, 7, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]) {
+        expect(kOurs[i]).toEqual(kMut[i]);
+        expect(Math.abs(p.hip[i]![1] - mp.hip[i]![1])).toBeLessThan(1e-3);
+      }
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+
   test('standing while the ankles drift up the picture with depth (the hip does not lift) is not a jump', () => {
     /** Both ankles 20 px up by the last frame (0.13 leg lengths over a floor-wide rule's 0.05), 0.9 px a frame; the hip stays. */
     const depth = (i: number): number => (20 * i) / (N - 1);
