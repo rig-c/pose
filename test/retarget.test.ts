@@ -2644,6 +2644,61 @@ describe('#47: --leg-scale and --plant-feet', () => {
     expect(linesOf(rb, 'FEET')).toContain('FEET   jumps (both ankles and mid_hip > 0.05 leg lengths above their rolling floor, ≥ 2 frames): none');
   }, SLOW);
 
+  test('#101: a raised heel during a hand-over is not a jump, a real flight is, and a mutant without the cue calls the heel a jump', () => {
+    /**
+     * Hand-over on frames 10–12 (150 px legs; 0.05 leg lengths = 7.5 px):
+     * - Front foot `r` swings on 6–12 (20, 20, 20, 20, 18, 15, 11 px up) and lands on 13 (0 px).
+     * - `mid_hip` rises 9 px (0.06 leg lengths) on 10–12.
+     * - Back foot `l`:
+     *   - raised heel: lifts to 12 px (0.08 leg lengths) on 10–12, holds 12 px on 13–14 when `r` lands (|dy| = 0 < 0.01), then swings on 15–17 (24 px) and lands on 18;
+     *   - real flight: rises through `r`'s landing (12, 18, 24, 30, 36, 24 px on 10–15, |dy| = 0.04 leg lengths/frame on 13–14) before landing on 16.
+     */
+    const handOver = (flight: boolean) => {
+      const rUp = (i: number): number => (i >= 6 && i <= 9 ? 20 : i === 10 ? 18 : i === 11 ? 15 : i === 12 ? 11 : 0);
+      const lUp = (i: number): number =>
+        flight
+          ? i === 10 ? 12 : i === 11 ? 18 : i === 12 ? 24 : i === 13 ? 30 : i === 14 ? 36 : i === 15 ? 24 : 0
+          : i >= 10 && i <= 14 ? 12 : i >= 15 && i <= 17 ? 24 : 0;
+      const mUp = (i: number): number => (i >= 10 && i <= 12 ? 9 : 0);
+      return legsPose(() => 1, (i, s) => (s === 'r' ? rUp(i) : lUp(i)) - mUp(i), mUp);
+    };
+    const heel = setup({ pose: handOver(false) });
+    const heelRep = join(heel.dir, 'report.json');
+    const rh = retarget(heel, ['--plant-feet', '--report', heelRep]);
+    expect(rh.stderr).toBe('');
+    expect(rh.status).toBe(0);
+    expect(linesOf(rh, 'FEET')).toContain('FEET   jumps (both ankles and mid_hip > 0.05 leg lengths above their rolling floor, ≥ 2 frames): none');
+    expect((JSON.parse(readFileSync(heelRep, 'utf8')) as { feet: { jumps: unknown } }).feet.jumps).toEqual([]);
+
+    const flight = setup({ pose: handOver(true) });
+    const flightRep = join(flight.dir, 'report.json');
+    const rf = retarget(flight, ['--plant-feet', '--report', flightRep]);
+    expect(rf.stderr).toBe('');
+    expect(rf.status).toBe(0);
+    expect(linesOf(rf, 'FEET')).toContain('FEET   jumps (both ankles and mid_hip > 0.05 leg lengths above their rolling floor, ≥ 2 frames): 10–12');
+    expect((JSON.parse(readFileSync(flightRep, 'utf8')) as { feet: { jumps: unknown } }).feet.jumps).toEqual([[10, 12]]);
+
+    // Planted mutant without the front-foot landing cue: calls the raised heel on 10–12 a jump.
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'legs.ts');
+      const from = 'const jumps = runs(lifted).filter(([a, b]) => b - a + 1 >= JUMP_FRAMES && !raisedHeel(a, b));';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'const jumps = runs(lifted).filter(([a, b]) => b - a + 1 >= JUMP_FRAMES);'));
+      const mRep = join(heel.dir, 'mutant-report.json');
+      const rm = retarget(heel, ['--plant-feet', '--report', mRep], join(d, 'cli.ts'));
+      expect(rm.status).toBe(0);
+      expect((JSON.parse(readFileSync(mRep, 'utf8')) as { feet: { jumps: unknown } }).feet.jumps).toEqual([[10, 12]]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+
   test('standing while the ankles drift up the picture with depth (the hip does not lift) is not a jump', () => {
     /** Both ankles 20 px up by the last frame (0.13 leg lengths over a floor-wide rule's 0.05), 0.9 px a frame; the hip stays. */
     const depth = (i: number): number => (20 * i) / (N - 1);
