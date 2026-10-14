@@ -32,9 +32,11 @@
  * derivations in y over `PLANT_BLEND` frames while taking the new derivation's x
  * immediately (rig-c/pose#102). A jump — both ankles and mid_hip more
  * than `JUMP_RISE` leg lengths above their rolling floor (the 95th-percentile
- * picture y over ± `FLOOR_SECONDS`), for ≥ `JUMP_FRAMES` frames — releases the
- * plant: the hip follows the pose's travel from where it was, and re-plants on
- * landing. A step does too: while the supporting ankle moves more than
+ * picture y over ± `FLOOR_SECONDS`), for ≥ `JUMP_FRAMES` frames, excluding a
+ * hand-over whose back ankle stays up and holds its height in y (`< STILL_SPEED`
+ * for `STILL_FRAMES` frames) when the front foot lands (a raised heel,
+ * rig-c/pose#101) — releases the plant: the hip follows the pose's travel from
+ * where it was, and re-plants on landing. A step does too: while the supporting ankle moves more than
  * `STEP_SPEED` leg lengths a frame its plant is released, the other foot takes
  * support if it is planted (not released, not moving) and otherwise the hip
  * follows the pose; the released ankle may support again once it has moved
@@ -421,6 +423,9 @@ function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, read
   for (const s of SIDES) legLength[s] = percentile(ankle[s].map((a, i) => Math.hypot(a[0] - hip[s][i]![0], a[1] - hip[s][i]![1])), 0.5);
   const mean = (legLength.r + legLength.l) / 2;
   // A jump: both ankles and mid_hip above their rolling floors, for ≥ JUMP_FRAMES frames.
+  // #101: at a hand-over the front foot has not landed yet while the back ankle lifts its heel; when
+  // the front foot lands (the first frame after its lifted run) while the back ankle stays up, a back
+  // ankle that holds its height in y (< STILL_SPEED a frame for STILL_FRAMES frames) is a raised heel.
   const midY = hip.r.map((h, i) => (h[1] + hip.l[i]![1]) / 2);
   const rises: Array<{ ys: number[]; unit: number }> = [
     { ys: ankle.r.map((a) => a[1]), unit: legLength.r },
@@ -431,8 +436,23 @@ function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, read
     const floor = rollingFloor(ys, times);
     return ys.map((y, i) => floor[i]! - y > JUMP_RISE * unit);
   });
+  const ankleRuns = { r: runs(up[0]!), l: runs(up[1]!) };
+  const stillY = (s: Side, from: number): boolean => {
+    if (from + STILL_FRAMES > n) return false;
+    for (let k = from; k < from + STILL_FRAMES; k++) {
+      if (!up[s === 'r' ? 0 : 1]![k] || Math.abs(ankle[s][k]![1] - ankle[s][k - 1]![1]) / legLength[s] >= STILL_SPEED) return false;
+    }
+    return true;
+  };
+  const raisedHeel = (a: number, b: number): boolean => {
+    const rSpan = ankleRuns.r.find(([s, e]) => s <= a && b <= e)!;
+    const lSpan = ankleRuns.l.find(([s, e]) => s <= a && b <= e)!;
+    if (rSpan[1] === lSpan[1]) return false;
+    const [fSpan, back]: [[number, number], Side] = rSpan[1] < lSpan[1] ? [rSpan, 'l'] : [lSpan, 'r'];
+    return stillY(back, fSpan[1] + 1);
+  };
   const lifted = Array.from({ length: n }, (_, i) => up.every((u) => u[i]));
-  const jumps = runs(lifted).filter(([a, b]) => b - a + 1 >= JUMP_FRAMES);
+  const jumps = runs(lifted).filter(([a, b]) => b - a + 1 >= JUMP_FRAMES && !raisedHeel(a, b));
   const jump = new Array<boolean>(n).fill(false);
   for (const [a, b] of jumps) for (let i = a; i <= b; i++) jump[i] = true;
   // Ankle speeds, leg lengths a frame (0 on the first frame).
