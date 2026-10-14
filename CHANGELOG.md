@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.20.0](https://github.com/rig-c/pose/compare/v0.19.0...v0.20.0) (2026-10-14)
+
+
+### Features
+
+* **retarget:** key head chain nod from eyes' vertical travel against neck ([#111](https://github.com/rig-c/pose/issues/111)) ([#129](https://github.com/rig-c/pose/issues/129)) ([1a241c6](https://github.com/rig-c/pose/commit/1a241c67aa3e18ee9aa27c25446bb9a0ef8fbfce))
+* **retarget:** track the lower foot on the floor when only the higher foot is free ([#119](https://github.com/rig-c/pose/issues/119)) ([#130](https://github.com/rig-c/pose/issues/130)) ([b70b47e](https://github.com/rig-c/pose/commit/b70b47e258afca6873ea4dcbdcd621136812cb19))
+
+
+### Bug Fixes
+
+* **clean:** hold the face joints as one group ([#109](https://github.com/rig-c/pose/issues/109)) ([#126](https://github.com/rig-c/pose/issues/126)) ([f3820bb](https://github.com/rig-c/pose/commit/f3820bb93337d26f3ead94b6a052dde013cff7a4))
+* **clean:** keep a held joint held around a short excursion ([#108](https://github.com/rig-c/pose/issues/108)) ([#124](https://github.com/rig-c/pose/issues/124)) ([9a768c7](https://github.com/rig-c/pose/commit/9a768c71e0904177e7f102d8c5f5dd2bfa26c3f8))
+* **legs:** carry jump travel to land on the floor and keep flight frames above it ([#103](https://github.com/rig-c/pose/issues/103)) ([57970fd](https://github.com/rig-c/pose/commit/57970fdfcf357629f76baf37d230118f0494de80))
+* **legs:** distinguish a raised heel at a hand-over from a jump by the front foot's landing ([#101](https://github.com/rig-c/pose/issues/101)) ([74c70e5](https://github.com/rig-c/pose/commit/74c70e5e268b020027ad2d3dc6f7cfef8c1bbd81))
+* **retarget:** ease clampArt at set edges and cap foreshortened steps ([#110](https://github.com/rig-c/pose/issues/110)) ([#127](https://github.com/rig-c/pose/issues/127)) ([b2fcb52](https://github.com/rig-c/pose/commit/b2fcb5280b07aba86bcb3fa912ffc34505708124))
+* **retarget:** place hip from unclamped leg reach and land leg scales ([#128](https://github.com/rig-c/pose/issues/128)) ([470cdcc](https://github.com/rig-c/pose/commit/470cdcc533240b97e1ed83e9517188e5190cab4b)), closes [#107](https://github.com/rig-c/pose/issues/107)
+
 ## [0.19.0](https://github.com/rig-c/pose/compare/v0.18.0...v0.19.0) (2026-10-14)
 
 
