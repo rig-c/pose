@@ -107,10 +107,54 @@ export function measuredFrames(h: HipsInferred | undefined): Set<number> | null 
   return out;
 }
 
+/** The stillness hold's figures (#91): speed in trunk lengths per frame, reach in trunk lengths, the shortest hold in seconds, the blend in frames. */
+export interface HoldParams {
+  speed: number;
+  reach: number;
+  minSeconds: number;
+  blend: number;
+}
+/**
+ * One stillness hold of one joint: its frames (inclusive), and the joint's
+ * jitter inside them before and after, px/f². `after` is 0 on a hold held at
+ * its median throughout; on a hold that carries a seam's cross-fade it is the
+ * ramp's own curvature, expected and not noise (the lines print "ramp").
+ */
+export interface CleanHold {
+  joint: Body18;
+  frames: [number, number];
+  jitter: { before: number | null; after: number | null };
+}
+/**
+ * A run of frames (`frames`, inside a region the holds cover) on which a joint
+ * has a position and no hold, with the test it fails there: `speed` (its
+ * largest median speed, trunk lengths a frame; null where its speed is not
+ * known on some frame), `reach` (its largest distance from its median over the
+ * run, trunk lengths), `short` (it passes both and the run lasts under the
+ * minimum; the figure is its seconds), or `span` (it passes all three and its
+ * spans broke elsewhere; the figure is its reach).
+ */
+/** Two holds of one joint meeting (back to back, or a gap of under 6 frames): the second's first frame, the step between their medians in trunk lengths, and the gap in frames (cross-faded). */
+export interface CleanSeam {
+  joint: Body18;
+  frame: number;
+  step: number;
+  gap: number;
+}
+export interface CleanUnheld {
+  joint: Body18;
+  frames: [number, number];
+  test: 'speed' | 'reach' | 'short' | 'span';
+  value: number | null;
+}
 export interface CleanRecord {
   spec: typeof CLEAN_SPEC;
-  /** `hipsInferred` is present only when clean marked the hips (`--hips-inferred`). */
-  params: { loop: boolean; legs: number; rest: number; hipsInferred?: HipsInferred };
+  /**
+   * `hipsInferred` is present only when clean marked the hips (`--hips-inferred`).
+   * `hold` (#91): the stillness hold's figures, or "off"; absent in a record
+   * written before #91.
+   */
+  params: { loop: boolean; legs: number; rest: number; hipsInferred?: HipsInferred; hold?: HoldParams | 'off' };
   /**
    * `found`: every joint the spike step replaced, by frame (index into `frames`)
    * and joint. `untested`: the frames the spike step did not test, because a
@@ -119,6 +163,10 @@ export interface CleanRecord {
   spikes: { found: CleanSpike[]; untested: number[] };
   /** Mean |second difference| of y, px/f², before and after; null where no joint has three consecutive positions. */
   jitter: { before: number | null; after: number | null };
+  /** The stillness holds (#91), per joint; present, with `unheld`, exactly when `params.hold` is an object. */
+  holds?: CleanHold[];
+  unheld?: CleanUnheld[];
+  seams?: CleanSeam[];
 }
 export interface PoseSequence {
   spec: typeof POSE_SPEC;
@@ -265,24 +313,37 @@ function readCamera(p: Problems, where: string, camera: unknown, frames: number 
   return out;
 }
 
-/** `cleaned`: { spec, params: { loop, legs, rest, hipsInferred? }, spikes: { found: [{ frame, joint }], untested: [frame] }, jitter: { before, after } }. */
+/** `cleaned`: { spec, params: { loop, legs, rest, hipsInferred?, hold? }, spikes: { found: [{ frame, joint }], untested: [frame] }, jitter: { before, after }, holds?, unheld?, seams? }. */
 function readCleaned(p: Problems, where: string, c: unknown, frames: number | null): CleanRecord | undefined {
   const cw = `${where} "cleaned"`;
-  const shape = '{ spec, params: { loop, legs, rest, hipsInferred? }, spikes: { found: [{ frame, joint }], untested: [frame] }, jitter: { before, after } }';
+  const shape = '{ spec, params: { loop, legs, rest, hipsInferred?, hold? }, spikes: { found: [{ frame, joint }], untested: [frame] }, jitter: { before, after }, holds?, unheld?, seams? }';
   if (!isObject(c)) {
     p.add('POSE_CLEANED', `${cw} is ${typeName(c)}; it is the record rig-pose clean writes, ${shape}`);
     return undefined;
   }
   const before = p.list.length;
-  refuseUnknownKeys(p, 'POSE_CLEANED', cw, c, ['spec', 'params', 'spikes', 'jitter']);
+  refuseUnknownKeys(p, 'POSE_CLEANED', cw, c, ['spec', 'params', 'spikes', 'jitter', 'holds', 'unheld', 'seams']);
   for (const k of ['spec', 'params', 'spikes', 'jitter']) if (!(k in c)) p.add('POSE_CLEANED', `${cw} has no "${k}"; the record is ${shape}`);
   if ('spec' in c && c.spec !== CLEAN_SPEC) p.add('POSE_CLEANED', `${cw} "spec" is ${typeName(c.spec)}; this reader reads "${CLEAN_SPEC}"`);
   const window = (v: unknown) => Number.isInteger(v) && (v === 1 || ((v as number) >= 5 && (v as number) % 2 === 1));
   if ('params' in c) {
     const q = c.params;
-    if (!isObject(q)) p.add('POSE_CLEANED', `${cw} "params" is ${typeName(q)}; it must be { loop, legs, rest, hipsInferred? }`);
+    if (!isObject(q)) p.add('POSE_CLEANED', `${cw} "params" is ${typeName(q)}; it must be { loop, legs, rest, hipsInferred?, hold? }`);
     else {
-      refuseUnknownKeys(p, 'POSE_CLEANED', `${cw} "params"`, q, ['loop', 'legs', 'rest', 'hipsInferred']);
+      refuseUnknownKeys(p, 'POSE_CLEANED', `${cw} "params"`, q, ['loop', 'legs', 'rest', 'hipsInferred', 'hold']);
+      if ('hold' in q) {
+        const h = q.hold;
+        const hw = `${cw} "params" "hold"`;
+        if (h === 'off') {
+          for (const k of ['holds', 'unheld', 'seams']) if (k in c) p.add('POSE_CLEANED', `${cw} has "${k}" with "params" "hold" "off"; a record lists holds only when the hold ran`);
+        } else if (!isObject(h)) p.add('POSE_CLEANED', `${hw} is ${typeName(h)}; it must be "off" or { speed, reach, minSeconds, blend }`);
+        else {
+          refuseUnknownKeys(p, 'POSE_CLEANED', hw, h, ['speed', 'reach', 'minSeconds', 'blend']);
+          for (const k of ['speed', 'reach', 'minSeconds'] as const) if (!(typeof h[k] === 'number' && Number.isFinite(h[k]) && h[k] > 0)) p.add('POSE_CLEANED', `${hw} "${k}" is ${typeName(h[k])}; it must be a number > 0 (${k === 'minSeconds' ? 'seconds' : k === 'speed' ? 'trunk lengths per frame' : 'trunk lengths'})`);
+          if (!(Number.isInteger(h.blend) && (h.blend as number) >= 0)) p.add('POSE_CLEANED', `${hw} "blend" is ${typeName(h.blend)}; it must be a whole number of frames ≥ 0`);
+          for (const k of ['holds', 'unheld', 'seams']) if (!(k in c)) p.add('POSE_CLEANED', `${cw} has "params" "hold" and no "${k}"; a record whose hold ran lists its holds, the joints it did not hold and its seams (an empty array when none)`);
+        }
+      } else for (const k of ['holds', 'unheld', 'seams']) if (k in c) p.add('POSE_CLEANED', `${cw} has "${k}" and no "params" "hold"; the holds' figures are recorded in "params" "hold"`);
       if ('hipsInferred' in q) readHipsInferred(p, `${cw} "params" "hipsInferred"`, q.hipsInferred, frames);
       if (typeof q.loop !== 'boolean') p.add('POSE_CLEANED', `${cw} "params" "loop" is ${typeName(q.loop)}; it must be true or false`);
       for (const k of ['legs', 'rest'] as const) if (!window(q[k])) p.add('POSE_CLEANED', `${cw} "params" "${k}" is ${typeName(q[k])}; it must be 1 (none) or an odd whole number ≥ 5`);
@@ -323,17 +384,79 @@ function readCleaned(p: Problems, where: string, c: unknown, frames: number | nu
       }
     }
   }
+  if ('holds' in c) {
+    const hs = c.holds;
+    if (!Array.isArray(hs)) p.add('POSE_CLEANED', `${cw} "holds" is ${typeName(hs)}; it must be an array of { joint, frames: [first, last], jitter: { before, after } }`);
+    else hs.forEach((h: unknown, i: number) => {
+      const hw = `${cw} holds[${i}]`;
+      if (!isObject(h)) {
+        p.add('POSE_CLEANED', `${hw} is ${typeName(h)}; a hold is { joint, frames: [first, last], jitter: { before, after } }`);
+        return;
+      }
+      refuseUnknownKeys(p, 'POSE_CLEANED', hw, h, ['joint', 'frames', 'jitter']);
+      if (typeof h.joint !== 'string' || !isBody18(h.joint)) p.add('POSE_CLEANED', `${hw} "joint" is ${typeName(h.joint)}; it must be a body-18 joint: ${BODY18.join(', ')}`);
+      const f = h.frames;
+      if (!(Array.isArray(f) && f.length === 2 && frameOk(f[0]) && frameOk(f[1]) && (f[0] as number) <= (f[1] as number))) p.add('POSE_CLEANED', `${hw} "frames" is ${typeName(f)}; it must be [first, last], frame indices in ${frameRange}, first ≤ last`);
+      const j = h.jitter;
+      if (!isObject(j)) p.add('POSE_CLEANED', `${hw} "jitter" is ${typeName(j)}; it must be { before, after }`);
+      else {
+        refuseUnknownKeys(p, 'POSE_CLEANED', `${hw} "jitter"`, j, ['before', 'after']);
+        for (const k of ['before', 'after'] as const) {
+          const v = j[k];
+          if (!(v === null || (typeof v === 'number' && Number.isFinite(v) && v >= 0))) p.add('POSE_CLEANED', `${hw} "jitter" "${k}" is ${typeName(v)}; it must be px/f² ≥ 0, or null (not measured)`);
+        }
+      }
+    });
+  }
+  if ('unheld' in c) {
+    const us = c.unheld;
+    if (!Array.isArray(us)) p.add('POSE_CLEANED', `${cw} "unheld" is ${typeName(us)}; it must be an array of { joint, frames: [first, last], test, value }`);
+    else us.forEach((u: unknown, i: number) => {
+      const uw = `${cw} unheld[${i}]`;
+      if (!isObject(u)) {
+        p.add('POSE_CLEANED', `${uw} is ${typeName(u)}; an unheld joint is { joint, frames: [first, last], test, value }`);
+        return;
+      }
+      refuseUnknownKeys(p, 'POSE_CLEANED', uw, u, ['joint', 'frames', 'test', 'value']);
+      if (typeof u.joint !== 'string' || !isBody18(u.joint)) p.add('POSE_CLEANED', `${uw} "joint" is ${typeName(u.joint)}; it must be a body-18 joint: ${BODY18.join(', ')}`);
+      const f = u.frames;
+      if (!(Array.isArray(f) && f.length === 2 && frameOk(f[0]) && frameOk(f[1]) && (f[0] as number) <= (f[1] as number))) p.add('POSE_CLEANED', `${uw} "frames" is ${typeName(f)}; it must be [first, last], frame indices in ${frameRange}, first ≤ last`);
+      if (u.test !== 'speed' && u.test !== 'reach' && u.test !== 'short' && u.test !== 'span') p.add('POSE_CLEANED', `${uw} "test" is ${typeName(u.test)}; it must be "speed", "reach", "short" or "span"`);
+      const v = u.value;
+      const ok = typeof v === 'number' && Number.isFinite(v) && v >= 0;
+      if (!(ok || (v === null && u.test === 'speed'))) p.add('POSE_CLEANED', `${uw} "value" is ${typeName(v)}; it must be a figure ≥ 0 (trunk lengths, or seconds for "short"), or null for a speed not known`);
+    });
+  }
+  if ('seams' in c) {
+    const ss = c.seams;
+    if (!Array.isArray(ss)) p.add('POSE_CLEANED', `${cw} "seams" is ${typeName(ss)}; it must be an array of { joint, frame, step, gap }`);
+    else ss.forEach((x: unknown, i: number) => {
+      const sw = `${cw} seams[${i}]`;
+      if (!isObject(x)) {
+        p.add('POSE_CLEANED', `${sw} is ${typeName(x)}; a seam is { joint, frame, step, gap }`);
+        return;
+      }
+      refuseUnknownKeys(p, 'POSE_CLEANED', sw, x, ['joint', 'frame', 'step', 'gap']);
+      if (!(Number.isInteger(x.gap) && (x.gap as number) >= 0)) p.add('POSE_CLEANED', `${sw} "gap" is ${typeName(x.gap)}; it must be a whole number of frames ≥ 0`);
+      if (typeof x.joint !== 'string' || !isBody18(x.joint)) p.add('POSE_CLEANED', `${sw} "joint" is ${typeName(x.joint)}; it must be a body-18 joint: ${BODY18.join(', ')}`);
+      if (!frameOk(x.frame)) p.add('POSE_CLEANED', `${sw} "frame" is ${typeName(x.frame)}; it must be a frame index in ${frameRange}`);
+      if (!(typeof x.step === 'number' && Number.isFinite(x.step) && x.step >= 0)) p.add('POSE_CLEANED', `${sw} "step" is ${typeName(x.step)}; it must be trunk lengths ≥ 0`);
+    });
+  }
   if (p.list.length > before) return undefined;
-  const q = c.params as { loop: boolean; legs: number; rest: number; hipsInferred?: HipsInferred };
+  const q = c.params as { loop: boolean; legs: number; rest: number; hipsInferred?: HipsInferred; hold?: HoldParams | 'off' };
   const j = c.jitter as { before: number | null; after: number | null };
   return {
     spec: CLEAN_SPEC,
-    params: { loop: q.loop, legs: q.legs, rest: q.rest, ...(q.hipsInferred !== undefined ? { hipsInferred: copyHipsInferred(q.hipsInferred) } : {}) },
+    params: { loop: q.loop, legs: q.legs, rest: q.rest, ...(q.hipsInferred !== undefined ? { hipsInferred: copyHipsInferred(q.hipsInferred) } : {}), ...(q.hold !== undefined ? { hold: holdParamsOf(q.hold) } : {}) },
     spikes: {
       found: ((c.spikes as { found: Array<{ frame: number; joint: Body18 }> }).found).map((s) => ({ frame: s.frame, joint: s.joint })),
       untested: [...(c.spikes as { untested: number[] }).untested],
     },
     jitter: { before: j.before, after: j.after },
+    ...('holds' in c ? { holds: (c.holds as CleanHold[]).map(copyHold) } : {}),
+    ...('unheld' in c ? { unheld: (c.unheld as CleanUnheld[]).map(copyUnheld) } : {}),
+    ...('seams' in c ? { seams: (c.seams as CleanSeam[]).map((x) => ({ joint: x.joint, frame: x.frame, step: x.step, gap: x.gap })) } : {}),
   };
 }
 
@@ -464,6 +587,9 @@ function readHipsInferred(p: Problems, hw: string, h: unknown, frames: number | 
   const undeclared = [...filled].filter((f) => !dec.has(f)).sort((a, b) => a - b);
   if (undeclared.length > 0) p.add('POSE_CLEANED', `${hw}: frame(s) ${spans(undeclared)} are interpolated or held but not declined; only a frame the reading declined is filled, and "declined" says why`);
 }
+const holdParamsOf = (h: HoldParams | 'off'): HoldParams | 'off' => (h === 'off' ? 'off' : { speed: h.speed, reach: h.reach, minSeconds: h.minSeconds, blend: h.blend });
+const copyHold = (h: CleanHold): CleanHold => ({ joint: h.joint, frames: [h.frames[0], h.frames[1]], jitter: { before: h.jitter.before, after: h.jitter.after } });
+const copyUnheld = (u: CleanUnheld): CleanUnheld => ({ joint: u.joint, frames: [u.frames[0], u.frames[1]], test: u.test, value: u.value });
 
 function readJoints(p: Problems, pw: string, joints: unknown): Partial<Record<Body18, Joint>> {
   const out: Partial<Record<Body18, Joint>> = {};
@@ -651,6 +777,14 @@ export function writePoseSequence(seq: PoseSequence): string {
   const camera = seq.camera?.map((c) => ({ s: round(c.s, 6), tx: round(c.tx, 3), ty: round(c.ty, 3), inliers: c.inliers }));
   const c = seq.cleaned;
   const jit = (v: number | null) => (v === null ? null : round(v, 4));
-  const cleaned = c === undefined ? undefined : { spec: c.spec, params: { loop: c.params.loop, legs: c.params.legs, rest: c.params.rest, ...(c.params.hipsInferred !== undefined ? { hipsInferred: copyHipsInferred(c.params.hipsInferred) } : {}) }, spikes: { found: c.spikes.found.map((s) => ({ frame: s.frame, joint: s.joint })), untested: [...c.spikes.untested] }, jitter: { before: jit(c.jitter.before), after: jit(c.jitter.after) } };
+  const cleaned = c === undefined ? undefined : {
+    spec: c.spec,
+    params: { loop: c.params.loop, legs: c.params.legs, rest: c.params.rest, ...(c.params.hipsInferred !== undefined ? { hipsInferred: copyHipsInferred(c.params.hipsInferred) } : {}), ...(c.params.hold !== undefined ? { hold: holdParamsOf(c.params.hold) } : {}) },
+    spikes: { found: c.spikes.found.map((s) => ({ frame: s.frame, joint: s.joint })), untested: [...c.spikes.untested] },
+    jitter: { before: jit(c.jitter.before), after: jit(c.jitter.after) },
+    ...(c.holds !== undefined ? { holds: c.holds.map((h) => ({ joint: h.joint, frames: [h.frames[0], h.frames[1]], jitter: { before: jit(h.jitter.before), after: jit(h.jitter.after) } })) } : {}),
+    ...(c.seams !== undefined ? { seams: c.seams.map((x) => ({ joint: x.joint, frame: x.frame, step: round(x.step, 4), gap: x.gap })) } : {}),
+    ...(c.unheld !== undefined ? { unheld: c.unheld.map((u) => ({ joint: u.joint, frames: [u.frames[0], u.frames[1]], test: u.test, value: u.value === null ? null : round(u.value, 4) })) } : {}),
+  };
   return `${JSON.stringify({ spec: seq.spec, space: seq.space, width: seq.width, height: seq.height, source: seq.source, ...(seq.cameraSource !== undefined ? { cameraSource: seq.cameraSource } : {}), ...(camera !== undefined ? { camera } : {}), ...(cleaned !== undefined ? { cleaned } : {}), frames }, null, 2)}\n`;
 }
