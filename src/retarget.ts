@@ -824,16 +824,20 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
    * offset turned by the nearest mapped bone above — the key formula's own
    * assumption (unit scale, no shear), which the landing check holds to account.
    */
+  let headNodBone: string | null = null;
+  let headNod: Pt[] | null = null;
+  let headNodTrack: MotionTrack | null = null;
   const posedOrigin = (b: string, i: number): Pt => {
     const own = rest.get(b)!;
     if (t !== null && b === t.bone) return [own.worldX + (travel[i]?.[0] ?? 0), own.worldY + (travel[i]?.[1] ?? 0)];
-    if (own.parent === null) return [own.worldX, own.worldY];
+    const nod = b === headNodBone ? (headNod?.[i] ?? [0, 0]) : [0, 0];
+    if (own.parent === null) return [own.worldX + nod[0], own.worldY + nod[1]];
     const parent = own.parent;
     const po = posedOrigin(parent, i);
     const r = turnAbove(parent, i) / DEG;
     const ox = own.worldX - rest.get(parent)!.worldX;
     const oy = own.worldY - rest.get(parent)!.worldY;
-    return [po[0] + Math.cos(r) * ox - Math.sin(r) * oy, po[1] + Math.sin(r) * ox + Math.cos(r) * oy];
+    return [po[0] + Math.cos(r) * ox - Math.sin(r) * oy + nod[0], po[1] + Math.sin(r) * ox + Math.cos(r) * oy + nod[1]];
   };
   /** A rig point (a bone, `name:tip`, `a+b`) posed on frame i the same way. */
   const posedPoint = (spec: string, i: number): Pt => {
@@ -920,6 +924,74 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     }
   }
   p.throwIfAny();
+
+  // #111: the head chain's nod channel — the eyes' vertical travel against the
+  // neck, measured in the rig's own units, keyed as a translate on the head bone
+  // (whose rotate track carries roll only).
+  for (const c of map.chains) {
+    for (let k = 0; k + 1 < c.joints.length; k++) {
+      const ja = c.joints[k]!;
+      const jb = c.joints[k + 1]!;
+      if (!((ja === 'r_eye' && jb === 'l_eye') || (ja === 'l_eye' && jb === 'r_eye'))) continue;
+      const hb = c.bones[k]!;
+      const ha = c.aim[k]!;
+      if (t?.bone === hb || sw.offsetTracks.some((tr) => tr.bone === hb)) break;
+      let underScaled = false;
+      for (let a = rest.get(hb)!.parent; a !== null; a = rest.get(a)!.parent) if (scales.has(a)) underScaled = true;
+      if (underScaled) break;
+      const rEye = series.get('r_eye')!;
+      const lEye = series.get('l_eye')!;
+      const neckSeries = series.get('neck') ?? (() => {
+        const h = heldOf('neck');
+        return 'never' in h ? undefined : h.at;
+      })();
+      let nodScale: number | null = scale?.factor ?? null;
+      if (nodScale === null && ha.includes('>')) {
+        const [pa, pb] = aimEnds(hb, ha);
+        const a0 = rigPoint(rest, pa)!;
+        const b0 = rigPoint(rest, pb)!;
+        const rigEye = Math.hypot(b0[0] - a0[0], b0[1] - a0[1]);
+        const refEye = median(rEye.map((re, i) => Math.hypot(lEye[i]![0] - re[0], lEye[i]![1] - re[1])));
+        if (refEye > 1e-6 && rigEye > 1e-6) nodScale = rigEye / refEye;
+      }
+      if (neckSeries !== undefined && nodScale !== null) {
+        const refEN = rEye.map((re, i) => -((re[1] + lEye[i]![1]) / 2 - neckSeries[i]![1]));
+        const dy = refEN.map((v) => (v - refEN[0]!) * nodScale);
+        if (dy.some((v) => Math.abs(r3(v)) > 0)) {
+          const bone = rest.get(hb)!;
+          const parent = bone.parent === null ? null : rest.get(bone.parent)!;
+          const keys: MotionKey[] = [];
+          const nod: Pt[] = [];
+          for (let i = 0; i < n; i++) {
+            const wy = dy[i]!;
+            let lx = 0;
+            let ly = r3(wy);
+            let awx = 0;
+            let awy = ly;
+            if (parent !== null) {
+              const r = turnAbove(parent.name, i) / DEG;
+              const pa = Math.cos(r) * parent.a - Math.sin(r) * parent.c;
+              const pb = Math.cos(r) * parent.b - Math.sin(r) * parent.d;
+              const pc = Math.sin(r) * parent.a + Math.cos(r) * parent.c;
+              const pd = Math.sin(r) * parent.b + Math.cos(r) * parent.d;
+              const det = pa * pd - pb * pc;
+              lx = r3((-pb * wy) / det);
+              ly = r3((pa * wy) / det);
+              awx = pa * lx + pb * ly;
+              awy = pc * lx + pd * ly;
+            }
+            keys.push({ t: keyTimes[i]!, v: [lx, ly] });
+            nod.push([awx, awy]);
+          }
+          headNodBone = hb;
+          headNod = nod;
+          headNodTrack = { bone: hb, property: 'translate', keys };
+        }
+      }
+      break;
+    }
+    if (headNodTrack !== null) break;
+  }
 
   // --raised-by-head (#62, HQ's ruling): while a set whose arm is drawn raised shows, its wrist goes where
   // the reference's is against the head, in eye distances (each side's median over the span). Solved last
@@ -1202,6 +1274,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     }
   }
   if (translateTrack !== null) tracks.push(translateTrack);
+  if (headNodTrack !== null) tracks.push(headNodTrack);
   tracks.push(...sw.offsetTracks, ...sw.slotTracks);
 
   return {

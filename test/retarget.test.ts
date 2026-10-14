@@ -4545,4 +4545,108 @@ describe('#107: --leg-scale clamp floor does not lift the hip, and POSTURE reads
   }, SLOW);
 });
 
+describe('#111: the head chain nods from the eyes\' vertical travel against the neck', () => {
+  const N = 24;
+  const DT = 1 / 24;
+  const headRig = (b: BoneSpec[]): BoneSpec[] => [
+    ...b,
+    { name: 'head', parent: 'neck', x: 0, y: 20 },
+    { name: 'eye_r', parent: 'head', x: -6, y: 10 },
+    { name: 'eye_l', parent: 'head', x: 6, y: 10 },
+  ];
+  const mapWithHead = (): Record<string, unknown> => ({
+    ...baseMap(),
+    chains: [
+      { name: 'pelvis', bones: ['hip'], joints: ['r_hip', 'l_hip'], aim: ['leg_r0>leg_l0'] },
+      ...baseChains(),
+      { name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: ['eye_r>eye_l'] },
+    ],
+  });
+  const rollDeg = (i: number): number => 12 * Math.sin((i / N) * 2 * Math.PI);
+  /** World vertical nod in rig units: 0 on frames [0, 2] and [21, 23] (<0.5s so clean's stillness hold does not blend), and a known -10 dip inside. */
+  const nodY = (i: number): number => (i >= 2 && i <= 21 ? -10 * Math.sin(((i - 2) / 19) * Math.PI) : 0);
 
+  function nodPose(withNod: boolean, withRoll = false): Record<string, unknown> {
+    const m: Motion = { ...BASE, n: N, dt: DT, hip: () => [0, 0], trunk: () => 90 };
+    return poseDoc(m, (i, j) => {
+      // Keep right foot planted as support so --plant-feet emits POSTURE bounce r 0–23.
+      j.r_ankle = { state: 'observed', at: [-20, 350], score: 0.9 };
+      j.l_ankle = { state: 'observed', at: [20, 320], score: 0.9 };
+      const r = j.r_eye!.at as Pt;
+      const l = j.l_eye!.at as Pt;
+      const dyPic = withNod ? -nodY(i) / SCALE : 0;
+      const mid: Pt = [(r[0] + l[0]) / 2, (r[1] + l[1]) / 2 + dyPic];
+      const d = dir(withRoll ? rollDeg(i) : 0, 6);
+      j.r_eye = { state: 'observed', at: [mid[0] - d[0], mid[1] - d[1]], score: 0.9 };
+      j.l_eye = { state: 'observed', at: [mid[0] + d[0], mid[1] + d[1]], score: 0.9 };
+    });
+  }
+
+  test('a known nod is keyed on head.translate, POSTURE eyes − neck ratio is >= 0.5, and roll is unchanged where the reference does not nod', () => {
+    const cNod = setup({ rig: { bones: headRig }, map: mapWithHead(), pose: nodPose(true, false) });
+    const report = join(cNod.dir, 'report.json');
+    const rNod = retarget(cNod, ['--plant-feet', '--report', report]);
+    expect(rNod.stderr).toBe('');
+    expect(rNod.status).toBe(0);
+
+    // Bar 2: roll is unchanged where the reference does not nod (and on every frame when roll is present).
+    const cRollNod = setup({ rig: { bones: headRig }, map: mapWithHead(), pose: nodPose(true, true) });
+    const cRollFlat = setup({ rig: { bones: headRig }, map: mapWithHead(), pose: nodPose(false, true) });
+    expect(retarget(cRollNod, ['--plant-feet']).status).toBe(0);
+    expect(retarget(cRollFlat, ['--plant-feet']).status).toBe(0);
+    const tracksRollNod = motionOf(cRollNod.out).animations.dance!.tracks;
+    const tracksRollFlat = motionOf(cRollFlat.out).animations.dance!.tracks;
+    const headRotNod = tracksRollNod.find((t) => t.bone === 'head' && t.property === 'rotate')!;
+    const headRotFlat = tracksRollFlat.find((t) => t.bone === 'head' && t.property === 'rotate')!;
+    expect(headRotNod.keys).toEqual(headRotFlat.keys);
+    expect(tracksRollFlat.find((t) => t.bone === 'head' && t.property === 'translate')).toBeUndefined();
+
+    // Bar 3: a known nod is keyed on head.translate, and the posed eyes − neck vertical travel matches nodY(i).
+    const tracksNod = motionOf(cNod.out).animations.dance!.tracks;
+    const headTrans = tracksNod.find((t) => t.bone === 'head' && t.property === 'translate');
+    expect(headTrans).toBeDefined();
+    for (const i of [0, 1, 2, 21, 22, 23]) {
+      expect(headTrans!.keys[i]!.v).toEqual([0, 0]);
+    }
+    const poses = poseRawAnimation(loadBuild(cNod.build), 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+    const b0 = byName(poses[0]!.bones);
+    const baseEN = (b0.get('eye_r')!.worldY + b0.get('eye_l')!.worldY) / 2 - b0.get('neck')!.worldY;
+    poses.forEach((p, i) => {
+      const b = byName(p.bones);
+      const en = (b.get('eye_r')!.worldY + b.get('eye_l')!.worldY) / 2 - b.get('neck')!.worldY;
+      expect(Math.abs(en - (baseEN + nodY(i)))).toBeLessThan(0.01);
+    });
+
+    // Bar 1: POSTURE bounce row reads eyes − neck ratio >= 0.5.
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as { posture: { bounce: Array<{ eyesNeck: { rig: number; reference: number; ratio: number; corr: number } }> } };
+    expect(rep.posture.bounce).toHaveLength(1);
+    expect(rep.posture.bounce[0]!.eyesNeck.ratio).toBeGreaterThanOrEqual(0.5);
+    expect(rep.posture.bounce[0]!.eyesNeck.ratio).toBeCloseTo(1, 3);
+    expect(rep.posture.bounce[0]!.eyesNeck.corr).toBeCloseTo(1, 5);
+  }, SLOW);
+
+  test('mutant (#111): without the head nod channel, the posed head reads 0 vertical travel against the neck', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm111-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const from = 'if (headNodTrack !== null) tracks.push(headNodTrack);';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, ''));
+      const c = setup({ rig: { bones: headRig }, map: mapWithHead(), pose: nodPose(true, false) });
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--plant-feet', '--report', report], join(d, 'cli.ts'));
+      expect(r.status).toBe(0);
+      const rep = JSON.parse(readFileSync(report, 'utf8')) as { posture: { bounce: Array<{ eyesNeck: { rig: number; reference: number; ratio: number } }> } };
+      console.log(`  mutant "without headNodTrack": eyesNeck rig sd ${rep.posture.bounce[0]!.eyesNeck.rig.toFixed(4)}u, ratio ${rep.posture.bounce[0]!.eyesNeck.ratio.toFixed(4)}`);
+      expect(rep.posture.bounce[0]!.eyesNeck.rig).toBeCloseTo(0, 6);
+      expect(rep.posture.bounce[0]!.eyesNeck.ratio).toBeCloseTo(0, 6);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
