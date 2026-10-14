@@ -163,17 +163,28 @@ export interface Flip {
   clipped: 'start' | 'end' | 'both' | null;
 }
 
-/** One span of frames under the short cutoff: the segment's angle there was interpolated, not read (`holdShort`). */
+/**
+ * One span of frames under `--short` (angle interpolated, `holdShort`) or under
+ * `SHORT_STEP_FRACTION` with a one-frame step over `SHORT_STEP_CAP` (step
+ * capped, `capShortSteps`, #110).
+ */
 export interface Short {
   chain: string;
   bone: string;
   /** The segment the bone carries: from joint, to joint. */
   joints: [string, string];
-  /** First and last frame under the cutoff; every one of them had its angle replaced, and the frames either side keep the input's. */
+  /** First and last frame whose angle was replaced; the frames either side keep the input's. */
   frames: [number, number];
   /** The lowest picture length on those frames, as a fraction of the segment's median picture length. */
   minFraction: number;
+  /** Present when a foreshortened segment (< `SHORT_STEP_FRACTION`) had its per-frame step capped (#110): the one-frame step after capping and the largest step asked, degrees, signed. */
+  step?: number;
+  asked?: number;
 }
+
+/** A limb segment shorter than this fraction of its median picture length has its per-frame angle step capped at `SHORT_STEP_CAP` degrees (rig-c/pose#110). */
+export const SHORT_STEP_FRACTION = 0.6;
+export const SHORT_STEP_CAP = 30;
 
 /**
  * A segment under the short cutoff long enough to be a pose (the limb pointing
@@ -571,6 +582,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   // against its own median, on the points the angle was read from.
   const short: Short[] = [];
   const endOn: EndOn[] = [];
+  const fractions = new Map<string, { chain: string; joints: [string, string]; fraction: number[] }>();
   if (opts.short !== 'off') {
     const cutoff = opts.short;
     for (const c of map.chains) {
@@ -586,7 +598,9 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
           p.add('POSE_SHORT_MEDIAN', `chain "${c.name}" — bone "${b}"'s segment ${joints[0]} → ${joints[1]} has median picture length ${med}px over the ${n} frames; --short measures a frame's length against that median, and there is none to measure against`);
           return;
         }
-        const spans = holdShort(targets.get(b)!, lengths.map((l) => l / med), cutoff);
+        const fraction = lengths.map((l) => l / med);
+        fractions.set(b, { chain: c.name, joints, fraction });
+        const spans = holdShort(targets.get(b)!, fraction, cutoff);
         for (const s of spans) short.push({ chain: c.name, bone: b, joints, ...s });
         for (const run of mergeRuns(spans, END_ON_GAP)) {
           const seconds = Math.round((endOf(run.frames[1]) - keyTimes[run.frames[0]]!) * 1e6) / 1e6;
@@ -868,6 +882,13 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   };
   const turn = (bone: string, i: number) => targets.get(bone)![i]! - restOf.get(bone)!;
   const covered = coveredChains(sw.switches, n);
+  if (opts.short !== 'off') {
+    for (const [b, info] of fractions) {
+      for (const s of capShortSteps(targets.get(b)!, info.fraction, covered.get(info.chain))) {
+        short.push({ chain: info.chain, bone: b, joints: info.joints, ...s });
+      }
+    }
+  }
   const range: RangeDemand[] = [];
   const order = map.chains.flatMap((c) => c.bones.map((b) => ({ c, b }))).filter(({ c, b }) => c.reach || b in c.range);
   order.sort((x, y) => depth(x.b) - depth(y.b));
@@ -1302,10 +1323,97 @@ export function mergeRuns(spans: readonly ShortSpan[], gap: number): ShortSpan[]
   return out;
 }
 
+/**
+ * Cap one-frame steps on a foreshortened segment (#110), in place. Where a
+ * segment's picture length is under `SHORT_STEP_FRACTION` (0.60) of its median
+ * on either side of a frame step (above `--short`'s hold cutoff, where two end-on
+ * pixels still swing the angle faster than the limb moved) and the one-frame turn
+ * exceeds `SHORT_STEP_CAP` (30°), spread the turn across a symmetric window of
+ * frames the same way `spreadFlips` does (`lo = k - h - 1`, `hi = k + h`), bounded
+ * by the ends of the pose and by any active alternate set on the chain (`covered`).
+ */
+export function capShortSteps(
+  angles: number[],
+  fraction: readonly number[],
+  covered?: readonly boolean[],
+  fractionCutoff: number = SHORT_STEP_FRACTION,
+  stepCap: number = SHORT_STEP_CAP,
+): ShortSpan[] {
+  const n = angles.length;
+  if (n < 2) return [];
+  const out: ShortSpan[] = [];
+  for (let segStart = 0; segStart < n;) {
+    if (covered?.[segStart] === true) {
+      segStart++;
+      continue;
+    }
+    let segEnd = segStart;
+    while (segEnd + 1 < n && covered?.[segEnd + 1] !== true) segEnd++;
+    if (segEnd - segStart >= 1) {
+      const u: number[] = new Array<number>(n).fill(0);
+      u[segStart] = angles[segStart]!;
+      for (let i = segStart + 1; i <= segEnd; i++) u[i] = u[i - 1]! + wrap(angles[i]! - angles[i - 1]!);
+      const fits = (lo: number, hi: number) => Math.abs(u[hi]! - u[lo]!) <= stepCap * (hi - lo);
+      interface Win { lo: number; hi: number; asked: number }
+      const wins: Win[] = [];
+      for (let k = segStart + 1; k <= segEnd; k++) {
+        if (!(Math.min(fraction[k - 1]!, fraction[k]!) < fractionCutoff)) continue;
+        const jump = u[k]! - u[k - 1]!;
+        if (Math.abs(jump) <= stepCap) continue;
+        let h = 1;
+        let lo = Math.max(segStart, k - h - 1);
+        let hi = Math.min(segEnd, k + h);
+        while (!fits(lo, hi) && (lo > segStart || hi < segEnd)) {
+          h++;
+          lo = Math.max(segStart, k - h - 1);
+          hi = Math.min(segEnd, k + h);
+        }
+        wins.push({ lo, hi, asked: jump });
+      }
+      for (let changed = true; changed;) {
+        changed = false;
+        wins.sort((a, b) => a.lo - b.lo);
+        for (let i = 0; i + 1 < wins.length; i++) {
+          const a = wins[i]!;
+          const b = wins[i + 1]!;
+          if (b.lo >= a.hi) continue;
+          wins.splice(i, 2, { lo: a.lo, hi: Math.max(a.hi, b.hi), asked: Math.abs(b.asked) > Math.abs(a.asked) ? b.asked : a.asked });
+          changed = true;
+          break;
+        }
+        if (changed) continue;
+        for (const w of wins) {
+          if (fits(w.lo, w.hi) || (w.lo === segStart && w.hi === segEnd)) continue;
+          w.lo = Math.max(segStart, w.lo - 1);
+          w.hi = Math.min(segEnd, w.hi + 1);
+          changed = true;
+        }
+      }
+      for (const w of wins) {
+        if (w.lo + 1 > w.hi - 1) continue;
+        const step = (u[w.hi]! - u[w.lo]!) / (w.hi - w.lo);
+        for (let i = w.lo + 1; i < w.hi; i++) angles[i] = wrap(u[w.lo]! + step * (i - w.lo));
+        let minFraction = Infinity;
+        for (let i = w.lo + 1; i <= w.hi - 1; i++) minFraction = Math.min(minFraction, fraction[i]!);
+        if (!(minFraction < fractionCutoff)) {
+          minFraction = Math.min(minFraction, fraction[w.lo]!, fraction[w.hi]!);
+        }
+        out.push({ frames: [w.lo + 1, w.hi - 1], minFraction, step: r3(step), asked: r3(w.asked) });
+      }
+    }
+    segStart = segEnd + 1;
+  }
+  return out;
+}
+
 const spanOf = (frames: [number, number], times: readonly number[]): string =>
   frames[0] === frames[1] ? `frame ${frames[0]} (t=${times[frames[0]]!.toFixed(3)}s)` : `frames ${frames[0]}–${frames[1]} (t=${times[frames[0]]!.toFixed(3)}–${times[frames[1]]!.toFixed(3)}s)`;
 
 export function shortLine(s: Short, times: readonly number[], cutoff: number): string {
+  if (s.step !== undefined && s.asked !== undefined) {
+    const sg = (v: number) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}°`;
+    return `chain "${s.chain}" bone "${s.bone}" (${s.joints[0]} → ${s.joints[1]}) ${spanOf(s.frames, times)}: picture length down to ${s.minFraction.toFixed(2)} of its median, under ${SHORT_STEP_FRACTION.toFixed(2)}, turned ${sg(s.asked)} in one frame (over ${SHORT_STEP_CAP}°); spread to ${sg(s.step)} per frame`;
+  }
   const lo = s.frames[0] - 1;
   const hi = s.frames[1] + 1;
   const held = lo < 0 && hi >= times.length

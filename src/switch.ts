@@ -591,21 +591,49 @@ export function artRangeLine(e: ArtRange, times: readonly number[]): string {
 }
 
 /**
+ * The art-range clamp eases in and out at a span's edges over at least
+ * `ART_EASE_FRAMES` frames, or enough frames to keep the clamp's step at the
+ * boundary within `ART_EASE_STEP` degrees per frame (#110).
+ */
+export const ART_EASE_FRAMES = 3;
+export const ART_EASE_STEP = 3;
+
+/**
  * Inside each span, a bone with a `turn` in the set is held within it: its
- * target world angle is drawn + clamp(wrap(target − drawn), min, max). Each
- * bone is clamped on its own world angle, and keys are differences of world
- * angles, so a forearm under a clamped upper arm keeps its own target.
+ * target world angle is drawn + clamp(wrap(target − drawn), min, max), eased
+ * in and out over at least `ART_EASE_FRAMES` frames at an edge where the clamp
+ * switches on or off across the boundary (#110). Each bone is clamped on its
+ * own world angle, and keys are differences of world angles, so a forearm
+ * under a clamped upper arm keeps its own target.
  */
 export function clampArt(switches: readonly Switch[], map: JointMap, targets: Map<string, number[]>): void {
   for (const sw of switches) {
     const set = map.alternates.find((a) => a.name === sw.set)!;
+    const [a, b] = sw.frames;
     for (const [bone, limits] of Object.entries(set.turn)) {
       const drawn = set.drawn[bone]!;
       const target = targets.get(bone)!;
-      for (let i = sw.frames[0]; i <= sw.frames[1]; i++) {
+      const n = target.length;
+      const delta = (i: number): number => {
         const t = wrap(target[i]! - drawn);
         const c = Math.min(Math.max(t, limits[0]), limits[1]);
-        if (Math.abs(c - t) > RANGE_SLACK) target[i] = wrap(drawn + c);
+        return Math.abs(c - t) > RANGE_SLACK ? c - t : 0;
+      };
+      const da = delta(a);
+      const db = delta(b);
+      const easeIn = a > 0 && da !== 0 && Math.sign(delta(a - 1)) === Math.sign(da)
+        ? Math.max(ART_EASE_FRAMES, Math.ceil(Math.abs(da) / ART_EASE_STEP) - 1)
+        : 0;
+      const easeOut = b + 1 < n && db !== 0 && Math.sign(delta(b + 1)) === Math.sign(db)
+        ? Math.max(ART_EASE_FRAMES, Math.ceil(Math.abs(db) / ART_EASE_STEP) - 1)
+        : 0;
+      for (let i = a; i <= b; i++) {
+        const d = delta(i);
+        if (d === 0) continue;
+        const wIn = i - a < easeIn ? (i - a + 1) / (easeIn + 1) : 1;
+        const wOut = b - i < easeOut ? (b - i + 1) / (easeOut + 1) : 1;
+        const w = Math.min(wIn, wOut);
+        target[i] = wrap(target[i]! + w * d);
       }
     }
   }

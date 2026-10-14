@@ -14,7 +14,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { poseRawAnimation, poseRawSetup, readModel, type CompiledDocument, type RawBone } from 'rig-c/core';
 import { Plate } from 'rig-c/plate';
-import { holdShort, isAcross, mergeRuns, spreadFlips } from '../src/retarget.ts';
+import { capShortSteps, holdShort, isAcross, mergeRuns, shortLine, spreadFlips } from '../src/retarget.ts';
+import { clampArt } from '../src/switch.ts';
 import { clean } from '../src/clean.ts';
 import { loopTrack, type RigcTrack } from '../src/idle.ts';
 import { readPoseSequence, writePoseSequence } from '../src/pose.ts';
@@ -4357,3 +4358,85 @@ describe('"place": "by-hip" (#93): a hand that meets the body placed by its offs
     expect(linesOf(ok, 'BY-HIP')).toHaveLength(1);
   }, SLOW);
 });
+
+// --- #110: art-range edge easing and foreshortened step cap ----------------------
+
+describe('#110: clampArt eases at set edges, and capShortSteps caps foreshortened steps', () => {
+  test('clampArt eases in and out at set edges so the boundary step stays within 3° of the picture step, while interior and outside frames are unchanged', () => {
+    const n = 28;
+    // Reference sits at -55 outside [4, 23] and -50 inside [4, 23] (+5° picture step in, -5° picture step out).
+    // Set "lift" has drawn -80 and turn [-10, 10], so the clamped angle inside is -70 (20° off the reference, eased over 6 frames).
+    const asked = Array.from({ length: n }, (_, i) => (i >= 4 && i <= 23 ? -50 : -55));
+    const targets = new Map<string, number[]>([['sleeve_r0', [...asked]]]);
+    const sw = [{ set: 'lift', slots: { sleeve_r0: 'seg_up' }, hides: [], chains: ['arm_r'], frames: [4, 23] as [number, number], from: 0.5, to: 3, seconds: 2.5, distance: { max: 0, median: 0 }, artTurn: {}, offsets: {}, place: null, moved: { on: null, off: null } }];
+    const map = { translate: null, chains: [], alternates: [{ name: 'lift', slots: { sleeve_r0: 'seg_up' }, hides: [], chains: ['arm_r'], pose: {}, drawn: { sleeve_r0: -80 }, turn: { sleeve_r0: [-10, 10] as [number, number] }, offsets: {}, place: null, frames: null }] };
+    clampArt(sw, map, targets);
+    const got = targets.get('sleeve_r0')!;
+    // Outside [4, 23] and interior [10, 17] are unchanged from unclamped / fully clamped.
+    for (let i = 0; i <= 3; i++) expect(got[i]).toBe(-55);
+    for (let i = 10; i <= 17; i++) expect(got[i]).toBe(-70);
+    for (let i = 24; i < n; i++) expect(got[i]).toBe(-55);
+    // Entry step (3 -> 4) and exit step (23 -> 24): rig step minus picture step <= 3°.
+    const inDiff = wrap(got[4]! - got[3]!) - wrap(asked[4]! - asked[3]!);
+    const outDiff = wrap(got[24]! - got[23]!) - wrap(asked[24]! - asked[23]!);
+    expect(Math.abs(inDiff)).toBeLessThanOrEqual(3);
+    expect(Math.abs(outDiff)).toBeLessThanOrEqual(3);
+  });
+
+  test('mutant (#110): without edge easing in clampArt, the boundary step jumps by the full clamp offset and the <= 3° check is red', async () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm110-art-'));
+    try {
+      const src = readFileSync(join(ROOT, 'src', 'switch.ts'), 'utf8');
+      const from = 'const easeIn = a > 0 && da !== 0 && Math.sign(delta(a - 1)) === Math.sign(da)';
+      expect(src.split(from)).toHaveLength(2);
+      const mutated = src
+        .replace(from, 'const easeIn = false && a > 0 && da !== 0 && Math.sign(delta(a - 1)) === Math.sign(da)')
+        .replace('const easeOut = b + 1 < n && db !== 0 && Math.sign(delta(b + 1)) === Math.sign(db)', 'const easeOut = false && b + 1 < n');
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      writeFileSync(join(d, 'src', 'switch.ts'), mutated);
+      const mod = await import(join(d, 'src', 'switch.ts')) as typeof import('../src/switch.ts');
+      const asked = Array.from({ length: 28 }, (_, i) => (i >= 4 && i <= 23 ? -50 : -55));
+      const targets = new Map<string, number[]>([['sleeve_r0', [...asked]]]);
+      const sw = [{ set: 'lift', slots: { sleeve_r0: 'seg_up' }, hides: [], chains: ['arm_r'], frames: [4, 23] as [number, number], from: 0.5, to: 3, seconds: 2.5, distance: { max: 0, median: 0 }, artTurn: {}, offsets: {}, place: null, moved: { on: null, off: null } }];
+      const map = { translate: null, chains: [], alternates: [{ name: 'lift', slots: { sleeve_r0: 'seg_up' }, hides: [], chains: ['arm_r'], pose: {}, drawn: { sleeve_r0: -80 }, turn: { sleeve_r0: [-10, 10] as [number, number] }, offsets: {}, place: null, frames: null }] };
+      mod.clampArt(sw, map, targets);
+      const got = targets.get('sleeve_r0')!;
+      const inDiff = wrap(got[4]! - got[3]!) - wrap(asked[4]! - asked[3]!);
+      console.log(`  mutant "no clampArt edge easing": boundary step diff is ${inDiff.toFixed(2)}°`);
+      expect(Math.abs(inDiff)).toBeGreaterThan(3);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  test('capShortSteps spreads a > 30° step when fraction < 0.60 to <= 30°/frame, stays inside uncovered spans, and leaves keys away from the step unchanged', () => {
+    // 12 frames: angle steps from 0° to 54° between frame 4 and frame 5 while fraction dips to 0.50 (above 0.35, below 0.60).
+    const angles = [0, 0, 0, 0, 0, 54, 54, 54, 54, 54, 54, 54];
+    const fraction = [1, 1, 1, 1, 0.50, 0.55, 1, 1, 1, 1, 1, 1];
+    expect(holdShort(angles, fraction, 0.35)).toEqual([]);
+    const capped = capShortSteps(angles, fraction);
+    expect(capped).toEqual([{ frames: [4, 5], minFraction: 0.5, step: 18, asked: 54 }]);
+    for (let i = 1; i < angles.length; i++) {
+      expect(Math.abs(wrap(angles[i]! - angles[i - 1]!))).toBeLessThanOrEqual(30);
+    }
+    // Frames outside [4, 5] are untouched.
+    expect(angles.slice(0, 4)).toEqual([0, 0, 0, 0]);
+    expect(angles.slice(6)).toEqual([54, 54, 54, 54, 54, 54]);
+    const times = angles.map((_, i) => i * 0.125);
+    expect(shortLine({ chain: 'arm_l', bone: 'sleeve_l1', joints: ['l_elbow', 'l_wrist'], ...capped[0]! }, times, 0.35)).toBe(
+      'chain "arm_l" bone "sleeve_l1" (l_elbow → l_wrist) frames 4–5 (t=0.500–0.625s): picture length down to 0.50 of its median, under 0.60, turned +54.0° in one frame (over 30°); spread to +18.0° per frame',
+    );
+  });
+
+  test('mutant (#110): without capShortSteps a foreshortened segment at 0.50 of median jumps > 30° in one frame', () => {
+    const angles = [0, 0, 0, 0, 0, 54, 54, 54, 54, 54, 54, 54];
+    const fraction = [1, 1, 1, 1, 0.50, 0.55, 1, 1, 1, 1, 1, 1];
+    holdShort(angles, fraction, 0.35);
+    let maxStep = 0;
+    for (let i = 1; i < angles.length; i++) maxStep = Math.max(maxStep, Math.abs(wrap(angles[i]! - angles[i - 1]!)));
+    console.log(`  mutant "no capShortSteps": max step is ${maxStep.toFixed(1)}°`);
+    expect(maxStep).toBeGreaterThan(30);
+  });
+});
+
