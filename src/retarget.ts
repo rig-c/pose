@@ -53,8 +53,10 @@
  * With `raisedByHead` (rig-c/pose#62), after the range clamp and before the art
  * turn is read: inside each span of a set that draws an arm raised, the arm is
  * solved last, so its wrist lands where the reference's is against the head, in
- * eye distances. The head and the shoulder are posed from the final targets of
- * the bones above. The set's `turn` then holds the result (`clampArt`).
+ * eye distances (each side's median over the span). The head and the shoulder
+ * are posed from the final targets of the bones above. A target out of reach
+ * goes to the reach limit along the head-relative direction (REACH); the set's
+ * `turn` is part of the solve, and only a forearm it still holds is ART-RANGE.
  *
  * The lines across the body — hips, shoulders, eyes — are read from the pose
  * after holds, whether the map uses them or not: a line under
@@ -72,8 +74,8 @@ import type { Chain, JointMap, Rest, RigSlots } from './map.ts';
 import { aimAngle, aimEnds, descends, partBone, pointParts, rigPoint } from './map.ts';
 import type { Joint } from './pose.ts';
 import { Problems, Refusal } from './problems.ts';
-import type { ArtRange, Raised, SlotTrack, Switch, SwitchOptions } from './switch.ts';
-import { clampArt, coveredChains, isRaised, measureArt, overflow, RANGE_SLACK, runsOf, selectSwitches, twoBone } from './switch.ts';
+import type { ArtRange, Raised, ReachShort, SlotTrack, Switch, SwitchOptions } from './switch.ts';
+import { clampArt, coveredChains, isRaised, measureArt, overflow, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
 import type { Feet, LegScale, PathPose, Posing, Side, Stance } from './legs.ts';
 import { isLegSegment, legScaleOf, legsOf, pathFrom, plantHip, posePath, rootOf, SIDES, stanceOf, supportsOf, tipOf } from './legs.ts';
 
@@ -832,14 +834,18 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   }
   p.throwIfAny();
 
-  // --raised-by-head (#62): while a set whose arm is drawn raised shows, its wrist goes where the
-  // reference's is against the head, in the rig's eye distances. Solved last of the bones: every bone
-  // above the arm, the head and the trunk's reach included, has its final target (range clamp done),
-  // so the head and the shoulder are posed from them frame by frame; the arm moves neither.
+  // --raised-by-head (#62, HQ's ruling): while a set whose arm is drawn raised shows, its wrist goes where
+  // the reference's is against the head, in eye distances (each side's median over the span). Solved last
+  // of the bones: every bone above the arm, the head and the trunk's reach included, has its final target
+  // (range clamp done), so the head and the shoulder are posed from them frame by frame; the arm moves
+  // neither. A target out of reach is placed at the reach limit along the head-relative direction
+  // (`reachLimit`, a REACH line). The set's `turn` is part of the solve: a held upper arm has its forearm
+  // re-aimed at the placed wrist, and only a forearm the turn still holds is ART-RANGE.
   const raised: Raised[] = [];
-  const raisedJobs: Array<{ sw: Switch; chain: Chain; wrist: (i: number) => Pt; before: Pt[]; reference: Pt[]; refEyes: number[]; unreachable: number[]; arm: number; farthest: number }> = [];
+  const raisedArt: Array<{ sw: Switch; entries: ArtRange[] }> = [];
+  const raisedJobs: Array<{ sw: Switch; chain: Chain; wrist: (i: number) => Pt; before: Pt[]; reference: Pt[]; placed: Pt[]; refEye: number; rigEye: number; short: Array<{ i: number; how: 'far' | 'near' | 'missed'; shortfall: number }>; upperHeld: number[]; l0: number; l1: number; farthest: number; eyePoints: [string, string] }> = [];
   if (head !== null && !('problem' in head)) {
-    const headPoints = (i: number): { centre: Pt; dist: number } => {
+    const eyesOn = (i: number): { centre: Pt; dist: number } => {
       const a = posedPoint(head.points[0], i);
       const b = posedPoint(head.points[1], i);
       return { centre: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], dist: Math.hypot(b[0] - a[0], b[1] - a[1]) };
@@ -847,8 +853,10 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     const headBones = new Set([...head.points.flatMap((x) => pointParts(x).map(partBone))]);
     const ra = series.get(head.joints[0])!;
     const rb = series.get(head.joints[1])!;
+    const refCentre = (i: number): Pt => [(ra[i]![0] + rb[i]![0]) / 2, (ra[i]![1] + rb[i]![1]) / 2];
     for (const s of sw.switches) {
       const set = map.alternates.find((a) => a.name === s.set)!;
+      const art: ArtRange[] = [];
       for (const cn of s.chains) {
         const c = map.chains.find((x) => x.name === cn)!;
         const drawn = set.drawn[c.bones[0]!];
@@ -875,6 +883,15 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         }
         const wristOf = (i: number): Pt => posedPoint(wristSpec, i);
         const refWrist = series.get(c.joints[2]!)!;
+        // The unit, each side's median over the span (HQ's ruling).
+        const span: number[] = [];
+        for (let i = s.frames[0]; i <= s.frames[1]; i++) span.push(i);
+        const refEye = median(span.map((i) => Math.hypot(rb[i]![0] - ra[i]![0], rb[i]![1] - ra[i]![1])));
+        const rigEye = median(span.map((i) => eyesOn(i).dist));
+        if (!(refEye > 1e-9) || !(rigEye > 1e-9)) {
+          p.add('RAISED_EYES', `${label}: over frames ${s.frames[0]}–${s.frames[1]} the median eye distance is ${refEye > 1e-9 ? `${rigEye} units on the rig (points "${head.points[0]}", "${head.points[1]}")` : `${refEye}px in the reference (${head.joints[0]}, ${head.joints[1]})`}; an eye distance of 0 is no unit`);
+          continue;
+        }
         // The rig's own lengths, and each bone's aim against the vector it carries, at setup.
         const S0 = rigPoint(rest, b0)!;
         const E0 = rigPoint(rest, b1)!;
@@ -885,68 +902,116 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         const d1 = wrap(Math.atan2(W0[1] - E0[1], W0[0] - E0[0]) * DEG - restOf.get(b1)!);
         const t0 = targets.get(b0)!;
         const t1 = targets.get(b1)!;
-        const job = { sw: s, chain: c, wrist: wristOf, before: [] as Pt[], reference: [] as Pt[], refEyes: [] as number[], unreachable: [] as number[], arm: l0 + l1, farthest: 0 };
-        for (let i = s.frames[0]; i <= s.frames[1]; i++) {
-          const h = headPoints(i);
-          const refC: Pt = [(ra[i]![0] + rb[i]![0]) / 2, (ra[i]![1] + rb[i]![1]) / 2];
-          const refD = Math.hypot(rb[i]![0] - ra[i]![0], rb[i]![1] - ra[i]![1]);
-          if (!(refD > 1e-9) || !(h.dist > 1e-9)) {
-            p.add('RAISED_EYES', `${label}: frame ${i} (t=${keyTimes[i]!.toFixed(3)}s) has ${refD > 1e-9 ? `the rig's eye points "${head.points[0]}", "${head.points[1]}"` : `the reference's ${head.joints[0]} and ${head.joints[1]}`} at one point; an eye distance of 0 is no unit`);
-            continue;
-          }
+        const turn0 = set.turn[b0];
+        const turn1 = set.turn[b1];
+        const job: (typeof raisedJobs)[number] = { sw: s, chain: c, wrist: wristOf, before: [], reference: [], placed: [], refEye, rigEye, short: [], upperHeld: [], l0, l1, farthest: 0, eyePoints: head.points };
+        /** Per frame of the span: the forearm's art turn the re-aim asked, and how far past its turn. */
+        const foreAsked: number[] = [];
+        const foreOver: number[] = [];
+        for (const i of span) {
+          const h = eyesOn(i);
+          const rc = refCentre(i);
           // The reference's wrist from its head centre, in its eye distances, y turned up.
-          const ref: Pt = [(refWrist[i]![0] - refC[0]) / refD, -(refWrist[i]![1] - refC[1]) / refD];
+          const ref: Pt = [(refWrist[i]![0] - rc[0]) / refEye, -(refWrist[i]![1] - rc[1]) / refEye];
           const w = wristOf(i);
           job.reference.push(ref);
-          job.refEyes.push(refD);
-          job.before.push([(w[0] - h.centre[0]) / h.dist, (w[1] - h.centre[1]) / h.dist]);
-          const target: Pt = [h.centre[0] + ref[0] * h.dist, h.centre[1] + ref[1] * h.dist];
-          // The pose's bend side, read on the vectors the two bones carry.
-          const side: 1 | -1 = wrap(t1[i]! + d1 - (t0[i]! + d0)) >= 0 ? 1 : -1;
+          job.before.push([(w[0] - h.centre[0]) / rigEye, (w[1] - h.centre[1]) / rigEye]);
+          const target: Pt = [h.centre[0] + ref[0] * rigEye, h.centre[1] + ref[1] * rigEye];
           const shoulder = posedOrigin(b0, i);
           job.farthest = Math.max(job.farthest, Math.hypot(target[0] - shoulder[0], target[1] - shoulder[1]));
-          const sol = twoBone(shoulder, target, l0, l1, side);
-          if (!sol.reached) job.unreachable.push(i);
-          if (sol.upper === null) continue;
-          t0[i] = wrap(sol.upper - d0);
-          t1[i] = wrap(sol.fore - d1);
+          const place = reachLimit(h.centre, target, shoulder, l0, l1);
+          const P = place.point;
+          job.placed.push([(P[0] - h.centre[0]) / rigEye, (P[1] - h.centre[1]) / rigEye]);
+          if (place.how !== 'in') job.short.push({ i, how: place.how, shortfall: Math.hypot(target[0] - P[0], target[1] - P[1]) / rigEye });
+          // The pose's bend side, read on the vectors the two bones carry.
+          const side: 1 | -1 = wrap(t1[i]! + d1 - (t0[i]! + d0)) >= 0 ? 1 : -1;
+          const sol = twoBone(shoulder, P, l0, l1, side);
+          if (sol.upper === null) {
+            foreAsked.push(wrap(t1[i]! - (set.drawn[b1] ?? 0)));
+            foreOver.push(0);
+            continue;
+          }
+          let a0 = wrap(sol.upper - d0);
+          let a1 = wrap(sol.fore - d1);
+          // The set's turn holds the upper arm; the forearm is then re-aimed at the placed wrist from where the held upper arm puts the elbow.
+          if (turn0 !== undefined) {
+            const tt = wrap(a0 - set.drawn[b0]!);
+            const cl = Math.min(Math.max(tt, turn0[0]), turn0[1]);
+            if (Math.abs(cl - tt) > RANGE_SLACK) {
+              a0 = wrap(set.drawn[b0]! + cl);
+              job.upperHeld.push(i);
+              const r = (a0 + d0) / DEG;
+              const E: Pt = [shoulder[0] + l0 * Math.cos(r), shoulder[1] + l0 * Math.sin(r)];
+              a1 = wrap(Math.atan2(P[1] - E[1], P[0] - E[0]) * DEG - d1);
+            }
+          }
+          // A forearm the turn still holds: the re-aim failed within the art's range — ART-RANGE.
+          const asked = turn1 === undefined ? 0 : wrap(a1 - set.drawn[b1]!);
+          const over = turn1 === undefined ? 0 : overflow(asked, turn1);
+          foreAsked.push(asked);
+          foreOver.push(over);
+          if (turn1 !== undefined && over > RANGE_SLACK) a1 = wrap(set.drawn[b1]! + Math.min(Math.max(asked, turn1[0]), turn1[1]));
+          t0[i] = a0;
+          t1[i] = a1;
+        }
+        if (turn1 !== undefined) {
+          for (const [a, b] of runsOf(foreOver.map((o) => o > RANGE_SLACK), RANGE_GAP)) {
+            let worst = a;
+            for (let k = a; k <= b; k++) if (foreOver[k]! > foreOver[worst]!) worst = k;
+            const first = s.frames[0] + a;
+            const last = s.frames[0] + b;
+            art.push({ set: set.name, chain: c.name, bone: b1, frames: [first, last], seconds: r6(endOf(last) - keyTimes[first]!), maxOverflow: r3(foreOver[worst]!), turn: r3(foreAsked[worst]!), limits: turn1, clamped: true });
+          }
         }
         raisedJobs.push(job);
       }
+      if (art.length > 0) raisedArt.push({ sw: s, entries: art });
     }
   }
   p.throwIfAny();
-  const artRange = measureArt(sw.switches, map, targets, endOf, keyTimes, RANGE_GAP);
+  // The art turn of every span; a raised chain's bones were held by the solve, and only its re-aimed forearm is listed (above).
+  const measured = measureArt(sw.switches, map, targets, endOf, keyTimes, RANGE_GAP);
+  const solvedBy = (e: ArtRange, s: Switch) => raisedJobs.some((j) => j.sw === s && j.chain.name === e.chain);
+  const artRange: ArtRange[] = [];
+  for (const s of sw.switches) {
+    const own = measured.filter((e) => e.set === s.set && e.frames[0] >= s.frames[0] && e.frames[1] <= s.frames[1]);
+    artRange.push(...own.filter((e) => !solvedBy(e, s)), ...(raisedArt.find((x) => x.sw === s)?.entries ?? []));
+  }
   clampArt(sw.switches, map, targets);
   // Where each raised wrist lands as keyed: after the solve and the set's `turn`.
-  if (head !== null && !('problem' in head)) {
-    for (const job of raisedJobs) {
-      const after: Pt[] = [];
-      const rigEyes: number[] = [];
-      for (let i = job.sw.frames[0]; i <= job.sw.frames[1]; i++) {
-        const a = posedPoint(head.points[0], i);
-        const b = posedPoint(head.points[1], i);
-        const d = Math.hypot(b[0] - a[0], b[1] - a[1]);
-        const w = job.wrist(i);
-        rigEyes.push(d);
-        after.push([(w[0] - (a[0] + b[0]) / 2) / d, (w[1] - (a[1] + b[1]) / 2) / d]);
-      }
-      const worst = (rig: readonly Pt[]): Pt => [Math.max(...rig.map((v, k) => Math.abs(v[0] - job.reference[k]![0]))), Math.max(...rig.map((v, k) => Math.abs(v[1] - job.reference[k]![1])))].map(r6) as Pt;
-      const round = (vs: readonly Pt[]): Pt[] => vs.map((v) => [r6(v[0]), r6(v[1])]);
-      raised.push({
-        set: job.sw.set,
-        chain: job.chain.name,
-        frames: job.sw.frames,
-        seconds: secondsOf(job.sw.frames),
-        eyes: { rig: [r6(Math.min(...rigEyes)), r6(Math.max(...rigEyes))], reference: [r6(Math.min(...job.refEyes)), r6(Math.max(...job.refEyes))] },
-        reference: round(job.reference),
-        before: round(job.before),
-        after: round(after),
-        worst: { before: worst(job.before), after: worst(after) },
-        unreachable: job.unreachable,
-        reach: { arm: r6(job.arm), farthest: r6(job.farthest) },
-      });
+  for (const job of raisedJobs) {
+    const after: Pt[] = [];
+    for (let i = job.sw.frames[0]; i <= job.sw.frames[1]; i++) {
+      const a = posedPoint(job.eyePoints[0], i);
+      const b = posedPoint(job.eyePoints[1], i);
+      const w = job.wrist(i);
+      after.push([(w[0] - (a[0] + b[0]) / 2) / job.rigEye, (w[1] - (a[1] + b[1]) / 2) / job.rigEye]);
     }
+    const worst = (rig: readonly Pt[]): Pt => [Math.max(...rig.map((v, k) => Math.abs(v[0] - job.reference[k]![0]))), Math.max(...rig.map((v, k) => Math.abs(v[1] - job.reference[k]![1])))].map(r6) as Pt;
+    const round = (vs: readonly Pt[]): Pt[] => vs.map((v) => [r6(v[0]), r6(v[1])]);
+    const short: ReachShort[] = [];
+    for (let k = 0; k < job.short.length;) {
+      let m = k;
+      while (m + 1 < job.short.length && job.short[m + 1]!.i === job.short[m]!.i + 1 && job.short[m + 1]!.how === job.short[k]!.how) m++;
+      const fs = job.short.slice(k, m + 1).map((x) => x.shortfall);
+      short.push({ frames: [job.short[k]!.i, job.short[m]!.i], how: job.short[k]!.how, shortfall: { max: r6(Math.max(...fs)), median: r6(median(fs)) } });
+      k = m + 1;
+    }
+    raised.push({
+      set: job.sw.set,
+      chain: job.chain.name,
+      frames: job.sw.frames,
+      seconds: secondsOf(job.sw.frames),
+      eyes: { rig: r6(job.rigEye), reference: r6(job.refEye) },
+      reference: round(job.reference),
+      placed: round(job.placed),
+      before: round(job.before),
+      after: round(after),
+      worst: { before: worst(job.before), after: worst(after), placed: r6(Math.max(...after.map((v, k) => Math.hypot(v[0] - job.placed[k]![0], v[1] - job.placed[k]![1])))) },
+      short,
+      upperHeld: job.upperHeld,
+      reach: { min: r6(Math.abs(job.l0 - job.l1)), max: r6(job.l0 + job.l1), farthest: r6(job.farthest) },
+    });
   }
 
   // The legs on their final targets: a bone under a scaled bone is keyed through

@@ -14,7 +14,7 @@ import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './
 import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, readIdle, targetOf, trackLabel, type IdleReading, type RigcTrack, type Target } from './idle.ts';
 import { bendLine, endOnLine, flipLine, holdLine, rangeLine, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions } from './retarget.ts';
 import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, readBuild, resolveRig, restOf, slotsOf } from './rigc.ts';
-import { artRangeLine, chainsMoving, raisedLine, RAISED_WITHIN, switchLine, uncoveredFolds } from './switch.ts';
+import { artRangeLine, chainsMoving, raisedLine, RAISED_WITHIN, reachLine, switchLine, uncoveredFolds } from './switch.ts';
 import { landed, measureFeet, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
 import { legsOf } from './legs.ts';
 import { reduceKeys, type ReduceBone, type Reduced } from './reduce.ts';
@@ -132,6 +132,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     for (const e of r.range) say(`  RANGE  ${rangeLine(e, r.times)}`);
     if (a.raisedByHead === true && r.raised.length === 0) say(`  RAISED none — no set drawing an arm within ${RAISED_WITHIN}° of straight up showed; no key moved`);
     for (const e of r.raised) say(`  RAISED ${raisedLine(e, r.times)}`);
+    for (const e of r.raised) if (e.short.length > 0) say(`  REACH  ${reachLine(e, r.times)}`);
     for (const e of r.artRange) say(`  ART-RANGE ${artRangeLine(e, r.times)}`);
     for (const l of r.legScale) say(`  LEG-SCALE ${legScaleLine(l, r.times)}`);
     if (r.pivot !== null) say(`  PIVOT  bone "${r.pivot.bone}"'s origin is ${r.pivot.distance.toFixed(2)} units (${r.pivot.hipWidths.toFixed(3)} hip widths) from its thigh roots' midpoint (${r.pivot.roots.join(' + ')}): dx ${r.pivot.offset[0].toFixed(2)}, dy ${r.pivot.offset[1].toFixed(2)}, at setup — the pivot every hip turn swings the legs about`);
