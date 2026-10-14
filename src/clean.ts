@@ -437,12 +437,13 @@ export function cleanLine(r: CleanRecord): string {
 
 /**
  * Where a sequence's `inferred` hips come from, as the lines say it: "declared
- * at clean" when the record says `--hips-inferred` marked them; "source not
+ * at clean" when the record says `--hips-inferred` marked them; "measured by
+ * <method>" when a tool read the pelvis line off the picture (#86); "source not
  * stated" when the joints carry the state and the record does not say why
  * (a file whose states were written by hand or by another tool).
  */
 export function inferredSource(r: CleanRecord | undefined): string {
   const h = r?.params.hipsInferred;
   if (h === undefined) return 'source not stated';
-  return h.by === 'declared' ? 'declared at clean' : h.by;
+  return h.by === 'declared' ? 'declared at clean' : `measured by ${h.method}`;
 }

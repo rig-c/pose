@@ -1590,6 +1590,65 @@ describe('the pelvis tilts and the trunk reaches from the posed hip for the shou
     expect(q.frames.tilt).toBe(BASE.n - k);
   }, SLOW);
 
+  /**
+   * #86: the pelvis pose cleaned with `hipsInferred` (every hip inferred), its
+   * record replaced by a `measured` one with the given classes. The positions
+   * are the plain run's, so the keys are too; only the reading changes.
+   */
+  type Runs = Array<[number, number]>;
+  const measuredRun = (classes: { read: Runs; interpolated: Runs; held: Runs }) => {
+    const c = setup({ rig: { bones: ctlBones }, map: pelvisMap(true), pose: pelvisPose() });
+    const seq = clean(readPoseSequence(JSON.stringify(pelvisPose()), 'fixture'), { loop: false, legs: 1, rest: 1, hipsInferred: true }, undefined, 'fixture').seq;
+    const doc = JSON.parse(writePoseSequence(seq)) as { cleaned: { params: Record<string, unknown> } };
+    const declined = [...classes.interpolated, ...classes.held].sort((x, y) => x[0] - y[0]).map((frames) => ({ frames, why: 'covered' }));
+    doc.cleaned.params.hipsInferred = { by: 'measured', method: 'test method', ...classes, declined };
+    writeFileSync(c.pose, JSON.stringify(doc));
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--report', report]);
+    return { r, motion: readFileSync(c.out, 'utf8'), report: JSON.parse(readFileSync(report, 'utf8')) as Record<string, unknown> };
+  };
+  type Measured = { tilt: { reference: { range: number } }; hipsInferred?: unknown; tiltMeasured: unknown; frames: { tilt: number } };
+  const N = BASE.n;
+  const allTilts = () => Array.from({ length: N }, (_, i) => tilt(i));
+  const rangeOf = (xs: number[]) => Math.max(...xs) - Math.min(...xs);
+
+  test('#86 read: every frame read — the tilt is the plain run\'s, the line says so, and the keys are the same', () => {
+    const { plain } = inferredRuns();
+    const m = measuredRun({ read: [[0, N - 1]], interpolated: [], held: [] });
+    expect(m.r.stderr).toBe('');
+    expect(m.r.status).toBe(0);
+    const l = linesOf(m.r, 'POSTURE')[0]!;
+    expect(l).toStartWith('POSTURE hip tilt range (chain "pelvis", r_hip → l_hip, Spine degrees): reference ');
+    expect(l).toEndWith(`; tilt measured (test method) on ${N} frame(s): ${N} read, 0 interpolated, 0 held (held: none)`);
+    expect(linesOf(m.r, 'CLEAN')[0]).toEndWith('; hips inferred (measured by test method)');
+    const q = m.report.posture as Measured;
+    expect(q.tilt).toEqual((plain.report.posture as { tilt: unknown }).tilt as never);
+    expect(q.hipsInferred).toBeUndefined();
+    expect(q.tiltMeasured).toEqual({ method: 'test method', frames: N, read: N, interpolated: 0, held: 0, heldSpans: [] });
+    expect(m.motion).toBe(plain.motion);
+  }, SLOW);
+
+  test('#86 interpolated: the interpolated frames are read into the tilt and counted', () => {
+    const m = measuredRun({ read: [[0, 1], [5, N - 1]], interpolated: [[2, 4]], held: [] });
+    expect(m.r.status).toBe(0);
+    expect(linesOf(m.r, 'POSTURE')[0]).toEndWith(`; tilt measured (test method) on ${N} frame(s): ${N - 3} read, 3 interpolated, 0 held (held: none)`);
+    const q = m.report.posture as Measured;
+    expect(Math.abs(q.tilt.reference.range - rangeOf(allTilts()))).toBeLessThan(0.054);
+    expect(q.frames.tilt).toBe(N);
+  }, SLOW);
+
+  test('#86 held: the held frames are read into the tilt, counted, and their spans printed; a reading that left them out would differ', () => {
+    const k = 5;
+    const m = measuredRun({ read: [[k, N - 2]], interpolated: [], held: [[0, k - 1], [N - 1, N - 1]] });
+    expect(m.r.status).toBe(0);
+    expect(linesOf(m.r, 'POSTURE')[0]).toEndWith(`; tilt measured (test method) on ${N} frame(s): ${N - k - 1} read, 0 interpolated, ${k + 1} held (held: 0–${k - 1}, ${N - 1})`);
+    const q = m.report.posture as Measured;
+    expect(q.tiltMeasured).toEqual({ method: 'test method', frames: N, read: N - k - 1, interpolated: 0, held: k + 1, heldSpans: [[0, k - 1], [N - 1, N - 1]] });
+    // Over every frame, as read; the read frames alone give another range, so the held ones are in it.
+    expect(Math.abs(q.tilt.reference.range - rangeOf(allTilts()))).toBeLessThan(0.054);
+    expect(Math.abs(rangeOf(allTilts().slice(k, N - 1)) - rangeOf(allTilts()))).toBeGreaterThan(0.2);
+  }, SLOW);
+
   test('control: a map without a pelvis chain prints no POSTURE line', () => {
     const c = setup();
     const r = retarget(c);

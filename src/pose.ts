@@ -70,12 +70,43 @@ export interface CleanSpike {
 }
 /**
  * Who said the hips are `inferred` (#63): `declared` — the person running
- * `rig-pose clean --hips-inferred` said so. A measured producer would record
- * itself under another `by`; this reader reads only `declared` today.
+ * `rig-pose clean --hips-inferred` said so; `measured` (#86) — a tool read the
+ * pelvis line off the picture (`tools/pelvis.py`, after clean) and turned the
+ * hip pair to a measured angle on every frame. The exact shape:
+ *
+ *   { by: "measured", method: string,
+ *     read: Run[], interpolated: Run[], held: Run[],
+ *     declined: Array<{ frames: Run, why: string }> }      Run = [first, last]
+ *
+ * `method` names the reading. Runs are integer frame indices inside the
+ * sequence, first ≤ last, increasing and not overlapping within each list.
+ * Every frame of the sequence is in exactly one of `read` (the frame's own
+ * reading), `interpolated` (a declined frame between two reads close in time,
+ * the angle interpolated) and `held` (any other declined frame, the nearer read
+ * held). `declined` lists, with the reason, exactly the frames that are
+ * interpolated or held. Anything else is refused by name (POSE_CLEANED).
  */
-export interface HipsInferred {
-  by: 'declared';
+export type Run = [number, number];
+export type HipsInferred =
+  | { by: 'declared' }
+  | { by: 'measured'; method: string; read: Run[]; interpolated: Run[]; held: Run[]; declined: Array<{ frames: Run; why: string }> };
+
+/** A copy of the record, in the writer's key order. */
+export function copyHipsInferred(h: HipsInferred): HipsInferred {
+  const runs = (rs: Run[]): Run[] => rs.map(([a, b]) => [a, b]);
+  return h.by === 'declared'
+    ? { by: 'declared' }
+    : { by: 'measured', method: h.method, read: runs(h.read), interpolated: runs(h.interpolated), held: runs(h.held), declined: h.declined.map((d) => ({ frames: [d.frames[0], d.frames[1]], why: d.why })) };
 }
+
+/** The frames a `measured` record gives an angle on (read, interpolated, held), as a set; null for any other record or none. */
+export function measuredFrames(h: HipsInferred | undefined): Set<number> | null {
+  if (h === undefined || h.by !== 'measured') return null;
+  const out = new Set<number>();
+  for (const rs of [h.read, h.interpolated, h.held]) for (const [a, b] of rs) for (let f = a; f <= b; f++) out.add(f);
+  return out;
+}
+
 export interface CleanRecord {
   spec: typeof CLEAN_SPEC;
   /** `hipsInferred` is present only when clean marked the hips (`--hips-inferred`). */
@@ -252,14 +283,7 @@ function readCleaned(p: Problems, where: string, c: unknown, frames: number | nu
     if (!isObject(q)) p.add('POSE_CLEANED', `${cw} "params" is ${typeName(q)}; it must be { loop, legs, rest, hipsInferred? }`);
     else {
       refuseUnknownKeys(p, 'POSE_CLEANED', `${cw} "params"`, q, ['loop', 'legs', 'rest', 'hipsInferred']);
-      if ('hipsInferred' in q) {
-        const h = q.hipsInferred;
-        if (!isObject(h)) p.add('POSE_CLEANED', `${cw} "params" "hipsInferred" is ${typeName(h)}; it must be { by: "declared" }`);
-        else {
-          refuseUnknownKeys(p, 'POSE_CLEANED', `${cw} "params" "hipsInferred"`, h, ['by']);
-          if (h.by !== 'declared') p.add('POSE_CLEANED', `${cw} "params" "hipsInferred" "by" is ${typeName(h.by)}; this reader reads "declared" (the person running rig-pose clean --hips-inferred said so)`);
-        }
-      }
+      if ('hipsInferred' in q) readHipsInferred(p, `${cw} "params" "hipsInferred"`, q.hipsInferred, frames);
       if (typeof q.loop !== 'boolean') p.add('POSE_CLEANED', `${cw} "params" "loop" is ${typeName(q.loop)}; it must be true or false`);
       for (const k of ['legs', 'rest'] as const) if (!window(q[k])) p.add('POSE_CLEANED', `${cw} "params" "${k}" is ${typeName(q[k])}; it must be 1 (none) or an odd whole number ≥ 5`);
     }
@@ -304,13 +328,141 @@ function readCleaned(p: Problems, where: string, c: unknown, frames: number | nu
   const j = c.jitter as { before: number | null; after: number | null };
   return {
     spec: CLEAN_SPEC,
-    params: { loop: q.loop, legs: q.legs, rest: q.rest, ...(q.hipsInferred !== undefined ? { hipsInferred: { by: q.hipsInferred.by } } : {}) },
+    params: { loop: q.loop, legs: q.legs, rest: q.rest, ...(q.hipsInferred !== undefined ? { hipsInferred: copyHipsInferred(q.hipsInferred) } : {}) },
     spikes: {
       found: ((c.spikes as { found: Array<{ frame: number; joint: Body18 }> }).found).map((s) => ({ frame: s.frame, joint: s.joint })),
       untested: [...(c.spikes as { untested: number[] }).untested],
     },
     jitter: { before: j.before, after: j.after },
   };
+}
+
+/** `hipsInferred`: { by: "declared" } or the measured record (the shape at `HipsInferred`), refused by name otherwise. */
+function readHipsInferred(p: Problems, hw: string, h: unknown, frames: number | null): void {
+  const measuredShape = '{ by: "measured", method, read, interpolated, held: [[first, last]], declined: [{ frames: [first, last], why }] }';
+  if (!isObject(h)) {
+    p.add('POSE_CLEANED', `${hw} is ${typeName(h)}; it must be { by: "declared" } or ${measuredShape}`);
+    return;
+  }
+  if (h.by === 'declared') {
+    refuseUnknownKeys(p, 'POSE_CLEANED', hw, h, ['by']);
+    return;
+  }
+  if (h.by !== 'measured') {
+    refuseUnknownKeys(p, 'POSE_CLEANED', hw, h, ['by']);
+    p.add('POSE_CLEANED', `${hw} "by" is ${typeName(h.by)}; this reader reads "declared" (the person running rig-pose clean --hips-inferred said so) or "measured" (a tool read the pelvis line off the picture, tools/pelvis.py)`);
+    return;
+  }
+  const before = p.list.length;
+  const CLASSES = ['read', 'interpolated', 'held'] as const;
+  refuseUnknownKeys(p, 'POSE_CLEANED', hw, h, ['by', 'method', ...CLASSES, 'declined']);
+  for (const k of ['method', ...CLASSES, 'declined']) if (!(k in h)) p.add('POSE_CLEANED', `${hw} has no "${k}"; a measured record is ${measuredShape}`);
+  if ('method' in h && !(typeof h.method === 'string' && h.method.trim() !== '')) p.add('POSE_CLEANED', `${hw} "method" is ${typeName(h.method)}; it must be a non-empty string naming the reading`);
+  const range = `[0, ${frames === null ? 'the frame count' : frames - 1}]`;
+  /** A run [first, last], or null after naming what is wrong with it. */
+  const run = (v: unknown, rw: string): Run | null => {
+    if (!(Array.isArray(v) && v.length === 2)) {
+      p.add('POSE_CLEANED', `${rw} is ${typeName(v)}; a run is [first, last], two frame indices`);
+      return null;
+    }
+    let ok = true;
+    v.forEach((f: unknown, k: number) => {
+      if (!(Number.isInteger(f) && (f as number) >= 0 && (frames === null || (f as number) < frames))) {
+        p.add('POSE_CLEANED', `${rw}[${k}] is ${typeName(f)}; it must be a frame index in ${range}`);
+        ok = false;
+      }
+    });
+    if (!ok) return null;
+    const [a, b] = v as Run;
+    if (a > b) {
+      p.add('POSE_CLEANED', `${rw} is [${a}, ${b}]; a run's first frame must not come after its last`);
+      return null;
+    }
+    return [a, b];
+  };
+  type Named = { r: Run; w: string };
+  /** Runs in order and apart: each starts after the previous one ends. */
+  const ordered = (rs: Named[], what: string) => {
+    for (let k = 1; k < rs.length; k++) {
+      const prev = rs[k - 1]!;
+      const cur = rs[k]!;
+      if (cur.r[0] <= prev.r[1]) p.add('POSE_CLEANED', `${cur.w} [${cur.r[0]}, ${cur.r[1]}] starts at or before the end of ${prev.w} [${prev.r[0]}, ${prev.r[1]}]; ${what} runs must increase and not overlap`);
+    }
+  };
+  const classes: Record<(typeof CLASSES)[number], Named[]> = { read: [], interpolated: [], held: [] };
+  for (const c of CLASSES) {
+    if (!(c in h)) continue;
+    const list = h[c];
+    if (!Array.isArray(list)) {
+      p.add('POSE_CLEANED', `${hw} "${c}" is ${typeName(list)}; it must be an array of runs [first, last]`);
+      continue;
+    }
+    list.forEach((v: unknown, k: number) => {
+      const w = `${hw} ${c}[${k}]`;
+      const r = run(v, w);
+      if (r !== null) classes[c].push({ r, w });
+    });
+    ordered(classes[c], c);
+  }
+  const declined: Named[] = [];
+  if ('declined' in h) {
+    if (!Array.isArray(h.declined)) p.add('POSE_CLEANED', `${hw} "declined" is ${typeName(h.declined)}; it must be an array of { frames: [first, last], why }`);
+    else h.declined.forEach((d: unknown, k: number) => {
+      const w = `${hw} declined[${k}]`;
+      if (!isObject(d)) {
+        p.add('POSE_CLEANED', `${w} is ${typeName(d)}; a declined run is { frames: [first, last], why }`);
+        return;
+      }
+      refuseUnknownKeys(p, 'POSE_CLEANED', w, d, ['frames', 'why']);
+      if (!('why' in d)) p.add('POSE_CLEANED', `${w} has no "why"; a declined run says why, a non-empty string`);
+      else if (!(typeof d.why === 'string' && d.why.trim() !== '')) p.add('POSE_CLEANED', `${w} "why" is ${typeName(d.why)}; a declined run says why, a non-empty string`);
+      if (!('frames' in d)) {
+        p.add('POSE_CLEANED', `${w} has no "frames"; a declined run is { frames: [first, last], why }`);
+        return;
+      }
+      const r = run(d.frames, `${w} "frames"`);
+      if (r !== null) declined.push({ r, w: `${w} "frames"` });
+    });
+    ordered(declined, 'declined');
+  }
+  // Across lists: the classes are disjoint, they cover every frame, and declined is exactly interpolated ∪ held.
+  for (let x = 0; x < CLASSES.length; x++) {
+    for (let y = x + 1; y < CLASSES.length; y++) {
+      for (const a of classes[CLASSES[x]!]) {
+        for (const b of classes[CLASSES[y]!]) {
+          if (a.r[0] <= b.r[1] && b.r[0] <= a.r[1]) p.add('POSE_CLEANED', `${a.w} [${a.r[0]}, ${a.r[1]}] and ${b.w} [${b.r[0]}, ${b.r[1]}] share frame(s) ${Math.max(a.r[0], b.r[0])}–${Math.min(a.r[1], b.r[1])}; a frame is one of read, interpolated and held`);
+        }
+      }
+    }
+  }
+  if (p.list.length > before) return;
+  const set = (rs: Named[]) => {
+    const out = new Set<number>();
+    for (const { r } of rs) for (let f = r[0]; f <= r[1]; f++) out.add(f);
+    return out;
+  };
+  const spans = (fs: number[]) => {
+    const out: Run[] = [];
+    for (const f of fs) {
+      const last = out[out.length - 1];
+      if (last !== undefined && f === last[1] + 1) last[1] = f;
+      else out.push([f, f]);
+    }
+    return out.map(([a, b]) => (a === b ? `${a}` : `${a}–${b}`)).join(', ');
+  };
+  const read = set(classes.read);
+  const filled = set([...classes.interpolated, ...classes.held]);
+  const dec = set(declined);
+  if (frames !== null) {
+    const none = Array.from({ length: frames }, (_, f) => f).filter((f) => !read.has(f) && !filled.has(f));
+    if (none.length > 0) p.add('POSE_CLEANED', `${hw}: frame(s) ${spans(none)} are in none of read, interpolated and held; every frame of the sequence is one of them`);
+  }
+  const both = [...dec].filter((f) => read.has(f)).sort((a, b) => a - b);
+  if (both.length > 0) p.add('POSE_CLEANED', `${hw}: frame(s) ${spans(both)} are both read and declined; a frame is read or declined, not both`);
+  const unfilled = [...dec].filter((f) => !read.has(f) && !filled.has(f)).sort((a, b) => a - b);
+  if (unfilled.length > 0) p.add('POSE_CLEANED', `${hw}: frame(s) ${spans(unfilled)} are declined but neither interpolated nor held; a declined frame takes one of them`);
+  const undeclared = [...filled].filter((f) => !dec.has(f)).sort((a, b) => a - b);
+  if (undeclared.length > 0) p.add('POSE_CLEANED', `${hw}: frame(s) ${spans(undeclared)} are interpolated or held but not declined; only a frame the reading declined is filled, and "declined" says why`);
 }
 
 function readJoints(p: Problems, pw: string, joints: unknown): Partial<Record<Body18, Joint>> {
@@ -499,6 +651,6 @@ export function writePoseSequence(seq: PoseSequence): string {
   const camera = seq.camera?.map((c) => ({ s: round(c.s, 6), tx: round(c.tx, 3), ty: round(c.ty, 3), inliers: c.inliers }));
   const c = seq.cleaned;
   const jit = (v: number | null) => (v === null ? null : round(v, 4));
-  const cleaned = c === undefined ? undefined : { spec: c.spec, params: { loop: c.params.loop, legs: c.params.legs, rest: c.params.rest, ...(c.params.hipsInferred !== undefined ? { hipsInferred: { by: c.params.hipsInferred.by } } : {}) }, spikes: { found: c.spikes.found.map((s) => ({ frame: s.frame, joint: s.joint })), untested: [...c.spikes.untested] }, jitter: { before: jit(c.jitter.before), after: jit(c.jitter.after) } };
+  const cleaned = c === undefined ? undefined : { spec: c.spec, params: { loop: c.params.loop, legs: c.params.legs, rest: c.params.rest, ...(c.params.hipsInferred !== undefined ? { hipsInferred: copyHipsInferred(c.params.hipsInferred) } : {}) }, spikes: { found: c.spikes.found.map((s) => ({ frame: s.frame, joint: s.joint })), untested: [...c.spikes.untested] }, jitter: { before: jit(c.jitter.before), after: jit(c.jitter.after) } };
   return `${JSON.stringify({ spec: seq.spec, space: seq.space, width: seq.width, height: seq.height, source: seq.source, ...(seq.cameraSource !== undefined ? { cameraSource: seq.cameraSource } : {}), ...(camera !== undefined ? { camera } : {}), ...(cleaned !== undefined ? { cleaned } : {}), frames }, null, 2)}\n`;
 }

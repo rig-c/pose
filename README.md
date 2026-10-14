@@ -52,6 +52,27 @@ The output carries the record, here the dancer's from the table below:
 
 **`--hips-inferred`** ([#63](https://github.com/rig-c/pose/issues/63)) declares that the hips are not seen: under a skirt or a cloak the pose model still places them, but where it puts them is its guess. After the four steps, `r_hip` and `l_hip` are marked `inferred` on every frame where they have a position (`INFERRED`), and the record's params carry `"hipsInferred": { "by": "declared" }` — the person running `clean` said so. Positions and scores are unchanged, so `retarget`'s keys are the same with the flag and without it. What changes is the `POSTURE` line, which does not read a hip tilt off inferred hips (below), and the `CLEAN` line, which ends `hips inferred (declared at clean)`.
 
+**Measured hips: `tools/pelvis.py`** ([#86](https://github.com/rig-c/pose/issues/86), not shipped) reads the pelvis line where the eye reads it under a skirt, off the skirt's waistband, and runs after `clean`: scan → clean → pelvis → retarget. It takes the video and a sequence `clean` wrote without `--hips-inferred`. It refuses by name, writing nothing:
+
+- a sequence with no `cleaned` record (`PELVIS_NOT_CLEANED`);
+- one whose hips are already marked (`PELVIS_HIPS_INFERRED`);
+- a frame count other than the video's (`PELVIS_FRAMES`);
+- a clip on which no frame gives a reading (`PELVIS_NO_READING`).
+
+On each frame it reads the top edge of the dark region at the waist. The region is set by the hips and the frame's trunk length. The tool keeps the edge's flattest high run, since a flaring skirt's sides are steep and are not the pelvis line, and fits a line to it.
+
+A frame gives no reading, declined with the reason, when:
+
+- a wrist lies in front of the waist (the picture under it is not the skirt's dark);
+- the edge is too broken or too far from a line;
+- the reading jumps further than a misread guard allows.
+
+The tool never draws a line through a hand in front. A declined frame does not fall back to the detector's hip line, which is the value known to be wrong there. If two reads lie close in time on either side, the frame takes the interpolation between them; otherwise it holds the nearer read.
+
+Both hips are marked `inferred` on every frame and turned about their midpoint to the frame's angle, keeping the midpoint and the width. The record says which frame is which: `"hipsInferred": { "by": "measured", "method", "read", "interpolated", "held": [[first, last], …], "declined": [{ "frames": [first, last], "why" }] }`. Every frame is in exactly one of `read`, `interpolated` and `held`, and `declined` lists exactly the interpolated and held frames. Runs are frame indices inside the sequence, increasing and disjoint. A malformed record is refused by name (`POSE_CLEANED`).
+
+`tools/pelvis_selftest.py` is its synthetic check. A planted wrist on a hand in front of the waist reads "covered", and with the hand moved away the edge's angle is read again. The misread guard, the interpolation and the hold are checked frame by frame. Its mutant (`--no-cover-check`) must read a line through the hand, and the check asserts that it does.
+
 **Measured** on HQ's references ([#67](https://github.com/rig-c/pose/issues/67)'s bars):
 
 | Clip | Run | Jitter, px/f² | Against |
@@ -91,7 +112,7 @@ and what the run cannot decide for you it lists:
 - `FLIP` — a segment that turns more than `--flip` degrees in one frame (with `--flip <deg>`; off by default) is spread over the frames around the jump; one line per spread, with the chain, the segment, the jump, the frames and h. Below.
 - `BEND` — with `--bends clamp`, a hinge bent the wrong way is straightened on that frame instead of refusing.
 - `FOLD` — `rigc render --folds` over the new animation: every mesh that folds, and when. A reading, not a gate.
-- `POSTURE` — when the map has a pelvis chain (joints `r_hip`, `l_hip`) and a `translate`: the hip line's tilt range, and the sway — the x-range of mid_hip − mid_shoulder — in rig units and in shoulder widths, the pose's beside the posed rig's. A reading, not a gate. A frame on which either hip is `inferred` is left out of the tilt. When that is every frame, as after `clean --hips-inferred`, the line is `hip tilt not read: hips inferred (declared at clean)` and the report's `posture` has `"tilt": null` with `"tiltWhy"`; on some frames only, the tilt is read over the others and the line counts the frames left out (`posture.hipsInferred`). The source is read from the clean record, or is `source not stated` when the joints carry the state and the record does not. The sway reads the hips as before.
+- `POSTURE` — when the map has a pelvis chain (joints `r_hip`, `l_hip`) and a `translate`: the hip line's tilt range, and the sway — the x-range of mid_hip − mid_shoulder — in rig units and in shoulder widths, the pose's beside the posed rig's. A reading, not a gate. A frame on which either hip is `inferred` is left out of the tilt. When that is every frame, as after `clean --hips-inferred`, the line is `hip tilt not read: hips inferred (declared at clean)` and the report's `posture` has `"tilt": null` with `"tiltWhy"`; on some frames only, the tilt is read over the others and the line counts the frames left out (`posture.hipsInferred`). The source is read from the clean record, or is `source not stated` when the joints carry the state and the record does not. With a `measured` record ([#86](https://github.com/rig-c/pose/issues/86)), the read, interpolated and held frames are the measurement, so the tilt is read on all three. The line adds `tilt measured (<method>) on N frame(s): R read, I interpolated, H held (held: <spans>)`. The report's `posture` carries `tiltMeasured: { method, frames, read, interpolated, held, heldSpans }`. The sway reads the hips as before.
 - `SWITCH` — with `alternates` in the map ([below](#alternate-drawings-alternates)): each span on which a set of alternate drawings shows, its slots, its frames, how far the pose was from the set's key skeleton, how far each bone with a `drawn` angle was turned from it, and where each of its boundaries was moved to (`moved`, [below](#alternate-drawings-alternates)).
 - `UNCOVERED` — with `alternates` in the map: every fold on a frame where no switch took the folding mesh off screen. This is the list of poses still to paint.
 - `RANGE` — a chain's `range` ([below](#a-joints-range-range)): a bone whose rotate key the pose asks past its range, outside every span of a set depicting its chain, is clamped at the limit; one line per run, with the frames, the seconds and the largest overflow. The demand for an alternate.
