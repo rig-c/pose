@@ -780,5 +780,12 @@ export function unheldText(h: { speed: number; reach: number; minSeconds?: numbe
 export function inferredSource(r: CleanRecord | undefined): string {
   const h = r?.params.hipsInferred;
   if (h === undefined) return 'source not stated';
-  return h.by === 'declared' ? 'declared at clean' : `measured by ${h.method}`;
+  if (h.by === 'declared') return 'declared at clean';
+  const spans = (rs: Array<[number, number]>) => rs.map(([a, b]) => (a === b ? `${a}` : `${a}–${b}`)).join(', ');
+  const scaled = h.scaled !== undefined && h.scaled.length > 0 ? `, scaled ${spans(h.scaled)}${h.fit?.gain !== undefined && h.fit.gain !== null && h.fit.corr !== null ? ` (gain ${h.fit.gain.toFixed(2)}×, r=${h.fit.corr.toFixed(3)})` : ''}` : '';
+  const unmeasured =
+    h.unmeasured !== undefined && (h.unmeasured.length > 0 || (h.fit !== undefined && (h.fit.corr === null || h.fit.corr < 0.9)))
+      ? `, unmeasured ${h.unmeasured.length === 0 ? 'none' : spans(h.unmeasured)}${h.fit !== undefined ? ` (r=${h.fit.corr === null ? 'none' : h.fit.corr.toFixed(3)} < 0.9)` : ''}`
+      : '';
+  return `measured by ${h.method}${scaled}${unmeasured}`;
 }

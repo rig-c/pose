@@ -74,36 +74,63 @@ export interface CleanSpike {
  * pelvis line off the picture (`tools/pelvis.py`, after clean) and turned the
  * hip pair to a measured angle on every frame. The exact shape:
  *
- *   { by: "measured", method: string,
- *     read: Run[], interpolated: Run[], held: Run[],
+ *   { by: "measured", method: string, fit?: { frames, gain, corr },
+ *     read: Run[], interpolated: Run[], scaled?: Run[], held: Run[], unmeasured?: Run[],
  *     declined: Array<{ frames: Run, why: string }> }      Run = [first, last]
  *
  * `method` names the reading. Runs are integer frame indices inside the
  * sequence, first ≤ last, increasing and not overlapping within each list.
  * Every frame of the sequence is in exactly one of `read` (the frame's own
  * reading), `interpolated` (a declined frame between two reads close in time,
- * the angle interpolated) and `held` (any other declined frame, the earlier
- * read carried to the end of its run; at the clip's start, the later read). `declined` lists, with the reason, exactly the frames that are
- * interpolated or held. Anything else is refused by name (POSE_CLEANED).
+ * the angle interpolated), `scaled` (#106: a longer declined run taking the
+ * detector hip line scaled by `fit.gain`), `held` (the earlier read carried to
+ * the end of its run; at the clip's start, the later read) and `unmeasured`
+ * (#106: a longer declined run when `fit.corr` < 0.9). `declined` lists, with
+ * the reason, exactly the non-read frames. Anything else is refused by name
+ * (POSE_CLEANED).
  */
 export type Run = [number, number];
+export interface PelvisFit {
+  frames: number;
+  gain: number | null;
+  corr: number | null;
+}
 export type HipsInferred =
   | { by: 'declared' }
-  | { by: 'measured'; method: string; read: Run[]; interpolated: Run[]; held: Run[]; declined: Array<{ frames: Run; why: string }> };
+  | {
+      by: 'measured';
+      method: string;
+      fit?: PelvisFit;
+      read: Run[];
+      interpolated: Run[];
+      scaled?: Run[];
+      held: Run[];
+      unmeasured?: Run[];
+      declined: Array<{ frames: Run; why: string }>;
+    };
 
 /** A copy of the record, in the writer's key order. */
 export function copyHipsInferred(h: HipsInferred): HipsInferred {
   const runs = (rs: Run[]): Run[] => rs.map(([a, b]) => [a, b]);
-  return h.by === 'declared'
-    ? { by: 'declared' }
-    : { by: 'measured', method: h.method, read: runs(h.read), interpolated: runs(h.interpolated), held: runs(h.held), declined: h.declined.map((d) => ({ frames: [d.frames[0], d.frames[1]], why: d.why })) };
+  if (h.by === 'declared') return { by: 'declared' };
+  return {
+    by: 'measured',
+    method: h.method,
+    ...(h.fit !== undefined ? { fit: { frames: h.fit.frames, gain: h.fit.gain, corr: h.fit.corr } } : {}),
+    read: runs(h.read),
+    interpolated: runs(h.interpolated),
+    ...(h.scaled !== undefined ? { scaled: runs(h.scaled) } : {}),
+    held: runs(h.held),
+    ...(h.unmeasured !== undefined ? { unmeasured: runs(h.unmeasured) } : {}),
+    declined: h.declined.map((d) => ({ frames: [d.frames[0], d.frames[1]], why: d.why })),
+  };
 }
 
-/** The frames a `measured` record gives an angle on (read, interpolated, held), as a set; null for any other record or none. */
+/** The frames a `measured` record gives an angle on (read, interpolated, scaled, held), as a set; null for any other record or none. */
 export function measuredFrames(h: HipsInferred | undefined): Set<number> | null {
   if (h === undefined || h.by !== 'measured') return null;
   const out = new Set<number>();
-  for (const rs of [h.read, h.interpolated, h.held]) for (const [a, b] of rs) for (let f = a; f <= b; f++) out.add(f);
+  for (const rs of [h.read, h.interpolated, h.scaled ?? [], h.held]) for (const [a, b] of rs) for (let f = a; f <= b; f++) out.add(f);
   return out;
 }
 
@@ -489,10 +516,22 @@ function readHipsInferred(p: Problems, hw: string, h: unknown, frames: number | 
     return;
   }
   const before = p.list.length;
-  const CLASSES = ['read', 'interpolated', 'held'] as const;
-  refuseUnknownKeys(p, 'POSE_CLEANED', hw, h, ['by', 'method', ...CLASSES, 'declined']);
-  for (const k of ['method', ...CLASSES, 'declined']) if (!(k in h)) p.add('POSE_CLEANED', `${hw} has no "${k}"; a measured record is ${measuredShape}`);
+  const REQ_CLASSES = ['read', 'interpolated', 'held'] as const;
+  const ALL_CLASSES = ['read', 'interpolated', 'scaled', 'held', 'unmeasured'] as const;
+  refuseUnknownKeys(p, 'POSE_CLEANED', hw, h, ['by', 'method', 'fit', ...ALL_CLASSES, 'declined']);
+  for (const k of ['method', ...REQ_CLASSES, 'declined']) if (!(k in h)) p.add('POSE_CLEANED', `${hw} has no "${k}"; a measured record is ${measuredShape}`);
   if ('method' in h && !(typeof h.method === 'string' && h.method.trim() !== '')) p.add('POSE_CLEANED', `${hw} "method" is ${typeName(h.method)}; it must be a non-empty string naming the reading`);
+  if ('fit' in h) {
+    const f = h.fit;
+    const fw = `${hw} "fit"`;
+    if (!isObject(f)) p.add('POSE_CLEANED', `${fw} is ${typeName(f)}; it must be { frames, gain, corr }`);
+    else {
+      refuseUnknownKeys(p, 'POSE_CLEANED', fw, f, ['frames', 'gain', 'corr']);
+      if (!(Number.isInteger(f.frames) && (f.frames as number) >= 0)) p.add('POSE_CLEANED', `${fw} "frames" is ${typeName(f.frames)}; it must be a whole number of frames ≥ 0`);
+      if (!(f.gain === null || (typeof f.gain === 'number' && Number.isFinite(f.gain)))) p.add('POSE_CLEANED', `${fw} "gain" is ${typeName(f.gain)}; it must be a finite number or null`);
+      if (!(f.corr === null || (typeof f.corr === 'number' && Number.isFinite(f.corr) && f.corr >= -1 && f.corr <= 1))) p.add('POSE_CLEANED', `${fw} "corr" is ${typeName(f.corr)}; it must be a correlation in [-1, 1] or null`);
+    }
+  }
   const range = `[0, ${frames === null ? 'the frame count' : frames - 1}]`;
   /** A run [first, last], or null after naming what is wrong with it. */
   const run = (v: unknown, rw: string): Run | null => {
@@ -524,8 +563,8 @@ function readHipsInferred(p: Problems, hw: string, h: unknown, frames: number | 
       if (cur.r[0] <= prev.r[1]) p.add('POSE_CLEANED', `${cur.w} [${cur.r[0]}, ${cur.r[1]}] starts at or before the end of ${prev.w} [${prev.r[0]}, ${prev.r[1]}]; ${what} runs must increase and not overlap`);
     }
   };
-  const classes: Record<(typeof CLASSES)[number], Named[]> = { read: [], interpolated: [], held: [] };
-  for (const c of CLASSES) {
+  const classes: Record<(typeof ALL_CLASSES)[number], Named[]> = { read: [], interpolated: [], scaled: [], held: [], unmeasured: [] };
+  for (const c of ALL_CLASSES) {
     if (!(c in h)) continue;
     const list = h[c];
     if (!Array.isArray(list)) {
@@ -560,12 +599,15 @@ function readHipsInferred(p: Problems, hw: string, h: unknown, frames: number | 
     });
     ordered(declined, 'declined');
   }
-  // Across lists: the classes are disjoint, they cover every frame, and declined is exactly interpolated ∪ held.
-  for (let x = 0; x < CLASSES.length; x++) {
-    for (let y = x + 1; y < CLASSES.length; y++) {
-      for (const a of classes[CLASSES[x]!]) {
-        for (const b of classes[CLASSES[y]!]) {
-          if (a.r[0] <= b.r[1] && b.r[0] <= a.r[1]) p.add('POSE_CLEANED', `${a.w} [${a.r[0]}, ${a.r[1]}] and ${b.w} [${b.r[0]}, ${b.r[1]}] share frame(s) ${Math.max(a.r[0], b.r[0])}–${Math.min(a.r[1], b.r[1])}; a frame is one of read, interpolated and held`);
+  const has106 = 'scaled' in h || 'unmeasured' in h || 'fit' in h;
+  const classListLabel = has106 ? 'read, interpolated, scaled, held and unmeasured' : 'read, interpolated and held';
+  const filledLabel = has106 ? 'interpolated, scaled, held or unmeasured' : 'interpolated or held';
+  // Across lists: the classes are disjoint, they cover every frame, and declined is exactly the non-read classes.
+  for (let x = 0; x < ALL_CLASSES.length; x++) {
+    for (let y = x + 1; y < ALL_CLASSES.length; y++) {
+      for (const a of classes[ALL_CLASSES[x]!]) {
+        for (const b of classes[ALL_CLASSES[y]!]) {
+          if (a.r[0] <= b.r[1] && b.r[0] <= a.r[1]) p.add('POSE_CLEANED', `${a.w} [${a.r[0]}, ${a.r[1]}] and ${b.w} [${b.r[0]}, ${b.r[1]}] share frame(s) ${Math.max(a.r[0], b.r[0])}–${Math.min(a.r[1], b.r[1])}; a frame is one of ${classListLabel}`);
         }
       }
     }
@@ -586,18 +628,18 @@ function readHipsInferred(p: Problems, hw: string, h: unknown, frames: number | 
     return out.map(([a, b]) => (a === b ? `${a}` : `${a}–${b}`)).join(', ');
   };
   const read = set(classes.read);
-  const filled = set([...classes.interpolated, ...classes.held]);
+  const nonRead = set([...classes.interpolated, ...classes.scaled, ...classes.held, ...classes.unmeasured]);
   const dec = set(declined);
   if (frames !== null) {
-    const none = Array.from({ length: frames }, (_, f) => f).filter((f) => !read.has(f) && !filled.has(f));
-    if (none.length > 0) p.add('POSE_CLEANED', `${hw}: frame(s) ${spans(none)} are in none of read, interpolated and held; every frame of the sequence is one of them`);
+    const none = Array.from({ length: frames }, (_, f) => f).filter((f) => !read.has(f) && !nonRead.has(f));
+    if (none.length > 0) p.add('POSE_CLEANED', `${hw}: frame(s) ${spans(none)} are in none of ${classListLabel}; every frame of the sequence is one of them`);
   }
   const both = [...dec].filter((f) => read.has(f)).sort((a, b) => a - b);
   if (both.length > 0) p.add('POSE_CLEANED', `${hw}: frame(s) ${spans(both)} are both read and declined; a frame is read or declined, not both`);
-  const unfilled = [...dec].filter((f) => !read.has(f) && !filled.has(f)).sort((a, b) => a - b);
-  if (unfilled.length > 0) p.add('POSE_CLEANED', `${hw}: frame(s) ${spans(unfilled)} are declined but neither interpolated nor held; a declined frame takes one of them`);
-  const undeclared = [...filled].filter((f) => !dec.has(f)).sort((a, b) => a - b);
-  if (undeclared.length > 0) p.add('POSE_CLEANED', `${hw}: frame(s) ${spans(undeclared)} are interpolated or held but not declined; only a frame the reading declined is filled, and "declined" says why`);
+  const unfilled = [...dec].filter((f) => !read.has(f) && !nonRead.has(f)).sort((a, b) => a - b);
+  if (unfilled.length > 0) p.add('POSE_CLEANED', `${hw}: frame(s) ${spans(unfilled)} are declined but neither ${filledLabel}; a declined frame takes one of them`);
+  const undeclared = [...nonRead].filter((f) => !dec.has(f)).sort((a, b) => a - b);
+  if (undeclared.length > 0) p.add('POSE_CLEANED', `${hw}: frame(s) ${spans(undeclared)} are ${filledLabel} but not declined; only a frame the reading declined is filled, and "declined" says why`);
 }
 const holdParamsOf = (h: HoldParams | 'off'): HoldParams | 'off' => (h === 'off' ? 'off' : { speed: h.speed, reach: h.reach, minSeconds: h.minSeconds, blend: h.blend });
 const copyHold = (h: CleanHold): CleanHold => ({ joint: h.joint, frames: [h.frames[0], h.frames[1]], jitter: { before: h.jitter.before, after: h.jitter.after } });

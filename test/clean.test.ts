@@ -432,7 +432,7 @@ describe('a measured "hipsInferred" record (#86) is read, written and refused by
       `${W} has no "held"; a measured record is { by: "measured", method, read, interpolated, held: [[first, last]], declined: [{ frames: [first, last], why }] }`,
     ]);
     expect(refusal({ ...MEASURED, method: '' })).toEqual([`${W} "method" is the string ""; it must be a non-empty string naming the reading`]);
-    expect(refusal({ ...MEASURED, extra: 1 })).toEqual([`${W} has a key this reader does not know: "extra"; the keys it reads are by, method, read, interpolated, held, declined`]);
+    expect(refusal({ ...MEASURED, extra: 1 })).toEqual([`${W} has a key this reader does not know: "extra"; the keys it reads are by, method, fit, read, interpolated, scaled, held, unmeasured, declined`]);
     expect(refusal({ ...MEASURED, read: [[0, 3.5], [7, 12]] })).toEqual([
       `${W} read[0][1] is number 3.5; it must be a frame index in [0, 11]`,
       `${W} read[1][1] is number 12; it must be a frame index in [0, 11]`,
@@ -445,6 +445,38 @@ describe('a measured "hipsInferred" record (#86) is read, written and refused by
       `${W} declined[0] has no "why"; a declined run says why, a non-empty string`,
       `${W} declined[1] "frames" is an array; a run is [first, last], two frame indices`,
     ]);
+    expect(refusal({ ...MEASURED, fit: { frames: -1, gain: 'bad', corr: 1.5 } })).toEqual([
+      `${W} "fit" "frames" is number -1; it must be a whole number of frames ≥ 0`,
+      `${W} "fit" "gain" is the string "bad"; it must be a finite number or null`,
+      `${W} "fit" "corr" is number 1.5; it must be a correlation in [-1, 1] or null`,
+    ]);
+  });
+
+  test('#106 scaled and unmeasured: read, round-tripped, and named on the CLEAN line', () => {
+    const scaledRec = {
+      ...MEASURED,
+      fit: { frames: 7, gain: 2.73, corr: 0.938 },
+      scaled: [[6, 6], [10, 11]],
+      held: [],
+      unmeasured: [],
+    };
+    const backScaled = readPoseSequence(docWith(scaledRec), 'p.json');
+    expect(backScaled.cleaned!.params.hipsInferred).toEqual(scaledRec as never);
+    expect(writePoseSequence(readPoseSequence(writePoseSequence(backScaled), 'p.json'))).toBe(writePoseSequence(backScaled));
+    expect(measuredFrames(backScaled.cleaned!.params.hipsInferred)).toEqual(new Set(Array.from({ length: 12 }, (_, i) => i)));
+    expect(cleanLine(backScaled.cleaned!)).toEndWith('; hips inferred (measured by a test reading, scaled 6, 10–11 (gain 2.73×, r=0.938))');
+
+    const unmeasuredRec = {
+      ...MEASURED,
+      fit: { frames: 7, gain: 0.04, corr: 0.078 },
+      scaled: [],
+      held: [],
+      unmeasured: [[6, 6], [10, 11]],
+    };
+    const backUnm = readPoseSequence(docWith(unmeasuredRec), 'p.json');
+    expect(backUnm.cleaned!.params.hipsInferred).toEqual(unmeasuredRec as never);
+    expect(measuredFrames(backUnm.cleaned!.params.hipsInferred)).toEqual(new Set([0, 1, 2, 3, 4, 5, 7, 8, 9]));
+    expect(cleanLine(backUnm.cleaned!)).toEndWith('; hips inferred (measured by a test reading, unmeasured 6, 10–11 (r=0.078 < 0.9))');
   });
 
   test('planted: the classes must be disjoint, cover every frame, and be exactly what was declined', () => {

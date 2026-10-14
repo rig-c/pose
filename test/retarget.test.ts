@@ -1625,11 +1625,11 @@ describe('the pelvis tilts and the trunk reaches from the posed hip for the shou
    * are the plain run's, so the keys are too; only the reading changes.
    */
   type Runs = Array<[number, number]>;
-  const measuredRun = (classes: { read: Runs; interpolated: Runs; held: Runs }) => {
+  const measuredRun = (classes: { read: Runs; interpolated: Runs; held: Runs; scaled?: Runs; unmeasured?: Runs; fit?: { frames: number; gain: number | null; corr: number | null } }) => {
     const c = setup({ rig: { bones: ctlBones }, map: pelvisMap(true), pose: pelvisPose() });
     const seq = clean(readPoseSequence(JSON.stringify(pelvisPose()), 'fixture'), { loop: false, legs: 1, rest: 1, hipsInferred: true }, undefined, 'fixture').seq;
     const doc = JSON.parse(writePoseSequence(seq)) as { cleaned: { params: Record<string, unknown> } };
-    const declined = [...classes.interpolated, ...classes.held].sort((x, y) => x[0] - y[0]).map((frames) => ({ frames, why: 'covered' }));
+    const declined = [...classes.interpolated, ...(classes.scaled ?? []), ...classes.held, ...(classes.unmeasured ?? [])].sort((x, y) => x[0] - y[0]).map((frames) => ({ frames, why: 'covered' }));
     doc.cleaned.params.hipsInferred = { by: 'measured', method: 'test method', ...classes, declined };
     writeFileSync(c.pose, JSON.stringify(doc));
     const report = join(c.dir, 'report.json');
@@ -1676,6 +1676,39 @@ describe('the pelvis tilts and the trunk reaches from the posed hip for the shou
     // Over every frame, as read; the read frames alone give another range, so the held ones are in it.
     expect(Math.abs(q.tilt.reference.range - rangeOf(allTilts()))).toBeLessThan(0.054);
     expect(Math.abs(rangeOf(allTilts().slice(k, N - 1)) - rangeOf(allTilts()))).toBeGreaterThan(0.2);
+  }, SLOW);
+
+  test('#106 scaled and unmeasured: scaled frames are read into the tilt and named; unmeasured frames are left out, refused nowhere, and named on the line', () => {
+    const k = 5;
+    const sc = measuredRun({
+      read: [[k, N - 2]],
+      interpolated: [],
+      scaled: [[0, k - 1], [N - 1, N - 1]],
+      held: [],
+      unmeasured: [],
+      fit: { frames: N - k - 1, gain: 2.73, corr: 0.938 },
+    });
+    expect(sc.r.status).toBe(0);
+    expect(linesOf(sc.r, 'POSTURE')[0]).toEndWith(`; tilt measured (test method) on ${N} frame(s): ${N - k - 1} read, 0 interpolated, ${k + 1} scaled (scaled: 0–${k - 1}, ${N - 1}, gain 2.73×, r=0.938), 0 held (held: none)`);
+    expect(linesOf(sc.r, 'CLEAN')[0]).toEndWith(`; hips inferred (measured by test method, scaled 0–${k - 1}, ${N - 1} (gain 2.73×, r=0.938))`);
+    const qSc = sc.report.posture as Measured;
+    expect(qSc.frames.tilt).toBe(N);
+    expect(Math.abs(qSc.tilt.reference.range - rangeOf(allTilts()))).toBeLessThan(0.054);
+
+    const unm = measuredRun({
+      read: [[k, N - 2]],
+      interpolated: [],
+      scaled: [],
+      held: [],
+      unmeasured: [[0, k - 1], [N - 1, N - 1]],
+      fit: { frames: N - k - 1, gain: 0.04, corr: 0.078 },
+    });
+    expect(unm.r.status).toBe(0);
+    expect(linesOf(unm.r, 'POSTURE')[0]).toEndWith(`; tilt measured (test method) on ${N - k - 1} frame(s): ${N - k - 1} read, 0 interpolated, 0 held (held: none); ${k + 1} unmeasured (0–${k - 1}, ${N - 1}, r=0.078 < 0.9)`);
+    expect(linesOf(unm.r, 'CLEAN')[0]).toEndWith(`; hips inferred (measured by test method, unmeasured 0–${k - 1}, ${N - 1} (r=0.078 < 0.9))`);
+    const qUnm = unm.report.posture as Measured;
+    expect(qUnm.frames.tilt).toBe(N - k - 1);
+    expect(Math.abs(qUnm.tilt.reference.range - rangeOf(allTilts().slice(k, N - 1)))).toBeLessThan(0.054);
   }, SLOW);
 
   test('control: a map without a pelvis chain prints no POSTURE line', () => {
