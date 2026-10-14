@@ -52,23 +52,22 @@ describe('#113: --plant-feet reads the support from the lower ankle', () => {
   test('a step under a lifted leg: before #113 the lifted leg takes support; read from the lower ankle, no foot supports until the grounded one is still, and then it does', () => {
     const a = stepUnderLift();
     const before = supportsOf(a, hips, times, secondsOf);
-    // Before: the step hands support to the only free foot, the lifted left, held until the right has been
-    // 0.02 leg lengths lower for 0.1 s after it re-planted (frames 12–14).
-    expect(sides(before.support)).toBe('rrrrrrrrrrllllrrrrrrrrrrrrrrrr');
+    // Before: the step hands support to the only free foot, the lifted left, held until the right re-plants on frame 12
+    // and is 0.02 leg lengths lower for 0.1 s (frames 12–14, taking support from 12: #102).
+    expect(sides(before.support)).toBe('rrrrrrrrrrllrrrrrrrrrrrrrrrrrr');
     expect(before.lowered).toBeUndefined();
     const feet = supportsOf(a, hips, times, secondsOf, false, true);
     // The step still releases the right foot (frame 10, re-planted on 12); the lifted left may not take support.
     expect(feet.steps.map((s) => [s.side, s.frames, s.replant, s.to])).toEqual([['r', [10, 11], 12, null]]);
     expect(sides(feet.support)).toBe('rrrrrrrrrr--rrrrrrrrrrrrrrrrrr');
-    // Frames 12–13: the lifted leg wins the rule before #113; the grounded leg supports.
-    for (const i of [12, 13]) {
+    // Frames 10–11: the lifted leg wins the rule before #113; read from the lower ankle, neither foot supports.
+    for (const i of [10, 11]) {
       expect(before.support[i]).toBe('l');
-      expect(feet.support[i]).toBe('r');
+      expect(feet.support[i]).toBeNull();
       expect(a.r[i]![1] - a.l[i]![1]).toBe(20);
     }
     expect(feet.lowered).toEqual([
       { frames: [10, 11], was: 'l', now: null, cause: 'higher' },
-      { frames: [12, 13], was: 'l', now: 'r' },
     ]);
     // On every frame with a supporting foot, its ankle is the lower one.
     feet.support.forEach((s, i) => {
@@ -79,7 +78,7 @@ describe('#113: --plant-feet reads the support from the lower ankle', () => {
   test('a supporting foot rising above a lower foot that is released and not yet still: before #113 it is kept; read from the lower ankle it is released after 0.1 s, and the lower foot takes support once it is still', () => {
     const a = liftedOverDrift();
     const before = supportsOf(a, hips, times, secondsOf);
-    expect(sides(before.support)).toBe('lllllrrrrrrrrrrrrrllllllllllll');
+    expect(sides(before.support)).toBe('lllllrrrrrrrrrrrllllllllllllll');
     const feet = supportsOf(a, hips, times, secondsOf, false, true);
     expect(feet.steps.map((s) => [s.side, s.frames, s.replant, s.to])).toEqual([['l', [5, 15], 16, 'r']]);
     // The right is 2.5 px higher from frame 6 (0.02 leg lengths of the 96.06 px mean leg is 1.92 px), so it is released
@@ -87,7 +86,6 @@ describe('#113: --plant-feet reads the support from the lower ankle', () => {
     expect(sides(feet.support)).toBe('lllllrrr--------llllllllllllll');
     expect(feet.lowered).toEqual([
       { frames: [8, 15], was: 'r', now: null, cause: 'released' },
-      { frames: [16, 17], was: 'r', now: 'l' },
     ]);
   });
 
@@ -122,10 +120,10 @@ describe('#113: --plant-feet reads the support from the lower ankle', () => {
       const m = (await import(path)) as { supportsOf: typeof supportsOf };
       const a = stepUnderLift();
       const feet = m.supportsOf(a, hips, times, secondsOf, false, true);
-      console.log(`  mutant "rule off": support ${sides(feet.support)}, frames 12–13 ${feet.support[12]}${feet.support[13]}, lowered ${JSON.stringify(feet.lowered)}`);
-      // The lifted left supports frames 10–13 again, and nothing is named.
-      expect(feet.support[12]).toBe('l');
-      expect(feet.support[13]).toBe('l');
+      console.log(`  mutant "rule off": support ${sides(feet.support)}, frames 10–11 ${feet.support[10]}${feet.support[11]}, lowered ${JSON.stringify(feet.lowered)}`);
+      // The lifted left supports frames 10–11 again, and nothing is named.
+      expect(feet.support[10]).toBe('l');
+      expect(feet.support[11]).toBe('l');
       expect(feet.lowered).toEqual([]);
     } finally {
       rmSync(d, { recursive: true, force: true });

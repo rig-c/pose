@@ -52,7 +52,7 @@ function gait(slide: number): { ankle: Record<Side, Pt[]>; hip: Record<Side, Pt[
   return { ankle, hip };
 }
 
-const SUPPORTS: Feet['supports'] = [{ side: 'r', frames: [0, 23] }, { side: 'l', frames: [24, 39] }];
+const SUPPORTS: Feet['supports'] = [{ side: 'r', frames: [0, 21] }, { side: 'l', frames: [22, 39] }];
 const times = Array.from({ length: N }, (_, i) => i / FPS);
 const secondsOf = (x: [number, number]) => (x[1] - x[0] + 1) / FPS;
 /** Rig scale 1: world x = picture x, world y = −picture y; the ankle's posed offset from the hip is the picture's. */
@@ -66,8 +66,8 @@ describe('#92: --plant-feet under travel "in-place"', () => {
   test('a supporting foot sliding back while the hips stay: in place the hip travels nothing, and each supporting ankle follows its own track', () => {
     const g = gait(2);
     const feet = supportsOf(g.ankle, g.hip, times, secondsOf, true);
-    // The right foot supports first; the left takes over once it has been 0.02 leg lengths lower (4 px over the
-    // 100.02 px median leg: from frame 22) for 0.1 s (frames 22–24).
+    // The right foot supports first; the left takes over from frame 22 once it has been 0.02 leg lengths lower (4 px over the
+    // 100.02 px median leg: from frame 22) for 0.1 s (frames 22–24, #102).
     expect(feet.supports).toEqual(SUPPORTS);
     expect(feet.jumps).toEqual([]);
     expect(feet.steps).toEqual([]);
@@ -95,8 +95,8 @@ describe('#92: --plant-feet under travel "in-place"', () => {
     expect(p.closure).toBeNull();
     // Held while it slides back 2 px a frame, the right foot carries the hip 2 px a frame forward …
     for (let i = 1; i < HALF; i++) expect(p.hip[i]![0] - p.hip[i - 1]![0]).toBeCloseTo(2, 9);
-    // … and over the loop the hip travels 60 px (the swing the held right foot makes before the left takes over pulls 8 back).
-    expect(p.hip[N - 1]![0] - p.hip[0]![0]).toBeCloseTo(60, 9);
+    // … and over the loop the hip travels 68 px (38 px on r 0–19 less 4 px as r swings on 20–21, then 34 px on l 22–39).
+    expect(p.hip[N - 1]![0] - p.hip[0]![0]).toBeCloseTo(68, 9);
   });
 
   test('a slide faster than a step (0.04 leg lengths a frame): without the declaration both feet are released and never re-plant; in place nothing is released and the supports alternate', () => {
@@ -136,8 +136,8 @@ describe('#92: --plant-feet under travel "in-place"', () => {
       const p = plant(g, feet, true, m.plantHip);
       const worst = Math.max(...p.hip.map((h) => Math.abs(h[0])));
       console.log(`  mutant "follow ignored": closure drift ${p.closure!.drift.toFixed(3)} px, the hip up to ${worst.toFixed(3)} px off still`);
-      // The slide is integrated again (today's 60 px over the loop), and closing it bows the hip in between.
-      expect(p.closure!.drift).toBeCloseTo(60, 9);
+      // The slide is integrated again (today's 68 px over the loop), and closing it bows the hip in between.
+      expect(p.closure!.drift).toBeCloseTo(68, 9);
       expect(worst).toBeGreaterThan(1);
     } finally {
       rmSync(d, { recursive: true, force: true });

@@ -24,11 +24,13 @@
  * **Planted feet.** The hip is no longer the pose's mid_hip travel scaled. On
  * every frame one foot supports: the one whose reference ankle is lower in the
  * picture, changing only when the other ankle has been ≥ `PLANT_SWITCH` leg
- * lengths lower for ≥ `PLANT_SWITCH_SECONDS`. The supporting foot is held where
+ * lengths lower for ≥ `PLANT_SWITCH_SECONDS`, and taking support from the frame
+ * it crossed that margin once confirmed (rig-c/pose#102). The supporting foot is held where
  * it was on the frame it took support, moved in y onto the one floor every span
  * shares (rig-c/pose#85, `plantHip`), and the hip is placed so it stays there,
  * through the posed (scaled) legs. A change of support blends the two
- * derivations over `PLANT_BLEND` frames. A jump — both ankles and mid_hip more
+ * derivations in y over `PLANT_BLEND` frames while taking the new derivation's x
+ * immediately (rig-c/pose#102). A jump — both ankles and mid_hip more
  * than `JUMP_RISE` leg lengths above their rolling floor (the 95th-percentile
  * picture y over ± `FLOOR_SECONDS`), for ≥ `JUMP_FRAMES` frames — releases the
  * plant: the hip follows the pose's travel from where it was, and re-plants on
@@ -435,6 +437,7 @@ function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, read
   const open: Partial<Record<Side, Step>> = {};
   let cur: Side | null = null;
   let lowerFrom = -1;
+  let freeFrom = -1;
   const released: number[] = [];
   const lower = (cands: Side[], i: number): Side => (cands.length === 2 ? (ankle.l[i]![1] > ankle.r[i]![1] ? 'l' : 'r') : cands[0]!);
   for (let i = 0; i < n; i++) {
@@ -450,6 +453,7 @@ function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, read
     if (jump[i]) {
       cur = null;
       lowerFrom = -1;
+      freeFrom = -1;
       continue;
     }
     const free = (s: Side) => open[s] === undefined && !moving(s, i);
@@ -465,28 +469,41 @@ function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, read
       if (to !== null) changes.push({ frame: i, from: cur, to });
       cur = to;
       lowerFrom = -1;
+      freeFrom = -1;
     } else if (cur === null) {
       const cands = SIDES.filter(may);
       if (cands.length > 0) {
         cur = lower(cands, i);
         changes.push({ frame: i, from: null, to: cur });
         lowerFrom = -1;
+        freeFrom = -1;
       }
     } else {
       const other: Side = cur === 'r' ? 'l' : 'r';
       if ((free(other) || lowerAnkle) && higher(cur)) {
         if (lowerFrom < 0) lowerFrom = i;
-        if (secondsOf([lowerFrom, i]) >= PLANT_SWITCH_SECONDS - 1e-9) {
-          if (free(other)) {
-            changes.push({ frame: i, from: cur, to: other });
+        if (free(other)) {
+          if (freeFrom < 0) freeFrom = i;
+          // #102: once confirmed over PLANT_SWITCH_SECONDS, the incoming foot takes support from the landing frame it crossed the margin on.
+          if (secondsOf([freeFrom, i]) >= PLANT_SWITCH_SECONDS - 1e-9) {
+            for (let k = freeFrom; k < i; k++) support[k] = other;
+            changes.push({ frame: freeFrom, from: cur, to: other });
             cur = other;
-          } else {
+            lowerFrom = -1;
+            freeFrom = -1;
+          }
+        } else {
+          freeFrom = -1;
+          if (secondsOf([lowerFrom, i]) >= PLANT_SWITCH_SECONDS - 1e-9) {
             cur = null; // #113: the lower foot may not take support (released, or moving); neither foot supports
             released.push(i);
+            lowerFrom = -1;
           }
-          lowerFrom = -1;
         }
-      } else lowerFrom = -1;
+      } else {
+        lowerFrom = -1;
+        freeFrom = -1;
+      }
     }
     support[i] = cur;
   }
@@ -528,8 +545,9 @@ export interface Floor {
  * floor is `floor` when given (`--floor`, world units), and otherwise the median
  * of the spans' planted heights; each span's anchor moves in y by floor − its
  * planted height, and the hip with it, so everything above follows. A change of
- * support still blends the two derivations over `PLANT_BLEND` frames, now
- * between two spans on the floor; a jump follows the pose's travel from the hip
+ * support still blends the two derivations' y over `PLANT_BLEND` frames, now
+ * between two spans on the floor, while holding the planted foot's x from the
+ * frame it lands on (#102); a jump follows the pose's travel from the hip
  * it left (on the floor) and lands on the floor. On a blend frame the hip is
  * between the two derivations, so the supporting ankle is off its anchor:
  * `blends` lists those frames with the anchor's y, and `holdBlend` stretches
@@ -634,7 +652,8 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
     if (from !== null && i - blendAt < PLANT_BLEND) {
       const w = (i - blendAt + 1) / (PLANT_BLEND + 1);
       const f = of(from, i);
-      hip.push([f[0] + (to[0] - f[0]) * w, f[1] + (to[1] - f[1]) * w]);
+      // #102: blend y only; x takes the new derivation immediately so the planted foot does not slide across the blend.
+      hip.push([to[0], f[1] + (to[1] - f[1]) * w]);
       const m = mode!;
       if (m.kind === 'plant') blends.push({ frame: i, side: m.side, y: m.anchor[1] });
     } else {

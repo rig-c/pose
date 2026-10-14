@@ -2687,7 +2687,7 @@ describe('#47: --leg-scale and --plant-feet', () => {
     // the hip follows the pose's travel until the right foot is still.
     expect(linesOf(r, 'FEET')).toContain('FEET   steps (the supporting ankle > 0.03 leg lengths a frame; re-planted after 2 frames < 0.01): r 8–11 → the pose\'s travel, re-planted at 12');
     expect(linesOf(r, 'FEET')).toContain('FEET   supports: r 0–7, r 12–23');
-    expect(linesOf(r, 'FEET')).toContain('FEET   support read from the lower ankle (a foot ≥ 0.02 leg lengths higher than the other does not take support, rig-c/pose#113): 6 frame(s) read differently from before — frames 8–11 l → none (the only foot free to take support was the higher one), frames 12–13 l → r');
+    expect(linesOf(r, 'FEET')).toContain('FEET   support read from the lower ankle (a foot ≥ 0.02 leg lengths higher than the other does not take support, rig-c/pose#113): 4 frame(s) read differently from before — frames 8–11 l → none (the only foot free to take support was the higher one)');
     const p = posedLegs(c.build);
     expect(spread(p.ankle.r.slice(0, 8))).toBeLessThan(0.01);
     // Re-planted where it stepped to: held from the end of the blend on, well left of where it was (the rigid 70-unit
@@ -2737,7 +2737,7 @@ describe('#47: --leg-scale and --plant-feet', () => {
     expect((JSON.parse(readFileSync(report, 'utf8')) as { feet: { closure: unknown } }).feet.closure).toBeNull();
   }, SLOW);
 
-  test('a change of support: the other ankle lower for 0.1 s takes over, the hip blends over 3 frames, and each foot holds while it supports', () => {
+  test('a change of support: the other ankle lower for 0.1 s takes over from landing, the hip blends in y over 3 frames, and each foot holds while it supports', () => {
     /** The left foot 6 px up (0.04 leg lengths) until frame 7, then the right one — 3 px a frame (0.02 leg lengths: not a step). */
     const lift = (i: number, s: 'r' | 'l'): number => {
       const l = i < 8 ? 6 : i === 8 ? 3 : 0;
@@ -2748,17 +2748,14 @@ describe('#47: --leg-scale and --plant-feet', () => {
     const r = retarget(c, ['--plant-feet', '--report', report]);
     expect(r.stderr).toBe('');
     expect(r.status).toBe(0);
-    // Lower (by 6 px) from frame 9; 0.1 s is reached on frame 11 (frames 9–11 last 0.125 s, 9–10 0.083 s).
-    expect(linesOf(r, 'FEET')).toContain('FEET   supports: r 0–10, l 11–23');
+    // Lower (by 6 px) from frame 9; 0.1 s is reached on frame 11 (frames 9–11 last 0.125 s, 9–10 0.083 s), so it takes support from frame 9 (#102).
+    expect(linesOf(r, 'FEET')).toContain('FEET   supports: r 0–8, l 9–23');
     const rep = JSON.parse(readFileSync(report, 'utf8')) as { feet: { changes: unknown; steps: unknown } };
-    expect(rep.feet.changes).toEqual([{ frame: 0, from: null, to: 'r' }, { frame: 11, from: 'r', to: 'l' }]);
+    expect(rep.feet.changes).toEqual([{ frame: 0, from: null, to: 'r' }, { frame: 9, from: 'r', to: 'l' }]);
     expect(rep.feet.steps).toEqual([]);
     const p = posedLegs(c.build);
-    expect(spread(p.ankle.r.slice(0, 11))).toBeLessThan(0.01);
-    expect(spread(p.ankle.l.slice(14))).toBeLessThan(0.01);
-    // The blend: on frames 11–13 the left foot is on its way to held, not snapped — it ends where it is held.
-    const held = p.ankle.l[14]!;
-    expect(Math.hypot(p.ankle.l[13]![0] - held[0], p.ankle.l[13]![1] - held[1])).toBeLessThan(Math.hypot(p.ankle.l[11]![0] - held[0], p.ankle.l[11]![1] - held[1]) + 1e-9);
+    expect(spread(p.ankle.r.slice(0, 9))).toBeLessThan(0.01);
+    expect(spread(p.ankle.l.slice(9))).toBeLessThan(0.01);
     // Control: lower on one frame only (9), short of 0.1 s, changes nothing.
     const once = (i: number): number => (i < 8 || i > 10 ? 6 : i === 9 ? 0 : 3);
     const short = setup({ pose: legsPose(() => 1, (i, s) => (s === 'l' ? once(i) : 6 - once(i))) });
