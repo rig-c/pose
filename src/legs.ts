@@ -39,6 +39,15 @@
  * less than `STILL_SPEED` for `STILL_FRAMES` frames (rig-c/pose#47, round 2).
  * The floor is rolling because an ankle's picture y drifts with depth: under
  * one floor for the sequence, HQ's dancer standing still read as jumping.
+ *
+ * **In place** (rig-c/pose#92). A sequence declared `travel: "in-place"` is a
+ * gait that does not travel: its supporting foot moves back in the picture
+ * while the body stays, so holding it turns that slide into travel. Under the
+ * declaration each plant's anchor follows its own ankle's track (`follow`, the
+ * picture x scaled) from the frame it planted, its y still on the one floor; no
+ * step is read, since a foot that follows its track has no plant to drag; and
+ * the hip's x drift from the first frame to the last is spread back over the
+ * frames (`closeLoop`), so the loop carries no net travel.
  */
 import type { Chain, JointMap, Rest } from './map.ts';
 
@@ -339,9 +348,11 @@ export function rollingFloor(ys: readonly number[], times: readonly number[]): n
 /**
  * Which foot supports on each frame, from the reference ankles and hips (picture
  * px, y down) — the header's rules. `times` are the key times; `secondsOf`
- * times a run of frames as the rest of the retarget does.
+ * times a run of frames as the rest of the retarget does. `inPlace` (#92): no
+ * ankle is moving for the step rules, so nothing is released and every foot is
+ * free to take support.
  */
-export function supportsOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, times: readonly number[], secondsOf: (run: [number, number]) => number): Feet {
+export function supportsOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, times: readonly number[], secondsOf: (run: [number, number]) => number, inPlace = false): Feet {
   const n = ankle.r.length;
   const legLength = {} as Record<Side, number>;
   for (const s of SIDES) legLength[s] = percentile(ankle[s].map((a, i) => Math.hypot(a[0] - hip[s][i]![0], a[1] - hip[s][i]![1])), 0.5);
@@ -364,7 +375,9 @@ export function supportsOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side,
   // Ankle speeds, leg lengths a frame (0 on the first frame).
   const speed = {} as Record<Side, number[]>;
   for (const s of SIDES) speed[s] = ankle[s].map((a, i) => (i === 0 ? 0 : Math.hypot(a[0] - ankle[s][i - 1]![0], a[1] - ankle[s][i - 1]![1]) / legLength[s]));
-  const moving = (s: Side, i: number) => speed[s][i]! > STEP_SPEED;
+  // In place (rig-c/pose#92) the supporting foot follows its own track instead of being held, so a
+  // moving ankle has no plant to drag and nothing is released: no step, and every foot is free.
+  const moving = (s: Side, i: number) => !inPlace && speed[s][i]! > STEP_SPEED;
   const still = (s: Side, i: number) => {
     for (let k = i - STILL_FRAMES + 1; k <= i; k++) if (k >= 0 && !(speed[s][k]! < STILL_SPEED)) return false;
     return true;
@@ -466,16 +479,41 @@ export interface Floor {
  * `blends` lists those frames with the anchor's y, and `holdBlend` stretches
  * the supporting leg to keep it there. Null `floor` in the result: there is no
  * support span.
+ *
+ * `follow(i, side)` (#92, an in-place sequence): the supporting ankle's track,
+ * world x. A plant's anchor x then moves by follow(i) − follow(the frame it
+ * planted), and the loop is closed (`closeLoop`, `closure` in the result; null
+ * without `follow`).
  */
-export function plantHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: number) => Pt, start: Pt, floor?: number): { hip: Pt[]; floor: Floor | null; blends: BlendFrame[] } {
-  const picture = placeHip(feet, offset, travel, start, null);
+export function plantHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: number) => Pt, start: Pt, floor?: number, follow?: (i: number, s: Side) => number): { hip: Pt[]; floor: Floor | null; blends: BlendFrame[]; closure: Closure | null } {
+  const picture = placeHip(feet, offset, travel, start, null, follow);
   const heights = feet.supports.map((sp) => picture.anchors.get(sp.frames[0]));
-  if (heights.length === 0) return { hip: picture.hip, floor: null, blends: picture.blends };
+  if (heights.length === 0) return { hip: picture.hip, floor: null, blends: picture.blends, closure: null };
   if (heights.some((h) => h === undefined)) throw new Error('plantHip: a support span starts on a frame no plant started on');
   const y = floor ?? percentile(heights as number[], 0.5);
   const shifts = feet.supports.map((sp, k) => ({ side: sp.side, frames: [sp.frames[0], sp.frames[1]] as [number, number], shift: y - heights[k]! }));
-  const placed = placeHip(feet, offset, travel, start, y);
-  return { hip: placed.hip, floor: { y, given: floor !== undefined, shifts }, blends: placed.blends };
+  const placed = placeHip(feet, offset, travel, start, y, follow);
+  const closure = follow === undefined ? null : closeLoop(placed.hip);
+  return { hip: placed.hip, floor: { y, given: floor !== undefined, shifts }, blends: placed.blends, closure };
+}
+
+/** In place (rig-c/pose#92): the hip's x travel from the first frame to the last before the loop was closed, world units, and the frames it was spread over. */
+export interface Closure {
+  drift: number;
+  frames: number;
+}
+
+/**
+ * Close an in-place loop (rig-c/pose#92): the hip's x on frame i moves by
+ * −drift · i / (n − 1), drift its x on the last frame less its x on the first,
+ * so the last frame's hip x is the first's and the loop carries no net travel.
+ * The y is the floor's (#85) and is not touched. In place.
+ */
+export function closeLoop(hip: Pt[]): Closure {
+  const n = hip.length;
+  const drift = n > 1 ? hip[n - 1]![0] - hip[0]![0] : 0;
+  if (n > 1) for (let i = 0; i < n; i++) hip[i]![0] -= (drift * i) / (n - 1);
+  return { drift, frames: n };
 }
 
 /** A frame inside the blend after a change of support (or a landing): the side now supporting, and the world y its plant holds the ankle at. */
@@ -490,17 +528,19 @@ export interface BlendFrame {
  * picture puts it (`floorY` null) or at world y `floorY`; and each plant's
  * picture anchor y, by the frame its support span starts on.
  */
-function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: number) => Pt, start: Pt, floorY: number | null): { hip: Pt[]; anchors: Map<number, number>; blends: BlendFrame[] } {
+function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: number) => Pt, start: Pt, floorY: number | null, follow?: (i: number, s: Side) => number): { hip: Pt[]; anchors: Map<number, number>; blends: BlendFrame[] } {
   const n = feet.support.length;
   const hip: Pt[] = [];
   const anchors = new Map<number, number>();
   const blends: BlendFrame[] = [];
   /** How the hip is derived on a frame: held over a foot's anchor, or carried by the pose's travel from a frame's hip. */
-  type Mode = { kind: 'plant'; side: Side; anchor: Pt } | { kind: 'travel'; from: number; at: Pt };
+  type Mode = { kind: 'plant'; side: Side; anchor: Pt; from: number } | { kind: 'travel'; from: number; at: Pt };
   const of = (mode: Mode, i: number): Pt => {
     if (mode.kind === 'plant') {
       const o = offset(i, mode.side);
-      return [mode.anchor[0] - o[0], mode.anchor[1] - o[1]];
+      // In place (#92) the anchor's x follows the supporting ankle's own track from the frame it planted.
+      const dx = follow === undefined ? 0 : follow(i, mode.side) - follow(mode.from, mode.side);
+      return [mode.anchor[0] + dx - o[0], mode.anchor[1] - o[1]];
     }
     const a = travel(i);
     const b = travel(mode.from);
@@ -509,7 +549,7 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
   /** A plant from frame i: its anchor's x where the foot is, its y there or on the floor. */
   const plant = (i: number, side: Side, at: Pt): Mode => {
     anchors.set(i, at[1]);
-    return { kind: 'plant', side, anchor: [at[0], floorY ?? at[1]] };
+    return { kind: 'plant', side, anchor: [at[0], floorY ?? at[1]], from: i };
   };
   let mode: Mode | null = null;
   let from: Mode | null = null;

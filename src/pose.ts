@@ -180,11 +180,22 @@ export interface PoseSequence {
   camera?: CameraFrame[];
   /** Present once `rig-pose clean` has run on the sequence (#67). */
   cleaned?: CleanRecord;
+  /**
+   * Optional (rig-c/pose#92): the clip's frame of reference. "in-place" — a
+   * gait filmed without the figure travelling (a treadmill or reel walk, a
+   * loop) — is the one value; `clean --loop` writes it, and it may be written
+   * by hand. Absent: the figure's travel in the picture is its travel.
+   */
+  travel?: Travel;
   frames: PoseFrame[];
 }
 
+/** The one value of a sequence's `travel` (rig-c/pose#92). */
+export const TRAVEL_IN_PLACE = 'in-place';
+export type Travel = typeof TRAVEL_IN_PLACE;
+
 const TOP_KEYS = ['spec', 'space', 'width', 'height', 'source', 'frames'];
-const OPTIONAL_KEYS = ['cameraSource', 'camera', 'cleaned'];
+const OPTIONAL_KEYS = ['cameraSource', 'camera', 'cleaned', 'travel'];
 const CAMERA_KEYS = ['s', 'tx', 'ty', 'inliers'];
 
 /**
@@ -269,10 +280,11 @@ export function readPoseSequence(text: string, where: string): PoseSequence {
     if (typeof doc.cameraSource !== 'string' || doc.cameraSource.trim() === '') p.add('POSE_CAMERA_SOURCE', `${where} "cameraSource" is ${typeName(doc.cameraSource)}; it must be a non-empty string saying where the camera came from ("tracked", "hand-labelled, N keys")`);
     else if (!('camera' in doc)) p.add('POSE_CAMERA_SOURCE', `${where} has "cameraSource" ${JSON.stringify(doc.cameraSource)} and no "camera"; it states where a camera came from, so it needs one`);
   }
+  if ('travel' in doc && doc.travel !== TRAVEL_IN_PLACE) p.add('POSE_TRAVEL', `${where} "travel" is ${typeName(doc.travel)}; the one value is "${TRAVEL_IN_PLACE}" (a gait filmed without the figure travelling), and without the key the picture's travel is the figure's`);
   const cleaned = 'cleaned' in doc ? readCleaned(p, where, doc.cleaned, Array.isArray(doc.frames) ? doc.frames.length : null) : undefined;
   p.throwIfAny();
   const cameraSource = typeof doc.cameraSource === 'string' ? doc.cameraSource : undefined;
-  return { spec: POSE_SPEC, space: POSE_SPACE, width: doc.width as number, height: doc.height as number, source: doc.source as string, ...(cameraSource !== undefined ? { cameraSource } : {}), ...(camera !== undefined ? { camera } : {}), ...(cleaned !== undefined ? { cleaned } : {}), frames };
+  return { spec: POSE_SPEC, space: POSE_SPACE, width: doc.width as number, height: doc.height as number, source: doc.source as string, ...(cameraSource !== undefined ? { cameraSource } : {}), ...(camera !== undefined ? { camera } : {}), ...(cleaned !== undefined ? { cleaned } : {}), ...(doc.travel === TRAVEL_IN_PLACE ? { travel: TRAVEL_IN_PLACE } : {}), frames };
 }
 
 /** `camera`: one `{ s > 0, tx, ty, inliers ≥ 0 }` per frame, as many as `frames`. */
@@ -786,5 +798,5 @@ export function writePoseSequence(seq: PoseSequence): string {
     ...(c.seams !== undefined ? { seams: c.seams.map((x) => ({ joint: x.joint, frame: x.frame, step: round(x.step, 4), gap: x.gap })) } : {}),
     ...(c.unheld !== undefined ? { unheld: c.unheld.map((u) => ({ joint: u.joint, frames: [u.frames[0], u.frames[1]], test: u.test, value: u.value === null ? null : round(u.value, 4) })) } : {}),
   };
-  return `${JSON.stringify({ spec: seq.spec, space: seq.space, width: seq.width, height: seq.height, source: seq.source, ...(seq.cameraSource !== undefined ? { cameraSource: seq.cameraSource } : {}), ...(camera !== undefined ? { camera } : {}), ...(cleaned !== undefined ? { cleaned } : {}), frames }, null, 2)}\n`;
+  return `${JSON.stringify({ spec: seq.spec, space: seq.space, width: seq.width, height: seq.height, source: seq.source, ...(seq.cameraSource !== undefined ? { cameraSource: seq.cameraSource } : {}), ...(camera !== undefined ? { camera } : {}), ...(cleaned !== undefined ? { cleaned } : {}), ...(seq.travel !== undefined ? { travel: seq.travel } : {}), frames }, null, 2)}\n`;
 }

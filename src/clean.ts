@@ -23,7 +23,10 @@
  *    `rest`. A window of 1 is none.
  * 4. **Floor.** With `loop` only: the whole figure is moved in y by one
  *    constant, so the lowest ankle over the cycle (the largest y of either
- *    ankle on any frame) is at its height before smoothing.
+ *    ankle on any frame) is at its height before smoothing. A loop is also
+ *    written with `travel: "in-place"` (rig-c/pose#92): one cycle of a gait,
+ *    repeated, does not travel, whatever its supporting foot does in the
+ *    picture.
  * 5. **Hold** (#91, unless `hold` is "off"). A joint that has stopped is
  *    written at one position: detector noise on a still joint is not motion.
  *    `holdStill` below states the test and the write.
@@ -68,7 +71,7 @@ import type { CleanRecord, CleanSeam, CleanSpike, CleanUnheld, Joint, PoseSequen
 export type Unheld = CleanUnheld;
 /** Two holds of one joint back to back (#91): the second's first frame, and the step between their medians. */
 export type Seam = CleanSeam;
-import { CLEAN_SPEC, personTrack, sortedJoints } from './pose.ts';
+import { CLEAN_SPEC, personTrack, sortedJoints, TRAVEL_IN_PLACE } from './pose.ts';
 import { Problems } from './problems.ts';
 
 /** A spike is a joint this many trunk lengths or more from its median. */
@@ -693,7 +696,8 @@ export function clean(seq: PoseSequence, params: CleanParams, wanted: string | u
   });
   const { cleaned: _was, ...rest } = seq;
   return {
-    seq: { ...rest, cleaned: record, frames },
+    // #92: a loop is one cycle of a gait repeated in place, so it carries no travel of its own.
+    seq: { ...rest, ...(params.loop ? { travel: TRAVEL_IN_PLACE } : {}), cleaned: record, frames },
     record,
     person,
     trunk: { length: trunk, frames: lengths.length },

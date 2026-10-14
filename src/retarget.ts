@@ -72,11 +72,12 @@ import type { Body18 } from './joints.ts';
 import { isBody18, VIRTUAL } from './joints.ts';
 import type { Chain, JointMap, Rest, RigSlots } from './map.ts';
 import { aimAngle, aimEnds, descends, partBone, pointParts, rigPoint } from './map.ts';
-import type { Joint } from './pose.ts';
+import type { Joint, Travel } from './pose.ts';
+import { TRAVEL_IN_PLACE } from './pose.ts';
 import { Problems, Refusal } from './problems.ts';
 import type { ArtRange, Raised, ReachShort, SlotTrack, Switch, SwitchOptions } from './switch.ts';
 import { clampArt, coveredChains, isRaised, measureArt, overflow, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
-import type { BlendHold, Feet, Floor, LegScale, PathPose, Posing, Side, Stance } from './legs.ts';
+import type { BlendHold, Closure, Feet, Floor, LegScale, PathPose, Posing, Side, Stance } from './legs.ts';
 import { holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, plantHip, posePath, rootOf, SIDES, stanceOf, supportsOf, tipOf } from './legs.ts';
 
 const DEG = 180 / Math.PI;
@@ -112,6 +113,8 @@ export interface RetargetOptions extends SwitchOptions {
   floor?: number;
   /** While a set whose arm is drawn raised shows, its wrist is placed against the rig's head in eye distances (rig-c/pose#62); false (the default) keeps the pose's angles. */
   raisedByHead?: boolean;
+  /** The sequence's `travel` (rig-c/pose#92): "in-place" makes --plant-feet let the supporting foot follow its own track and close the loop; absent, nothing changes. */
+  travel?: Travel;
 }
 
 export interface Hold {
@@ -294,6 +297,8 @@ export interface Retarget {
   floor: Floor | null;
   /** With --plant-feet: the supporting leg stretched on the blend frames so its ankle stays on the floor (#85). */
   blendHold: BlendHold | null;
+  /** With --plant-feet on an in-place sequence: the hip's x drift closed over the loop (#92). */
+  closure: Closure | null;
   /** Each ankle's world position on every frame, as the keys put it, when legs are scaled or feet planted. */
   ankles: { bones: Record<Side, string>; at: Record<Side, Pt[]> } | null;
   /** The translated bone's origin against its thigh roots' midpoint, at setup. */
@@ -612,6 +617,9 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   // which are aimed from where the hip is.
   const legScaleOn = opts.legScale !== undefined && opts.legScale !== 'off';
   const plantOn = opts.plantFeet === true;
+  /** #92: an in-place sequence under --plant-feet — the supporting foot follows its own track, no step releases, the loop closed. */
+  const inPlace = plantOn && opts.travel === TRAVEL_IN_PLACE;
+  let closure: Closure | null = null;
   const legScale: LegScale[] = [];
   const scales = new Map<string, number[]>();
   let stance: Stance | null = null;
@@ -643,7 +651,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       const hipOf = (s: Side) => series.get(`${s}_hip`);
       const ankleOf = (s: Side) => series.get(`${s}_ankle`);
       const hr = hipOf('r'), hl = hipOf('l'), ar = ankleOf('r'), al = ankleOf('l');
-      if (hr !== undefined && hl !== undefined && ar !== undefined && al !== undefined) feet = supportsOf({ r: ar, l: al }, { r: hr, l: hl }, keyTimes, secondsOf);
+      if (hr !== undefined && hl !== undefined && ar !== undefined && al !== undefined) feet = supportsOf({ r: ar, l: al }, { r: hr, l: hl }, keyTimes, secondsOf, inPlace);
       else if (plantOn) p.add('LEGS_MAP', `--plant-feet reads both hips and both ankles from the pose; the map's chains use ${['r_hip', 'l_hip', 'r_ankle', 'l_ankle'].filter((j) => !series.has(j)).join(', ')} nowhere`);
     }
   }
@@ -695,9 +703,12 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     });
     const tb = rest.get(t!.bone)!;
     // #85: every support span on one floor — the median of their planted heights, or --floor.
-    const planted = plantHip(feet!, (i, s) => offsets[i]![s], (i) => poseTravel[i]!, [tb.worldX, tb.worldY], opts.floor);
+    // #92: in place, the supporting ankle's own picture x, scaled, is the track its anchor follows.
+    const follow = inPlace ? (i: number, s: Side) => series.get(`${s}_ankle`)![i]![0] * scale!.factor : undefined;
+    const planted = plantHip(feet!, (i, s) => offsets[i]![s], (i) => poseTravel[i]!, [tb.worldX, tb.worldY], opts.floor, follow);
     const hip = planted.hip;
     floor = planted.floor;
+    closure = planted.closure;
     for (let i = 0; i < n; i++) travel[i] = [hip[i]![0] - tb.worldX, hip[i]![1] - tb.worldY];
     const L = (legs as { legs: Record<Side, { chain: Chain; ankleBone: string }> }).legs;
     const world = (i: number, v: Pt): Pt => [hip[i]![0] + v[0], hip[i]![1] + v[1]];
@@ -1140,7 +1151,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     animation: { duration: keyTimes[n - 1]!, tracks },
     times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale,
     switches: sw.switches, shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
-    legScale, scales, feet, planted: plantOn, stance, floor, blendHold, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs), raised,
+    legScale, scales, feet, planted: plantOn, stance, floor, blendHold, closure, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs), raised,
   };
 }
 

@@ -922,7 +922,7 @@ describe('readers', () => {
     expect(r.status).toBe(1);
     const f = fails(r);
     const p = c.pose;
-    expect(f).toContain(`FAIL  POSE_KEYS: ${p} has a key this reader does not know: "lens"; the keys it reads are spec, space, width, height, source, frames, cameraSource, camera, cleaned`);
+    expect(f).toContain(`FAIL  POSE_KEYS: ${p} has a key this reader does not know: "lens"; the keys it reads are spec, space, width, height, source, frames, cameraSource, camera, cleaned, travel`);
     expect(f).toContain(`FAIL  POSE_SPACE: ${p} "space" is {"units":"picture-px","origin":"top-left","y":"up"}; for "rig-pose-sequence/1" it must be exactly {"units":"picture-px","origin":"top-left","y":"down"}`);
     expect(f).toContain(`FAIL  POSE_TIME: ${p} frames[5] "t" is 0.5s, not after frame 4's 0.5s; times must strictly increase`);
     expect(f.some((l) => l.startsWith(`FAIL  POSE_JOINT_NAME: ${p} frames[2] people[0] names joint "r_toe", which body-18 does not have; the joints are nose, neck,`))).toBe(true);
@@ -2646,6 +2646,41 @@ describe('#47: --leg-scale and --plant-feet', () => {
     expect(linesOf(rb, 'FEET').find((l) => l.startsWith('FEET   steps'))).toContain('r 8–11 → the pose\'s travel, re-planted at 12');
   }, SLOW);
 
+  test('#92: travel "in-place" — the sliding foot is followed, not released; the loop is closed and reported; control: without it, today\'s step', () => {
+    /** The right ankle (supporting: the left is 6 px up) slides 10 px left a frame on frames 8–10, then stays: a step's speed. */
+    const slide = (i: number): number => -10 * Math.min(3, Math.max(0, i - 7));
+    const doc = legsPose(() => 1, (_, s) => (s === 'l' ? 6 : 0));
+    (doc.frames as Array<{ people: Array<{ joints: JointsDoc }> }>).forEach((f, i) => {
+      const j = f.people[0]!.joints;
+      const a = j.r_ankle!.at as Pt;
+      j.r_ankle = { ...j.r_ankle, at: [a[0] + slide(i), a[1]] };
+    });
+    const c = setup({ pose: { ...doc, travel: 'in-place' } });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--plant-feet', '--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    const feet = linesOf(r, 'FEET');
+    expect(feet).toContain('FEET   supports: r 0–23');
+    expect(feet.find((l) => l.startsWith('FEET   steps'))).toBeUndefined();
+    expect(feet.find((l) => l.startsWith('FEET   in place (the sequence\'s travel "in-place"): each supporting foot follows its own ankle\'s picture x, scaled'))).toBeDefined();
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as { feet: { steps: unknown; closure: { drift: number; frames: number } | null } };
+    expect(rep.feet.steps).toEqual([]);
+    expect(rep.feet.closure!.frames).toBe(N);
+    const p = posedLegs(c.build);
+    // Closed, as rig-c poses the build: the last frame's hip x is the first's.
+    expect(Math.abs(p.hip[N - 1]![0] - p.hip[0]![0])).toBeLessThan(0.01);
+    // The right ankle follows its track: 30 px left in the picture, 45 units on the rig (scale 1.5), less the closure's share.
+    const moved = p.ankle.r[N - 1]![0] - p.ankle.r[0]![0];
+    expect(Math.abs(moved - (-45 - rep.feet.closure!.drift))).toBeLessThan(0.01);
+    // Control: the same joints without the declaration read today's step and print no closure.
+    const today = setup({ pose: doc });
+    const rt = retarget(today, ['--plant-feet', '--report', report]);
+    expect(rt.status).toBe(0);
+    expect(linesOf(rt, 'FEET')).toContain('FEET   steps (the supporting ankle > 0.03 leg lengths a frame; re-planted after 2 frames < 0.01): r 8–11 → l supports, re-planted at 12');
+    expect((JSON.parse(readFileSync(report, 'utf8')) as { feet: { closure: unknown } }).feet.closure).toBeNull();
+  }, SLOW);
+
   test('a change of support: the other ankle lower for 0.1 s takes over, the hip blends over 3 frames, and each foot holds while it supports', () => {
     /** The left foot 6 px up (0.04 leg lengths) until frame 7, then the right one — 3 px a frame (0.02 leg lengths: not a step). */
     const lift = (i: number, s: 'r' | 'l'): number => {
@@ -2818,10 +2853,10 @@ describe('#47: --leg-scale and --plant-feet', () => {
         cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
         cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
         const path = join(d, 'src', 'legs.ts');
-        const from = 'const placed = placeHip(feet, offset, travel, start, y);';
+        const from = 'const placed = placeHip(feet, offset, travel, start, y, follow);';
         const before = readFileSync(path, 'utf8');
         expect(before.split(from)).toHaveLength(2);
-        writeFileSync(path, before.replace(from, 'const placed = placeHip(feet, offset, travel, start, null);'));
+        writeFileSync(path, before.replace(from, 'const placed = placeHip(feet, offset, travel, start, null, follow);'));
         const mutant = threeHeightsRun(join(d, 'cli.ts'));
         const pkg = threeHeightsRun(CLI);
         console.log(`  mutant "shift forced to 0": exit ${mutant.status}, planted ankles spread ${mutant.spread.toFixed(3)} units across spans (package ${pkg.spread.toFixed(4)})`);
