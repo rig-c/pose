@@ -2628,7 +2628,7 @@ describe('#47: --leg-scale and --plant-feet', () => {
     expect(rep.feet.steps).toEqual([]);
   }, SLOW);
 
-  test('a step: the supporting ankle moving > 0.03 leg lengths a frame is released, the other foot takes support, and it re-plants once still', () => {
+  test('a step: the supporting ankle moving > 0.03 leg lengths a frame is released, the other foot (6 px up) does not take support (#113), and it re-plants once still', () => {
     /** The right ankle (supporting: the left is 6 px up) slides 10 px left a frame on frames 8–10 (0.067 leg lengths a frame; its knee bends the way it bends at rest), then stays. */
     const slide = (i: number): number => -10 * Math.min(3, Math.max(0, i - 7));
     const stepPose = (both: boolean) => {
@@ -2648,12 +2648,15 @@ describe('#47: --leg-scale and --plant-feet', () => {
     const r = retarget(c, ['--plant-feet', '--report', report]);
     expect(r.stderr).toBe('');
     expect(r.status).toBe(0);
-    // Still on frames 11 and 12 (< 0.01): re-planted at 12; lower again, it takes support back after 0.1 s (frames 12–14).
-    expect(linesOf(r, 'FEET')).toContain('FEET   steps (the supporting ankle > 0.03 leg lengths a frame; re-planted after 2 frames < 0.01): r 8–11 → l supports, re-planted at 12');
-    expect(linesOf(r, 'FEET')).toContain('FEET   supports: r 0–7, l 8–13, r 14–23');
+    // #113: the old assertion here (`r 8–11 → l supports`, `l 8–13`) was the bug — a 6 px-higher ankle took support.
+    // Still on frames 11 and 12 (< 0.01): re-planted at 12, and the lower foot, it takes support there. #113: the left
+    // ankle is 6 px (0.04 leg lengths) higher, so it does not take support on the step — before #113 it did (l 8–13);
+    // the hip follows the pose's travel until the right foot is still.
+    expect(linesOf(r, 'FEET')).toContain('FEET   steps (the supporting ankle > 0.03 leg lengths a frame; re-planted after 2 frames < 0.01): r 8–11 → the pose\'s travel, re-planted at 12');
+    expect(linesOf(r, 'FEET')).toContain('FEET   supports: r 0–7, r 12–23');
+    expect(linesOf(r, 'FEET')).toContain('FEET   support read from the lower ankle (a foot ≥ 0.02 leg lengths higher than the other does not take support, rig-c/pose#113): 6 frame(s) read differently from before — frames 8–11 l → none (the only foot free to take support was the higher one), frames 12–13 l → r');
     const p = posedLegs(c.build);
     expect(spread(p.ankle.r.slice(0, 8))).toBeLessThan(0.01);
-    expect(spread(p.ankle.l.slice(11, 14))).toBeLessThan(0.01);
     // Re-planted where it stepped to: held from the end of the blend on, well left of where it was (the rigid 70-unit
     // shin turned toward the 30 px the ankle slid; measured 15.9 units), not dragged back to its old anchor.
     expect(spread(p.ankle.r.slice(17))).toBeLessThan(0.01);
@@ -2692,11 +2695,12 @@ describe('#47: --leg-scale and --plant-feet', () => {
     // The right ankle follows its track: 30 px left in the picture, 45 units on the rig (scale 1.5), less the closure's share.
     const moved = p.ankle.r[N - 1]![0] - p.ankle.r[0]![0];
     expect(Math.abs(moved - (-45 - rep.feet.closure!.drift))).toBeLessThan(0.01);
-    // Control: the same joints without the declaration read today's step and print no closure.
+    // #113: the old assertion here (`r 8–11 → l supports`) was the bug — a 6 px-higher ankle took support.
+    // Control: the same joints without the declaration read today's step (the left, 6 px up, not taking support: #113) and print no closure.
     const today = setup({ pose: doc });
     const rt = retarget(today, ['--plant-feet', '--report', report]);
     expect(rt.status).toBe(0);
-    expect(linesOf(rt, 'FEET')).toContain('FEET   steps (the supporting ankle > 0.03 leg lengths a frame; re-planted after 2 frames < 0.01): r 8–11 → l supports, re-planted at 12');
+    expect(linesOf(rt, 'FEET')).toContain('FEET   steps (the supporting ankle > 0.03 leg lengths a frame; re-planted after 2 frames < 0.01): r 8–11 → the pose\'s travel, re-planted at 12');
     expect((JSON.parse(readFileSync(report, 'utf8')) as { feet: { closure: unknown } }).feet.closure).toBeNull();
   }, SLOW);
 
