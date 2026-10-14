@@ -1214,4 +1214,61 @@ describe('the stillness hold (#91): a joint that has stopped is written at one p
       rmSync(d, { recursive: true, force: true });
     }
   }, 60_000);
+
+  const FACE_JOINTS = ['nose', 'r_eye', 'l_eye', 'r_ear', 'l_ear'] as const;
+  const L_EYE = BODY18.indexOf('l_eye');
+  /** As STOPS (still from frame 20 on), except l_eye drifts 0.7 px/frame after frame 20 (or after frame 40 when `late` is true). */
+  const EYE_DRIFTS = travel((i) => 3 * Math.min(i, 20), (k, i) => (k === L_EYE ? 0.7 * Math.max(0, i - 20) : 0));
+  const EYE_DRIFTS_LATE = travel((i) => 3 * Math.min(i, 20), (k, i) => (k === L_EYE ? 0.7 * Math.max(0, i - 40) : 0));
+
+  test('face group (#109): a face with one eye still and one drifting is held whole (over the span where all five pass) or not at all', () => {
+    // l_eye drifts over the whole still span (21–59): none of the five face joints is held, while every non-face joint is held on 21–59.
+    const noneFace = runClean(seqDoc(60, EYE_DRIFTS), HOLD);
+    const spansNone = spansOf(noneFace);
+    for (const f of FACE_JOINTS) expect(spansNone[f]).toBeUndefined();
+    for (const name of BODY18) if (!FACE_JOINTS.includes(name as typeof FACE_JOINTS[number])) expect(spansNone[name]).toEqual([[21, 59]]);
+
+    // l_eye stays still through frame 40 and then drifts: all five face joints are held together over the shared span where all five pass, and released together after.
+    const sharedFace = runClean(seqDoc(60, EYE_DRIFTS_LATE), HOLD);
+    const spansShared = spansOf(sharedFace);
+    const noseSpan = spansShared.nose;
+    expect(noseSpan).toBeDefined();
+    expect(noseSpan!).toHaveLength(1);
+    for (const f of FACE_JOINTS) expect(spansShared[f]).toEqual(noseSpan!);
+    for (const name of BODY18) if (!FACE_JOINTS.includes(name as typeof FACE_JOINTS[number])) expect(spansShared[name]).toEqual([[21, 59]]);
+  });
+
+  test('mutant (#109): without the face group rule one eye is held while the other drifts, and the face group test is red', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'clean.ts');
+      const from = 'const group: readonly Body18[] = FACE.includes(name) ? FACE : [name];';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'const group: readonly Body18[] = [name];'));
+      const dir = tempDir();
+      const input = join(dir, 'pose.json');
+      const out = join(dir, 'out.json');
+      const faceHoldsOf = (cliPath: string) => {
+        writeFileSync(input, JSON.stringify(seqDoc(60, EYE_DRIFTS)));
+        const ran = cli(['clean', '--pose', input, '--out', out, '--legs', '1', '--rest', '1'], cliPath);
+        expect(ran.status).toBe(0);
+        const seq = readPoseSequence(readFileSync(out, 'utf8'), out);
+        return seq.cleaned!.holds!.filter((h) => (FACE_JOINTS as readonly string[]).includes(h.joint));
+      };
+      const mutant = faceHoldsOf(join(d, 'cli.ts'));
+      console.log(`  mutant "piecewise face hold": held ${mutant.length} face joint(s) while l_eye drifted: ${mutant.map((h) => `${h.joint} ${h.frames.join('–')}`).join(', ')}`);
+      if (mutant.length === 0) throw new Error('mutant "piecewise face hold" survived: no face joint was held');
+      expect(mutant.map((h) => h.joint)).toContain('r_eye');
+      expect(mutant.map((h) => h.joint)).not.toContain('l_eye');
+      // Control: the real source holds none of the face joints when l_eye drifts.
+      expect(faceHoldsOf(CLI)).toEqual([]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
