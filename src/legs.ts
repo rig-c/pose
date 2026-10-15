@@ -683,23 +683,6 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
   const tracked = new Array<Side | null>(n).fill(null);
   for (const t of feet.tracked ?? []) for (let i = t.frames[0]; i <= t.frames[1]; i++) tracked[i] = t.side;
   const trkX = trackFn ?? follow;
-  // #142: on a run (two or more flights), each support span's push-off ankle lift and side-to-side
-  // straight-length asymmetry would otherwise swing floorY - offset(i, s)[1] far past the pose's
-  // own bounce and ratchet the un-floored picture pass per cycle. Keep the support spans' mean floor
-  // shift across both support spans and flights, holding each grounded ankle on floorY via blends.
-  const isRun = feet.jumps.length >= 2 && feet.supports.length > 0;
-  let runShift = 0;
-  if (isRun && floorY !== null) {
-    const t0 = travel(0)[1];
-    const shifts: number[] = [];
-    for (let i = 0; i < n; i++) {
-      const s = feet.support[i] ?? null;
-      if (s === null) continue;
-      shifts.push(floorY - offset(i, s)[1] - (start[1] + travel(i)[1] - t0));
-    }
-    if (shifts.length > 0) runShift = shifts.reduce((a, b) => a + b, 0) / shifts.length;
-  }
-  const flightShift = runShift;
   /** How the hip is derived on a frame: held over a foot's anchor, tracking the lower foot on the floor (#119), or carried by the pose's travel from a frame's hip (and for a jump against `floorY`, carried so the landing frame meets the floor and frames inside the flight never go below it, #103). */
   type Mode =
     | { kind: 'plant'; side: Side; anchor: Pt; from: number }
@@ -710,13 +693,6 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
       const o = offset(i, mode.side);
       // In place (#92) the anchor's x follows the supporting ankle's own track from the frame it planted.
       const dx = follow === undefined ? 0 : follow(i, mode.side) - follow(mode.from, mode.side);
-      if (isRun) {
-        const yPose = start[1] + travel(i)[1] - travel(0)[1] + (floorY === null ? 0 : runShift);
-        if (floorY === null) return [mode.anchor[0] + dx - o[0], yPose];
-        const d = -o[1];
-        const y = d > 0 ? Math.min(Math.max(yPose, mode.anchor[1] + STANCE_BOUNDS[0] * d), mode.anchor[1] + STANCE_BOUNDS[1] * d) : yPose;
-        return [mode.anchor[0] + dx - o[0], y];
-      }
       return [mode.anchor[0] + dx - o[0], mode.anchor[1] - o[1]];
     }
     if (mode.kind === 'track') {
@@ -727,13 +703,6 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
     }
     const a = travel(i);
     const b = travel(mode.from);
-    if (isRun) {
-      let y = start[1] + a[1] - travel(0)[1] + (floorY === null ? 0 : flightShift);
-      if (mode.end !== undefined && floorY !== null && i <= mode.end) {
-        y = Math.max(y, floorY - Math.min(offset(i, 'r')[1], offset(i, 'l')[1]));
-      }
-      return [mode.at[0] + a[0] - b[0], y];
-    }
     let y = mode.at[1] + a[1] - b[1];
     if (mode.carry !== undefined && mode.land !== undefined && mode.end !== undefined && floorY !== null) {
       if (mode.land < n && i <= mode.land && mode.land > mode.from) {
@@ -787,7 +756,7 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
         // The new support is held where it is on this frame, under the hip the old derivation gives here.
         const here = of(mode!, i);
         const o = offset(i, s);
-        from = isRun ? null : mode;
+        from = mode;
         mode = plant(i, s, [here[0] + o[0], here[1] + o[1]]);
         blendAt = i;
       }
@@ -815,10 +784,6 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
     } else {
       from = null;
       hip.push(to);
-      const m = mode!;
-      if (isRun && floorY !== null && m.kind === 'plant' && Math.abs(to[1] - (m.anchor[1] - offset(i, m.side)[1])) > BLEND_HOLD_WITHIN) {
-        blends.push({ frame: i, side: m.side, y: m.anchor[1] });
-      }
     }
   }
   return { hip, anchors, blends };
