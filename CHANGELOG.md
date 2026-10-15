@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.20.5](https://github.com/rig-c/pose/compare/v0.20.4...v0.20.5) (2026-10-15)
+
+
+### Bug Fixes
+
+* **leg-scale:** share the larger 95th-percentile straight length across both legs ([#148](https://github.com/rig-c/pose/issues/148)) ([#151](https://github.com/rig-c/pose/issues/151)) ([fa54db7](https://github.com/rig-c/pose/commit/fa54db7d736afe94b4c29152fea4f40b9c9b59b0))
+* **legs:** start jump at ankle push-off when mid_hip is rising ([#142](https://github.com/rig-c/pose/issues/142)) ([#152](https://github.com/rig-c/pose/issues/152)) ([901c5e1](https://github.com/rig-c/pose/commit/901c5e1accaa06bcce56c99d1adf7c5974855e64))
+* **plant-feet:** fade flight carry over the landing blend instead of dropping at land+1 ([#147](https://github.com/rig-c/pose/issues/147)) ([#149](https://github.com/rig-c/pose/issues/149)) ([e91864c](https://github.com/rig-c/pose/commit/e91864c507b2631ad529fbf3e5d6aee7d0d3aeba))
+* **retarget:** respect noScale inheritance when solving leg scale ([#154](https://github.com/rig-c/pose/issues/154)) ([c933d37](https://github.com/rig-c/pose/commit/c933d37ea5ae5e1d7c3c5803ce0c6722e8a2c169)), closes [#153](https://github.com/rig-c/pose/issues/153)
+
 ## [0.20.4](https://github.com/rig-c/pose/compare/v0.20.3...v0.20.4) (2026-10-15)
 
 
