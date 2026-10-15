@@ -101,10 +101,19 @@ export interface AlternateSet {
   /** `place: "by-hip"` (rig-c/pose#93): the chains whose wrist `pose` puts within one hip width of the mid-hip, their wrists placed by the offset from the hip while the set shows. Absent or null: the pose's angles. */
   place?: { by: 'hip'; chains: string[] } | null;
 }
+export interface FaceAxis {
+  bone: string;
+  range: [number, number];
+}
+export interface FaceMap {
+  yaw?: FaceAxis;
+  pitch?: FaceAxis;
+}
 export interface JointMap {
   chains: Chain[];
   translate: Translate | null;
   alternates: AlternateSet[];
+  face?: FaceMap;
 }
 
 /** What a slot of the built rig shows at setup, and every attachment any skin gives it. */
@@ -135,7 +144,7 @@ export function readMap(text: string, where: string): JointMap {
     p.throwIfAny();
     throw new Error('unreachable');
   }
-  refuseUnknownKeys(p, 'MAP_KEYS', where, doc, ['spec', 'note', 'chains', 'translate', 'alternates']);
+  refuseUnknownKeys(p, 'MAP_KEYS', where, doc, ['spec', 'note', 'chains', 'translate', 'alternates', 'face']);
   if (doc.spec !== MAP_SPEC) p.add('MAP_SPEC', `${where} "spec" is ${typeName(doc.spec)}; this reader reads "${MAP_SPEC}"`);
   const chains: Chain[] = [];
   if (!Array.isArray(doc.chains) || doc.chains.length === 0) {
@@ -235,8 +244,42 @@ export function readMap(text: string, where: string): JointMap {
     }
   }
   const alternates = 'alternates' in doc ? readAlternates(p, where, doc.alternates, chains, translate) : [];
+  const face = 'face' in doc ? readFaceMap(p, where, doc.face) : undefined;
   p.throwIfAny();
-  return { chains, translate, alternates };
+  return { chains, translate, alternates, ...(face === undefined ? {} : { face }) };
+}
+
+function readFaceMap(p: Problems, where: string, raw: unknown): FaceMap | undefined {
+  const fw = `${where} "face"`;
+  if (!isObject(raw)) {
+    p.add('MAP_FACE_SHAPE', `${fw} is ${typeName(raw)}; it is { yaw?: { bone, range: [min, max] }, pitch?: { bone, range: [min, max] } }`);
+    return undefined;
+  }
+  refuseUnknownKeys(p, 'MAP_KEYS', fw, raw, ['yaw', 'pitch']);
+  if (!('yaw' in raw) && !('pitch' in raw)) {
+    p.add('MAP_FACE_SHAPE', `${fw} names neither "yaw" nor "pitch"; it must name at least one axis`);
+    return undefined;
+  }
+  const out: FaceMap = {};
+  for (const axis of ['yaw', 'pitch'] as const) {
+    if (!(axis in raw)) continue;
+    const aw = `${fw} "${axis}"`;
+    const ax = raw[axis];
+    if (!isObject(ax)) {
+      p.add('MAP_FACE_SHAPE', `${aw} is ${typeName(ax)}; it is { bone, range: [min, max] }`);
+      continue;
+    }
+    refuseUnknownKeys(p, 'MAP_KEYS', aw, ax, ['bone', 'range']);
+    const bone = typeof ax.bone === 'string' && ax.bone !== '' ? ax.bone : null;
+    if (bone === null) p.add('MAP_FACE_BONE', `${aw} "bone" is ${typeName(ax.bone)}; it must name a bone`);
+    const v = ax.range;
+    if (!Array.isArray(v) || v.length !== 2 || !v.every((x) => typeof x === 'number' && Number.isFinite(x)) || (v[0] as number) > 0 || (v[1] as number) < 0 || (v[0] as number) >= (v[1] as number)) {
+      p.add('MAP_FACE_RANGE', `${aw} "range" is ${JSON.stringify(v)}; it must be [min, max], two finite numbers of degrees with min ≤ 0 ≤ max and min < max`);
+    } else if (bone !== null) {
+      out[axis] = { bone, range: [v[0] as number, v[1] as number] };
+    }
+  }
+  return out;
 }
 
 const SET_SHAPE = '{ name, slots: { "<slot>": "<attachment>" }, hides?: [slot], chains: [chain], pose: { "<joint>": [x, y] }, drawn?: { "<bone>": deg }, offsets?: { "<bone>": [dx, dy] }, turn?: { "<bone>": [min, max] }, frames?: [[first, last], …], place?: "by-hip" }';
@@ -558,6 +601,22 @@ export function resolveMap(map: JointMap, rest: Rest, where: string, slots: RigS
     if (!c.reach || t === null || b === undefined || !rest.has(b) || !rest.has(t.bone)) continue;
     if (b !== t.bone && !descends(rest, b, t.bone)) {
       p.add('MAP_REACH', `chain "${c.name}" — bone "${b}" reaches from its posed origin, but it does not descend from the translated bone "${t.bone}"; its origin would not travel with the anchor`);
+    }
+  }
+  if (map.face !== undefined) {
+    for (const axis of ['yaw', 'pitch'] as const) {
+      const ax = map.face[axis];
+      if (ax === undefined) continue;
+      const label = `"face.${axis}"`;
+      if (!rest.has(ax.bone)) {
+        p.add('MAP_BONE_EXISTS', `${label} — bone "${ax.bone}" is not in the rig; its bones are ${listed}`);
+        continue;
+      }
+      const prev = owner.get(ax.bone);
+      if (prev !== undefined) p.add('MAP_BONE_ONCE', `bone "${ax.bone}" is in ${prev.startsWith('"') ? prev : `chain "${prev}"`} and in ${label}; a bone carries one rotate track`);
+      owner.set(ax.bone, label);
+      const o = rest.get(ax.bone)!;
+      if (Math.hypot(o.a, o.c) < 1e-9) p.add('MAP_AIM_LENGTH', `${label} — bone "${ax.bone}" has a collapsed x axis at setup (scale 0)`);
     }
   }
   resolveAlternates(p, map.alternates, slots);

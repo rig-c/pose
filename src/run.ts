@@ -19,6 +19,7 @@ import { landed, measureFeet, measureLanding, measurePosture, measureShear, pose
 import { legsOf, PLANT_SWITCH, STANCE_BOUNDS } from './legs.ts';
 import { M2_IDENTITY, mulM2, reduceKeys, reduceScale, reduceUnderScale, SCALE_REDUCE, setupLocal, type M2, type ReduceBone, type Reduced, type ReduceRow, type UnderBone } from './reduce.ts';
 import type { BlendHold, Closure, Floor, LegScale, Lowered, Side, Stance, SupportScaleRun } from './legs.ts';
+import { faceLine } from './face.ts';
 
 export interface RetargetArgs extends RetargetOptions {
   rig: string;
@@ -157,6 +158,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       if (r.blendHold !== null) for (const l of blendLines(r.blendHold, r.times)) say(`  FEET   ${l}`);
     }
     if (r.stance !== null) for (const l of stanceLines(r.stance, r.times)) say(`  STANCE ${l}`);
+    if (r.face !== null) say(`  FACE   ${faceLine(r.face)}`);
 
     // --reduce (#32): the dense keys thinned top-down, before anything reads the tracks.
     const reduced = a.reduce === undefined ? null : reduceTracks(r, map, rest, a.reduce, a.reduceHip);
@@ -183,7 +185,12 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         if ((t.kind === 'bone' || t.kind === 'group') && Array.isArray(sample)) return boneIdentity(property, sample.length);
         return undefined;
       };
-      const mapped = [...map.chains.flatMap((c) => c.bones), ...(map.translate === null ? [] : [map.translate.bone])];
+      const mapped = [
+        ...map.chains.flatMap((c) => c.bones),
+        ...(map.translate === null ? [] : [map.translate.bone]),
+        ...(map.face?.yaw === undefined ? [] : [map.face.yaw.bone]),
+        ...(map.face?.pitch === undefined ? [] : [map.face.pitch.bone]),
+      ];
       const below = new Map<string, string[]>();
       for (const m of new Set(mapped)) {
         for (let b = rest.get(m)?.parent ?? null; b !== null; b = rest.get(b)?.parent ?? null) {
@@ -317,6 +324,16 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         raised: r.raised,
         // Only when a set declares `place` (#93): a map without one writes the report it always has.
         ...(map.alternates.some((x) => x.place !== undefined && x.place !== null) ? { byHip: r.byHip } : {}),
+        ...(r.face === null
+          ? {}
+          : {
+              face: {
+                ears: r.face.ears,
+                read: { yaw: r.face.read.yaw, pitch: r.face.read.pitch },
+                ...(r.face.yaw === undefined ? {} : { yaw: { bone: r.face.yaw.bone, limits: r.face.yaw.limits, read: r.face.yaw.read, mapped: r.face.yaw.mapped, scale: r.face.yaw.scale, corr: r.face.yaw.corr } }),
+                ...(r.face.pitch === undefined ? {} : { pitch: { bone: r.face.pitch.bone, limits: r.face.pitch.limits, read: r.face.pitch.read, mapped: r.face.pitch.mapped, scale: r.face.pitch.scale, corr: r.face.pitch.corr } }),
+              },
+            }),
         legScale: r.legScale.map(({ scale: _scale, asked: _asked, ...rest }) => rest),
         pivot: r.pivot,
         stance: r.stance === null ? null : { tolerance: r.stance.tolerance, release: r.stance.release, minSeconds: r.stance.minSeconds, bounds: r.stance.bounds, ...(r.stance.range === undefined ? {} : { range: r.stance.range }), runs: r.stance.runs, over: r.stance.over },
