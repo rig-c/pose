@@ -143,7 +143,7 @@ export function slotsOf(doc: CompiledDocument): RigSlots {
   for (const s of doc.slots) {
     const attachments = new Set<string>();
     for (const k of doc.skins) for (const name of Object.keys(k.attachments[s.name] ?? {})) attachments.add(name);
-    out.set(s.name, { setup: s.setup, attachments });
+    out.set(s.name, { setup: s.setup, attachments, bone: s.bone });
   }
   return out;
 }

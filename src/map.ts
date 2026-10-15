@@ -111,6 +111,8 @@ export interface JointMap {
 export interface RigSlot {
   setup: string | null;
   attachments: ReadonlySet<string>;
+  /** The bone the slot is attached to, when read from a compiled build. */
+  bone?: string;
 }
 export type RigSlots = ReadonlyMap<string, RigSlot>;
 

@@ -897,7 +897,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     return null;
   };
   const turn = (bone: string, i: number) => targets.get(bone)![i]! - restOf.get(bone)!;
-  const covered = coveredChains(sw.switches, n);
+  const covered = coveredChains(sw.switches, n, sw.chainHolds);
   if (opts.short !== 'off') {
     for (const [b, info] of fractions) {
       for (const s of capShortSteps(targets.get(b)!, info.fraction, covered.get(info.chain))) {
@@ -1188,7 +1188,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     const own = measured.filter((e) => e.set === s.set && e.frames[0] >= s.frames[0] && e.frames[1] <= s.frames[1]);
     artRange.push(...own.filter((e) => !solvedBy(e, s)), ...(raisedArt.find((x) => x.sw === s)?.entries ?? []));
   }
-  clampArt(sw.switches, map, targets);
+  clampArt(sw.switches, map, targets, sw.chainHolds);
   // Where each raised wrist lands as keyed: after the solve and the set's `turn`.
   for (const job of raisedJobs) {
     const after: Pt[] = [];
