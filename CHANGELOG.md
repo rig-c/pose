@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.21.0](https://github.com/rig-c/pose/compare/v0.20.5...v0.21.0) (2026-10-15)
+
+
+### Features
+
+* **retarget:** read face yaw/pitch and map into declared range ([#138](https://github.com/rig-c/pose/issues/138)) ([#156](https://github.com/rig-c/pose/issues/156)) ([728345b](https://github.com/rig-c/pose/commit/728345bc59514a546a6517f93e75622939a65116))
+
+
+### Bug Fixes
+
+* **retarget:** normalise leg-scale and head-nod against residual camera zoom ([#159](https://github.com/rig-c/pose/issues/159)) ([#160](https://github.com/rig-c/pose/issues/160)) ([975ef92](https://github.com/rig-c/pose/commit/975ef92419012ed3254657add191262c01348ad1))
+* **retarget:** preserve planted ankle horizontal anchor during blend stretch ([#47](https://github.com/rig-c/pose/issues/47)) ([#158](https://github.com/rig-c/pose/issues/158)) ([71303ac](https://github.com/rig-c/pose/commit/71303ac6b73b0744ffa228be1db7135025bdbe5c))
+
 ## [0.20.5](https://github.com/rig-c/pose/compare/v0.20.4...v0.20.5) (2026-10-15)
 
 
