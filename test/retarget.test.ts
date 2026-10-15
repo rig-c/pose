@@ -2760,6 +2760,91 @@ describe('#47: --leg-scale and --plant-feet', () => {
     }
   }, SLOW);
 
+  test('#142: a run with flights and asymmetric stance leg-scale keeps the support spans\' floor shift across flight frames so hip vertical range stays within 0.85–1.15 of the sequence; mutant dropping flight shift fails it', () => {
+    /**
+     * Two 12-frame run cycles (24 frames): r supports 0–2 and 12–14 (landing at 0.94, mid-stance at 0.82),
+     * flights 3–5 and 15–17, l supports 6–8 and 18–20 (landing at 0.94, mid-stance at 0.82), flights 9–11 and 21–23.
+     * The hip rises 13 px on flights and dips 5 px at mid-stance (range 18 px = 27 rig units = 0.18 leg lengths).
+     * Grounded ankles sit on the floor, and keeping the support spans' mean floor shift across flights preserves
+     * hip-vertical = 1.000; a mutant that drops the shift on flight frames jumps to 1.456 > 1.15.
+     */
+    const f = (i: number): number => {
+      const m = i % 12;
+      if (m === 0 || m === 6) return 0.94;
+      if (m === 1 || m === 7) return 0.82;
+      if (m === 2 || m === 8) return 0.82;
+      return 0.88;
+    };
+    const rise = (i: number): number => {
+      const m = i % 6;
+      if (m === 0) return -3 + (1 - f(i)) * V[1];
+      if (m === 1) return -5 + (1 - f(i)) * V[1];
+      if (m === 2) return -2 + (1 - f(i)) * V[1];
+      if (m === 3) return 10 + (1 - f(i)) * V[1];
+      if (m === 4) return 13 + (1 - f(i)) * V[1];
+      return 10 + (1 - f(i)) * V[1];
+    };
+    const lift = (i: number, side: 'r' | 'l'): number => {
+      const m = i % 12;
+      if (m <= 2) return side === 'l' ? 14 : 0;
+      if (m >= 6 && m <= 8) return side === 'r' ? 14 : 0;
+      return 12;
+    };
+    const doc = { ...legsPose(f, lift, rise), travel: 'in-place' };
+    const c = setup({ pose: doc });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--leg-scale', '0.5,1.2', '--plant-feet', '--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as { feet: { jumps: Array<[number, number]>; floor: number } };
+    expect(rep.feet.jumps.length).toBe(4);
+    const p = posedLegs(c.build);
+    const floorY = rep.feet.floor;
+    const rigLeg = 150;
+    // Grounded frames keep the supporting ankle on the floor; flight frames keep both ankles above it.
+    for (let i = 0; i < 24; i++) {
+      const inFlight = rep.feet.jumps.some(([ja, jb]) => i >= ja && i <= jb);
+      const minFoot = Math.min(p.ankle.r[i]![1], p.ankle.l[i]![1]);
+      if (inFlight) expect((minFoot - floorY) / rigLeg).toBeGreaterThan(0.01);
+      else expect(Math.abs(minFoot - floorY) / rigLeg).toBeLessThanOrEqual(0.01);
+    }
+    const cycleRatio = (pts: Array<[number, number]>): number => {
+      const seqRange = ((13 - -5) * 1.5) / rigLeg;
+      const ys0 = pts.slice(0, 12).map((pt) => pt[1]);
+      const ys1 = pts.slice(12, 24).map((pt) => pt[1]);
+      const r0 = (Math.max(...ys0) - Math.min(...ys0)) / rigLeg;
+      const r1 = (Math.max(...ys1) - Math.min(...ys1)) / rigLeg;
+      return (0.5 * (r0 + r1)) / seqRange;
+    };
+    const ratio = cycleRatio(p.hip);
+    expect(ratio).toBeGreaterThanOrEqual(0.85);
+    expect(ratio).toBeLessThanOrEqual(1.15);
+
+    // Mutant that drops the floor shift on flight frames exaggerates hip-vertical well above 1.15.
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm142-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'legs.ts');
+      const from = 'const flightShift = runShift;';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'const flightShift = 0;'));
+      const m = setup({ pose: doc });
+      const mRep = join(m.dir, 'report.json');
+      const rm = retarget(m, ['--leg-scale', '0.5,1.2', '--plant-feet', '--report', mRep], join(d, 'cli.ts'));
+      expect(rm.status).toBe(0);
+      const mp = posedLegs(m.build);
+      const mRatio = cycleRatio(mp.hip);
+      console.log(`  mutant "without #142 flight floor shift": hip-vertical rig/sequence = ${mRatio.toFixed(3)} (ours ${ratio.toFixed(3)})`);
+      expect(mRatio).toBeGreaterThan(1.15);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+
   test('standing while the ankles drift up the picture with depth (the hip does not lift) is not a jump', () => {
     /** Both ankles 20 px up by the last frame (0.13 leg lengths over a floor-wide rule's 0.05), 0.9 px a frame; the hip stays. */
     const depth = (i: number): number => (20 * i) / (N - 1);
