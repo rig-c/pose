@@ -268,7 +268,7 @@ export interface LegScale {
   chain: string;
   bone: string;
   joints: [string, string];
-  /** The straight length: the 95th percentile of the segment's picture length, px. */
+  /** The straight length: the larger of the two sides' 95th-percentile picture lengths for this segment (#148), px. */
   straight: number;
   /** The picture length over the straight length, before the clamp: lowest, median, highest. */
   ratio: { min: number; median: number; max: number };
@@ -290,9 +290,8 @@ export interface LegScale {
   support?: SupportScaleRun[];
 }
 
-/** One segment's scale per frame: picture length ÷ its 95th percentile, clamped; its asked scale without the clamp floor (#107); and the runs clamped. */
-export function legScaleOf(lengths: readonly number[], limits: [number, number]): Omit<LegScale, 'chain' | 'bone' | 'joints'> {
-  const straight = percentile(lengths, STRAIGHT_PERCENTILE);
+/** One segment's scale per frame: picture length ÷ straight length (the larger of the two sides' 95th percentiles, #148), clamped; its asked scale without the clamp floor (#107); and the runs clamped. */
+export function legScaleOf(lengths: readonly number[], limits: [number, number], straight = percentile(lengths, STRAIGHT_PERCENTILE)): Omit<LegScale, 'chain' | 'bone' | 'joints'> {
   const ratio = lengths.map((l) => l / straight);
   const scale = ratio.map((r) => Math.min(Math.max(r, limits[0]), limits[1]));
   const asked = ratio.map((r) => Math.min(r, limits[1]));
