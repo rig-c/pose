@@ -2748,13 +2748,58 @@ describe('#47: --leg-scale and --plant-feet', () => {
       const dip11 = Math.min(mp.ankle.r[11]![1], mp.ankle.l[11]![1]) - floorY;
       console.log(`  mutant "without #103 jump carry": frame 11 foot is ${dip11.toFixed(2)} units relative to floor`);
       expect(dip11).toBeLessThan(-10);
-      // Outside the jump and its landing frame (0..7 and 13..23), the hip's travel is unchanged.
+      // Outside the jump and its 3-frame landing blend (0..7 and 15..23), the hip's travel is unchanged.
       const kOurs = motionOf(c.out).animations.dance!.tracks.find((t) => t.bone === 'hip' && t.property === 'translate')!.keys;
       const kMut = motionOf(m.out).animations.dance!.tracks.find((t) => t.bone === 'hip' && t.property === 'translate')!.keys;
-      for (const i of [0, 1, 2, 3, 4, 5, 6, 7, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]) {
+      for (const i of [0, 1, 2, 3, 4, 5, 6, 7, 15, 16, 17, 18, 19, 20, 21, 22, 23]) {
         expect(kOurs[i]).toEqual(kMut[i]);
         expect(Math.abs(p.hip[i]![1] - mp.hip[i]![1])).toBeLessThan(1e-3);
       }
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+
+  test('#147: the flight carry fades over the landing blend instead of dropping at land+1; mutant cutting carry at land drops the hip on land+1', () => {
+    /**
+     * Take-off on frame 7 with legs compressed to 0.85, flight on frames 8–11,
+     * landing on frame 12 and standing still on frames 12–15 at full leg length.
+     * The flight's carry (+45 units) stays on the travel derivation across the
+     * 3-frame landing blend (12, 13, 14) so the posed hip y stays continuous across
+     * 12 -> 13 -> 14 -> 15 instead of dropping on frame 13 (land+1).
+     */
+    const f = (i: number): number => (i === 7 ? 0.85 : 1);
+    const rise = (i: number): number => (i === 7 ? 0.15 * V[1] : i === 8 ? 25 : i === 9 ? 28 : i === 10 ? 22 : i === 11 ? 8 : 0);
+    const doc = { ...legsPose(f, () => 0, rise), travel: 'in-place' };
+    const c = setup({ pose: doc });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--leg-scale', '0.8,1.05', '--plant-feet', '--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    const p = posedLegs(c.build);
+    for (const i of [13, 14, 15]) {
+      expect(Math.abs(p.hip[i]![1] - p.hip[i - 1]![1])).toBeLessThan(1e-2);
+    }
+
+    // Mutant that cuts carry at i <= mode.land drops the hip on land+1 (frame 13) by > 10 units while standing still.
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm147-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'legs.ts');
+      const from = 'Math.min(i, mode.land)';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, '(i <= mode.land ? i : mode.from)'));
+      const m = setup({ pose: doc });
+      const rm = retarget(m, ['--leg-scale', '0.8,1.05', '--plant-feet'], join(d, 'cli.ts'));
+      expect(rm.status).toBe(0);
+      const mp = posedLegs(m.build);
+      const drop13 = mp.hip[13]![1] - mp.hip[12]![1];
+      console.log(`  mutant "cut carry at land (#147)": frame 12->13 hip step is ${drop13.toFixed(2)} units`);
+      expect(drop13).toBeLessThan(-10);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
