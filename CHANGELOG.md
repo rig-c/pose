@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.20.2](https://github.com/rig-c/pose/compare/v0.20.1...v0.20.2) (2026-10-15)
+
+
+### Bug Fixes
+
+* **retarget:** restore shortened shin on straight stance leg before floor stretch ([#137](https://github.com/rig-c/pose/issues/137)) ([#141](https://github.com/rig-c/pose/issues/141)) ([95eb351](https://github.com/rig-c/pose/commit/95eb351196aec0f00b5ad97737c5275ac98543ee))
+* **switch:** keep behind-torso arm slots across prep gaps ([#136](https://github.com/rig-c/pose/issues/136)) ([#139](https://github.com/rig-c/pose/issues/139)) ([6e62154](https://github.com/rig-c/pose/commit/6e62154482ef23b683b254271fe6d5539a5f1fed))
+
 ## [0.20.1](https://github.com/rig-c/pose/compare/v0.20.0...v0.20.1) (2026-10-14)
 
 
