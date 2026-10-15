@@ -5717,5 +5717,236 @@ describe('figure growth over the dance (#159): rolling leg-scale straight length
   }, SLOW);
 });
 
+describe('face knee (#164): 1:1 mapping inside FACE_KNEE * limit so a single outlier does not crush the rest of the clip', () => {
+  function facePose(rawYawDeg: (i: number) => number, rawPitchDeg: (i: number) => number = () => 0): Record<string, unknown> {
+    return poseDoc(BASE, (i, joints) => {
+      const neck = (joints.neck as { at: Pt }).at;
+      const midEye: Pt = [neck[0], neck[1] - 35];
+      const dEye = 12;
+      const dEar = 24;
+      joints.r_eye = { state: 'observed', at: [midEye[0] - dEye / 2, midEye[1]], score: 0.95 };
+      joints.l_eye = { state: 'observed', at: [midEye[0] + dEye / 2, midEye[1]], score: 0.95 };
+      joints.r_ear = { state: 'observed', at: [midEye[0] - dEar / 2, midEye[1] + 5], score: 0.95 };
+      joints.l_ear = { state: 'observed', at: [midEye[0] + dEar / 2, midEye[1] + 5], score: 0.95 };
+      const ty = Math.tan(rawYawDeg(i) * RAD);
+      const tp = Math.tan(rawPitchDeg(i) * RAD);
+      const nx = midEye[0] - (ty * dEye) / 1.25;
+      const ny = midEye[1] + 5 + tp * dEye;
+      joints.nose = { state: 'observed', at: [nx, ny], score: 0.95 };
+    });
+  }
 
+  test('a 12° opening yaw with a single 43° outlier maps 1:1 at f0 (within 0.5° of raw), hits 15° at the peak, and stays monotone', () => {
+    // Raw yaw is 12° at f0, rises through 12°..15°, spikes to 43° at frame 8, and settles back inside 12°.
+    const rawTargets = [12, 11, 10, 9, 11, 13, 18, 28, 43, 25, 14, 12, 10, 8, 6, 4];
+    const pose = facePose((i: number) => rawTargets[i]!);
+    const rigOpts: RigOpts = {
+      bones: (bs) => [...bs, { name: 'yaw', parent: 'root' }],
+    };
+    const c = setup({
+      rig: rigOpts,
+      map: { ...baseMap(), face: { yaw: { bone: 'yaw', range: [-15, 15] } } },
+      pose,
+    });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--bends', 'clamp', '--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'FACE')[0]).toContain('(knee [-12, 12]°)');
+
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as {
+      face: {
+        read: { yaw: { min: number; max: number } };
+        yaw: { knee: [number, number]; mapped: { min: number; max: number }; corr: number };
+      };
+    };
+    expect(rep.face.yaw.knee).toEqual([-12, 12]);
+    expect(rep.face.yaw.mapped.max).toBeCloseTo(15, 2);
+    expect(rep.face.yaw.corr).toBeGreaterThanOrEqual(0.99);
+
+    const m = JSON.parse(readFileSync(c.out, 'utf8')) as {
+      animations: { dance: { tracks: Array<{ bone?: string; property: string; keys: Array<{ t: number; v: number[] }> }> } };
+    };
+    const yawKeys = m.animations.dance.tracks.find((tr) => tr.bone === 'yaw' && tr.property === 'rotate')!.keys.map((k) => k.v[0]!);
+    // f0 raw yaw is ~12°, so mapped f0 yaw must stay within 0.5° of raw (1:1 inside the 12° knee).
+    expect( yawKeys[0]! ).toBeGreaterThan(11.5);
+    expect( Math.abs(yawKeys[0]! - 12) ).toBeLessThanOrEqual(0.5);
+    expect( yawKeys[8]! ).toBeCloseTo(15, 2);
+  }, SLOW);
+
+  test('mutant (#164): whole-sequence peak compression (FACE_KNEE = 0) crushes the 12° opening yaw down to ~4°', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm164-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'face.ts');
+      const from = 'export const FACE_KNEE = 0.8;';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'export const FACE_KNEE = 0;'));
+
+      const rawTargets = [12, 11, 10, 9, 11, 13, 18, 28, 43, 25, 14, 12, 10, 8, 6, 4];
+      const pose = facePose((i: number) => rawTargets[i]!);
+      const cMut = setup({
+        rig: { bones: (bs) => [...bs, { name: 'yaw', parent: 'root' }] },
+        map: { ...baseMap(), face: { yaw: { bone: 'yaw', range: [-15, 15] } } },
+        pose,
+      });
+      const rMut = retarget(cMut, ['--bends', 'clamp'], join(d, 'cli.ts'));
+      expect(rMut.status).toBe(0);
+      const m = JSON.parse(readFileSync(cMut.out, 'utf8')) as {
+        animations: { dance: { tracks: Array<{ bone?: string; property: string; keys: Array<{ t: number; v: number[] }> }> } };
+      };
+      const yaw0 = m.animations.dance.tracks.find((tr) => tr.bone === 'yaw' && tr.property === 'rotate')!.keys[0]!.v[0]!;
+      expect(Math.abs(yaw0 - 12)).toBeGreaterThan(7);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
+describe('continuous figure scale (#163) and --camera sidecar track (#161)', () => {
+  const N = 80;
+  const DT = 1 / 24;
+  const headRig: NonNullable<RigOpts['bones']> = (b) => [
+    ...b,
+    { name: 'head_ctl', parent: 'neck', x: 0, y: 20 },
+    { name: 'head', parent: 'head_ctl', x: 0, y: 0 },
+    { name: 'eye_r', parent: 'head', x: -6, y: 10 },
+    { name: 'eye_l', parent: 'head', x: 6, y: 10 },
+  ];
+  const mapWithHead = (): Record<string, unknown> => ({
+    ...baseMap(),
+    chains: [
+      { name: 'pelvis', bones: ['hip'], joints: ['r_hip', 'l_hip'], aim: ['leg_r0>leg_l0'] },
+      ...baseChains(),
+      { name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: ['eye_r>eye_l'] },
+    ],
+  });
+
+  function cameraEventPose(): Record<string, unknown> {
+    // Slow rise 0..20 (1.00 -> 1.18), fast drop 20..35 (1.18 -> 1.03), slow rise 35..60 (1.03 -> 1.28), frozen hold 60..79 (1.28).
+    const scaleAt = (i: number): number => {
+      if (i <= 20) return 1 + (0.18 * i) / 20;
+      if (i <= 35) return 1.18 - (0.15 * (i - 20)) / 15;
+      if (i <= 60) return 1.03 + (0.25 * (i - 35)) / 25;
+      return 1.28;
+    };
+    const m: Motion = { ...BASE, n: N, dt: DT, hip: () => [0, 0], trunk: () => 90, rt: () => -90, rs: () => -90, lt: () => -90, ls: () => -90 };
+    const doc = poseDoc(m, (i, j) => {
+      const z = scaleAt(i);
+      const cx = 100;
+      const cy = 200;
+      for (const k of Object.keys(j)) {
+        const pt = j[k]!.at as Pt;
+        j[k] = { ...j[k]!, at: [cx + (pt[0] - cx) * z, cy + (pt[1] - cy) * z] };
+      }
+      const rHip = j.r_hip!.at as Pt;
+      const lHip = j.l_hip!.at as Pt;
+      j.r_knee = { state: 'observed', at: [rHip[0], rHip[1] + 80 * z], score: 0.9 };
+      j.r_ankle = { state: 'observed', at: [rHip[0], rHip[1] + 150 * z], score: 0.9 };
+      j.l_knee = { state: 'observed', at: [lHip[0], lHip[1] + 80 * z], score: 0.9 };
+      j.l_ankle = { state: 'observed', at: [lHip[0], lHip[1] + 150 * z], score: 0.9 };
+    });
+    return {
+      ...doc,
+      cameraSource: 'hand',
+      camera: Array.from({ length: N }, (_, i) => ({
+        s: i < 20 ? 1 : i < 35 ? 0.92 : 0.78,
+        tx: i * 0.5,
+        ty: -i * 0.25,
+        inliers: 100,
+      })),
+    };
+  }
+
+  test('continuous figure scale holds frozen spans within <= 0.5%, caps frame-to-frame steps at <= 1%, and --camera writes rig-pose-camera/1 while leaving motion.json 100% byte-identical', () => {
+    const pose = cameraEventPose();
+    const withoutCam = setup({ rig: { bones: headRig }, map: mapWithHead(), pose });
+    const withCam = setup({ rig: { bones: headRig }, map: mapWithHead(), pose });
+    const camFile = join(withCam.dir, 'camera.json');
+
+    const flags = ['--bends', 'clamp', '--leg-scale', '0.8,1.05', '--plant-feet', '--stance', '0.07'];
+    const r0 = retarget(withoutCam, flags);
+    const r1 = retarget(withCam, [...flags, '--camera', camFile]);
+    expect(r0.status).toBe(0);
+    expect(r1.status).toBe(0);
+
+    // #161 Bar 1: motion.json is 100% byte-identical with and without --camera.
+    const bytes0 = readFileSync(withoutCam.out, 'utf8');
+    const bytes1 = readFileSync(withCam.out, 'utf8');
+    expect(bytes1).toBe(bytes0);
+
+    // #161 Bar 2 & #163 Bars 1-3: inspect camera.json and posed standing height.
+    const cam = JSON.parse(readFileSync(camFile, 'utf8')) as {
+      spec: string;
+      frames: Array<{ frame: number; t: number; s: number; rawS: number; tx: number; ty: number; videoS: number }>;
+      summary: { minS: number; maxS: number; maxStep: { step: number; frame: number; t: number }; endOverStart: number };
+    };
+    expect(cam.spec).toBe('rig-pose-camera/1');
+    expect(cam.frames).toHaveLength(N);
+    expect(cam.summary.maxStep.step).toBeLessThanOrEqual(0.01 + 1e-6);
+    expect(cam.summary.endOverStart).toBeCloseTo(1.28, 2);
+
+    // On the frozen ending span 60..79, figure scale s is held constant (variation <= 0.5%) and posed standing height varies <= 0.5%.
+    const frozenS = cam.frames.slice(60, 80).map((f) => f.s);
+    expect((Math.max(...frozenS) - Math.min(...frozenS)) / frozenS[0]!).toBeLessThanOrEqual(0.005);
+
+    const poses = poseRawAnimation(loadBuild(withCam.build), 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+    const standingHeight = (idx: number): number => {
+      const b = byName(poses[idx]!.bones);
+      const headY = b.get('head')!.worldY;
+      const r1 = b.get('leg_r1')!;
+      const l1 = b.get('leg_l1')!;
+      const rAnkY = r1.worldY + r1.c * 70;
+      const lAnkY = l1.worldY + l1.c * 70;
+      return headY - Math.min(rAnkY, lAnkY);
+    };
+    const frozenH = Array.from({ length: 20 }, (_, k) => standingHeight(60 + k));
+    expect((Math.max(...frozenH) - Math.min(...frozenH)) / frozenH[0]!).toBeLessThanOrEqual(0.005);
+    expect(Math.abs(standingHeight(N - 1) / standingHeight(0) - 1)).toBeLessThanOrEqual(0.02);
+
+    // ARG_PATH refusal when --camera points to a missing directory.
+    const bad = retarget(withCam, [...flags, '--camera', join(withCam.dir, 'no-such-dir', 'camera.json')]);
+    expect(bad.status).toBe(1);
+    expect(bad.stderr).toContain('ARG_PATH: --camera');
+  }, SLOW);
+
+  test('mutant (#163): without rate-limited projection (unsmoothed raw scale), a 15% single-frame spike violates the <= 1%/frame step bound', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm163-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'legs.ts');
+      const from = 'export const FIGURE_SCALE_STEP = 0.01;';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'export const FIGURE_SCALE_STEP = 0.5;'));
+
+      // Pose with a sharp 8% step between frames 20 and 21.
+      const m: Motion = { ...BASE, n: 40, dt: DT, hip: () => [0, 0], trunk: () => 90, rt: () => -90, rs: () => -90, lt: () => -90, ls: () => -90 };
+      const pose = poseDoc(m, (i, j) => {
+        const z = i < 20 ? 1 : 1.08 + 0.004 * (i - 20);
+        const cx = 100;
+        const cy = 200;
+        for (const k of Object.keys(j)) {
+          const pt = j[k]!.at as Pt;
+          j[k] = { ...j[k]!, at: [cx + (pt[0] - cx) * z, cy + (pt[1] - cy) * z] };
+        }
+      });
+      const cMut = setup({ rig: { bones: headRig }, map: mapWithHead(), pose });
+      const camFile = join(cMut.dir, 'camera.json');
+      const rMut = retarget(cMut, ['--bends', 'clamp', '--leg-scale', '0.8,1.05', '--plant-feet', '--camera', camFile], join(d, 'cli.ts'));
+      expect(rMut.status).toBe(0);
+      const cam = JSON.parse(readFileSync(camFile, 'utf8')) as { summary: { maxStep: { step: number } } };
+      expect(cam.summary.maxStep.step).toBeGreaterThan(0.05);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
 

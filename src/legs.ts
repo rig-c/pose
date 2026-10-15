@@ -834,6 +834,82 @@ export const STANCE_BOUNDS: readonly [number, number] = [0.92, 1.08];
 /** Per side, per frame: the lower bound of the leg's stretch (#95). */
 export type StanceLower = Record<Side, readonly number[]>;
 
+/** Maximum per-frame relative step of the continuous figure-scale curve (`rig-c/pose#163`). */
+export const FIGURE_SCALE_STEP = 0.01;
+/** Consecutive frames whose raw figure height stays within this many pixels over ≥ `FROZEN_MIN_FRAMES` frames hold their span median (`rig-c/pose#163`). */
+export const FROZEN_STEP_PX = 0.5;
+export const FROZEN_MIN_FRAMES = 5;
+
+function medianOf(xs: readonly number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 === 1 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
+}
+
+/**
+ * Continuous per-frame figure scale `s[i]` (`s[0] = 1`, `rig-c/pose#163`,
+ * `rig-c/pose#161`): L2 projection of `log(raw)` onto the rate-limited corridor
+ * `|log(s[i+1] / s[i])| <= log(1 + FIGURE_SCALE_STEP)` (`≤ 1%` per frame),
+ * holding any frozen span (`≥ FROZEN_MIN_FRAMES` frames where consecutive raw
+ * heights move by `≤ FROZEN_STEP_PX`) constant at its span median.
+ */
+export function figureScaleOf(raw: readonly number[], maxStep = FIGURE_SCALE_STEP): number[] {
+  const m = raw.length;
+  if (m === 0) return [];
+  const u = raw.map((v) => Math.log(Math.max(1e-6, v)));
+  const spans: Array<{ lo: number; hi: number; val: number }> = [];
+  for (let i = 0; i < m - 1;) {
+    if (Math.abs(raw[i + 1]! - raw[i]!) > FROZEN_STEP_PX) {
+      i++;
+      continue;
+    }
+    let j = i + 1;
+    while (j + 1 < m && Math.abs(raw[j + 1]! - raw[j]!) <= FROZEN_STEP_PX) j++;
+    if (j - i + 1 >= FROZEN_MIN_FRAMES) {
+      const med = Math.log(Math.max(1e-6, medianOf(raw.slice(i, j + 1))));
+      for (let k = i; k <= j; k++) u[k] = med;
+      spans.push({ lo: i, hi: j, val: med });
+    }
+    i = j + 1;
+  }
+  const r0 = Math.log(1 + maxStep);
+  const r = new Array<number>(Math.max(0, m - 1)).fill(r0);
+  for (const sp of spans) {
+    for (let i = sp.lo; i < sp.hi; i++) r[i] = 0;
+  }
+  for (let k = 0; k + 1 < spans.length; k++) {
+    const a = spans[k]!;
+    const b = spans[k + 1]!;
+    const gap = b.lo - a.hi;
+    if (gap > 0) {
+      const needed = Math.abs(b.val - a.val) / gap;
+      if (needed > r0) {
+        for (let i = a.hi; i < b.lo; i++) r[i] = needed * 1.0001;
+      }
+    }
+  }
+  const lam = new Array<number>(Math.max(0, m - 1)).fill(0);
+  const y = [...u];
+  for (let iter = 0; iter < 5000; iter++) {
+    let maxChange = 0;
+    for (let i = 0; i < m - 1; i++) {
+      const z = lam[i]! + 0.5 * (y[i + 1]! - y[i]!);
+      const thresh = 0.5 * r[i]!;
+      const next = z > thresh ? z - thresh : z < -thresh ? z + thresh : 0;
+      const d = next - lam[i]!;
+      if (Math.abs(d) > 1e-12) {
+        lam[i] = next;
+        y[i] = y[i]! + d;
+        y[i + 1] = y[i + 1]! - d;
+        if (Math.abs(d) > maxChange) maxChange = Math.abs(d);
+      }
+    }
+    if (maxChange < 1e-11) break;
+  }
+  const y0 = y[0]!;
+  return y.map((v) => Math.exp(v - y0));
+}
+
 /**
  * The leg's own range (rig-c/pose#95). Per side, r(i) = the leg's picture
  * length hip → ankle on frame i ÷ its straight length (`STRAIGHT_PERCENTILE`
@@ -842,16 +918,20 @@ export type StanceLower = Record<Side, readonly number[]>;
  * fold as far as the picture's leg is folded on that frame, never less far
  * than the default. A leg with no straight length keeps the default.
  */
-export function stanceRangeOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, inPlace = false): StanceLower {
+export function stanceRangeOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, inPlace = false, figureScale?: readonly number[]): StanceLower {
   const out = {} as Record<Side, number[]>;
+  const n = ankle.r.length;
+  const scale = !inPlace && n > 25
+    ? (figureScale ?? figureScaleOf(ankle.r.map((ar, i) => Math.max(
+        Math.hypot(ar[0] - hip.r[i]![0], ar[1] - hip.r[i]![1]),
+        Math.hypot(ankle.l[i]![0] - hip.l[i]![0], ankle.l[i]![1] - hip.l[i]![1]),
+      ))))
+    : null;
   for (const s of SIDES) {
-    const len = ankle[s].map((a, i) => Math.hypot(a[0] - hip[s][i]![0], a[1] - hip[s][i]![1]));
-    const n = len.length;
-    const globalStraight = percentile(len, STRAIGHT_PERCENTILE);
-    out[s] = len.map((l, i) => {
-      const straight = inPlace || n <= 25 ? globalStraight : percentile(len.slice(Math.max(0, i - 24), Math.min(n, i + 25)), STRAIGHT_PERCENTILE);
-      return straight > 1e-9 && Number.isFinite(l) ? Math.min(STANCE_BOUNDS[0], l / straight) : STANCE_BOUNDS[0];
-    });
+    const raw = ankle[s].map((a, i) => Math.hypot(a[0] - hip[s][i]![0], a[1] - hip[s][i]![1]));
+    const len = scale !== null ? raw.map((l, i) => (scale[i]! > 1e-6 ? l / scale[i]! : l)) : raw;
+    const straight = percentile(len, STRAIGHT_PERCENTILE);
+    out[s] = len.map((l) => (straight > 1e-9 && Number.isFinite(l) ? Math.min(STANCE_BOUNDS[0], l / straight) : STANCE_BOUNDS[0]));
   }
   return out;
 }

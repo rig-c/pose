@@ -41,6 +41,8 @@ export interface RetargetArgs extends RetargetOptions {
   render?: string;
   /** Write the run's measurements as JSON here. */
   report?: string;
+  /** Write the sequence's per-frame relative figure scale and pan as a sidecar JSON here (#161). */
+  camera?: string;
   /** The rig's animation read as its idle (default: idle); naming one the motion spec lacks is refused. */
   idle?: string;
   /** Loop the idle's dropped tracks into the new animation (#43 item 2). */
@@ -72,7 +74,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     if (path !== undefined && !existsSync(path)) args.add('ARG_PATH', `${flag} ${path} does not exist`);
   }
   // A file this run writes goes into a directory that is there already; --build and --render make theirs.
-  for (const [flag, path] of [['--out', a.out], ['--report', a.report]] as const) {
+  for (const [flag, path] of [['--out', a.out], ['--report', a.report], ['--camera', a.camera]] as const) {
     if (path === undefined) continue;
     const dir = dirname(path);
     if (!existsSync(dir)) args.add('ARG_PATH', `${flag} ${path} — directory ${dir} does not exist`);
@@ -292,6 +294,35 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       if (!kept.green) refuse([{ code: 'RIG_GATE', text: `rigc build into --build ${a.build} is red where the same build was green in scratch (exit ${kept.run.status}); nothing written` }, ...kept.fails.map((x) => ({ code: 'RIGC', text: x }))]);
     }
     writeFileSync(a.out, `${JSON.stringify(motion, null, 2)}\n`);
+    if (a.camera !== undefined) {
+      const ss = r.figureScale.frames.map((x) => x.s);
+      const minS = ss.length === 0 ? 1 : Math.min(...ss);
+      const maxS = ss.length === 0 ? 1 : Math.max(...ss);
+      writeFileSync(a.camera, `${JSON.stringify({
+        spec: 'rig-pose-camera/1',
+        rig: input.name,
+        animation: a.name,
+        frames: r.figureScale.frames.map((f, i) => {
+          const cam = seq.camera?.[i];
+          const camS = cam?.s ?? 1;
+          return {
+            frame: f.frame,
+            t: f.t,
+            s: f.s,
+            rawS: f.rawS,
+            tx: cam?.tx ?? 0,
+            ty: cam?.ty ?? 0,
+            videoS: Number((f.s * camS).toFixed(6)),
+          };
+        }),
+        summary: {
+          minS,
+          maxS,
+          maxStep: r.figureScale.maxStep,
+          endOverStart: r.figureScale.endOverStart,
+        },
+      }, null, 2)}\n`);
+    }
     if (a.render !== undefined && f.meshes !== null && f.frames !== '') {
       rmSync(a.render, { recursive: true, force: true });
       cpSync(f.frames, a.render, { recursive: true });
@@ -330,8 +361,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
               face: {
                 ears: r.face.ears,
                 read: { yaw: r.face.read.yaw, pitch: r.face.read.pitch },
-                ...(r.face.yaw === undefined ? {} : { yaw: { bone: r.face.yaw.bone, limits: r.face.yaw.limits, read: r.face.yaw.read, mapped: r.face.yaw.mapped, scale: r.face.yaw.scale, corr: r.face.yaw.corr } }),
-                ...(r.face.pitch === undefined ? {} : { pitch: { bone: r.face.pitch.bone, limits: r.face.pitch.limits, read: r.face.pitch.read, mapped: r.face.pitch.mapped, scale: r.face.pitch.scale, corr: r.face.pitch.corr } }),
+                ...(r.face.yaw === undefined ? {} : { yaw: { bone: r.face.yaw.bone, limits: r.face.yaw.limits, knee: r.face.yaw.knee, read: r.face.yaw.read, mapped: r.face.yaw.mapped, scale: r.face.yaw.scale, corr: r.face.yaw.corr } }),
+                ...(r.face.pitch === undefined ? {} : { pitch: { bone: r.face.pitch.bone, limits: r.face.pitch.limits, knee: r.face.pitch.knee, read: r.face.pitch.read, mapped: r.face.pitch.mapped, scale: r.face.pitch.scale, corr: r.face.pitch.corr } }),
               },
             }),
         legScale: r.legScale.map(({ scale: _scale, asked: _asked, ...rest }) => rest),
@@ -345,6 +376,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         reduce: reduced === null ? null : { tolerance: a.reduce, hipTolerance: a.reduceHip ?? null, rows: reduced.rows },
       }, null, 2)}\n`);
     }
+    if (a.camera !== undefined) say(`  wrote ${a.camera} — camera track (${r.figureScale.frames.length} frames)`);
     say(`  wrote ${a.out} — animations: ${Object.keys(motion.animations).join(', ')}`);
     return { lines, written: true };
   } finally {
