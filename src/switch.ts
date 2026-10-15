@@ -498,10 +498,9 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
       for (let i = sw.frames[0]; i <= sw.frames[1]; i++) row[i] = o;
     }
   }
-  // #136: when a group's base setup slots sit in front of the torso, an unswitched gap between two
-  // behind-the-torso switches keeps each chain on its behind-the-torso slots on the frames where that
-  // chain stays within tolerance of the surrounding behind sets (with the same minimum-span bridging),
-  // and across a joint behind-to-behind transition where all chains move from one behind set to another.
+  // #136/#139/#162: between two sets that both draw an arm behind the torso, a frame that belongs to
+  // neither set stays behind (the nearer set's layer). The default front slot is for a frame no set can
+  // claim and whose arm is read in front — not a fallback.
   const chainHolds: Array<{ set: string; chain: string; frames: [number, number] }> = [];
   for (const group of groups) {
     const layer = groupLayering(group, map, slots);
@@ -578,6 +577,56 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
           return false;
         });
         if (!frontNear) for (const cn of chains) for (let i = g0; i <= g1; i++) cPick.get(cn)![i] = set0;
+      } else {
+        for (const cn of chains) {
+          const arr = cPick.get(cn)!;
+          const frontSets = group.filter((a) => layer.isFront(a) && a.chains.includes(cn));
+          const d0s = byChain.get(set0.name)?.get(cn);
+          const d1s = byChain.get(set1.name)?.get(cn);
+          for (let i = g0; i <= g1; i++) {
+            if (arr[i] !== null) continue;
+            const claimedFront = frontSets.some((f) => (byChain.get(f.name)?.get(cn)?.[i] ?? Infinity) <= opts.switchTolerance);
+            if (!claimedFront) {
+              const d0 = d0s?.[i] ?? Infinity;
+              const d1 = d1s?.[i] ?? Infinity;
+              arr[i] = d0 <= d1 ? set0 : set1;
+            }
+          }
+          for (let i = g0; i <= g1;) {
+            const a = arr[i];
+            let j = i;
+            while (j + 1 <= g1 && arr[j + 1] === a) j++;
+            const before = arr[i - 1] ?? null;
+            const after = arr[j + 1] ?? null;
+            const span = times[j + 1]! - times[i]!;
+            if (span < opts.switchMin - 1e-9) {
+              if (a === null && before !== null && after !== null) {
+                for (let k = i; k <= j; k++) {
+                  const d0 = d0s?.[k] ?? Infinity;
+                  const d1 = d1s?.[k] ?? Infinity;
+                  arr[k] = d0 <= d1 ? set0 : set1;
+                }
+              } else if (before !== null && before === after && a !== before) {
+                for (let k = i; k <= j; k++) arr[k] = before;
+              }
+            }
+            i = j + 1;
+          }
+          for (let i = g0; i <= g1;) {
+            const a = arr[i];
+            let j = i;
+            while (j + 1 <= g1 && arr[j + 1] === a) j++;
+            const before = arr[i - 1] ?? null;
+            const after = arr[j + 1] ?? null;
+            if (before !== null && before === after && a !== before && times[j + 1]! - times[i]! < opts.switchMin - 1e-9) {
+              for (let k = i; k <= j; k++) arr[k] = before;
+            } else if (a !== null && i > g0 && j < g1 && times[j + 1]! - times[i]! < opts.switchMin - 1e-9) {
+              const fill = before ?? after ?? null;
+              for (let k = i; k <= j; k++) arr[k] = fill;
+            }
+            i = j + 1;
+          }
+        }
       }
       for (const s of layer.touched) {
         if (!shown.has(s)) shown.set(s, Array.from({ length: n }, () => slots.get(s)!.setup));
