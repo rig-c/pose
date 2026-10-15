@@ -11,6 +11,8 @@ import { describe, expect, test } from 'bun:test';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { plantHip, supportsOf, type Feet, type Side } from '../src/legs.ts';
+import type { JointMap, RigSlots } from '../src/map.ts';
+import { selectSwitches, type SwitchOptions } from '../src/switch.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const MUTANTS = join(ROOT, 'node_modules', '.cache', 'rig-pose-mutants');
@@ -138,3 +140,134 @@ describe('#102: a change of support holds the planted foot from landing through 
     }
   });
 });
+
+/**
+ * Synthetic rig and pose for #136:
+ * - Draw order: 0 `forearm_r_back`, 1 `forearm_l_back`, 2 `topwear` (torso, never hidden),
+ *   3 `forearm_r` (setup), 4 `forearm_l` (setup), 5 `forearm_r_front`, 6 `forearm_l_front`.
+ * - `K_back` draws both arms behind `topwear` (slots 0, 1; hides 3, 4, 5, 6), key angle -90° on both arms.
+ * - `K_front` draws both arms in front of `topwear` (slots 5, 6; hides 0, 1, 3, 4), key angle -80° on `arm_r`, -50° on `arm_l`.
+ * - Over 28 frames at 24 fps (`switchMin = 0.25s` = 6 frames, `2 * switchMin = 0.50s` = 12 frames):
+ *   - Frames 0–9 (10 frames): `arm_r = -90°`, `arm_l = -90°` (`K_back`, distance 0°).
+ *   - Frames 10–17 (8 frames = 0.333s >= switchMin, < 2 * switchMin): `arm_r = -90°` (10° from `K_front`, 0° from `K_back`),
+ *     `arm_l = -50°` (0° from `K_front`, 40° > 25° from `K_back`) -> `K_front` has distance 10° <= 25°, a short front window
+ *     between two behind windows while `arm_r` stays behind at `K_back`.
+ *   - Frames 18–27 (10 frames): `arm_r = -90°`, `arm_l = -90°` (`K_back`, distance 0°).
+ */
+function shortFrontBetweenBehind(): { map: JointMap; targets: Map<string, number[]>; times: number[]; duration: number; slots: RigSlots; opts: SwitchOptions } {
+  const n = 28;
+  const fps = 24;
+  const t = Array.from({ length: n }, (_, i) => i / fps);
+  const slots: RigSlots = new Map([
+    ['forearm_r_back', { setup: null, attachments: new Set(['K_back_r']), bone: 'arm_r0' }],
+    ['forearm_l_back', { setup: null, attachments: new Set(['K_back_l']), bone: 'arm_l0' }],
+    ['topwear', { setup: 'topwear', attachments: new Set(['topwear', 'K_back_top', 'K_front_top']), bone: 'chest' }],
+    ['forearm_r', { setup: 'forearm_r', attachments: new Set(['forearm_r']), bone: 'arm_r0' }],
+    ['forearm_l', { setup: 'forearm_l', attachments: new Set(['forearm_l']), bone: 'arm_l0' }],
+    ['forearm_r_front', { setup: null, attachments: new Set(['K_front_r']), bone: 'arm_r0' }],
+    ['forearm_l_front', { setup: null, attachments: new Set(['K_front_l']), bone: 'arm_l0' }],
+  ]);
+  const map: JointMap = {
+    translate: null,
+    chains: [
+      { name: 'arm_r', bones: ['arm_r0'], joints: ['r_shoulder', 'r_wrist'], aim: ['x'], range: {}, bend: 'free', reach: false },
+      { name: 'arm_l', bones: ['arm_l0'], joints: ['l_shoulder', 'l_wrist'], aim: ['x'], range: {}, bend: 'free', reach: false },
+    ],
+    alternates: [
+      {
+        name: 'K_back',
+        slots: { forearm_r_back: 'K_back_r', forearm_l_back: 'K_back_l', topwear: 'K_back_top' },
+        hides: ['forearm_r', 'forearm_l', 'forearm_r_front', 'forearm_l_front'],
+        offsets: {},
+        chains: ['arm_r', 'arm_l'],
+        pose: {
+          r_shoulder: [0, 0],
+          r_wrist: [0, 100], // pictureAngle = -90°
+          l_shoulder: [0, 0],
+          l_wrist: [0, 100], // pictureAngle = -90°
+        },
+        drawn: { arm_r0: -90, arm_l0: -90 },
+        turn: { arm_r0: [-5, 5], arm_l0: [-5, 5] },
+        frames: null,
+        place: null,
+      },
+      {
+        name: 'K_front',
+        slots: { forearm_r_front: 'K_front_r', forearm_l_front: 'K_front_l', topwear: 'K_front_top' },
+        hides: ['forearm_r_back', 'forearm_l_back', 'forearm_r', 'forearm_l'],
+        offsets: {},
+        chains: ['arm_r', 'arm_l'],
+        pose: {
+          r_shoulder: [0, 0],
+          r_wrist: [100 * Math.cos((-80 * Math.PI) / 180), -100 * Math.sin((-80 * Math.PI) / 180)], // pictureAngle = -80°
+          l_shoulder: [0, 0],
+          l_wrist: [100 * Math.cos((-50 * Math.PI) / 180), -100 * Math.sin((-50 * Math.PI) / 180)], // pictureAngle = -50°
+        },
+        drawn: { arm_r0: -80, arm_l0: -50 },
+        turn: { arm_r0: [-20, 20], arm_l0: [-20, 20] },
+        frames: null,
+        place: null,
+      },
+    ],
+  };
+  const armR = Array.from({ length: n }, () => -90);
+  const armL = Array.from({ length: n }, (_, i) => (i >= 10 && i <= 17 ? -50 : -90));
+  const targets = new Map<string, number[]>([
+    ['arm_r0', armR],
+    ['arm_l0', armL],
+  ]);
+  const opts: SwitchOptions = { switchTolerance: 25, switchMin: 0.25, switchAt: 'first' };
+  return { map, targets, times: t, duration: t[n - 1]!, slots, opts };
+}
+
+describe('#136: a short front-set window between two behind-set windows is dropped, and the behind chain stays behind the torso', () => {
+  test('synthetic: short front window (frames 10–17, 0.333s < 2 * switchMin) between two behind windows (0–9, 18–27) is dropped and arm_r stays behind topwear on all 28 frames', () => {
+    const s = shortFrontBetweenBehind();
+    const sw = selectSwitches(s.map, s.targets, s.times, s.duration, s.slots, s.opts);
+    // K_front on 10–17 is dropped; only the two K_back windows remain.
+    expect(sw.switches.map((x) => ({ set: x.set, frames: x.frames }))).toEqual([
+      { set: 'K_back', frames: [0, 9] },
+      { set: 'K_back', frames: [18, 27] },
+    ]);
+    // Over all 28 frames (0–27), arm_r stays behind topwear (forearm_r_back shown, front setup forearm_r hidden).
+    for (let i = 0; i < 28; i++) {
+      expect(sw.shown.get('forearm_r_back')![i]).toBe('K_back_r');
+      expect(sw.shown.get('forearm_r')![i]).toBeNull();
+      expect(sw.shown.get('forearm_r_front')![i]).toBeNull();
+    }
+    // arm_l is behind topwear on 0–9 and 18–27, and in front (setup forearm_l) only on 10–17.
+    for (let i = 0; i < 28; i++) {
+      const inExcursion = i >= 10 && i <= 17;
+      expect(sw.shown.get('forearm_l_back')![i]).toBe(inExcursion ? null : 'K_back_l');
+      expect(sw.shown.get('forearm_l')![i]).toBe(inExcursion ? 'forearm_l' : null);
+      expect(sw.shown.get('forearm_l_front')![i]).toBeNull();
+    }
+  });
+
+  test("mutant: under today's rule (without the #136 short-front-window drop), K_front shows on 10–17 and pulls both arms in front of topwear", async () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      const path = join(d, 'src', 'switch.ts');
+      const src = readFileSync(path, 'utf8');
+      const from = 'if (layer.torsoRank !== null) {';
+      expect(src.split(from)).toHaveLength(2);
+      writeFileSync(path, src.replace(from, 'if (false && layer.torsoRank !== null) {'));
+      const m = (await import(path)) as { selectSwitches: typeof selectSwitches };
+      const s = shortFrontBetweenBehind();
+      const sw = m.selectSwitches(s.map, s.targets, s.times, s.duration, s.slots, s.opts);
+      console.log(`  mutant "today's rule": switches = ${sw.switches.map((x) => `${x.set}[${x.frames[0]}–${x.frames[1]}]`).join(', ')}`);
+      expect(sw.switches.map((x) => ({ set: x.set, frames: x.frames }))).toEqual([
+        { set: 'K_back', frames: [0, 9] },
+        { set: 'K_front', frames: [10, 17] },
+        { set: 'K_back', frames: [18, 27] },
+      ]);
+      // Under the mutant, arm_r is pulled in front of topwear (forearm_r_front) on frames 10–17.
+      expect(sw.shown.get('forearm_r_front')![10]).toBe('K_front_r');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+});
+
