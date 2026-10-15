@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.22.0](https://github.com/rig-c/pose/compare/v0.21.0...v0.22.0) (2026-10-15)
+
+
+### Features
+
+* **retarget:** add continuous figure scale, --camera sidecar track, and 1:1 face knee ([#161](https://github.com/rig-c/pose/issues/161), [#163](https://github.com/rig-c/pose/issues/163), [#164](https://github.com/rig-c/pose/issues/164)) ([#167](https://github.com/rig-c/pose/issues/167)) ([41d14f7](https://github.com/rig-c/pose/commit/41d14f7152b9b4cb695c7a43f204d1c946ec2245))
+
+
+### Bug Fixes
+
+* **switch:** keep behind-to-behind gap frames on the nearer behind set ([#162](https://github.com/rig-c/pose/issues/162)) ([#165](https://github.com/rig-c/pose/issues/165)) ([ca2915f](https://github.com/rig-c/pose/commit/ca2915f9967237cb7e4601c1ebc872f15b3b1a9e))
+
 ## [0.21.0](https://github.com/rig-c/pose/compare/v0.20.5...v0.21.0) (2026-10-15)
 
 
