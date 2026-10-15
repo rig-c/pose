@@ -3078,6 +3078,16 @@ describe('#47: --leg-scale and --plant-feet', () => {
         return ys;
       });
     }
+    /** Each span's supporting ankle's world x on every frame of the span, blend frames included, posed by rig-c. */
+    function plantedXs(build: string, report: string): number[][] {
+      const rep = JSON.parse(readFileSync(report, 'utf8')) as Report85;
+      const a = ankles85(build);
+      return rep.feet.supports.map((sp) => {
+        const xs: number[] = [];
+        for (let i = sp.frames[0]; i <= sp.frames[1]; i++) xs.push(a[sp.side][i]![0]);
+        return xs;
+      });
+    }
     const spreadOf = (yss: number[][]): number => Math.max(...yss.flat()) - Math.min(...yss.flat());
     /** The tolerance the landing check holds an ankle to: 0.01 units plus 1e-4 of the 150-unit leg. */
     const FLOOR_TOL = 0.01 + 1e-4 * LEG;
@@ -3181,7 +3191,7 @@ describe('#47: --leg-scale and --plant-feet', () => {
       }
     }, SLOW);
 
-    test('the blend: the supporting ankle stays on the floor while the hip blends, its leg stretched and landing-checked; mutant: without the stretch it leaves the floor', () => {
+    test('the blend: the supporting ankle stays on the floor and on its horizontal anchor while the hip blends, its leg stretched and landing-checked; mutants: without the stretch it leaves the floor, and without the horizontal compensation an angled leg drifts sideways', () => {
       const c = setup({ pose: threeHeights() });
       const report = join(c.dir, 'report.json');
       const r = retarget(c, ['--plant-feet', '--report', report]);
@@ -3199,6 +3209,21 @@ describe('#47: --leg-scale and --plant-feet', () => {
       expect(rep.feet.blend.runs.map((x) => [x.side, x.frames])).toEqual([['l', [13, 15]], ['r', [25, 27]]]);
       expect(rep.feet.blend.over).toEqual([]);
       for (const ys of plantedYs(c.build, report)) for (const y of ys) expect(Math.abs(y - rep.feet.floor!)).toBeLessThan(FLOOR_TOL);
+      for (const xs of plantedXs(c.build, report)) expect(Math.max(...xs) - Math.min(...xs)).toBeLessThan(FLOOR_TOL);
+
+      // Angled supporting legs (60° below horizontal: horizontal reach 75 units, vertical 130 units, k within [0.92, 1.08]):
+      // stretching the chain along its bone axis scales its horizontal reach from the thigh root too, and the hip's x
+      // compensation keeps the planted ankle on its horizontal anchor within FLOOR_TOL.
+      const angled: Motion = { ...M85, rt: () => -60, rs: () => -60, lt: () => -120, ls: () => -120 };
+      const angledPose = () => poseDoc(angled, (i, j) => {
+        const d: Pt = i < 12 ? [0, 0] : i < 24 ? [0, 6] : [0, 1];
+        for (const [name, at] of Object.entries(j)) j[name] = { ...at, at: [(at.at as Pt)[0] + d[0], (at.at as Pt)[1] + d[1]] };
+      });
+      const ca = setup({ pose: angledPose() });
+      const areport = join(ca.dir, 'report.json');
+      expect(retarget(ca, ['--plant-feet', '--report', areport]).status).toBe(0);
+      for (const xs of plantedXs(ca.build, areport)) expect(Math.max(...xs) - Math.min(...xs)).toBeLessThan(FLOOR_TOL);
+
       mkdirSync(MUTANTS, { recursive: true });
       const d = mkdtempSync(join(MUTANTS, 'm-'));
       try {
@@ -3220,6 +3245,18 @@ describe('#47: --leg-scale and --plant-feet', () => {
         // Red: on the first blend frame the ankle is 0.75 of the 9 units off.
         expect(worst >= FLOOR_TOL).toBe(true);
         expect(worst).toBeCloseTo(6.75, 1);
+
+        // Second mutant: keep the stretch, remove the horizontal dx compensation on the hip.
+        const fromDx = '      hip[i]![0] += dx;\n      travel[i]![0] += dx;\n';
+        expect(before.split(fromDx)).toHaveLength(2);
+        writeFileSync(path, before.replace(fromDx, ''));
+        const ma = setup({ pose: angledPose() });
+        const mareport = join(ma.dir, 'report.json');
+        const rma = retarget(ma, ['--plant-feet', '--report', mareport], join(d, 'cli.ts'));
+        expect(rma.status).toBe(0);
+        const worstX = Math.max(...plantedXs(ma.build, mareport).map((xs) => Math.max(...xs) - Math.min(...xs)));
+        console.log(`  mutant "no horizontal anchor compensation on the blend": the supporting ankle drifts ${worstX.toFixed(3)} units sideways`);
+        expect(worstX).toBeGreaterThan(3);
       } finally {
         rmSync(d, { recursive: true, force: true });
       }
