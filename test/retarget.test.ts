@@ -4961,3 +4961,138 @@ describe('#133: a supporting leg that asks under --leg-scale\'s floor is scaled 
   }, SLOW);
 });
 
+describe('#137: under --stance and --leg-scale, a straight stance leg whose shin was shortened below STANCE_BOUNDS[0] restores its shin before stretching to the floor', () => {
+  const THIGH = -90;
+  const SHIN = -90;
+  const N = 24;
+  const DT = 1 / 24;
+  const BONE_LEN = 80 + 70;
+  const STILL: Motion = { ...BASE, n: N, dt: DT, trunk: () => 90, rt: () => THIGH, rs: () => SHIN, lt: () => THIGH, ls: () => SHIN, hip: () => [0, 0] };
+
+  /**
+   * Right foot (`r`) supports on every frame at full length (80 + 70 = 150 px).
+   * Left foot (`l`, free) stands beside it in a `state = 'both'` stance:
+   * - frames 0–2: l_knee is 3 px higher (thigh 77 px, shin 73 px, total 150 px) so the shin's 95th-percentile straight length is ~73 px;
+   * - frames 3–11: thigh 80 px, shin 70 px, total 150 px;
+   * - frames 12–23 (held ending span): l_ankle is 9 px (0.06 leg lengths, within `--stance 0.07`) above r_ankle while l_knee stays at 80 px below l_hip, so the whole leg is 141 / 150 = 0.94 >= 0.92 (not folded), the thigh is 80 / 80 = 1.00 >= 0.92, and the shin is 61 / 73 = 0.8356 < 0.92.
+   */
+  function endingShortShinPose(): Record<string, unknown> {
+    return poseDoc(STILL, (i, j) => {
+      const rHip = j.r_hip!.at as Pt;
+      j.r_knee = { state: 'observed', at: [rHip[0], rHip[1] + 80], score: 0.9 };
+      j.r_ankle = { state: 'observed', at: [rHip[0], rHip[1] + 150], score: 0.9 };
+      const lHip = j.l_hip!.at as Pt;
+      const thighLen = i < 3 ? 77 : 80;
+      const ankleLen = i < 12 ? 150 : 141;
+      j.l_knee = { state: 'observed', at: [lHip[0], lHip[1] + thighLen], score: 0.9 };
+      j.l_ankle = { state: 'observed', at: [lHip[0], lHip[1] + ankleLen], score: 0.9 };
+    });
+  }
+
+  function mapWithPelvis(): Record<string, unknown> {
+    return {
+      ...baseMap(),
+      chains: [
+        { name: 'pelvis', bones: ['hip'], joints: ['r_hip', 'l_hip'], aim: ['leg_r0>leg_l0'] },
+        ...baseChains(),
+      ],
+    };
+  }
+
+  test('restores the shortened shin on the ending span so both ankles land on #85\'s floor with no stance.over, while leaving earlier frames and the supporting leg unchanged', () => {
+    const c = setup({ map: mapWithPelvis(), pose: endingShortShinPose() });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--leg-scale', '0.8,1.05', '--plant-feet', '--stance', '0.07', '--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as {
+      feet: { floor: number };
+      stance: { over: unknown[]; runs: Array<{ state: string; side: string; frames: [number, number] }> };
+    };
+    expect(rep.stance.runs.map((x) => [x.state, x.side, x.frames])).toEqual([['both', 'l', [0, 23]]]);
+    expect(rep.stance.over).toEqual([]);
+
+    const poses = poseRawAnimation(loadBuild(c.build), 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+    const ankleOf = (b: Map<string, RawBone>, side: 'r' | 'l'): Pt => {
+      const s1 = b.get(`leg_${side}1`)!;
+      return [s1.worldX + s1.a * 70, s1.worldY + s1.c * 70];
+    };
+    const floorY = rep.feet.floor;
+
+    for (let i = 0; i < N; i++) {
+      const b = byName(poses[i]!.bones);
+      const ar = ankleOf(b, 'r');
+      const al = ankleOf(b, 'l');
+      // Both the supporting right ankle and the stance left ankle sit on #85's floor on every frame.
+      expect(Math.abs(ar[1] - floorY)).toBeLessThan(0.05);
+      expect(Math.abs(al[1] - floorY)).toBeLessThan(0.05);
+      if (i >= 12) {
+        // On the ending span (12–23), both thigh and shin of the stance leg are un-squashed (~1.00) and knees are level.
+        expect(Math.hypot(b.get('leg_l0')!.a, b.get('leg_l0')!.c)).toBeCloseTo(1, 3);
+        expect(Math.hypot(b.get('leg_l1')!.a, b.get('leg_l1')!.c)).toBeCloseTo(1, 3);
+        expect(Math.abs(b.get('leg_l1')!.worldY - b.get('leg_r1')!.worldY)).toBeLessThan(0.05);
+      }
+    }
+  }, SLOW);
+
+  test('mutant (#137): without unshortenStanceShin the ending span exceeds STANCE_BOUNDS[1], floats off #85\'s floor, and leaves frames 0–11 and leg_r byte-identical', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm137-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const from = 'legScaleOn ? unshortenStanceShin(scales, L, posedFeet, lower) : posedFeet';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'posedFeet'));
+
+      const cPkg = setup({ map: mapWithPelvis(), pose: endingShortShinPose() });
+      const rPkg = retarget(cPkg, ['--leg-scale', '0.8,1.05', '--plant-feet', '--stance', '0.07']);
+      expect(rPkg.status).toBe(0);
+      const pkgMotion = motionOf(cPkg.out);
+
+      const cMut = setup({ map: mapWithPelvis(), pose: endingShortShinPose() });
+      const mReport = join(cMut.dir, 'report.json');
+      const rMut = retarget(cMut, ['--leg-scale', '0.8,1.05', '--plant-feet', '--stance', '0.07', '--report', mReport], join(d, 'cli.ts'));
+      expect(rMut.status).toBe(0);
+      const mutMotion = motionOf(cMut.out);
+
+      // Bar 2: outside the ending span (frames 0–11), and on the supporting right leg across all frames, keys are byte-identical.
+      for (let t = 0; t < pkgMotion.animations.dance!.tracks.length; t++) {
+        const pt = pkgMotion.animations.dance!.tracks[t]!;
+        const mt = mutMotion.animations.dance!.tracks[t]!;
+        for (let i = 0; i < 12; i++) {
+          expect(pt.keys[i]).toEqual(mt.keys[i]);
+        }
+        if ('bone' in pt && (pt.bone === 'leg_r0' || pt.bone === 'leg_r1' || pt.bone === 'hip')) {
+          expect(pt.keys).toEqual(mt.keys);
+        }
+      }
+
+      // Bar 3: on the mutant, frames 12–23 exceed 1.08 (stance.over non-empty) and the left ankle floats off #85's floor.
+      const rep = JSON.parse(readFileSync(mReport, 'utf8')) as {
+        feet: { floor: number };
+        stance: { over: Array<{ side: string; frames: [number, number]; needed: number; left: number }> };
+      };
+      expect(rep.stance.over).toHaveLength(1);
+      expect(rep.stance.over[0]!.side).toBe('l');
+      expect(rep.stance.over[0]!.frames).toEqual([12, 23]);
+      expect(rep.stance.over[0]!.needed).toBeGreaterThan(1.08);
+
+      const poses = poseRawAnimation(loadBuild(cMut.build), 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+      const b15 = byName(poses[15]!.bones);
+      const s1 = b15.get('leg_l1')!;
+      const ankle15Y = s1.worldY + s1.c * 70;
+      const gap = ankle15Y - rep.feet.floor;
+      console.log(`  mutant "without unshortenStanceShin": frame 15 needed k ${rep.stance.over[0]!.needed.toFixed(4)} > 1.08, left ankle ${gap.toFixed(2)}u (${(gap / BONE_LEN).toFixed(4)} leg lengths) above floor`);
+      expect(gap).toBeGreaterThan(0.3);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
+

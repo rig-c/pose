@@ -1014,7 +1014,61 @@ export interface StancePosed {
  * free side and with no frame between, takes their state, and is listed with
  * `absorbed`.
  */
-export function stanceOf(feet: Feet, ankle: Record<Side, readonly Pt[]>, tolerance: number, posed: (i: number) => StancePosed, secondsOf: (run: [number, number]) => number, lower?: StanceLower): Stance {
+/**
+ * Under `--stance` and `--leg-scale` (rig-c/pose#137), a free foot read `both`
+ * (planted beside the supporting one within `tolerance`) whose posed ankle sits
+ * above the floor (`ankle[free][1] > ankle[support][1]`) while neither the
+ * whole leg (`lo >= STANCE_BOUNDS[0]`) nor its thigh (`s0 >= STANCE_BOUNDS[0]`)
+ * is folded below `STANCE_BOUNDS[0]`, yet its shin was shortened below it
+ * (`s1 < STANCE_BOUNDS[0]`), owes that shin shortening to a low knee / high
+ * ankle split along a straight stance leg in the picture. Keeping the shortened
+ * shin scale makes `--stance` multiply both thigh and shin by `needed`,
+ * over-stretching the thigh (pushing the knee down), leaving the shin and foot
+ * squashed, and exceeding `STANCE_BOUNDS[1]` so the free ankle floats off #85's
+ * floor. Lifting the shin's scale to `min(1, s0)` before `stanceOf` reads
+ * `needed` restores the straight leg's shin proportion first so the chain is
+ * stretched only by the remaining gap.
+ */
+export function unshortenStanceShin(
+  scales: Map<string, number[]>,
+  legs: Record<Side, { chain: Chain; ankleBone: string }>,
+  posed: (i: number) => StancePosed,
+  lower?: StanceLower,
+): (i: number, free?: Side) => StancePosed {
+  const copied = new Set<string>();
+  const ensureCopy = (b: string): number[] => {
+    const cur = scales.get(b)!;
+    if (copied.has(b)) return cur;
+    const copy = [...cur];
+    scales.set(b, copy);
+    copied.add(b);
+    return copy;
+  };
+  return (i: number, free?: Side): StancePosed => {
+    const p = posed(i);
+    if (free === undefined) return p;
+    if (lowerOf(lower, free, i) < STANCE_BOUNDS[0]) return p;
+    const support: Side = free === 'r' ? 'l' : 'r';
+    const floor = p.ankle[support][1];
+    const root = p.root[free][1];
+    const a = p.ankle[free][1];
+    if (!(root - a > 1e-9 && a > floor + 1e-9)) return p;
+    const bones = legs[free].chain.bones;
+    if (bones.length < 2) return p;
+    const b0 = bones[0]!;
+    const b1 = bones[bones.length - 1]!;
+    const arr0 = scales.get(b0);
+    const arr1 = scales.get(b1);
+    if (arr0 === undefined || arr1 === undefined) return p;
+    const s0 = arr0[i]!;
+    const s1 = arr1[i]!;
+    if (!(s0 >= STANCE_BOUNDS[0] && s1 < STANCE_BOUNDS[0])) return p;
+    ensureCopy(b1)[i] = Math.min(1, s0);
+    return posed(i);
+  };
+}
+
+export function stanceOf(feet: Feet, ankle: Record<Side, readonly Pt[]>, tolerance: number, posed: (i: number, free?: Side) => StancePosed, secondsOf: (run: [number, number]) => number, lower?: StanceLower): Stance {
   const n = feet.support.length;
   const stretch: Stance['stretch'] = new Array(n).fill(null);
   const tracked = new Array<Side | null>(n).fill(null);
@@ -1085,7 +1139,7 @@ export function stanceOf(feet: Feet, ankle: Record<Side, readonly Pt[]>, toleran
       rows[i] = { state: r.state, side: f, height, k: null, needed: null, over: false, left: 0, lo };
       continue;
     }
-    const p = posed(i);
+    const p = posed(i, f);
     const floor = p.ankle[s][1];
     const root = p.root[f][1];
     const a = p.ankle[f][1];
