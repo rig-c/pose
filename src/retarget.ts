@@ -687,6 +687,20 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       else if (plantOn) p.add('LEGS_MAP', `--plant-feet reads both hips and both ankles from the pose; the map's chains use ${['r_hip', 'l_hip', 'r_ankle', 'l_ankle'].filter((j) => !series.has(j)).join(', ')} nowhere`);
     }
   }
+  const poseScale: number[] | null =
+    t !== null && scale !== null && !inPlace
+      ? (() => {
+          const [pa, pb] = t.scale.pose;
+          const A = series.get(pa)!;
+          const B = series.get(pb)!;
+          const raw = A.map((a, i) => Math.hypot(B[i]![0] - a[0], B[i]![1] - a[1]));
+          return raw.map((_, i) => {
+            const win = raw.slice(Math.max(0, i - 12), Math.min(n, i + 13)).filter((v) => v > 1e-6);
+            const m = win.length > 0 ? median(win) : scale!.pose;
+            return m > 1e-6 ? m / scale!.pose : 1;
+          });
+        })()
+      : null;
   if (legScaleOn) {
     const limits = opts.legScale as [number, number];
     const rawSegments: Array<{ chain: string; bone: string; joints: [string, string]; kind: string; lengths: number[]; ownStraight: number }> = [];
@@ -712,6 +726,40 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     }
     const straightByKind = new Map<string, number>();
     for (const seg of rawSegments) straightByKind.set(seg.kind, Math.max(straightByKind.get(seg.kind) ?? 0, seg.ownStraight));
+    if (!inPlace && n > 25) {
+      const byChain = new Map<string, typeof rawSegments>();
+      for (const seg of rawSegments) {
+        const list = byChain.get(seg.chain) ?? [];
+        list.push(seg);
+        byChain.set(seg.chain, list);
+      }
+      const chainTotals = [...byChain.values()].filter((list) => list.length >= 2).map((list) => list[0]!.lengths.map((_, i) => list.reduce((s, seg) => s + seg.lengths[i]!, 0)));
+      const rawBySeg = new Map(rawSegments.map((seg) => [seg, [...seg.lengths]]));
+      for (const seg of rawSegments) {
+        const globalStraight = straightByKind.get(seg.kind)!;
+        const peers = rawSegments.filter((s) => s.kind === seg.kind);
+        seg.lengths = rawBySeg.get(seg)!.map((l, i) => {
+          const lo = Math.max(0, i - 24);
+          const hi = Math.min(n, i + 25);
+          let localStraight = 0;
+          for (const peer of peers) localStraight = Math.max(localStraight, percentile(rawBySeg.get(peer)!.slice(lo, hi), STRAIGHT_PERCENTILE));
+          if (chainTotals.length > 0 && straightByKind.size >= 2) {
+            let sumKindStraight = 0;
+            for (const kind of straightByKind.keys()) {
+              let ks = 0;
+              for (const s of rawSegments) if (s.kind === kind) ks = Math.max(ks, percentile(rawBySeg.get(s)!.slice(lo, hi), STRAIGHT_PERCENTILE));
+              sumKindStraight += ks;
+            }
+            let maxChainTotal = 0;
+            for (const tot of chainTotals) maxChainTotal = Math.max(maxChainTotal, percentile(tot.slice(lo, hi), STRAIGHT_PERCENTILE));
+            if (sumKindStraight > maxChainTotal && maxChainTotal > 1e-6) {
+              localStraight *= maxChainTotal / sumKindStraight;
+            }
+          }
+          return localStraight > 1e-6 ? l * (globalStraight / localStraight) : l;
+        });
+      }
+    }
     for (const seg of rawSegments) {
       const ls = legScaleOf(seg.lengths, limits, straightByKind.get(seg.kind)!);
       legScale.push({ chain: seg.chain, bone: seg.bone, joints: seg.joints, ...ls });
@@ -790,7 +838,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     // (stanceOf's mechanism, its bounds) so its ankle stays on the floor. Before --stance, whose
     // floor is that supporting ankle. #95: the lower bound on a frame is the leg's own range there.
     const ankleSeries = { r: series.get('r_ankle')!, l: series.get('l_ankle')! };
-    const lower = stanceRangeOf(ankleSeries, { r: series.get('r_hip')!, l: series.get('l_hip')! });
+    const lower = stanceRangeOf(ankleSeries, { r: series.get('r_hip')!, l: series.get('l_hip')! }, inPlace);
     blendHold = holdBlend(planted.blends, n, posedFeet, lower);
     const beforeBlendX = blendHold.stretch.map((b, i) => (b === null ? 0 : posedFeet(i).ankle[b.side][0]));
     stretchChain(blendHold.stretch);
@@ -986,11 +1034,20 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         if (refEye > 1e-6 && rigEye > 1e-6) nodScale = rigEye / refEye;
       }
       if (neckSeries !== undefined && nodScale !== null) {
-        const refEN = rEye.map((re, i) => -((re[1] + lEye[i]![1]) / 2 - neckSeries[i]![1]));
-        const dy = refEN.map((v) => (v - refEN[0]!) * nodScale);
+        const bone = rest.get(hb)!;
+        const parent = bone.parent === null ? null : rest.get(bone.parent)!;
+        let neckRestLen = 0;
+        for (let a = parent; a !== null; a = a.parent === null ? null : rest.get(a.parent)!) {
+          const d = Math.hypot(bone.worldX - a.worldX, bone.worldY - a.worldY);
+          if (d > 1e-6) {
+            neckRestLen = d;
+            break;
+          }
+        }
+        const maxNod = !inPlace && neckRestLen > 1e-6 ? 0.02 * neckRestLen : Infinity;
+        const refEN = rEye.map((re, i) => -((re[1] + lEye[i]![1]) / 2 - neckSeries[i]![1]) / (poseScale?.[i] ?? 1));
+        const dy = refEN.map((v) => Math.max(-maxNod, Math.min(maxNod, (v - refEN[0]!) * nodScale!)));
         if (dy.some((v) => Math.abs(r3(v)) > 0)) {
-          const bone = rest.get(hb)!;
-          const parent = bone.parent === null ? null : rest.get(bone.parent)!;
           const keys: MotionKey[] = [];
           const nod: Pt[] = [];
           for (let i = 0; i < n; i++) {
