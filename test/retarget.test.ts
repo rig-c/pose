@@ -4846,8 +4846,8 @@ describe('#111: the head chain nods from the eyes\' vertical travel against the 
     ],
   });
   const rollDeg = (i: number): number => 12 * Math.sin((i / N) * 2 * Math.PI);
-  /** World vertical nod in rig units: 0 on frames [0, 2] and [21, 23] (<0.5s so clean's stillness hold does not blend), and a known -10 dip inside. */
-  const nodY = (i: number): number => (i >= 2 && i <= 21 ? -10 * Math.sin(((i - 2) / 19) * Math.PI) : 0);
+  /** World vertical nod in rig units: 0 on frames [0, 2] and [21, 23] (<0.5s so clean's stillness hold does not blend), and a known -0.4 dip inside. */
+  const nodY = (i: number): number => (i >= 2 && i <= 21 ? -0.4 * Math.sin(((i - 2) / 19) * Math.PI) : 0);
 
   function nodPose(withNod: boolean, withRoll = false): Record<string, unknown> {
     const m: Motion = { ...BASE, n: N, dt: DT, hip: () => [0, 0], trunk: () => 90 };
@@ -5602,5 +5602,120 @@ describe('face direction (rig-c/pose#138)', () => {
     }
   }, SLOW);
 });
+
+describe('figure growth over the dance (#159): rolling leg-scale straight length and bounded head-nod translate keep neck and legs within ±3% across camera zoom drift', () => {
+  const N = 60;
+  const DT = 1 / 24;
+  const headRig: NonNullable<RigOpts['bones']> = (b) => [
+    ...b,
+    { name: 'head_ctl', parent: 'neck', x: 0, y: 20 },
+    { name: 'head', parent: 'head_ctl', x: 0, y: 0 },
+    { name: 'eye_r', parent: 'head', x: -6, y: 10 },
+    { name: 'eye_l', parent: 'head', x: 6, y: 10 },
+  ];
+  const mapWithHead = (): Record<string, unknown> => ({
+    ...baseMap(),
+    chains: [
+      { name: 'pelvis', bones: ['hip'], joints: ['r_hip', 'l_hip'], aim: ['leg_r0>leg_l0'] },
+      ...baseChains(),
+      { name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: ['eye_r>eye_l'] },
+    ],
+  });
+
+  function zoomDriftPose(): Record<string, unknown> {
+    const m: Motion = { ...BASE, n: N, dt: DT, hip: () => [0, 0], trunk: () => 90, rt: () => -90, rs: () => -90, lt: () => -90, ls: () => -90 };
+    return poseDoc(m, (i, j) => {
+      // Camera zoom normalisation inflates the figure from 1.00x on frames 0..24 to 1.35x on frames 35..59,
+      // while the shoulders drop relative to the eyes on the ending phrase.
+      const z = i < 25 ? 1 : i < 35 ? 1 + (0.35 * (i - 25)) / 10 : 1.35;
+      const cx = 100;
+      const cy = 200;
+      for (const k of Object.keys(j)) {
+        const pt = j[k]!.at as Pt;
+        j[k] = { ...j[k]!, at: [cx + (pt[0] - cx) * z, cy + (pt[1] - cy) * z] };
+      }
+      const rHip = j.r_hip!.at as Pt;
+      const lHip = j.l_hip!.at as Pt;
+      j.r_knee = { state: 'observed', at: [rHip[0], rHip[1] + 80 * z], score: 0.9 };
+      j.r_ankle = { state: 'observed', at: [rHip[0], rHip[1] + 150 * z], score: 0.9 };
+      j.l_knee = { state: 'observed', at: [lHip[0], lHip[1] + 80 * z], score: 0.9 };
+      j.l_ankle = { state: 'observed', at: [lHip[0], lHip[1] + 150 * z], score: 0.9 };
+      if (i >= 40) {
+        j.r_eye = { state: 'observed', at: [(j.r_eye!.at as Pt)[0], (j.r_eye!.at as Pt)[1] - 6], score: 0.9 };
+        j.l_eye = { state: 'observed', at: [(j.l_eye!.at as Pt)[0], (j.l_eye!.at as Pt)[1] - 6], score: 0.9 };
+      }
+    });
+  }
+
+  test('keeps posed neck, thigh, shin, and whole-leg lengths at the ending within ±3% of frame 0 (and neck within ±2% on every frame)', () => {
+    const c = setup({ rig: { bones: headRig }, map: mapWithHead(), pose: zoomDriftPose() });
+    const r = retarget(c, ['--bends', 'clamp', '--leg-scale', '0.8,1.05', '--plant-feet', '--stance', '0.07']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+
+    const poses = poseRawAnimation(loadBuild(c.build), 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+    const measureFrame = (idx: number) => {
+      const b = byName(poses[idx]!.bones);
+      const neck = Math.hypot(b.get('head')!.worldX - b.get('neck')!.worldX, b.get('head')!.worldY - b.get('neck')!.worldY);
+      const rThigh = Math.hypot(b.get('leg_r1')!.worldX - b.get('leg_r0')!.worldX, b.get('leg_r1')!.worldY - b.get('leg_r0')!.worldY);
+      const lThigh = Math.hypot(b.get('leg_l1')!.worldX - b.get('leg_l0')!.worldX, b.get('leg_l1')!.worldY - b.get('leg_l0')!.worldY);
+      const r1 = b.get('leg_r1')!;
+      const l1 = b.get('leg_l1')!;
+      const rShin = Math.hypot(r1.a * 70, r1.c * 70);
+      const lShin = Math.hypot(l1.a * 70, l1.c * 70);
+      return { neck, rThigh, rShin, lThigh, lShin, rLeg: rThigh + rShin, lLeg: lThigh + lShin };
+    };
+    const f0 = measureFrame(0);
+    const fEnd = measureFrame(55);
+    for (const k of ['neck', 'rThigh', 'rShin', 'lThigh', 'lShin', 'rLeg', 'lLeg'] as const) {
+      const ratio = fEnd[k] / f0[k];
+      expect(ratio).toBeGreaterThanOrEqual(0.97);
+      expect(ratio).toBeLessThanOrEqual(1.03);
+    }
+    for (let i = 0; i < N; i++) {
+      const ratio = measureFrame(i).neck / f0.neck;
+      expect(ratio).toBeGreaterThanOrEqual(0.98 - 1e-4);
+      expect(ratio).toBeLessThanOrEqual(1.02 + 1e-4);
+    }
+  }, SLOW);
+
+  test('mutant (#159): without rolling leg-scale normalisation and head-nod stretch bound, neck and legs grow > 20% at the ending', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm159-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const before = readFileSync(path, 'utf8');
+      const fromLeg = 'if (!inPlace && n > 25) {';
+      const fromNod = 'const maxNod = !inPlace && neckRestLen > 1e-6 ? 0.02 * neckRestLen : Infinity;';
+      expect(before.split(fromLeg)).toHaveLength(2);
+      expect(before.split(fromNod)).toHaveLength(2);
+      writeFileSync(
+        path,
+        before
+          .replace(fromLeg, 'if (false) {')
+          .replace(fromNod, 'const maxNod = Infinity;'),
+      );
+
+      const cMut = setup({ rig: { bones: headRig }, map: mapWithHead(), pose: zoomDriftPose() });
+      const rMut = retarget(cMut, ['--bends', 'clamp', '--leg-scale', '0.8,1.05', '--plant-feet', '--stance', '0.07'], join(d, 'cli.ts'));
+      expect(rMut.status).toBe(0);
+      const poses = poseRawAnimation(loadBuild(cMut.build), 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+      const b0 = byName(poses[0]!.bones);
+      const b55 = byName(poses[55]!.bones);
+      const neck0 = Math.hypot(b0.get('head')!.worldX - b0.get('neck')!.worldX, b0.get('head')!.worldY - b0.get('neck')!.worldY);
+      const neck55 = Math.hypot(b55.get('head')!.worldX - b55.get('neck')!.worldX, b55.get('head')!.worldY - b55.get('neck')!.worldY);
+      const lThigh0 = Math.hypot(b0.get('leg_l1')!.worldX - b0.get('leg_l0')!.worldX, b0.get('leg_l1')!.worldY - b0.get('leg_l0')!.worldY);
+      const lThigh55 = Math.hypot(b55.get('leg_l1')!.worldX - b55.get('leg_l0')!.worldX, b55.get('leg_l1')!.worldY - b55.get('leg_l0')!.worldY);
+      expect(neck55 / neck0).toBeGreaterThan(1.2);
+      expect(lThigh55 / lThigh0).toBeGreaterThan(1.2);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
 
 

@@ -842,12 +842,16 @@ export type StanceLower = Record<Side, readonly number[]>;
  * fold as far as the picture's leg is folded on that frame, never less far
  * than the default. A leg with no straight length keeps the default.
  */
-export function stanceRangeOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>): StanceLower {
+export function stanceRangeOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, inPlace = false): StanceLower {
   const out = {} as Record<Side, number[]>;
   for (const s of SIDES) {
     const len = ankle[s].map((a, i) => Math.hypot(a[0] - hip[s][i]![0], a[1] - hip[s][i]![1]));
-    const straight = percentile(len, STRAIGHT_PERCENTILE);
-    out[s] = len.map((l) => (straight > 1e-9 && Number.isFinite(l) ? Math.min(STANCE_BOUNDS[0], l / straight) : STANCE_BOUNDS[0]));
+    const n = len.length;
+    const globalStraight = percentile(len, STRAIGHT_PERCENTILE);
+    out[s] = len.map((l, i) => {
+      const straight = inPlace || n <= 25 ? globalStraight : percentile(len.slice(Math.max(0, i - 24), Math.min(n, i + 25)), STRAIGHT_PERCENTILE);
+      return straight > 1e-9 && Number.isFinite(l) ? Math.min(STANCE_BOUNDS[0], l / straight) : STANCE_BOUNDS[0];
+    });
   }
   return out;
 }
