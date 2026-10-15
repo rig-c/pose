@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.3](https://github.com/rig-c/pose/compare/v0.20.2...v0.20.3) (2026-10-15)
+
+
+### Bug Fixes
+
+* **plant-feet:** keep support spans' floor shift across flights on runs ([#142](https://github.com/rig-c/pose/issues/142)) ([#143](https://github.com/rig-c/pose/issues/143)) ([47ce675](https://github.com/rig-c/pose/commit/47ce675d455f4b8a79161cf312e8f6e8576d2fab))
+
 ## [0.20.2](https://github.com/rig-c/pose/compare/v0.20.1...v0.20.2) (2026-10-15)
 
 
