@@ -61,13 +61,19 @@ export function poseFrames(doc: CompiledDocument, animation: string, times: read
 export function measureLanding(doc: CompiledDocument, animation: string, map: JointMap, r: Retarget, posed = poseFrames(doc, animation, r.times)): Landing[] {
   const out: Landing[] = [];
   const lengths = new Map(doc.bones.map((b) => [b.name, b.length ?? 0]));
+  const faceBones = new Set([r.face?.yaw?.bone, r.face?.pitch?.bone].filter((b): b is string => b !== undefined));
+  const isFaceSlider = (c: CompiledDocument['constraints'][number]): boolean => c.record?.kind === 'slider' && c.record.bone !== null && faceBones.has(c.record.bone);
+  const hasFaceSliders = faceBones.size > 0 && doc.constraints.some(isFaceSlider);
+  const chainPosed = hasFaceSliders
+    ? poseFrames({ ...doc, constraints: doc.constraints.filter((c) => !isFaceSlider(c)) }, animation, r.times)
+    : posed;
   for (const c of map.chains) {
     c.bones.forEach((b, k) => {
       const aim = c.aim[k]!;
       const asked = r.targets.get(b)!;
       let worst = -1;
       let frame = 0;
-      posed.forEach((bones, i) => {
+      chainPosed.forEach((bones, i) => {
         const reached = aimAngle(bones, lengths, b, aim);
         const e = Math.abs(wrap(reached - asked[i]!));
         if (e > worst) {
@@ -77,6 +83,24 @@ export function measureLanding(doc: CompiledDocument, animation: string, map: Jo
       });
       out.push({ bone: b, worst, frame, kind: 'angle', tolerance: ANGLE_TOLERANCE });
     });
+  }
+  if (r.face !== null) {
+    for (const axis of ['yaw', 'pitch'] as const) {
+      const ax = r.face[axis];
+      if (ax === undefined) continue;
+      const asked = r.targets.get(ax.bone)!;
+      let worst = -1;
+      let frame = 0;
+      posed.forEach((bones, i) => {
+        const reached = aimAngle(bones, lengths, ax.bone, 'x');
+        const e = Math.abs(wrap(reached - asked[i]!));
+        if (e > worst) {
+          worst = e;
+          frame = i;
+        }
+      });
+      out.push({ bone: ax.bone, worst, frame, kind: 'angle', tolerance: ANGLE_TOLERANCE });
+    }
   }
   const setup = new Map(poseRawSetup(doc).bones.map((b) => [b.name, b]));
   for (const [b, asked] of r.scales) {

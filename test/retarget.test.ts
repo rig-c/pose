@@ -5417,3 +5417,153 @@ describe('leg-scale (#153): respect noScale and noScaleOrReflection inheritance 
   }, SLOW);
 });
 
+describe('face direction (rig-c/pose#138)', () => {
+  function facePose(rawYawDeg: (i: number) => number, rawPitchDeg: (i: number) => number = () => 0): Record<string, unknown> {
+    return poseDoc(BASE, (i, joints) => {
+      const neck = (joints.neck as { at: Pt }).at;
+      const midEye: Pt = [neck[0], neck[1] - 35];
+      const dEye = 12;
+      const dEar = 24;
+      joints.r_eye = { state: 'observed', at: [midEye[0] - dEye / 2, midEye[1]], score: 0.95 };
+      joints.l_eye = { state: 'observed', at: [midEye[0] + dEye / 2, midEye[1]], score: 0.95 };
+      joints.r_ear = { state: 'observed', at: [midEye[0] - dEar / 2, midEye[1] + 5], score: 0.95 };
+      joints.l_ear = { state: 'observed', at: [midEye[0] + dEar / 2, midEye[1] + 5], score: 0.95 };
+      // For horizontal eyes (de = 12, da = 24), xne = (midEye.x - Nx) / 12 and xna = (midEye.x - Nx) / 24 = xne / 2,
+      // so (2*xne + xna)/2 = 1.25 * (midEye.x - Nx) / 12 = tan(yaw).
+      const ty = Math.tan(rawYawDeg(i) * RAD);
+      const tp = Math.tan(rawPitchDeg(i) * RAD);
+      const nx = midEye[0] - (ty * dEye) / 1.25;
+      const ny = midEye[1] + 5 + tp * dEye;
+      joints.nose = { state: 'observed', at: [nx, ny], score: 0.95 };
+    });
+  }
+
+  test('refuses malformed face map entries and duplicate or missing face bones by name', () => {
+    const badMaps: Array<{ face: unknown; code: string }> = [
+      { face: 'yaw', code: 'MAP_FACE_SHAPE' },
+      { face: {}, code: 'MAP_FACE_SHAPE' },
+      { face: { yaw: 12 }, code: 'MAP_FACE_SHAPE' },
+      { face: { yaw: { bone: '', range: [-15, 15] } }, code: 'MAP_FACE_BONE' },
+      { face: { yaw: { bone: 'yaw', range: [5, 15] } }, code: 'MAP_FACE_RANGE' },
+      { face: { yaw: { bone: 'yaw', range: [-15, -5] } }, code: 'MAP_FACE_RANGE' },
+      { face: { yaw: { bone: 'yaw', range: [15, -15] } }, code: 'MAP_FACE_RANGE' },
+      { face: { yaw: { bone: 'no_such_bone', range: [-15, 15] } }, code: 'MAP_BONE_EXISTS' },
+      { face: { yaw: { bone: 'chest', range: [-15, 15] } }, code: 'MAP_BONE_ONCE' },
+      { face: { yaw: { bone: 'yaw', range: [-15, 15] }, pitch: { bone: 'yaw', range: [-10, 15] } }, code: 'MAP_BONE_ONCE' },
+    ];
+    for (const { face, code } of badMaps) {
+      const c = setup({
+        rig: { bones: (bs) => [...bs, { name: 'yaw', parent: 'root' }, { name: 'pitch', parent: 'root' }] },
+        map: { ...baseMap(), face },
+      });
+      const r = retarget(c);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain(code);
+    }
+  }, SLOW);
+
+  test('monotonic nose turn 0 → max yaw drives the yaw axis monotonically within range (r >= 0.9), and leaves every non-face track byte-identical', () => {
+    // Raw yaw sweeps strictly monotonically from 0° to +30° across the 16 frames (compressed into [-15, 15] -> 0° to +15°),
+    // and pitch sweeps from -15° to +15° (compressed into [-10, 15] -> -10° to +15°).
+    const pose = facePose(
+      (i) => (30 * i) / (BASE.n - 1),
+      (i) => -15 + (30 * i) / (BASE.n - 1),
+    );
+    const rigOpts: RigOpts = {
+      bones: (bs) => [...bs, { name: 'yaw', parent: 'root' }, { name: 'pitch', parent: 'root' }],
+    };
+    const withoutFace = setup({ rig: rigOpts, map: baseMap(), pose });
+    const withFace = setup({
+      rig: rigOpts,
+      map: {
+        ...baseMap(),
+        face: {
+          yaw: { bone: 'yaw', range: [-15, 15] },
+          pitch: { bone: 'pitch', range: [-10, 15] },
+        },
+      },
+      pose,
+    });
+
+    const r0 = retarget(withoutFace, ['--bends', 'clamp']);
+    expect(r0.status).toBe(0);
+    expect(linesOf(r0, 'FACE')).toEqual([]);
+
+    const report = join(withFace.dir, 'report.json');
+    const r1 = retarget(withFace, ['--bends', 'clamp', '--report', report]);
+    expect(r1.stderr).toBe('');
+    expect(r1.status).toBe(0);
+
+    const faceLines = linesOf(r1, 'FACE');
+    expect(faceLines).toHaveLength(1);
+    expect(faceLines[0]).toContain('mapped yaw → bone "yaw" [-15, 15]°');
+    expect(faceLines[0]).toContain('pitch → bone "pitch" [-10, 15]°');
+
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as {
+      face: {
+        ears: boolean;
+        yaw: { bone: string; limits: [number, number]; mapped: { min: number; max: number }; corr: number };
+        pitch: { bone: string; limits: [number, number]; mapped: { min: number; max: number }; corr: number };
+      };
+    };
+    expect(rep.face.ears).toBe(true);
+    expect(rep.face.yaw.corr).toBeGreaterThanOrEqual(0.9);
+    expect(rep.face.pitch.corr).toBeGreaterThanOrEqual(0.9);
+    expect(rep.face.yaw.mapped.min).toBeGreaterThanOrEqual(-15);
+    expect(rep.face.yaw.mapped.max).toBeLessThanOrEqual(15);
+    expect(rep.face.pitch.mapped.min).toBeGreaterThanOrEqual(-10);
+    expect(rep.face.pitch.mapped.max).toBeLessThanOrEqual(15);
+
+    // Every non-face track is 100% byte-identical to the run without "face".
+    const m0 = JSON.parse(readFileSync(withoutFace.out, 'utf8')) as { animations: { dance: { tracks: Array<{ bone?: string; slot?: string; property: string; keys: Array<{ t: number; v: number[] }> }> } } };
+    const m1 = JSON.parse(readFileSync(withFace.out, 'utf8')) as { animations: { dance: { tracks: Array<{ bone?: string; slot?: string; property: string; keys: Array<{ t: number; v: number[] }> }> } } };
+    const nonFace1 = m1.animations.dance.tracks.filter((tr) => tr.bone !== 'yaw' && tr.bone !== 'pitch');
+    expect(JSON.stringify(nonFace1)).toBe(JSON.stringify(m0.animations.dance.tracks));
+
+    // Yaw track keys increase strictly monotonically from 0° to +15°, and posed build matches.
+    const yawTrack = m1.animations.dance.tracks.find((tr) => tr.bone === 'yaw' && tr.property === 'rotate')!;
+    expect(yawTrack).toBeDefined();
+    const yawKeys = yawTrack.keys.map((k) => k.v[0]!);
+    expect(yawKeys[0]).toBeCloseTo(0, 2);
+    expect(yawKeys[yawKeys.length - 1]).toBeCloseTo(15, 2);
+    for (let i = 1; i < yawKeys.length; i++) {
+      expect(yawKeys[i]!).toBeGreaterThan(yawKeys[i - 1]!);
+    }
+    const doc = loadBuild(withFace.build);
+    const steps = Array.from({ length: BASE.n - 1 }, () => BASE.dt);
+    const posed = poseRawAnimation(doc, 'dance', steps, {}, 'animation').map((p) => byName(p.bones));
+    const posedYaw = posed.map((b) => worldAngle(b, 'yaw'));
+    for (let i = 1; i < posedYaw.length; i++) {
+      expect(posedYaw[i]!).toBeGreaterThan(posedYaw[i - 1]!);
+    }
+  }, SLOW);
+
+  test('mutant (face-axis-unkeyed): leaving the face axis unkeyed fails POSE_LANDS and fails monotonic posed yaw', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm138-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const from = "tracks.push({ bone: ax.bone, property: 'rotate', keys: ax.keys.map((v, i) => ({ t: keyTimes[i]!, v: [v] })) });";
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, '// mutant: face axis unkeyed'));
+
+      const pose = facePose((i) => (15 * i) / (BASE.n - 1));
+      const cMut = setup({
+        rig: { bones: (bs) => [...bs, { name: 'yaw', parent: 'root' }] },
+        map: { ...baseMap(), face: { yaw: { bone: 'yaw', range: [-15, 15] } } },
+        pose,
+      });
+      const rMut = retarget(cMut, ['--bends', 'clamp'], join(d, 'cli.ts'));
+      expect(rMut.status).toBe(1);
+      expect(rMut.stderr).toContain('POSE_LANDS: bone "yaw" aim');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
+
