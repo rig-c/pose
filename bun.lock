@@ -185,7 +185,7 @@
 
     "qified": ["qified@0.10.1", "", { "dependencies": { "hookified": "^2.1.1" } }, "sha512-+Owyggi9IxT1ePKGafcI87ubSmxol6smwJ+RAHDQlx9+9cPwFWDiKFFCPuWhr9ignlGpZ9vDQLw67N4dcTVFEA=="],
 
-    "rig-c": ["rig-c@2.47.1", "", { "bin": { "rigc": "bin/rigc.cjs" } }, "sha512-zxMY0V+U7/+yi0Qs4tbovYaV9plw4uQUnxS4ecLQiV/DId/Ak8SnRBKm4eQiMyIyrQIf4nLBgUbaJeIQMg1gOg=="],
+    "rig-c": ["rig-c@2.58.1", "", { "bin": { "rigc": "bin/rigc.cjs" } }, "sha512-qcISOC2Ht/clv5v3JAXseLvjnhSkCJArc4v9Qk0O0bYJ6xjP99wdgxrAlpk6m4ySYkBNyQDpsCLPtiZDUmyZPw=="],
 
     "semver": ["semver@7.8.5", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA=="],
 
