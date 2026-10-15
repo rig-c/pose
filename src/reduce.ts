@@ -31,6 +31,7 @@
  * of the gated build against the dense targets with the tolerance added.
  */
 import { f32 } from 'rig-c/compile';
+import { poseNoScale } from './legs.ts';
 
 /** A key as the reducer writes it: a time, its values, and a raw curve on the segment to the next key. */
 export interface ReducedKey {
@@ -444,11 +445,21 @@ const wrap180 = (d: number): number => {
  * the reduced ones), or another bone of the same call given before it — times
  * the setup locals of the unmapped bones between (`via`).
  */
+export interface UnderStep {
+  wp0: M2;
+  w0: M2;
+  inherit?: 'noScale' | 'noScaleOrReflection';
+}
+
 export interface UnderBone {
   bone: string;
-  parent: { rigid: { turn: readonly number[]; world0: M2; scale: readonly number[] }; via: M2 } | { under: string; via: M2 };
+  parent: { rigid: { turn: readonly number[]; world0: M2; scale: readonly number[] }; via: M2; steps?: readonly UnderStep[] } | { under: string; via: M2; steps?: readonly UnderStep[] };
   /** Its setup local 2×2 in its parent's axes: inv(parent's setup world) · its setup world, by rig-c's setup. */
   local: M2;
+  /** Its parent's and its own setup world 2×2 when `inherit` is `noScale` or `noScaleOrReflection` (#153). */
+  wp0?: M2;
+  w0?: M2;
+  inherit?: 'noScale' | 'noScaleOrReflection';
   /** Its setup world x-axis length. */
   len0: number;
   /** The world angle its x axis is asked on every frame (degrees), and the scale of it asked (1: none). */
@@ -475,6 +486,12 @@ export function reduceUnderScale(times: readonly number[], bones: readonly Under
   const rotate = new Map<string, ReducedKey[]>();
   const scale = new Map<string, ReducedKey[]>();
   const rows: ReduceRow[] = [];
+  const stepVia = (m: M2, via: M2, steps: readonly UnderStep[] | undefined): M2 => {
+    if (steps === undefined || !steps.some((st) => st.inherit !== undefined)) return mul(m, via);
+    let cur = m;
+    for (const st of steps) cur = st.inherit !== undefined ? poseNoScale(cur, st.wp0, st.w0, st.inherit, 0, 1) : mul(cur, mul(inv(st.wp0), st.w0));
+    return cur;
+  };
   for (const b of bones) {
     for (const [what, xs] of [['target', b.target], ['asked', b.asked], ['dense', b.dense]] as const) {
       if (xs.length !== n) throw new Error(`reduce: bone "${b.bone}" has ${xs.length} ${what} value(s) for ${n} frame(s)`);
@@ -484,9 +501,9 @@ export function reduceUnderScale(times: readonly number[], bones: readonly Under
     if ('under' in p) {
       const above = world.get(p.under);
       if (above === undefined) throw new Error(`reduce: bone "${b.bone}" hangs from bone "${p.under}", which is not given before it`);
-      parent = above.map((m) => mul(m, p.via));
+      parent = above.map((m) => stepVia(m, p.via, p.steps));
     } else {
-      parent = Array.from({ length: n }, (_, i) => mul(mul(mul(rot(p.rigid.turn[i]!), p.rigid.world0), scaleX(p.rigid.scale[i]!)), p.via));
+      parent = Array.from({ length: n }, (_, i) => stepVia(mul(mul(rot(p.rigid.turn[i]!), p.rigid.world0), scaleX(p.rigid.scale[i]!)), p.via, p.steps));
     }
     const l0: [number, number] = [b.local[0], b.local[2]];
     const a0 = Math.atan2(l0[1], l0[0]) * DEG;
@@ -507,13 +524,14 @@ export function reduceUnderScale(times: readonly number[], bones: readonly Under
     const kAt = trackAt(rk, samples, 1).map((v) => v[0]!);
     const ae = worstOf(kAt.map((_, i) => i), (i) => aimError(i, kAt[i]!))!;
     rows.push({ bone: b.bone, kind: 'angle', before: n, after: rk.length, worst: ae.worst, frame: ae.frame });
-    // The scale that gives it the length asked on the rotate as reduced.
-    const reach = kAt.map((k, i) => Math.hypot(...axis(i, k)) / b.len0);
+    // The scale that gives it the length asked on the rotate as reduced (#153: under noScale, parent scale is normalised to 1).
+    const noScale = b.inherit;
+    const reach = noScale !== undefined ? kAt.map(() => 1) : kAt.map((k, i) => Math.hypot(...axis(i, k)) / b.len0);
     const sk = fitTrack(times, samples, { targets: reach.map((r, i) => [b.asked[i]! / r]), keep, tolerance: scaleTolerance, error: (i, v) => Math.abs(v[0]! * reach[i]! - b.asked[i]!), round: r6 });
     const sAt = trackAt(sk, samples, 1).map((v) => v[0]!);
     const se = worstOf(sAt.map((_, i) => i), (i) => Math.abs(sAt[i]! * reach[i]! - b.asked[i]!))!;
     rows.push({ bone: b.bone, kind: 'scale', before: n, after: sk.length, worst: se.worst, frame: se.frame });
-    world.set(b.bone, parent.map((m, i) => mul(mul(mul(m, rot(kAt[i]!)), b.local), scaleX(sAt[i]!))));
+    world.set(b.bone, parent.map((m, i) => (noScale !== undefined ? poseNoScale(m, b.wp0!, b.w0!, noScale, kAt[i]!, sAt[i]!) : mul(mul(mul(m, rot(kAt[i]!)), b.local), scaleX(sAt[i]!)))));
     rotate.set(b.bone, rk);
     scale.set(b.bone, sk);
   }

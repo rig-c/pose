@@ -431,21 +431,34 @@ function reduceTracks(r: ReturnType<typeof retarget>, map: JointMap, rest: Rest,
     return d;
   };
   const underBones = [...rotate.keys()].filter(under).sort((x, y) => depth(x) - depth(y));
+  const noScaleOf = (b: string): 'noScale' | 'noScaleOrReflection' | undefined => {
+    const inh = rest.get(b)!.inherit;
+    return inh === 'noScale' || inh === 'noScaleOrReflection' ? inh : undefined;
+  };
   const given: UnderBone[] = underBones.map((b) => {
     if (!scalex.has(b)) throw new Refusal([{ code: 'POSE_REDUCE', text: `bone "${b}" hangs under a scaled bone and has no scalex track, so it was not keyed through its parent's posed matrix; --reduce re-solves only a bone the legs keyed that way` }]);
-    // Up through the unmapped bones between (their setup locals), to a bone given before it or one the key formula holds for.
+    // Up through the unmapped bones between (their setup locals, or their noScale unit frames, #153), to a bone given before it or one the key formula holds for.
     let via: M2 = M2_IDENTITY;
+    const steps: Array<{ wp0: M2; w0: M2; inherit?: 'noScale' | 'noScaleOrReflection' }> = [];
     let p = rest.get(b)!.parent!;
     while (under(p) && !mapped.has(p)) {
-      via = mulM2(setupLocal(world0(rest.get(p)!.parent!), world0(p)), via);
+      const wp0 = world0(rest.get(p)!.parent!);
+      const w0 = world0(p);
+      via = mulM2(setupLocal(wp0, w0), via);
+      const inherit = noScaleOf(p);
+      steps.unshift({ wp0, w0, ...(inherit !== undefined ? { inherit } : {}) });
       p = rest.get(p)!.parent!;
     }
-    const parent: UnderBone['parent'] = under(p) ? { under: p, via } : { rigid: { turn: turnOf(p), world0: world0(p), scale: scaleAt.get(p) ?? new Array<number>(n).fill(1) }, via };
+    const viaSteps = steps.some((st) => st.inherit !== undefined) ? { steps } : {};
+    const parent: UnderBone['parent'] = under(p) ? { under: p, via, ...viaSteps } : { rigid: { turn: turnOf(p), world0: world0(p), scale: scaleAt.get(p) ?? new Array<number>(n).fill(1) }, via, ...viaSteps };
+    const wp0 = world0(rest.get(b)!.parent!);
     const w0 = world0(b);
+    const inherit = noScaleOf(b);
     return {
       bone: b,
       parent,
-      local: setupLocal(world0(rest.get(b)!.parent!), w0),
+      local: setupLocal(wp0, w0),
+      ...(inherit !== undefined ? { wp0, w0, inherit } : {}),
       len0: Math.hypot(w0[0], w0[2]),
       target: r.targets.get(b)!,
       asked: r.scales.get(b) ?? new Array<number>(n).fill(1),

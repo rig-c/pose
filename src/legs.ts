@@ -12,14 +12,16 @@
  * x axis, and a child with the `normal` inherit mode takes the parent's whole
  * world matrix — so under a thigh scaled by s, a shin at angle φ in the thigh's
  * axes points at atan2(sin φ, s·cos φ), not φ, and its own length is scaled by
- * |(s·cos φ, sin φ)|. The rotate key `turn − turn above` assumes unit scale. A
- * mapped bone below a scaled bone is therefore keyed through its parent's
- * posed matrix (`posePath`): with rig-c's semantics, a `rotate` key k and a
- * `scalex` key s' make the bone's local matrix R(k) · L · diag(s', 1), L its
- * setup local matrix (from rig-c's setup world matrices), so k and s' are the
- * ones that put its world x axis on the target angle at the asked length. Its
- * art is still sheared by the parent's scale; that is measured, not hidden
- * (`shear` in the report).
+ * |(s·cos φ, sin φ)|. A child with `noScale` or `noScaleOrReflection`
+ * (rig-c/pose#153) still has its direction carried through the parent's scaled
+ * matrix, so its angle is skewed the same way, while rig-c normalises that
+ * direction to unit length so the parent's scale is not inherited. The rotate
+ * key `turn − turn above` assumes unit scale. A mapped bone below a scaled bone
+ * is therefore keyed through its parent's posed matrix (`posePath`): with
+ * rig-c's semantics, a `rotate` key k and a `scalex` key s' put its world x
+ * axis on the target angle at the asked length (under `noScale`, s' is the
+ * bone's own asked scale s directly). Its art is still sheared by a `normal`
+ * parent's scale; that is measured, not hidden (`shear` in the report).
  *
  * **Planted feet.** The hip is no longer the pose's mid_hip travel scaled. On
  * every frame one foot supports: the one whose reference ankle is lower in the
@@ -165,11 +167,36 @@ export interface PathPose {
 }
 
 /**
+ * World 2×2 of a `noScale` or `noScaleOrReflection` bone under `Wp` at rotate
+ * key `k` (degrees) and scalex key `sk` (rig-c/pose#153), matching rig-c's
+ * `modeMatrix` (`rigc/src/core/world.ts`): the bone's local x direction is
+ * rotated by `k`, carried through `Wp` and normalised to unit length before its
+ * setup local frame (`F0`) and `sk` are applied.
+ */
+export function poseNoScale(Wp: M2, Wp0: M2, W0: M2, inherit: 'noScale' | 'noScaleOrReflection', k: number, sk: number): M2 {
+  const L0 = mul(inv(Wp0), W0);
+  const l0: Pt = [L0[0], L0[2]];
+  const len0 = Math.hypot(W0[0], W0[2]);
+  const u0: Pt = [W0[0] / len0, W0[2] / len0];
+  const flip0 = inherit === 'noScale' && Wp0[0] * Wp0[3] - Wp0[1] * Wp0[2] < 0 ? -1 : 1;
+  const turned0: M2 = [u0[0], -u0[1] * flip0, u0[1], u0[0] * flip0];
+  const F0 = mul(inv(turned0), W0);
+  const u = apply(Wp, apply(rot(k), l0));
+  const invLen = 1 / Math.sqrt(u[0] * u[0] + u[1] * u[1]);
+  const ux = u[0] * invLen;
+  const uy = u[1] * invLen;
+  const flip = inherit === 'noScale' && Wp[0] * Wp[3] - Wp[1] * Wp[2] < 0 ? -1 : 1;
+  const turned: M2 = [ux, -uy * flip, uy, ux * flip];
+  return mul(mul(turned, F0), scaleX(sk));
+}
+
+/**
  * Pose a path of bones, parents first, the first the path's top (its origin is
  * (0, 0)). A mapped bone with no scaled bone above it turns rigidly from setup
  * (R(turn) · setup world · diag(scale, 1)); a mapped bone under a scaled bone
  * is solved through its parent's posed matrix (the header); an unmapped bone
- * keeps its setup local matrix. Every setup matrix and origin is rig-c's.
+ * keeps its setup local matrix (or its `noScale` unit frame, #153). Every setup
+ * matrix and origin is rig-c's.
  */
 export function posePath(rest: Rest, path: readonly string[], posing: (b: string) => Posing | null, scaleOf: (b: string) => number | null): PathPose | string {
   const origin = new Map<string, Pt>();
@@ -199,7 +226,8 @@ export function posePath(rest: Rest, path: readonly string[], posing: (b: string
     origin.set(b, [po[0] + o[0], po[1] + o[1]]);
     const L0 = mul(inv(Wp0), W0);
     const under = scaledAbove.has(p);
-    if (pz === null) m.set(b, mul(Wp, L0));
+    const noScale = rb.inherit === 'noScale' || rb.inherit === 'noScaleOrReflection' ? rb.inherit : null;
+    if (pz === null) m.set(b, noScale !== null ? poseNoScale(Wp, Wp0, W0, noScale, 0, 1) : mul(Wp, L0));
     else if (!under) m.set(b, mul(mul(rot(pz.turn), W0), scaleX(s)));
     else {
       if (!pz.aimX) return `bone "${b}" is mapped under a scaled bone and aimed other than along its x axis; only an "x" aim is solved through a scaled parent`;
@@ -208,8 +236,9 @@ export function posePath(rest: Rest, path: readonly string[], posing: (b: string
       const v = apply(inv(Wp), X);
       const l0: Pt = [L0[0], L0[2]];
       const k = (Math.atan2(v[1], v[0]) - Math.atan2(l0[1], l0[0])) * DEG;
-      const sk = Math.hypot(v[0], v[1]) / Math.hypot(l0[0], l0[1]);
-      m.set(b, mul(mul(mul(Wp, rot(k)), L0), scaleX(sk)));
+      // Under noScale / noScaleOrReflection (#153), rig-c normalises the direction carried through Wp to unit length, so the parent's scale is not inherited and the bone's own scalex is s directly.
+      const sk = noScale !== null ? s : Math.hypot(v[0], v[1]) / Math.hypot(l0[0], l0[1]);
+      m.set(b, noScale !== null ? poseNoScale(Wp, Wp0, W0, noScale, k, sk) : mul(mul(mul(Wp, rot(k)), L0), scaleX(sk)));
       solved.set(b, { rotate: k, scale: sk });
     }
     if (under || scaleOf(b) !== null) scaledAbove.add(b);

@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { poseRawSetup, readModel, type CompiledDocument } from 'rig-c/core';
-import type { Rest, RestBone, RigSlot, RigSlots } from './map.ts';
+import type { InheritMode, Rest, RestBone, RigSlot, RigSlots } from './map.ts';
 import { isObject, parseJson, Problems, Refusal, typeName } from './problems.ts';
 
 export interface RigInput {
@@ -129,11 +129,18 @@ export function readBuild(build: string): CompiledDocument {
   return readModel(readFileSync(path, 'utf8'), path);
 }
 
-/** Every bone's setup pose, by rig-c's poser, with its model `length`. */
+/** Every bone's setup pose, by rig-c's poser, with its model `length` and `inheritMode`. */
 export function restOf(doc: CompiledDocument): Rest {
   const lengths = new Map(doc.bones.map((b) => [b.name, b.length ?? 0]));
+  const inherits = new Map<string, InheritMode>(
+    doc.bones.map((b) => {
+      const s = b.inheritMode;
+      const folded = s === undefined || s.length === 0 ? 'normal' : `${s[0]!.toLowerCase()}${s.slice(1)}`;
+      return [b.name, folded === 'onlyTranslation' || folded === 'noRotationOrReflection' || folded === 'noScale' || folded === 'noScaleOrReflection' ? folded : 'normal'];
+    }),
+  );
   const out = new Map<string, RestBone>();
-  for (const b of poseRawSetup(doc).bones) out.set(b.name, { ...b, length: lengths.get(b.name) ?? 0 });
+  for (const b of poseRawSetup(doc).bones) out.set(b.name, { ...b, length: lengths.get(b.name) ?? 0, inherit: inherits.get(b.name) ?? 'normal' });
   return out;
 }
 

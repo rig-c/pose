@@ -116,10 +116,14 @@ export interface RigSlot {
 }
 export type RigSlots = ReadonlyMap<string, RigSlot>;
 
+export type InheritMode = 'normal' | 'onlyTranslation' | 'noRotationOrReflection' | 'noScale' | 'noScaleOrReflection';
+
 /** The rig as the map is resolved against it: each bone's setup pose, by rig-c's poser. */
 export interface RestBone extends RawBone {
   /** The bone's `length` in the compiled model (0 when it has none). */
   length: number;
+  /** The bone's `inheritMode` in the compiled model, folded to its canonical lowercase-first name (`normal` when absent). */
+  inherit?: InheritMode;
 }
 export type Rest = ReadonlyMap<string, RestBone>;
 
