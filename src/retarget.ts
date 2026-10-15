@@ -792,7 +792,14 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     const ankleSeries = { r: series.get('r_ankle')!, l: series.get('l_ankle')! };
     const lower = stanceRangeOf(ankleSeries, { r: series.get('r_hip')!, l: series.get('l_hip')! });
     blendHold = holdBlend(planted.blends, n, posedFeet, lower);
+    const beforeBlendX = blendHold.stretch.map((b, i) => (b === null ? 0 : posedFeet(i).ankle[b.side][0]));
     stretchChain(blendHold.stretch);
+    blendHold.stretch.forEach((b, i) => {
+      if (b === null) return;
+      const dx = beforeBlendX[i]! - posedFeet(i).ankle[b.side][0];
+      hip[i]![0] += dx;
+      travel[i]![0] += dx;
+    });
     // --stance (#60): with the hip placed, a free ankle within the tolerance of the floor has its leg
     // stretched (every bone of its chain's scalex, about the chain's root) until it reaches it.
     if (opts.stance !== undefined && opts.stance !== 'off') {
