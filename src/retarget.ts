@@ -82,7 +82,7 @@ import { Problems, Refusal } from './problems.ts';
 import type { ArtRange, ByHip, Raised, ReachShort, SlotTrack, Switch, SwitchOptions } from './switch.ts';
 import { clampArt, coveredChains, isRaised, measureArt, overflow, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
 import type { BlendHold, Closure, Feet, Floor, LegScale, PathPose, Posing, Side, Stance } from './legs.ts';
-import { holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, plantHip, posePath, rootOf, scaleSupport, SIDES, stanceOf, stanceRangeOf, supportsOf, tipOf } from './legs.ts';
+import { holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, plantHip, posePath, rootOf, scaleSupport, SIDES, stanceOf, stanceRangeOf, supportsOf, tipOf, unshortenStanceShin } from './legs.ts';
 
 const DEG = 180 / Math.PI;
 
@@ -779,7 +779,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     // --stance (#60): with the hip placed, a free ankle within the tolerance of the floor has its leg
     // stretched (every bone of its chain's scalex, about the chain's root) until it reaches it.
     if (opts.stance !== undefined && opts.stance !== 'off') {
-      stance = stanceOf(feet!, ankleSeries, opts.stance, posedFeet, secondsOf, lower);
+      stance = stanceOf(feet!, ankleSeries, opts.stance, legScaleOn ? unshortenStanceShin(scales, L, posedFeet, lower) : posedFeet, secondsOf, lower);
       // The supporting leg (the blend's) and the free leg (the stance's) are different chains on a frame.
       for (let i = 0; i < n; i++) {
         const b = blendHold.stretch[i];
