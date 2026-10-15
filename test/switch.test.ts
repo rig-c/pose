@@ -271,3 +271,143 @@ describe('#136: a short front-set window between two behind-set windows is dropp
   });
 });
 
+function behindToBehindSweep(): { map: JointMap; targets: Map<string, number[]>; times: number[]; duration: number; slots: RigSlots; opts: SwitchOptions } {
+  const n = 40;
+  const fps = 24;
+  const t = Array.from({ length: n }, (_, i) => i / fps);
+  const slots: RigSlots = new Map([
+    ['forearm_r_back', { setup: null, attachments: new Set(['K0_r', 'K4_r']), bone: 'arm_r0' }],
+    ['forearm_l_back', { setup: null, attachments: new Set(['K0_l']), bone: 'arm_l0' }],
+    ['forearm_l_under', { setup: null, attachments: new Set(['K4_l']), bone: 'arm_l0' }],
+    ['topwear', { setup: 'topwear', attachments: new Set(['topwear', 'K0_top', 'K4_top', 'K2_top']), bone: 'chest' }],
+    ['forearm_r', { setup: 'forearm_r', attachments: new Set(['forearm_r']), bone: 'arm_r0' }],
+    ['forearm_l', { setup: 'forearm_l', attachments: new Set(['forearm_l']), bone: 'arm_l0' }],
+    ['forearm_r_front', { setup: null, attachments: new Set(['K2_r']), bone: 'arm_r0' }],
+    ['forearm_l_front', { setup: null, attachments: new Set(['K2_l']), bone: 'arm_l0' }],
+  ]);
+  const map: JointMap = {
+    translate: null,
+    chains: [
+      { name: 'arm_r', bones: ['arm_r0'], joints: ['r_shoulder', 'r_wrist'], aim: ['x'], range: {}, bend: 'free', reach: false },
+      { name: 'arm_l', bones: ['arm_l0'], joints: ['l_shoulder', 'l_wrist'], aim: ['x'], range: {}, bend: 'free', reach: false },
+    ],
+    alternates: [
+      {
+        name: 'K0',
+        slots: { forearm_r_back: 'K0_r', forearm_l_back: 'K0_l', topwear: 'K0_top' },
+        hides: ['forearm_r', 'forearm_l', 'forearm_l_under', 'forearm_r_front', 'forearm_l_front'],
+        offsets: {},
+        chains: ['arm_r', 'arm_l'],
+        pose: {
+          r_shoulder: [0, 0],
+          r_wrist: [0, 100], // -90°
+          l_shoulder: [0, 0],
+          l_wrist: [0, 100], // -90°
+        },
+        drawn: { arm_r0: -90, arm_l0: -90 },
+        turn: { arm_r0: [-20, 20], arm_l0: [-20, 20] },
+        frames: null,
+        place: null,
+      },
+      {
+        name: 'K4',
+        slots: { forearm_r_back: 'K4_r', forearm_l_under: 'K4_l', topwear: 'K4_top' },
+        hides: ['forearm_r', 'forearm_l', 'forearm_l_back', 'forearm_r_front', 'forearm_l_front'],
+        offsets: {},
+        chains: ['arm_r', 'arm_l'],
+        pose: {
+          r_shoulder: [0, 0],
+          r_wrist: [100 * Math.cos((-100 * Math.PI) / 180), -100 * Math.sin((-100 * Math.PI) / 180)], // -100° (within 25° of K0 for arm_r)
+          l_shoulder: [0, 0],
+          l_wrist: [0, -100], // +90° (180° from K0 for arm_l)
+        },
+        drawn: { arm_r0: -100, arm_l0: 90 },
+        turn: { arm_r0: [-20, 20], arm_l0: [-20, 20] },
+        frames: null,
+        place: null,
+      },
+      {
+        name: 'K2_front',
+        slots: { forearm_r_front: 'K2_r', forearm_l_front: 'K2_l', topwear: 'K2_top' },
+        hides: ['forearm_r', 'forearm_l', 'forearm_r_back', 'forearm_l_back', 'forearm_l_under'],
+        offsets: {},
+        chains: ['arm_r', 'arm_l'],
+        pose: {
+          r_shoulder: [0, 0],
+          r_wrist: [100, 0], // 0°
+          l_shoulder: [0, 0],
+          l_wrist: [-100, 0], // 180° (outside tolerance while arm_l sweeps via -90..+90 through -45/+45)
+        },
+        drawn: { arm_r0: 0, arm_l0: 180 },
+        turn: { arm_r0: [-20, 20], arm_l0: [-20, 20] },
+        frames: null,
+        place: null,
+      },
+    ],
+  };
+  // Frames 0–9: K0 (-90° / -90°). Frames 10–14: arm_l sweeps -60, -30, 10, 40, 60 (outside 25° of both K0 and K4) while arm_r is at -98°.
+  // Frames 15–22: K4 (-100° / +90°). Frames 23–29: arm_l sweeps +60, +40, +10, -30, -60, -70, -80 while arm_r is at -92°.
+  // Frames 30–39: K0 (-90° / -90°).
+  const armR = Array.from({ length: n }, (_, i) => (i >= 10 && i <= 22 ? -100 : -90));
+  const sweepIn = [-60, -30, 10, 40, 60];
+  const sweepOut = [60, 40, 20, 0, -20, -40, -60];
+  const armL = Array.from({ length: n }, (_, i) => {
+    if (i < 10) return -90;
+    if (i < 15) return sweepIn[i - 10]!;
+    if (i <= 22) return 90;
+    if (i < 30) return sweepOut[i - 23]!;
+    return -90;
+  });
+  const targets = new Map<string, number[]>([
+    ['arm_r0', armR],
+    ['arm_l0', armL],
+  ]);
+  const opts: SwitchOptions = { switchTolerance: 25, switchMin: 0.25, switchAt: 'first' };
+  return { map, targets, times: t, duration: t[n - 1]!, slots, opts };
+}
+
+describe('#162: between two behind-the-torso sets, an arm that leaves tolerance without being claimed by a front set stays on the nearer behind set', () => {
+  test('synthetic: arm_l stays on K0 or K4 across both behind-to-behind sweep gaps and never falls back to the front setup slot forearm_l', () => {
+    const s = behindToBehindSweep();
+    const sw = selectSwitches(s.map, s.targets, s.times, s.duration, s.slots, s.opts);
+    expect(sw.switches.map((x) => ({ set: x.set, frames: x.frames }))).toEqual([
+      { set: 'K0', frames: [0, 9] },
+      { set: 'K4', frames: [15, 22] },
+      { set: 'K0', frames: [30, 39] },
+    ]);
+    for (let i = 0; i < 40; i++) {
+      expect(sw.shown.get('forearm_l')![i]).toBeNull();
+      const inBehind = sw.shown.get('forearm_l_back')![i] === 'K0_l' || sw.shown.get('forearm_l_under')![i] === 'K4_l';
+      expect(inBehind).toBe(true);
+    }
+    const frontTrack = sw.slotTracks.find((tr) => tr.slot === 'forearm_l')!;
+    expect(frontTrack.keys).toEqual([{ t: 0, v: null }]);
+    const backTrack = sw.slotTracks.find((tr) => tr.slot === 'forearm_l_back')!;
+    const underTrack = sw.slotTracks.find((tr) => tr.slot === 'forearm_l_under')!;
+    expect(backTrack.keys.filter((k) => k.t > 0).length).toBeLessThanOrEqual(2);
+    expect(underTrack.keys.filter((k) => k.t > 0).length).toBeLessThanOrEqual(2);
+  });
+
+  test('mutant: without the nearer-behind fallback in behind-to-behind gaps, arm_l falls back to the front default forearm_l on the sweep frames', async () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      const path = join(d, 'src', 'switch.ts');
+      const src = readFileSync(path, 'utf8');
+      const from = 'if (!frontNear) for (const cn of chains) for (let i = g0; i <= g1; i++) cPick.get(cn)![i] = set0;\n      } else {';
+      expect(src.split(from)).toHaveLength(2);
+      writeFileSync(path, src.replace(from, 'if (!frontNear) for (const cn of chains) for (let i = g0; i <= g1; i++) cPick.get(cn)![i] = set0;\n      } else if (false) {'));
+      const m = (await import(path)) as { selectSwitches: typeof selectSwitches };
+      const s = behindToBehindSweep();
+      const sw = m.selectSwitches(s.map, s.targets, s.times, s.duration, s.slots, s.opts);
+      const frontFrames = sw.shown.get('forearm_l')!.map((v, i) => (v === 'forearm_l' ? i : -1)).filter((i) => i >= 0);
+      console.log(`  mutant "no nearer-behind fallback": forearm_l front frames = ${frontFrames.join(', ')}`);
+      expect(frontFrames).toEqual([10, 11, 12, 13, 14, 23, 24, 25, 26, 27, 28, 29]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+});
+
+
