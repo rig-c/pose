@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.4](https://github.com/rig-c/pose/compare/v0.20.3...v0.20.4) (2026-10-15)
+
+
+### Bug Fixes
+
+* **plant-feet:** revert [#143](https://github.com/rig-c/pose/issues/143) (runShift changed dance's 3-jump grounded frames) ([#145](https://github.com/rig-c/pose/issues/145)) ([92fe1ab](https://github.com/rig-c/pose/commit/92fe1abcfd28cadffa1699f2864da25aaeb45941))
+
 ## [0.20.3](https://github.com/rig-c/pose/compare/v0.20.2...v0.20.3) (2026-10-15)
 
 
