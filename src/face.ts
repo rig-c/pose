@@ -11,6 +11,13 @@ type Pt = [number, number];
 
 const DEG = 180 / Math.PI;
 
+/**
+ * Fraction of each side's limit below which `mapFaceAxis` is 1:1 identity
+ * (`rig-c/pose#164`); above `FACE_KNEE * limit` (`12°` for `15°`, `8°` for `10°`),
+ * a piecewise-linear knee compresses only the overshoot `[k, peak]` into `[k, limit]`.
+ */
+export const FACE_KNEE = 0.8;
+
 export interface FaceSpan {
   min: number;
   max: number;
@@ -20,11 +27,13 @@ export interface FaceSpan {
 export interface FaceAxisReading {
   bone: string;
   limits: [number, number];
+  /** Knee thresholds `[kneeNeg, kneePos]` in degrees (`FACE_KNEE * limits`), inside which mapping is 1:1. */
+  knee: [number, number];
   read: FaceSpan;
   mapped: FaceSpan;
-  /** Compression factors [kNeg, kPos] in (0, 1] applied to negative and positive read angles. */
+  /** Peak-to-limit ratios `[kNeg, kPos]` in (0, 1] for negative and positive sides. */
   scale: [number, number];
-  /** Pearson correlation between the read angle and the mapped keys over the clip. */
+  /** Spearman rank (monotone) correlation between the read angle and the mapped keys over the clip. */
   corr: number;
   /** Per-frame read angle in degrees, before range compression. */
   raw: number[];
@@ -65,16 +74,31 @@ function spanOf(xs: readonly number[]): FaceSpan {
   return { min: r3(min), max: r3(max), range: r3(max - min) };
 }
 
+function ranksOf(xs: readonly number[]): number[] {
+  const idx = xs.map((_, i) => i).sort((a, b) => xs[a]! - xs[b]!);
+  const out = new Array<number>(xs.length).fill(0);
+  for (let i = 0; i < idx.length;) {
+    let j = i;
+    while (j + 1 < idx.length && xs[idx[j + 1]!]! === xs[idx[i]!]!) j++;
+    const rank = 0.5 * (i + j);
+    for (let k = i; k <= j; k++) out[idx[k]!] = rank;
+    i = j + 1;
+  }
+  return out;
+}
+
 function corrOf(a: readonly number[], b: readonly number[]): number {
   if (a.length < 2 || a.length !== b.length) return 1;
-  const ma = a.reduce((x, y) => x + y, 0) / a.length;
-  const mb = b.reduce((x, y) => x + y, 0) / b.length;
+  const ra = ranksOf(a);
+  const rb = ranksOf(b);
+  const ma = ra.reduce((x, y) => x + y, 0) / ra.length;
+  const mb = rb.reduce((x, y) => x + y, 0) / rb.length;
   let num = 0;
   let da = 0;
   let db = 0;
-  for (let i = 0; i < a.length; i++) {
-    const xa = a[i]! - ma;
-    const xb = b[i]! - mb;
+  for (let i = 0; i < ra.length; i++) {
+    const xa = ra[i]! - ma;
+    const xb = rb[i]! - mb;
     num += xa * xb;
     da += xa * xa;
     db += xb * xb;
@@ -153,12 +177,21 @@ export function readFaceAngles(
   return { ears, yaw, pitch };
 }
 
+function mapKneeSide(u: number, limit: number, peak: number): number {
+  if (!(limit > 1e-9)) return 0;
+  if (!(peak > limit)) return u;
+  const k = FACE_KNEE * limit;
+  if (u <= k) return u;
+  if (u >= peak) return limit;
+  return k + ((limit - k) * (u - k)) / (peak - k);
+}
+
 /**
  * Compress a read angle series into `axis.range` (`[min, max]` with `min <= 0 <= max`):
- * negative readings scale by `kNeg = min(1, limits[0] / rawMin)` and positive
- * readings by `kPos = min(1, limits[1] / rawMax)`, so peaks above the range are
- * compressed to the limit rather than clipped flat, while motion already inside
- * the range keeps unit gain (`1`).
+ * readings on a side whose peak stays inside the limit map 1:1 (`f(x) = x`); when a
+ * side's peak exceeds its limit `L`, readings up to the knee `k = FACE_KNEE * L`
+ * (`0.8 * L`, `rig-c/pose#164`) still map 1:1 and only the overshoot `[k, peak]` is
+ * compressed linearly into `[k, L]`.
  */
 export function mapFaceAxis(raw: readonly number[], axis: FaceAxis): FaceAxisReading {
   const limits = axis.range;
@@ -168,12 +201,17 @@ export function mapFaceAxis(raw: readonly number[], axis: FaceAxis): FaceAxisRea
     if (x < rawMin) rawMin = x;
     if (x > rawMax) rawMax = x;
   }
+  const limNeg = -limits[0];
+  const limPos = limits[1];
+  const peakNeg = -rawMin;
+  const peakPos = rawMax;
   const kNeg = rawMin < limits[0] && rawMin < -1e-9 ? limits[0] / rawMin : 1;
   const kPos = rawMax > limits[1] && rawMax > 1e-9 ? limits[1] / rawMax : 1;
-  const keys = raw.map((x) => r3(x < 0 ? x * kNeg : x * kPos));
+  const keys = raw.map((x) => r3(x < 0 ? -mapKneeSide(-x, limNeg, peakNeg) : mapKneeSide(x, limPos, peakPos)));
   return {
     bone: axis.bone,
     limits: [limits[0], limits[1]],
+    knee: [r3(FACE_KNEE * limits[0]), r3(FACE_KNEE * limits[1])],
     read: spanOf(raw),
     mapped: spanOf(keys),
     scale: [r3(kNeg), r3(kPos)],
@@ -215,7 +253,7 @@ export function faceLine(f: FaceReading): string {
   for (const name of ['yaw', 'pitch'] as const) {
     const ax = f[name];
     if (ax === undefined) continue;
-    axes.push(`${name} → bone "${ax.bone}" [${ax.limits[0]}, ${ax.limits[1]}]°: ${sg(ax.mapped.min)}° … ${sg(ax.mapped.max)}° (scale ${ax.scale[0].toFixed(3)}/${ax.scale[1].toFixed(3)}, r=${ax.corr.toFixed(3)})`);
+    axes.push(`${name} → bone "${ax.bone}" [${ax.limits[0]}, ${ax.limits[1]}]° (knee [${ax.knee[0]}, ${ax.knee[1]}]°): ${sg(ax.mapped.min)}° … ${sg(ax.mapped.max)}° (scale ${ax.scale[0].toFixed(3)}/${ax.scale[1].toFixed(3)}, r=${ax.corr.toFixed(3)})`);
   }
   return `${joints}: ${readPart}; mapped ${axes.join(', ')}`;
 }

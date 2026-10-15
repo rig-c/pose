@@ -165,6 +165,9 @@ retarget
   --report <file>       write the run's measurements (holds, short, endOn, flips, bends, landings, folds,
                         switches, uncovered, turns, range, artRange, raised, byHip,
                         idleDropped, idleKeptOut, merged, reduce) as JSON
+  --camera <file>       write the sequence's camera track (rig-pose-camera/1: continuous figure scale s,
+                        raw standing height ratio, pan tx/ty, and composite videoS) as a sidecar JSON file
+                        without changing motion.json (rig-c/pose#161)
 
   It writes nothing until rigc's gate is green with the animation in, every mapped bone lands on
   the angle the pose asks for (posed by rig-c's own poser), and no hinge bends the wrong way.
@@ -262,7 +265,7 @@ function legScaleOf(f: Map<string, string>): [number, number] | 'off' {
 }
 
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head']);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report', 'camera', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head']);
   const bends = f.get('bends') ?? 'refuse';
   if (bends !== 'refuse' && bends !== 'clamp') throw new Usage(`--bends is "${bends}"; it must be refuse or clamp`);
   const switchAt = f.get('switch-at') ?? 'first';
@@ -299,6 +302,7 @@ function retargetArgs(argv: string[]): RetargetArgs {
     build: f.get('build'),
     render: f.get('render'),
     report: f.get('report'),
+    camera: f.get('camera'),
     idle: f.get('idle'),
     carryIdle: f.has('carry-idle'),
     merge: f.get('merge'),

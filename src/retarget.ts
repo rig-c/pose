@@ -82,7 +82,7 @@ import { Problems, Refusal } from './problems.ts';
 import type { ArtRange, ByHip, Raised, ReachShort, SlotTrack, Switch, SwitchOptions } from './switch.ts';
 import { clampArt, coveredChains, isRaised, measureArt, overflow, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
 import type { BlendHold, Closure, Feet, Floor, LegScale, PathPose, Posing, Side, Stance } from './legs.ts';
-import { holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, percentile, plantHip, posePath, rootOf, scaleSupport, SIDES, stanceOf, stanceRangeOf, STRAIGHT_PERCENTILE, supportsOf, tipOf, unshortenStanceShin } from './legs.ts';
+import { figureScaleOf, holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, percentile, plantHip, posePath, rootOf, scaleSupport, SIDES, stanceOf, stanceRangeOf, STRAIGHT_PERCENTILE, supportsOf, tipOf, unshortenStanceShin } from './legs.ts';
 import type { FaceReading } from './face.ts';
 import { readFace } from './face.ts';
 
@@ -326,6 +326,26 @@ export interface Retarget {
   byHip: ByHip[];
   /** With "face" in the map (#138): per-frame yaw/pitch reading and range-compressed mapping. */
   face: FaceReading | null;
+  /** Continuous per-frame figure scale relative to frame 0 (`#163`, `#161`). */
+  figureScale: FigureScaleReading;
+}
+
+export interface FigureScaleFrame {
+  frame: number;
+  t: number;
+  /** Continuous rate-limited figure scale relative to frame 0 (`s[0] = 1`, step ≤ 1%/frame, held on frozen spans). */
+  s: number;
+  /** Raw standing-height ratio relative to frame 0 (`raw[i] / raw[0]`). */
+  rawS: number;
+}
+
+export interface FigureScaleReading {
+  /** Largest frame-to-frame relative change `|s[i] - s[i-1]| / s[i-1]` and the frame `i` where it occurs. */
+  maxStep: { step: number; frame: number; t: number };
+  /** Ending scale over frame 0 (`s[n-1] / s[0]`). */
+  endOverStart: number;
+  /** Per-frame continuous scale `s` and raw scale `rawS`. */
+  frames: FigureScaleFrame[];
 }
 
 /** The hip's pivot against the thigh roots, at setup (rig-c/pose#47). */
@@ -687,20 +707,60 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       else if (plantOn) p.add('LEGS_MAP', `--plant-feet reads both hips and both ankles from the pose; the map's chains use ${['r_hip', 'l_hip', 'r_ankle', 'l_ankle'].filter((j) => !series.has(j)).join(', ')} nowhere`);
     }
   }
-  const poseScale: number[] | null =
-    t !== null && scale !== null && !inPlace
-      ? (() => {
-          const [pa, pb] = t.scale.pose;
-          const A = series.get(pa)!;
-          const B = series.get(pb)!;
-          const raw = A.map((a, i) => Math.hypot(B[i]![0] - a[0], B[i]![1] - a[1]));
-          return raw.map((_, i) => {
-            const win = raw.slice(Math.max(0, i - 12), Math.min(n, i + 13)).filter((v) => v > 1e-6);
-            const m = win.length > 0 ? median(win) : scale!.pose;
-            return m > 1e-6 ? m / scale!.pose : 1;
-          });
-        })()
-      : null;
+  const heldPt = (name: string): Pt[] | null => {
+    const known = series.get(name);
+    if (known !== undefined) return known;
+    const h = heldOf(name);
+    return 'never' in h ? null : h.at;
+  };
+  const rawFigureHeight: number[] = (() => {
+    const ar = heldPt('r_ankle');
+    const al = heldPt('l_ankle');
+    const top = heldPt('nose') ?? heldPt('neck');
+    if (ar !== null && al !== null && top !== null) {
+      const h = ar.map((r, i) => Math.max(r[1], al[i]![1]) - top[i]![1]);
+      if (h.every((v) => v > 1e-6)) return h;
+    }
+    const hr = heldPt('r_hip');
+    const hl = heldPt('l_hip');
+    if (ar !== null && al !== null && hr !== null && hl !== null) {
+      const h = ar.map((r, i) => Math.max(Math.hypot(r[0] - hr[i]![0], r[1] - hr[i]![1]), Math.hypot(al[i]![0] - hl[i]![0], al[i]![1] - hl[i]![1])));
+      if (h.every((v) => v > 1e-6)) return h;
+    }
+    if (t !== null) {
+      const [pa, pb] = t.scale.pose;
+      const A = series.get(pa)!;
+      const B = series.get(pb)!;
+      const h = A.map((a, i) => Math.hypot(B[i]![0] - a[0], B[i]![1] - a[1]));
+      if (h.every((v) => v > 1e-6)) return h;
+    }
+    return new Array<number>(n).fill(1);
+  })();
+  const continuousScale = figureScaleOf(rawFigureHeight);
+  const figureScale: FigureScaleReading = (() => {
+    const raw0 = rawFigureHeight[0] ?? 1;
+    let maxStep = 0;
+    let stepFrame = 0;
+    for (let i = 1; i < n; i++) {
+      const prev = continuousScale[i - 1]!;
+      const st = prev > 1e-9 ? Math.abs(continuousScale[i]! - prev) / prev : 0;
+      if (st > maxStep) {
+        maxStep = st;
+        stepFrame = i;
+      }
+    }
+    return {
+      maxStep: { step: r6(maxStep), frame: stepFrame, t: keyTimes[stepFrame] ?? 0 },
+      endOverStart: r6(continuousScale[n - 1] ?? 1),
+      frames: continuousScale.map((s, i) => ({
+        frame: i,
+        t: keyTimes[i]!,
+        s: r6(s),
+        rawS: r6(raw0 > 1e-9 ? rawFigureHeight[i]! / raw0 : 1),
+      })),
+    };
+  })();
+  const poseScale: number[] | null = t !== null && scale !== null && n > 25 && !inPlace ? continuousScale : null;
   if (legScaleOn) {
     const limits = opts.legScale as [number, number];
     const rawSegments: Array<{ chain: string; bone: string; joints: [string, string]; kind: string; lengths: number[]; ownStraight: number }> = [];
@@ -727,6 +787,12 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     const straightByKind = new Map<string, number>();
     for (const seg of rawSegments) straightByKind.set(seg.kind, Math.max(straightByKind.get(seg.kind) ?? 0, seg.ownStraight));
     if (!inPlace && n > 25) {
+      for (const seg of rawSegments) {
+        seg.lengths = seg.lengths.map((l, i) => (continuousScale[i]! > 1e-6 ? l / continuousScale[i]! : l));
+        seg.ownStraight = percentile(seg.lengths, STRAIGHT_PERCENTILE);
+      }
+      straightByKind.clear();
+      for (const seg of rawSegments) straightByKind.set(seg.kind, Math.max(straightByKind.get(seg.kind) ?? 0, seg.ownStraight));
       const byChain = new Map<string, typeof rawSegments>();
       for (const seg of rawSegments) {
         const list = byChain.get(seg.chain) ?? [];
@@ -734,30 +800,15 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         byChain.set(seg.chain, list);
       }
       const chainTotals = [...byChain.values()].filter((list) => list.length >= 2).map((list) => list[0]!.lengths.map((_, i) => list.reduce((s, seg) => s + seg.lengths[i]!, 0)));
-      const rawBySeg = new Map(rawSegments.map((seg) => [seg, [...seg.lengths]]));
-      for (const seg of rawSegments) {
-        const globalStraight = straightByKind.get(seg.kind)!;
-        const peers = rawSegments.filter((s) => s.kind === seg.kind);
-        seg.lengths = rawBySeg.get(seg)!.map((l, i) => {
-          const lo = Math.max(0, i - 24);
-          const hi = Math.min(n, i + 25);
-          let localStraight = 0;
-          for (const peer of peers) localStraight = Math.max(localStraight, percentile(rawBySeg.get(peer)!.slice(lo, hi), STRAIGHT_PERCENTILE));
-          if (chainTotals.length > 0 && straightByKind.size >= 2) {
-            let sumKindStraight = 0;
-            for (const kind of straightByKind.keys()) {
-              let ks = 0;
-              for (const s of rawSegments) if (s.kind === kind) ks = Math.max(ks, percentile(rawBySeg.get(s)!.slice(lo, hi), STRAIGHT_PERCENTILE));
-              sumKindStraight += ks;
-            }
-            let maxChainTotal = 0;
-            for (const tot of chainTotals) maxChainTotal = Math.max(maxChainTotal, percentile(tot.slice(lo, hi), STRAIGHT_PERCENTILE));
-            if (sumKindStraight > maxChainTotal && maxChainTotal > 1e-6) {
-              localStraight *= maxChainTotal / sumKindStraight;
-            }
-          }
-          return localStraight > 1e-6 ? l * (globalStraight / localStraight) : l;
-        });
+      if (chainTotals.length > 0 && straightByKind.size >= 2) {
+        let sumKindStraight = 0;
+        for (const ks of straightByKind.values()) sumKindStraight += ks;
+        let maxChainTotal = 0;
+        for (const tot of chainTotals) maxChainTotal = Math.max(maxChainTotal, percentile(tot, STRAIGHT_PERCENTILE));
+        if (sumKindStraight > maxChainTotal && maxChainTotal > 1e-6) {
+          const k = maxChainTotal / sumKindStraight;
+          for (const [kind, ks] of straightByKind) straightByKind.set(kind, ks * k);
+        }
       }
     }
     for (const seg of rawSegments) {
@@ -838,7 +889,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     // (stanceOf's mechanism, its bounds) so its ankle stays on the floor. Before --stance, whose
     // floor is that supporting ankle. #95: the lower bound on a frame is the leg's own range there.
     const ankleSeries = { r: series.get('r_ankle')!, l: series.get('l_ankle')! };
-    const lower = stanceRangeOf(ankleSeries, { r: series.get('r_hip')!, l: series.get('l_hip')! }, inPlace);
+    const lower = stanceRangeOf(ankleSeries, { r: series.get('r_hip')!, l: series.get('l_hip')! }, inPlace, continuousScale);
     blendHold = holdBlend(planted.blends, n, posedFeet, lower);
     const beforeBlendX = blendHold.stretch.map((b, i) => (b === null ? 0 : posedFeet(i).ankle[b.side][0]));
     stretchChain(blendHold.stretch);
@@ -1389,7 +1440,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     animation: { duration: keyTimes[n - 1]!, tracks },
     times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale,
     switches: sw.switches, shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
-    legScale, scales, feet, planted: plantOn, stance, floor, blendHold, closure, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs), raised, byHip, face,
+    legScale, scales, feet, planted: plantOn, stance, floor, blendHold, closure, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs), raised, byHip, face, figureScale,
   };
 }
 
