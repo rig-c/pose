@@ -64,6 +64,7 @@ interface BoneSpec {
   rotation?: number;
   length?: number;
   scaleX?: number;
+  inherit?: string;
 }
 
 /**
@@ -5329,3 +5330,90 @@ describe('leg-scale (#148): one straight length per segment for both legs, so co
     }
   }, SLOW);
 });
+
+describe('leg-scale (#153): respect noScale and noScaleOrReflection inheritance when solving a leg segment under a scaled parent', () => {
+  /** A 16-frame pose where the right thigh shortens to ~0.75 of straight on frame 15 while the right shin turns 45° across it. */
+  function foreshortenedPose(): Record<string, unknown> {
+    return poseDoc(BASE, (i, j) => {
+      const rHip = j.r_hip!.at as Pt;
+      const lHip = j.l_hip!.at as Pt;
+      j.l_knee = { state: 'observed', at: [lHip[0], lHip[1] + 80], score: 0.9 };
+      j.l_ankle = { state: 'observed', at: [lHip[0], lHip[1] + 150], score: 0.9 };
+      if (i < 15) {
+        j.r_knee = { state: 'observed', at: [rHip[0], rHip[1] + 80], score: 0.9 };
+        j.r_ankle = { state: 'observed', at: [rHip[0], rHip[1] + 150], score: 0.9 };
+      } else {
+        j.r_knee = { state: 'observed', at: [rHip[0], rHip[1] + 60], score: 0.9 };
+        j.r_ankle = { state: 'observed', at: [rHip[0] - 45, rHip[1] + 105], score: 0.9 };
+      }
+    });
+  }
+
+  test('lands scale, angle and ankle under direct noScale / noScaleOrReflection and under an unmapped noScale control bone (dense and --reduce)', () => {
+    for (const mode of ['noScale', 'noScaleOrReflection', 'ctl-noScale'] as const) {
+      const c = setup({
+        pose: foreshortenedPose(),
+        rig: {
+          bones: (bs) => {
+            if (mode !== 'ctl-noScale') {
+              return bs.map((b) => (b.name === 'leg_r1' || b.name === 'leg_l1' ? { ...b, inherit: mode } : b));
+            }
+            const out: BoneSpec[] = [];
+            for (const b of bs) {
+              if (b.name === 'leg_r1' || b.name === 'leg_l1') {
+                const ctl = `${b.name}_ctl`;
+                out.push({ name: ctl, parent: b.parent, x: b.x, y: b.y, rotation: b.rotation, length: 0, inherit: 'noScale' });
+                out.push({ ...b, parent: ctl, x: 0, y: 0, rotation: 0, inherit: 'normal' });
+              } else {
+                out.push(b);
+              }
+            }
+            return out;
+          },
+        },
+      });
+      for (const extra of [[], ['--reduce', '0.5']]) {
+        const report = join(c.dir, `report_${mode}_${extra.length}.json`);
+        const r = retarget(c, ['--leg-scale', '0.55,1.05', '--plant-feet', '--report', report, ...extra]);
+        expect(r.stderr).toBe('');
+        expect(r.status).toBe(0);
+        const rep = JSON.parse(readFileSync(report, 'utf8')) as {
+          landings: Array<{ bone: string; kind: string; worst: number; tolerance: number }>;
+          shear: Array<{ bone: string; shear: number }>;
+        };
+        for (const l of rep.landings) expect(l.worst).toBeLessThanOrEqual(l.tolerance);
+        const shinShear = rep.shear.find((s) => s.bone === 'leg_r1')!;
+        expect(shinShear.shear).toBeLessThan(1e-3);
+      }
+    }
+  }, SLOW);
+
+  test('mutant (ignore-noscale): treating a noScale shin as normal divides by the stripped parent scale and fails POSE_LANDS', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm153-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'legs.ts');
+      const from = "const noScale = rb.inherit === 'noScale' || rb.inherit === 'noScaleOrReflection' ? rb.inherit : null;";
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'const noScale = null;'));
+
+      const cMut = setup({
+        pose: foreshortenedPose(),
+        rig: {
+          bones: (bs) => bs.map((b) => (b.name === 'leg_r1' || b.name === 'leg_l1' ? { ...b, inherit: 'noScale' } : b)),
+        },
+      });
+      const rMut = retarget(cMut, ['--leg-scale', '0.55,1.05', '--plant-feet'], join(d, 'cli.ts'));
+      expect(rMut.status).toBe(1);
+      expect(rMut.stderr).toContain('POSE_LANDS: bone "leg_r1" scale');
+      expect(rMut.stderr).toContain('POSE_LANDS: bone "leg_r1:tip" ankle');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
