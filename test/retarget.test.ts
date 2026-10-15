@@ -2805,6 +2805,86 @@ describe('#47: --leg-scale and --plant-feet', () => {
     }
   }, SLOW);
 
+  test('#142: a support span ends at its ankle\'s push-off when both ankles are above their rolling floor and mid_hip is rising; mutant waiting for mid_hip drags the lifted foot down', () => {
+    /**
+     * Running cycle with crouch bottom on frames 2 and 12 and push-off on frames 3 and 13:
+     * - Grounded support on 0–2 (`r`) and 10–12 (`l`), with legs at full length (150 px) on 0–1 / 10–11 and crouched (`f = 0.92`, ankle on floor, hip lowered by `0.08 * V[1] + 6` px via `rise = -6`) on 2 / 12.
+     * - Push-off on frames 3 and 13: `f = 0.84` and `rise = 0.10 * V[1]` (~15 px), so both ankles are `15 px` (`0.10 > 0.05` leg lengths) above the floor while `mid_hip` is rising from frame 2's crouch bottom (`drop[1]` goes from `0.08 * V[1] + 6 = 18 px` on frame 2 to `0.06 * V[1] = 9 px` on frame 3, still below the `> 0.05` jump threshold).
+     * - Flight on frames 4–9 and 14–19 (`f = 1`, `rise = 25 px`).
+     */
+    const f = (i: number): number => {
+      if (i === 2 || i === 12 || i === 22) return 0.92;
+      if (i === 3 || i === 13) return 0.84;
+      return 1;
+    };
+    const rise = (i: number): number => {
+      if (i === 2 || i === 12 || i === 22) return 0.08 * V[1] - 5;
+      if (i === 3 || i === 13) return 0.16 * V[1] - 2;
+      if ((i >= 4 && i <= 9) || (i >= 14 && i <= 19)) return 25;
+      return 0;
+    };
+    const lift = (i: number): number => (i === 2 || i === 12 || i === 22 ? -(0.08 * V[1] - 5) : 0);
+    const doc = { ...legsPose(f, lift, rise), travel: 'in-place' };
+    const c = setup({ pose: doc });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--leg-scale', '0.8,1.05', '--plant-feet', '--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as {
+      feet: {
+        jumps: Array<[number, number]>;
+        supports: Array<{ side: string; frames: [number, number] }>;
+        floor: number;
+      };
+    };
+    expect(rep.feet.jumps).toEqual([
+      [3, 9],
+      [13, 19],
+    ]);
+    expect(rep.feet.supports.map((s) => s.frames)).toEqual([
+      [0, 2],
+      [10, 12],
+      [20, 23],
+    ]);
+
+    const p = posedLegs(c.build);
+    const floorY = rep.feet.floor;
+    expect(p.ankle.r[3]![1] - floorY).toBeGreaterThan(5);
+    expect(p.ankle.l[13]![1] - floorY).toBeGreaterThan(5);
+
+    // Mutant waiting for mid_hip to cross JUMP_RISE keeps push-off frames 3 and 13 grounded, dragging the lifted ankle to the floor and pulling the hip down.
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm142-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'legs.ts');
+      const from = 'for (const j of jumps) while (j[0] > 1 && up[0]![j[0] - 1] && up[1]![j[0] - 1] && midY[j[0] - 1]! < midY[j[0] - 2]!) j[0]--;';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, ''));
+
+      const cMut = setup({ pose: doc });
+      const mRep = join(cMut.dir, 'report.json');
+      const rMut = retarget(cMut, ['--leg-scale', '0.8,1.05', '--plant-feet', '--report', mRep], join(d, 'cli.ts'));
+      expect(rMut.status).toBe(0);
+      const repMut = JSON.parse(readFileSync(mRep, 'utf8')) as {
+        feet: { jumps: Array<[number, number]> };
+      };
+      expect(repMut.feet.jumps).toEqual([
+        [4, 9],
+        [14, 19],
+      ]);
+      const pMut = posedLegs(cMut.build);
+      const dip = p.hip[3]![1] - pMut.hip[3]![1];
+      console.log(`  mutant "mid_hip start (#142)": frame 3 hipY=${pMut.hip[3]![1].toFixed(2)}u vs ours=${p.hip[3]![1].toFixed(2)}u, dragged down by ${dip.toFixed(2)}u`);
+      expect(dip).toBeGreaterThan(10);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+
   test('standing while the ankles drift up the picture with depth (the hip does not lift) is not a jump', () => {
     /** Both ankles 20 px up by the last frame (0.13 leg lengths over a floor-wide rule's 0.05), 0.9 px a frame; the hip stays. */
     const depth = (i: number): number => (20 * i) / (N - 1);
@@ -5249,6 +5329,3 @@ describe('leg-scale (#148): one straight length per segment for both legs, so co
     }
   }, SLOW);
 });
-
-
-

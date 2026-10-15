@@ -35,7 +35,9 @@
  * picture y over ± `FLOOR_SECONDS`), for ≥ `JUMP_FRAMES` frames, excluding a
  * hand-over whose back ankle stays up and holds its height in y (`< STILL_SPEED`
  * for `STILL_FRAMES` frames) when the front foot lands (a raised heel,
- * rig-c/pose#101) — releases the plant: the hip follows the pose's travel from
+ * rig-c/pose#101), and starting from the first preceding push-off frame where
+ * both ankles are already above their rolling floor while mid_hip lags
+ * (rig-c/pose#142) — releases the plant: the hip follows the pose's travel from
  * where it was, and re-plants on landing. A step does too: while the supporting ankle moves more than
  * `STEP_SPEED` leg lengths a frame its plant is released, the other foot takes
  * support if it is planted (not released, not moving) and otherwise the hip
@@ -443,6 +445,9 @@ function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, read
   // #101: at a hand-over the front foot has not landed yet while the back ankle lifts its heel; when
   // the front foot lands (the first frame after its lifted run) while the back ankle stays up, a back
   // ankle that holds its height in y (< STILL_SPEED a frame for STILL_FRAMES frames) is a raised heel.
+  // #142: a run's push-off lifts the ankles off the floor while mid_hip is already rising from its
+  // crouch bottom; a jump starts at the first immediately preceding frame where both ankles are above
+  // their rolling floors and mid_hip is rising, so the support span ends at its ankle's push-off.
   const midY = hip.r.map((h, i) => (h[1] + hip.l[i]![1]) / 2);
   const rises: Array<{ ys: number[]; unit: number }> = [
     { ys: ankle.r.map((a) => a[1]), unit: legLength.r },
@@ -470,6 +475,7 @@ function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, read
   };
   const lifted = Array.from({ length: n }, (_, i) => up.every((u) => u[i]));
   const jumps = runs(lifted).filter(([a, b]) => b - a + 1 >= JUMP_FRAMES && !raisedHeel(a, b));
+  for (const j of jumps) while (j[0] > 1 && up[0]![j[0] - 1] && up[1]![j[0] - 1] && midY[j[0] - 1]! < midY[j[0] - 2]!) j[0]--;
   const jump = new Array<boolean>(n).fill(false);
   for (const [a, b] of jumps) for (let i = a; i <= b; i++) jump[i] = true;
   // Ankle speeds, leg lengths a frame (0 on the first frame).
