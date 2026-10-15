@@ -705,8 +705,8 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
     const b = travel(mode.from);
     let y = mode.at[1] + a[1] - b[1];
     if (mode.carry !== undefined && mode.land !== undefined && mode.end !== undefined && floorY !== null) {
-      if (mode.land < n && i <= mode.land && mode.land > mode.from) {
-        y += mode.carry * ((i - mode.from) / (mode.land - mode.from));
+      if (mode.land < n && mode.land > mode.from) {
+        y += mode.carry * ((Math.min(i, mode.land) - mode.from) / (mode.land - mode.from));
       }
       if (i <= mode.end) {
         y = Math.max(y, floorY - Math.min(offset(i, 'r')[1], offset(i, 'l')[1]));
