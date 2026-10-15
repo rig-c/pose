@@ -208,6 +208,127 @@ export function stepAt(xs: Series, i: number, size: number, loop: boolean): numb
   return steps.length === 0 ? null : median1(steps);
 }
 
+export const LIMB_BONES: ReadonlyArray<readonly [Body18, Body18]> = [
+  ['r_shoulder', 'r_elbow'],
+  ['r_elbow', 'r_wrist'],
+  ['l_shoulder', 'l_elbow'],
+  ['l_elbow', 'l_wrist'],
+  ['r_hip', 'r_knee'],
+  ['r_knee', 'r_ankle'],
+  ['l_hip', 'l_knee'],
+  ['l_knee', 'l_ankle'],
+];
+export const BONE_MIN = 0.75;
+export const BONE_MAX = 1.25;
+
+export function vectorMedianPts(pts: readonly Pt[]): Pt | null {
+  let best: Pt | null = null;
+  let bestSum = Infinity;
+  for (const p of pts) {
+    let sum = 0;
+    for (const q of pts) sum += Math.hypot(p[0] - q[0], p[1] - q[1]);
+    if (sum < bestSum) {
+      bestSum = sum;
+      best = p;
+    }
+  }
+  return best === null ? null : [best[0], best[1]];
+}
+
+export function limbErrorsOf(raw: ReadonlyMap<Body18, Series>, n: number, loop: boolean): { despiked: Map<Body18, Series>; spikes: SpikeFound[] } {
+  const boneOut = new Map<string, boolean[]>();
+  for (const [a, b] of LIMB_BONES) {
+    const sa = raw.get(a) ?? Array.from({ length: n }, () => null);
+    const sb = raw.get(b) ?? Array.from({ length: n }, () => null);
+    const ls = Array.from({ length: n }, (_, i) => {
+      const pa = sa[i];
+      const pb = sb[i];
+      return pa === null || pb === null || pa === undefined || pb === undefined ? null : Math.hypot(pb[0] - pa[0], pb[1] - pa[1]);
+    });
+    const valid = ls.filter((x): x is number => x !== null);
+    const med = valid.length === 0 ? null : median1(valid);
+    boneOut.set(`${a}-${b}`, ls.map((l) => (l === null || med === null ? false : l < BONE_MIN * med || l > BONE_MAX * med)));
+  }
+  const midJoints: ReadonlyArray<{ joint: Body18; b1: string; b2: string }> = [
+    { joint: 'r_elbow', b1: 'r_shoulder-r_elbow', b2: 'r_elbow-r_wrist' },
+    { joint: 'l_elbow', b1: 'l_shoulder-l_elbow', b2: 'l_elbow-l_wrist' },
+    { joint: 'r_knee', b1: 'r_hip-r_knee', b2: 'r_knee-r_ankle' },
+    { joint: 'l_knee', b1: 'l_hip-l_knee', b2: 'l_knee-l_ankle' },
+  ];
+  const endJoints: ReadonlyArray<{ joint: Body18; parent: Body18; b: string }> = [
+    { joint: 'r_wrist', parent: 'r_elbow', b: 'r_elbow-r_wrist' },
+    { joint: 'l_wrist', parent: 'l_elbow', b: 'l_elbow-l_wrist' },
+    { joint: 'r_ankle', parent: 'r_knee', b: 'r_knee-r_ankle' },
+    { joint: 'l_ankle', parent: 'l_knee', b: 'l_knee-l_ankle' },
+  ];
+  const inError = new Map<Body18, boolean[]>();
+  for (const name of raw.keys()) inError.set(name, Array.from({ length: n }, () => false));
+  for (const { joint, b1, b2 } of midJoints) {
+    const o1 = boneOut.get(b1)!;
+    const o2 = boneOut.get(b2)!;
+    inError.set(joint, Array.from({ length: n }, (_, i) => o1[i]! && o2[i]!));
+  }
+  for (const { joint, parent, b } of endJoints) {
+    const ob = boneOut.get(b)!;
+    const op = inError.get(parent) ?? Array.from({ length: n }, () => false);
+    inError.set(joint, Array.from({ length: n }, (_, i) => ob[i]! && !op[i]!));
+  }
+  const spikes: SpikeFound[] = [];
+  const despiked = new Map<Body18, Series>();
+  for (const [name, xs] of raw) {
+    const out = [...xs];
+    const flags = inError.get(name)!;
+    const runs: Array<[number, number]> = [];
+    let i = 0;
+    while (i < n) {
+      if (!flags[i]) {
+        i++;
+        continue;
+      }
+      let j = i;
+      while (j + 1 < n && flags[j + 1]) j++;
+      runs.push([i, j]);
+      i = j + 1;
+    }
+    if (loop && runs.length >= 2 && runs[0]![0] === 0 && runs[runs.length - 1]![1] === n - 1) {
+      const first = runs.shift()!;
+      const last = runs.pop()!;
+      runs.push([last[0], first[1]]);
+    }
+    for (const [a, b] of runs) {
+      const framesInRun: number[] = [];
+      if (a <= b) for (let k = a; k <= b; k++) framesInRun.push(k);
+      else {
+        for (let k = a; k < n; k++) framesInRun.push(k);
+        for (let k = 0; k <= b; k++) framesInRun.push(k);
+      }
+      const borderFrames: number[] = [];
+      if (loop) {
+        const before = (a - 1 + n) % n;
+        const after = (b + 1) % n;
+        if (!flags[before]) borderFrames.push(before);
+        if (!flags[after] && after !== before) borderFrames.push(after);
+      } else {
+        if (a - 1 >= 0 && !flags[a - 1]) borderFrames.push(a - 1);
+        if (b + 1 < n && !flags[b + 1]) borderFrames.push(b + 1);
+      }
+      const borderPts = borderFrames.map((f) => xs[f]).filter((p): p is Pt => p !== null && p !== undefined);
+      const rep = vectorMedianPts(borderPts);
+      if (rep !== null) {
+        for (const f of framesInRun) {
+          const p = xs[f];
+          const off = p ? Math.hypot(p[0] - rep[0], p[1] - rep[1]) : 0;
+          out[f] = [rep[0], rep[1]];
+          spikes.push({ frame: f, joint: name, off });
+        }
+      }
+    }
+    despiked.set(name, out);
+  }
+  spikes.sort((a, b) => a.frame - b.frame || BODY18.indexOf(a.joint) - BODY18.indexOf(b.joint));
+  return { despiked, spikes };
+}
+
 /**
  * Spikes on one joint (#73): every tested frame i where its distance d to the
  * `size`-frame vector median, `medianAt`, is over max(`floor`, `SPIKE_STEPS` × s),
@@ -354,19 +475,8 @@ export function clean(seq: PoseSequence, params: CleanParams, wanted: string | u
   const trunk = median1(lengths);
   const limit = SPIKE_TRUNKS * trunk;
 
-  // 1. Spikes.
-  const spikes: SpikeFound[] = [];
-  const despiked = new Map<Body18, Series>();
-  for (const name of names) {
-    const xs = raw.get(name)!;
-    const out = [...xs];
-    for (const s of spikesOf(xs, limit, params.loop)) {
-      out[s.frame] = s.at;
-      spikes.push({ frame: s.frame, joint: name, off: s.off });
-    }
-    despiked.set(name, out);
-  }
-  spikes.sort((a, b) => a.frame - b.frame || BODY18.indexOf(a.joint) - BODY18.indexOf(b.joint));
+  // 1. Detector errors from limb-length consistency (#75).
+  const { despiked, spikes } = limbErrorsOf(raw, n, params.loop);
 
   // 2. Occlusion.
   const occluded: Occluded[] = [];
