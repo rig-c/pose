@@ -5015,21 +5015,19 @@ describe('#137: under --stance and --leg-scale, a straight stance leg whose shin
   const STILL: Motion = { ...BASE, n: N, dt: DT, trunk: () => 90, rt: () => THIGH, rs: () => SHIN, lt: () => THIGH, ls: () => SHIN, hip: () => [0, 0] };
 
   /**
-   * Right foot (`r`) supports on every frame at full length (80 + 70 = 150 px).
+   * Right foot (`r`) supports on every frame at full length (90 + 60 = 150 px).
    * Left foot (`l`, free) stands beside it in a `state = 'both'` stance:
-   * - frames 0–2: l_knee is 3 px higher (thigh 77 px, shin 73 px, total 150 px) so the shin's 95th-percentile straight length is ~73 px;
-   * - frames 3–11: thigh 80 px, shin 70 px, total 150 px;
-   * - frames 12–23 (held ending span): l_ankle is 9 px (0.06 leg lengths, within `--stance 0.07`) above r_ankle while l_knee stays at 80 px below l_hip, so the whole leg is 141 / 150 = 0.94 >= 0.92 (not folded), the thigh is 80 / 80 = 1.00 >= 0.92, and the shin is 61 / 73 = 0.8356 < 0.92.
+   * - frames 0–11: thigh 90 px, shin 60 px, total 150 px (both sides share straight thigh 90 px, shin 60 px);
+   * - frames 12–23 (held ending span): l_ankle is 10 px (0.0667 leg lengths, within `--stance 0.07`) above r_ankle while l_knee stays at 90 px below l_hip, so the whole leg is 140 / 150 = 0.9333 >= 0.92 (not folded), the thigh is 90 / 90 = 1.00 >= 0.92, and the shin is 50 / 60 = 0.8333 < 0.92.
    */
   function endingShortShinPose(): Record<string, unknown> {
     return poseDoc(STILL, (i, j) => {
       const rHip = j.r_hip!.at as Pt;
-      j.r_knee = { state: 'observed', at: [rHip[0], rHip[1] + 80], score: 0.9 };
+      j.r_knee = { state: 'observed', at: [rHip[0], rHip[1] + 90], score: 0.9 };
       j.r_ankle = { state: 'observed', at: [rHip[0], rHip[1] + 150], score: 0.9 };
       const lHip = j.l_hip!.at as Pt;
-      const thighLen = i < 3 ? 77 : 80;
-      const ankleLen = i < 12 ? 150 : 141;
-      j.l_knee = { state: 'observed', at: [lHip[0], lHip[1] + thighLen], score: 0.9 };
+      const ankleLen = i < 12 ? 150 : 140;
+      j.l_knee = { state: 'observed', at: [lHip[0], lHip[1] + 90], score: 0.9 };
       j.l_ankle = { state: 'observed', at: [lHip[0], lHip[1] + ankleLen], score: 0.9 };
     });
   }
@@ -5139,5 +5137,118 @@ describe('#137: under --stance and --leg-scale, a straight stance leg whose shin
     }
   }, SLOW);
 });
+
+describe('leg-scale (#148): one straight length per segment for both legs, so consecutive landings on opposite feet place the hip at the same height', () => {
+  const N = 24;
+  const DT = 1 / 24;
+  const THIGH = 90;
+  const SHIN = 90;
+  const BONE_LEN = 150;
+
+  /**
+   * Two consecutive landings on opposite feet (`r` on frames 0–3, flight on 4–9, `l` on frames 10–13, flight on 14–19, `r` on 20–23):
+   * - On right-support frames (`0–3, 20–23`), `r_ankle` is at identical detector pixel distance (`141 px` below `r_hip`: thigh `76 px`, shin `65 px`), while on flight frames (`4–9, 14–19`) the right leg kicks out to `80 + 70 = 150 px`, giving right thigh/shin a 95th-percentile straight length of `80 px` / `70 px`.
+   * - The left leg (`l`) reaches only `76 + 65 = 141 px` at its peak and lands at the exact same `141 px` pixel distance on `10–13` (`76 px` thigh, `65 px` shin).
+   * With shared straight length (#148), both legs divide by `80 px` (thigh) and `70 px` (shin), so both landings place the hip at the exact same height (`141.00 u` above the floor). With per-side denominators, `l` gets `scale = 1.0` (`150.00 u`) while `r` gets `scale = 141 / 150 = 0.94` (`141.00 u`), creating a `9.00 u` (`6.0%`) alternating landing height step.
+   */
+  function asymmetricPeakSymmetricLandingPose(): Record<string, unknown> {
+    const motion: Motion = {
+      ...BASE,
+      n: N,
+      dt: DT,
+      trunk: () => 90,
+      rt: () => THIGH,
+      rs: () => SHIN,
+      lt: () => THIGH,
+      ls: () => SHIN,
+      hip: (i) => {
+        const flight = (i >= 4 && i <= 9) || (i >= 14 && i <= 19);
+        return [0, flight ? -30 : 0];
+      },
+    };
+    return poseDoc(motion, (i, j) => {
+      const rHip = j.r_hip!.at as Pt;
+      const lHip = j.l_hip!.at as Pt;
+      const rSupport = i <= 3 || i >= 20;
+      const lSupport = i >= 10 && i <= 13;
+      const flight = !rSupport && !lSupport;
+      // Right leg: 76 + 65 = 141 px on support (0..3, 20..23) and during left support (lifted to 110 px); 80 + 70 = 150 px in flight (8 frames = 33% of 24 -> 95th percentile is 80 / 70).
+      if (rSupport) {
+        j.r_knee = { state: 'observed', at: [rHip[0], rHip[1] + 76], score: 0.9 };
+        j.r_ankle = { state: 'observed', at: [rHip[0], rHip[1] + 141], score: 0.9 };
+      } else if (flight) {
+        j.r_knee = { state: 'observed', at: [rHip[0] + 64, rHip[1] + 48], score: 0.9 }; // hypot(64, 48) = 80
+        j.r_ankle = { state: 'observed', at: [rHip[0] + 64 + 56, rHip[1] + 48 + 42], score: 0.9 }; // hypot(56, 42) = 70
+      } else {
+        j.r_knee = { state: 'observed', at: [rHip[0], rHip[1] + 55], score: 0.9 };
+        j.r_ankle = { state: 'observed', at: [rHip[0], rHip[1] + 110], score: 0.9 };
+      }
+
+      // Left leg: never exceeds 76 + 65 = 141 px; on left support (10..13), identical vertical 76 + 65 = 141 px as right support!
+      if (lSupport) {
+        j.l_knee = { state: 'observed', at: [lHip[0], lHip[1] + 76], score: 0.9 };
+        j.l_ankle = { state: 'observed', at: [lHip[0], lHip[1] + 141], score: 0.9 };
+      } else if (flight) {
+        j.l_knee = { state: 'observed', at: [lHip[0] + 60.8, lHip[1] + 45.6], score: 0.9 }; // hypot = 76
+        j.l_ankle = { state: 'observed', at: [lHip[0] + 60.8 + 52, lHip[1] + 45.6 + 39], score: 0.9 }; // hypot = 65
+      } else {
+        j.l_knee = { state: 'observed', at: [lHip[0], lHip[1] + 55], score: 0.9 };
+        j.l_ankle = { state: 'observed', at: [lHip[0], lHip[1] + 110], score: 0.9 };
+      }
+    });
+  }
+
+  test('shares the larger 95th-percentile straight length across both legs so consecutive landings on opposite feet place the hip at the same height', () => {
+    const c = setup({ pose: asymmetricPeakSymmetricLandingPose() });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--leg-scale', '0.5,1.5', '--plant-feet', '--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('larger 95th percentile of 24 frames, both legs');
+
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as {
+      legScale: Array<{ bone: string; straight: number }>;
+    };
+    const byBone = new Map(rep.legScale.map((s) => [s.bone, s.straight]));
+    expect(byBone.get('leg_r0')).toBeCloseTo(80, 3);
+    expect(byBone.get('leg_l0')).toBeCloseTo(80, 3);
+    expect(byBone.get('leg_r1')).toBeCloseTo(70, 3);
+    expect(byBone.get('leg_l1')).toBeCloseTo(70, 3);
+
+    const poses = poseRawAnimation(loadBuild(c.build), 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+    const hipY0 = byName(poses[0]!.bones).get('hip')!.worldY;
+    const hipY10 = byName(poses[10]!.bones).get('hip')!.worldY;
+    expect(Math.abs(hipY0 - hipY10) / BONE_LEN).toBeLessThan(0.01);
+  }, SLOW);
+
+  test('mutant (per-side): taking each leg\'s 95th percentile separately gives opposite landings different hip heights', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm148-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const from = 'const ls = legScaleOf(seg.lengths, limits, straightByKind.get(seg.kind)!);';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'const ls = legScaleOf(seg.lengths, limits, seg.ownStraight);'));
+
+      const cMut = setup({ pose: asymmetricPeakSymmetricLandingPose() });
+      const rMut = retarget(cMut, ['--leg-scale', '0.5,1.5', '--plant-feet'], join(d, 'cli.ts'));
+      expect(rMut.status).toBe(0);
+
+      const poses = poseRawAnimation(loadBuild(cMut.build), 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+      const hipY0 = byName(poses[0]!.bones).get('hip')!.worldY;
+      const hipY10 = byName(poses[10]!.bones).get('hip')!.worldY;
+      const diff = Math.abs(hipY10 - hipY0);
+      console.log(`  mutant "per-side": landing hipY0=${hipY0.toFixed(2)}u vs hipY10=${hipY10.toFixed(2)}u, diff=${diff.toFixed(2)}u (${((diff / BONE_LEN) * 100).toFixed(2)}% > 1%)`);
+      expect(diff / BONE_LEN).toBeGreaterThan(0.05);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
 
 

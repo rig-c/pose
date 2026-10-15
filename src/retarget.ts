@@ -82,7 +82,7 @@ import { Problems, Refusal } from './problems.ts';
 import type { ArtRange, ByHip, Raised, ReachShort, SlotTrack, Switch, SwitchOptions } from './switch.ts';
 import { clampArt, coveredChains, isRaised, measureArt, overflow, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
 import type { BlendHold, Closure, Feet, Floor, LegScale, PathPose, Posing, Side, Stance } from './legs.ts';
-import { holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, plantHip, posePath, rootOf, scaleSupport, SIDES, stanceOf, stanceRangeOf, supportsOf, tipOf, unshortenStanceShin } from './legs.ts';
+import { holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, percentile, plantHip, posePath, rootOf, scaleSupport, SIDES, stanceOf, stanceRangeOf, STRAIGHT_PERCENTILE, supportsOf, tipOf, unshortenStanceShin } from './legs.ts';
 
 const DEG = 180 / Math.PI;
 
@@ -680,6 +680,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   }
   if (legScaleOn) {
     const limits = opts.legScale as [number, number];
+    const rawSegments: Array<{ chain: string; bone: string; joints: [string, string]; kind: string; lengths: number[]; ownStraight: number }> = [];
     for (const c of map.chains) {
       if (c.reach) continue;
       c.bones.forEach((b, k) => {
@@ -691,14 +692,21 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         }
         const from = series.get(joints[0])!;
         const to = series.get(joints[1])!;
-        const ls = legScaleOf(from.map((f, i) => Math.hypot(to[i]![0] - f[0], to[i]![1] - f[1])), limits);
-        if (!(ls.straight > 1e-6)) {
-          p.add('LEGS_MAP', `--leg-scale: chain "${c.name}" bone "${b}"'s segment ${joints[0]} → ${joints[1]} has a straight length (95th percentile) of ${ls.straight}px; there is nothing to scale against`);
+        const lengths = from.map((f, i) => Math.hypot(to[i]![0] - f[0], to[i]![1] - f[1]));
+        const ownStraight = percentile(lengths, STRAIGHT_PERCENTILE);
+        if (!(ownStraight > 1e-6)) {
+          p.add('LEGS_MAP', `--leg-scale: chain "${c.name}" bone "${b}"'s segment ${joints[0]} → ${joints[1]} has a straight length (95th percentile) of ${ownStraight}px; there is nothing to scale against`);
           return;
         }
-        legScale.push({ chain: c.name, bone: b, joints, ...ls });
-        scales.set(b, ls.scale);
+        rawSegments.push({ chain: c.name, bone: b, joints, kind: `${joints[0].slice(2)}:${joints[1].slice(2)}`, lengths, ownStraight });
       });
+    }
+    const straightByKind = new Map<string, number>();
+    for (const seg of rawSegments) straightByKind.set(seg.kind, Math.max(straightByKind.get(seg.kind) ?? 0, seg.ownStraight));
+    for (const seg of rawSegments) {
+      const ls = legScaleOf(seg.lengths, limits, straightByKind.get(seg.kind)!);
+      legScale.push({ chain: seg.chain, bone: seg.bone, joints: seg.joints, ...ls });
+      scales.set(seg.bone, ls.scale);
     }
     if (legScale.length === 0 && !p.any) p.add('LEGS_MAP', '--leg-scale scales the leg segments (two of one side\'s hip, knee and ankle), and the map aims none');
   }
