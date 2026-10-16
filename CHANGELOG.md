@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.2](https://github.com/rig-c/pose/compare/v0.22.1...v0.22.2) (2026-10-16)
+
+
+### Bug Fixes
+
+* **retarget:** derive figure scale from posture-invariant measures and key trunk foreshortening on chest:scaley ([#172](https://github.com/rig-c/pose/issues/172)) ([#174](https://github.com/rig-c/pose/issues/174)) ([9153184](https://github.com/rig-c/pose/commit/9153184dc19f541950e5275878f67efbade320fd))
+
 ## [0.22.1](https://github.com/rig-c/pose/compare/v0.22.0...v0.22.1) (2026-10-16)
 
 
