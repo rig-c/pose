@@ -64,8 +64,29 @@ export function measureLanding(doc: CompiledDocument, animation: string, map: Jo
   const faceBones = new Set([r.face?.yaw?.bone, r.face?.pitch?.bone].filter((b): b is string => b !== undefined));
   const isFaceSlider = (c: CompiledDocument['constraints'][number]): boolean => c.record?.kind === 'slider' && c.record.bone !== null && faceBones.has(c.record.bone);
   const hasFaceSliders = faceBones.size > 0 && doc.constraints.some(isFaceSlider);
-  const chainPosed = hasFaceSliders
-    ? poseFrames({ ...doc, constraints: doc.constraints.filter((c) => !isFaceSlider(c)) }, animation, r.times)
+  const hasScaleY = doc.animations.some((a) => a.name === animation && a.timelines.bones.some((b) => b.timelines.some((t) => t.kind === 'scaley')));
+  const chainPosed = hasFaceSliders || hasScaleY
+    ? poseFrames(
+        {
+          ...doc,
+          constraints: doc.constraints.filter((c) => !isFaceSlider(c)),
+          animations: hasScaleY
+            ? doc.animations.map((a) =>
+                a.name === animation
+                  ? {
+                      ...a,
+                      timelines: {
+                        ...a.timelines,
+                        bones: a.timelines.bones.map((b) => ({ ...b, timelines: b.timelines.filter((t) => t.kind !== 'scaley') })),
+                      },
+                    }
+                  : a,
+              )
+            : doc.animations,
+        },
+        animation,
+        r.times,
+      )
     : posed;
   for (const c of map.chains) {
     c.bones.forEach((b, k) => {
