@@ -5950,3 +5950,118 @@ describe('continuous figure scale (#163) and --camera sidecar track (#161)', () 
   }, SLOW);
 });
 
+describe('trunk smoothing under --reduce (#116): knot and handle smoothing keeps trunk local jitter <= 1.0 deg/f^2 under --leg-scale while leaving limbs within 0.05 and non-leg-scale runs byte-identical', () => {
+  const N = 30;
+  const DT = 1 / 30;
+  const headRig: NonNullable<RigOpts['bones']> = (b) => [
+    ...b,
+    { name: 'head_ctl', parent: 'neck', x: 0, y: 20 },
+    { name: 'head', parent: 'head_ctl', x: 0, y: 0 },
+    { name: 'eye_r', parent: 'head', x: -6, y: 10 },
+    { name: 'eye_l', parent: 'head', x: 6, y: 10 },
+  ];
+  const mapWithHead = (): Record<string, unknown> => ({
+    ...baseMap(),
+    chains: [
+      { name: 'pelvis', bones: ['hip'], joints: ['r_hip', 'l_hip'], aim: ['leg_r0>leg_l0'] },
+      ...baseChains(),
+      { name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: ['eye_r>eye_l'] },
+    ],
+  });
+
+  function noisyTrunkPose(): Record<string, unknown> {
+    // Trunk and head carry high-frequency +/-0.75 deg jitter on top of a slow 2.5 deg sway.
+    const trunkJitter = (i: number): number => 90 + 2.5 * Math.sin((2 * Math.PI * i) / 15) + (i % 2 === 0 ? 0.75 : -0.75);
+    const headWave = (i: number): number => 2.5 * Math.sin((2 * Math.PI * i) / 15) + (i % 3 === 0 ? 0.75 : i % 3 === 1 ? -0.75 : 0.25);
+    const m: Motion = { ...BASE, n: N, dt: DT, hip: () => [0, 0], trunk: trunkJitter };
+    return poseDoc(m, (i, j) => {
+      const neck = j.neck!.at as Pt;
+      const hw = headWave(i) * RAD;
+      const cx = neck[0];
+      const cy = neck[1] - 20;
+      const dx = 6 * Math.cos(hw);
+      const dy = -6 * Math.sin(hw);
+      j.r_eye = { state: 'observed', at: [cx - dx, cy - dy], score: 0.95 };
+      j.l_eye = { state: 'observed', at: [cx + dx, cy + dy], score: 0.95 };
+    });
+  }
+
+  function localRotateJitter(buildDir: string, boneName: string): number {
+    const doc = loadBuild(buildDir);
+    const poses = poseRawAnimation(doc, 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation').map((p) => byName(p.bones));
+    const setupParent = new Map<string, string | null>();
+    for (const b of doc.bones) setupParent.set(b.name, b.parent ?? null);
+    const parent = setupParent.get(boneName) ?? null;
+    const angles = poses.map((b) => {
+      const w = worldAngle(b, boneName);
+      if (!parent) return w;
+      let d = w - worldAngle(b, parent);
+      while (d > 180) d -= 360;
+      while (d < -180) d += 360;
+      return d;
+    });
+    let sum = 0;
+    for (let i = 1; i < angles.length - 1; i++) {
+      sum += Math.abs(angles[i + 1]! - 2 * angles[i]! + angles[i - 1]!);
+    }
+    return sum / (angles.length - 2);
+  }
+
+  test('smooths chest and head local jitter to <= 1.0 deg/f^2 under --leg-scale, holds limbs within 0.05, and leaves runs without --leg-scale byte-identical to mutant', () => {
+    const pose = noisyTrunkPose();
+    const c = setup({ rig: { bones: headRig }, map: mapWithHead(), pose });
+    const repFile = join(c.dir, 'report.json');
+    const r = retarget(c, ['--bends', 'clamp', '--leg-scale', '0.8,1.05', '--plant-feet', '--reduce', '1', '--reduce-hip', '1', '--report', repFile]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+
+    const chestJit = localRotateJitter(c.build, 'chest');
+    const headJit = localRotateJitter(c.build, 'head');
+    const trunkMean = (chestJit + headJit) / 2;
+    expect(trunkMean).toBeLessThanOrEqual(1.0);
+
+    // Mutant without smoothTrunk leaves trunk mean jitter > 1.2 deg/f^2, while limbs stay within 0.05 and non-leg-scale runs are byte-identical.
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm116-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'run.ts');
+      const from = 'smoothTrunk(r.times, bones, tolerance, out, trunkBones);';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, '// mutant: no smoothTrunk'));
+
+      const cMut = setup({ rig: { bones: headRig }, map: mapWithHead(), pose });
+      const mRepFile = join(cMut.dir, 'report.json');
+      const rMut = retarget(cMut, ['--bends', 'clamp', '--leg-scale', '0.8,1.05', '--plant-feet', '--reduce', '1', '--reduce-hip', '1', '--report', mRepFile], join(d, 'cli.ts'));
+      expect(rMut.status).toBe(0);
+      const mutChestJit = localRotateJitter(cMut.build, 'chest');
+      const mutHeadJit = localRotateJitter(cMut.build, 'head');
+      const mutTrunkMean = (mutChestJit + mutHeadJit) / 2;
+      expect(mutTrunkMean).toBeGreaterThan(1.2);
+      expect(trunkMean).toBeLessThan(mutTrunkMean - 0.3);
+
+      // Every limb bone's jitter and landing are unchanged within 0.05.
+      const repOurs = JSON.parse(readFileSync(repFile, 'utf8')) as { landings: Array<{ bone: string; kind: string; worst: number }> };
+      const repMut = JSON.parse(readFileSync(mRepFile, 'utf8')) as { landings: Array<{ bone: string; kind: string; worst: number }> };
+      for (const limb of ['sleeve_r0', 'sleeve_r1', 'sleeve_l0', 'sleeve_l1', 'leg_r0', 'leg_r1', 'leg_l0', 'leg_l1']) {
+        expect(Math.abs(localRotateJitter(c.build, limb) - localRotateJitter(cMut.build, limb))).toBeLessThanOrEqual(0.05);
+        const lOurs = repOurs.landings.find((b) => b.bone === limb && b.kind === 'angle')!.worst;
+        const lMut = repMut.landings.find((b) => b.bone === limb && b.kind === 'angle')!.worst;
+        expect(Math.abs(lOurs - lMut)).toBeLessThanOrEqual(0.05);
+      }
+
+      // Without --leg-scale (as on the dance under --reduce 1 alone), output is 100% byte-identical.
+      const cNoLeg = setup({ rig: { bones: headRig }, map: mapWithHead(), pose });
+      const cNoLegMut = setup({ rig: { bones: headRig }, map: mapWithHead(), pose });
+      expect(retarget(cNoLeg, ['--bends', 'clamp', '--reduce', '1']).status).toBe(0);
+      expect(retarget(cNoLegMut, ['--bends', 'clamp', '--reduce', '1'], join(d, 'cli.ts')).status).toBe(0);
+      expect(readFileSync(cNoLeg.out, 'utf8')).toBe(readFileSync(cNoLegMut.out, 'utf8'));
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+

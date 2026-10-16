@@ -253,6 +253,7 @@ The retarget writes one key per pose frame on every mapped bone. That is faithfu
   - A scaled bone's `scalex` track is thinned within 5e-5 of its setup length: half of the scale landing check's 1e-4, so a reduced curve cannot fail that check.
   - A mapped bone under a scaled bone (keyed through its parent's posed matrix by `--leg-scale`) is solved again through its parent as reduced. Its rotate is then thinned with the error read as the world aim it lands on, and its `scalex` with the error read as the world length it lands on. Its world error is its own fit error, as down any other chain.
   - Each ankle is held to the plant's tolerance plus the most the reduction may move it: the hip's tolerance (with `--reduce-hip`), plus the leg from the hip to the ankle (each bone's setup offset from its parent and the last bone's length) times the largest scale asked, times the angle tolerance in radians plus 5e-5. The ankle's `LAND` line prints that tolerance.
+  - When `--leg-scale` is active, each trunk bone (`chest` and `head`, not an ancestor of any scaled bone) has its kept knots and Bézier handles smoothed within `deg` of its dense world aim to minimise the mean absolute second difference of its evaluated local angle and its child's compensated local angle, holding any limb children within 0.03° of their fitted world aim (rig-c/pose#116).
 
 Exit codes: `0` written, `1` refused (every reason printed, nothing written), `2` bad invocation. `rig-pose --help` has every flag.
 

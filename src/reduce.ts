@@ -379,6 +379,365 @@ export function reduceKeys(times: readonly number[], bones: readonly ReduceBone[
   return { rotate: ordered, hip: hipKeys, rows, errors: errorsOrdered };
 }
 
+// ---------------------------------------------------------------------------
+// trunk-chain smoothing within the stated tolerance (rig-c/pose#116)
+// ---------------------------------------------------------------------------
+
+interface TrackBasis {
+  keys: readonly ReducedKey[];
+  samples: readonly number[];
+  K: number;
+  spans: number;
+  P: number;
+  hx1s: number[];
+  hx2s: number[];
+  f0: number[];
+  cols: Float64Array[];
+  d2Cols: Float64Array[];
+  activeFrames: number[][];
+  activeD2: number[][];
+  x0: Float64Array;
+}
+
+function evalTrack1D(keys: readonly ReducedKey[], samples: readonly number[]): number[] {
+  return trackAt(keys, samples, 1).map((v) => v[0]!);
+}
+
+function buildBasis(keys: readonly ReducedKey[], samples: readonly number[]): TrackBasis {
+  const K = keys.length;
+  const n = samples.length;
+  const spans = K - 1;
+  const hx1s: number[] = [];
+  const hx2s: number[] = [];
+  for (let j = 0; j < spans; j++) {
+    const t0 = keys[j]!.t;
+    const t1 = keys[j + 1]!.t;
+    hx1s.push(t0 + (t1 - t0) / 3);
+    hx2s.push(t0 + (2 * (t1 - t0)) / 3);
+  }
+  const zeroKeys: ReducedKey[] = keys.map((k, j) => (j + 1 < K ? { t: k.t, v: [0], curve: [hx1s[j]!, 0, hx2s[j]!, 0] } : { t: k.t, v: [0] }));
+  const f0 = evalTrack1D(zeroKeys, samples);
+  const P = K + 2 * spans;
+  const cols: Float64Array[] = [];
+  for (let p = 0; p < P; p++) {
+    const testKeys = zeroKeys.map((k) => ({ t: k.t, v: [...k.v], ...(k.curve !== undefined ? { curve: [...k.curve] } : {}) }));
+    if (p < K) testKeys[p]!.v[0] = 1;
+    else if (p < K + spans) testKeys[p - K]!.curve![1] = 1;
+    else testKeys[p - K - spans]!.curve![3] = 1;
+    const fp = evalTrack1D(testKeys, samples);
+    const col = new Float64Array(n);
+    for (let i = 0; i < n; i++) col[i] = fp[i]! - f0[i]!;
+    cols.push(col);
+  }
+  const d2Cols: Float64Array[] = cols.map((col) => {
+    const d = new Float64Array(Math.max(0, n - 2));
+    for (let i = 0; i < n - 2; i++) d[i] = col[i + 2]! - 2 * col[i + 1]! + col[i]!;
+    return d;
+  });
+  const activeFrames: number[][] = cols.map((col) => {
+    const idx: number[] = [];
+    for (let i = 0; i < n; i++) if (Math.abs(col[i]!) > 1e-9) idx.push(i);
+    return idx;
+  });
+  const activeD2: number[][] = d2Cols.map((dcol) => {
+    const idx: number[] = [];
+    for (let i = 0; i < dcol.length; i++) if (Math.abs(dcol[i]!) > 1e-9) idx.push(i);
+    return idx;
+  });
+  const x0 = new Float64Array(P);
+  for (let j = 0; j < K; j++) x0[j] = keys[j]!.v[0]!;
+  for (let j = 0; j < spans; j++) {
+    const c = keys[j]!.curve;
+    if (c !== undefined) {
+      x0[K + j] = c[1]!;
+      x0[K + spans + j] = c[3]!;
+    } else {
+      x0[K + j] = (2 * keys[j]!.v[0]! + keys[j + 1]!.v[0]!) / 3;
+      x0[K + spans + j] = (keys[j]!.v[0]! + 2 * keys[j + 1]!.v[0]!) / 3;
+    }
+  }
+  return { keys, samples, K, spans, P, hx1s, hx2s, f0, cols, d2Cols, activeFrames, activeD2, x0 };
+}
+
+function solveMinPWL(terms: ReadonlyArray<{ a: number; b: number; w: number }>, lo: number, hi: number): number {
+  const cands = [lo, hi];
+  for (let i = 0; i < terms.length; i++) {
+    const t = terms[i]!;
+    if (Math.abs(t.a) > 1e-12) {
+      const r = -t.b / t.a;
+      if (r > lo && r < hi) cands.push(r);
+    }
+  }
+  let bestX = lo;
+  let bestVal = Infinity;
+  for (let c = 0; c < cands.length; c++) {
+    const x = cands[c]!;
+    let val = 0;
+    for (let i = 0; i < terms.length; i++) {
+      const t = terms[i]!;
+      val += t.w * Math.abs(t.a * x + t.b);
+    }
+    if (val < bestVal) {
+      bestVal = val;
+      bestX = x;
+    }
+  }
+  return bestX;
+}
+
+function optimizeBasis(
+  basis: TrackBasis,
+  lb: readonly number[],
+  ub: readonly number[],
+  wSmooth = 1.0,
+  refY?: readonly number[],
+  refD2?: readonly number[],
+): { keys: ReducedKey[]; y: number[] } {
+  const { keys, samples, K, spans, P, hx1s, hx2s, f0, cols, d2Cols, activeFrames, activeD2, x0 } = basis;
+  const n = samples.length;
+  const x = new Float64Array(x0);
+  const y = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    let s = f0[i]!;
+    for (let p = 0; p < P; p++) s += cols[p]![i]! * x[p]!;
+    y[i] = s;
+  }
+  const seamWeight = Math.abs(y[n - 1]! - y[0]!) < 2.0 ? 20.0 : 0.0;
+  const seamDiff0 = y[n - 1]! - y[0]!;
+  const stepLimit = Math.max(5.0, Math.max(...ub.map((u, i) => Math.abs(u - lb[i]!))) * 5);
+  for (const pen of [2, 10, 50, 500, 10000, 100000]) {
+    for (let sweep = 0; sweep < 12; sweep++) {
+      for (let p = 0; p < P; p++) {
+        const col = cols[p]!;
+        const dcol = d2Cols[p]!;
+        const af = activeFrames[p]!;
+        const ad = activeD2[p]!;
+        const terms: Array<{ a: number; b: number; w: number }> = [];
+        for (let k = 0; k < ad.length; k++) {
+          const i = ad[k]!;
+          const targetD2 = refD2 !== undefined ? refD2[i]! : 0;
+          const curD2 = y[i + 2]! - 2 * y[i + 1]! + y[i]! - targetD2;
+          terms.push({ a: dcol[i]!, b: curD2, w: wSmooth / Math.max(1, n - 2) });
+        }
+        if (seamWeight > 0 && (Math.abs(col[0]!) > 1e-9 || Math.abs(col[n - 1]!) > 1e-9)) {
+          const aSeam = col[n - 1]! - col[0]!;
+          const bSeam = y[n - 1]! - y[0]! - seamDiff0;
+          terms.push({ a: aSeam, b: bSeam, w: seamWeight });
+        }
+        for (let k = 0; k < af.length; k++) {
+          const i = af[k]!;
+          const ci = col[i]!;
+          const mid = 0.5 * (lb[i]! + ub[i]!);
+          const half = Math.max(1e-6, 0.5 * (ub[i]! - lb[i]!));
+          const bMid = y[i]! - mid;
+          terms.push({ a: ci, b: bMid - half, w: pen * 0.5 });
+          terms.push({ a: ci, b: bMid + half, w: pen * 0.5 });
+          if (refY !== undefined) {
+            terms.push({ a: ci, b: y[i]! - refY[i]!, w: 1.0 / n });
+          } else {
+            terms.push({ a: ci, b: bMid, w: 1e-5 / n });
+          }
+        }
+        const dx = solveMinPWL(terms, -stepLimit, stepLimit);
+        if (Math.abs(dx) > 1e-9) {
+          x[p]! += dx;
+          for (let k = 0; k < af.length; k++) y[af[k]!]! += col[af[k]!]! * dx;
+        }
+      }
+    }
+  }
+  const outKeys: ReducedKey[] = keys.map((k, j) => {
+    const v0 = r3(x[j]!);
+    if (j + 1 < K) {
+      const cy1 = r3(x[K + j]!);
+      const cy2 = r3(x[K + spans + j]!);
+      if (k.curve === undefined) {
+        const v1 = r3(x[j + 1]!);
+        const lin1 = r3((2 * v0 + v1) / 3);
+        const lin2 = r3((v0 + 2 * v1) / 3);
+        if (Math.abs(cy1 - lin1) <= 0.001 && Math.abs(cy2 - lin2) <= 0.001) return { t: k.t, v: [v0] };
+      }
+      return { t: k.t, v: [v0], curve: [hx1s[j]!, cy1, hx2s[j]!, cy2] };
+    }
+    return { t: k.t, v: [v0] };
+  });
+  return { keys: outKeys, y: evalTrack1D(outKeys, samples) };
+}
+
+function msdDeg(arr: readonly number[]): number {
+  if (arr.length < 3) return 0;
+  let s = 0;
+  for (let i = 1; i < arr.length - 1; i++) s += Math.abs(wrap180(arr[i + 1]! - arr[i]!) - wrap180(arr[i]! - arr[i - 1]!));
+  return s / (arr.length - 2);
+}
+
+function d2Of(arr: readonly number[]): number[] {
+  const res: number[] = [];
+  for (let i = 0; i < arr.length - 2; i++) res.push(arr[i + 2]! - 2 * arr[i + 1]! + arr[i]!);
+  return res;
+}
+
+function solveLimbPreservingJitter(
+  basis: TrackBasis,
+  yOld: readonly number[],
+  lb: readonly number[],
+  ub: readonly number[],
+): { keys: ReducedKey[]; y: number[] } {
+  const jOld = msdDeg(yOld);
+  const baseD2 = d2Of(yOld);
+  let scale = 1.0;
+  let sm = optimizeBasis(basis, lb, ub, 4.0, yOld, baseD2);
+  for (let sIter = 0; sIter < 2; sIter++) {
+    const jNew = msdDeg(sm.y);
+    if (Math.abs(jNew - jOld) <= 0.02 || jNew < 1e-6) break;
+    scale *= jOld / jNew;
+    sm = optimizeBasis(basis, lb, ub, 4.0, yOld, baseD2.map((d) => d * scale));
+  }
+  return sm;
+}
+
+/**
+ * Smooths the reduced trunk and head rotate tracks within the stated world-aim
+ * tolerance (#116): fitTrack's per-span least-squares handles leave C0 slope
+ * breaks at knots pinned to the raw frame values, which across a parent→child
+ * trunk chain (`chest` → `head`) can amplify local second-difference jitter
+ * above the sequence's own. Optimizing knot values and handle y-coordinates
+ * jointly within the ±tolerance world-aim tube removes those C0 breaks while
+ * keeping any limb chains hanging from the trunk within 0.04 of their landing
+ * and jitter.
+ */
+export function smoothTrunk(
+  times: readonly number[],
+  bones: readonly ReduceBone[],
+  tolerance: number,
+  out: Reduced,
+  trunkBones: ReadonlySet<string>,
+): void {
+  const n = times.length;
+  if (n < 4 || trunkBones.size === 0) return;
+  const samples = samplesOf(times);
+  const byName = new Map(bones.map((b) => [b.bone, b]));
+  const roots = [...trunkBones].filter((b) => {
+    const info = byName.get(b);
+    return info !== undefined && (info.above === null || !trunkBones.has(info.above));
+  });
+  const tolInner = 0.985 * tolerance;
+
+  for (const root of roots) {
+    const rootKeys = out.rotate.get(root);
+    if (rootKeys === undefined || rootKeys.length <= 2) continue;
+    const headBones = [...trunkBones].filter((b) => byName.get(b)?.above === root && (out.rotate.get(b)?.length ?? 0) > 2);
+    if (headBones.length === 0) continue;
+    const arm0Bones = bones.filter((b) => !trunkBones.has(b.bone) && b.above === root && (out.rotate.get(b.bone)?.length ?? 0) > 2).map((b) => b.bone);
+    const arm0Set = new Set(arm0Bones);
+    const arm1Bones = bones.filter((b) => !trunkBones.has(b.bone) && b.above !== null && arm0Set.has(b.above) && (out.rotate.get(b.bone)?.length ?? 0) > 2).map((b) => b.bone);
+    const allManaged = [root, ...headBones, ...arm0Bones, ...arm1Bones];
+
+    const basisOf = new Map<string, TrackBasis>();
+    const yOldOf = new Map<string, number[]>();
+    for (const b of allManaged) {
+      const k = out.rotate.get(b)!;
+      basisOf.set(b, buildBasis(k, samples));
+      yOldOf.set(b, evalTrack1D(k, samples));
+    }
+
+    const rootInfo = byName.get(root)!;
+    const eAboveRoot = rootInfo.above === null ? new Array<number>(n).fill(0) : out.errors.get(rootInfo.above)!;
+    const targetRoot = rootInfo.dense.map((d, i) => d - eAboveRoot[i]!);
+    const yRootOld = yOldOf.get(root)!;
+
+    const rootLb = targetRoot.map((t) => t - tolInner);
+    const rootUb = targetRoot.map((t) => t + tolInner);
+    let smRoot = optimizeBasis(basisOf.get(root)!, rootLb, rootUb);
+    let eRoot = smRoot.y.map((v, i) => v - targetRoot[i]!);
+
+    const smSub = new Map<string, { keys: ReducedKey[]; y: number[] }>();
+    const eSub = new Map<string, number[]>();
+
+    const tightenAround = (i: number, excess: number) => {
+      for (let k = Math.max(0, i - 2); k <= Math.min(n - 1, i + 2); k++) {
+        const w = k === i ? 1.0 : 0.7;
+        if (smRoot.y[k]! > yRootOld[k]!) rootUb[k] = Math.min(rootUb[k]!, Math.max(yRootOld[k]!, smRoot.y[k]! - excess * w));
+        else rootLb[k] = Math.max(rootLb[k]!, Math.min(yRootOld[k]!, smRoot.y[k]! + excess * w));
+      }
+    };
+
+    const solveChildren = () => {
+      eSub.set(root, eRoot);
+      for (const h of headBones) {
+        const dH = byName.get(h)!.dense;
+        const targetH = dH.map((d, i) => d - eRoot[i]!);
+        const smH = optimizeBasis(basisOf.get(h)!, targetH.map((t) => t - tolInner), targetH.map((t) => t + tolInner));
+        smSub.set(h, smH);
+        eSub.set(h, smH.y.map((v, i) => v - targetH[i]!));
+      }
+      for (const b0 of arm0Bones) {
+        const yOld = yOldOf.get(b0)!;
+        const wOld = Math.max(...out.errors.get(b0)!.map(Math.abs));
+        const cap = Math.min(0.98 * tolerance, wOld + 0.035 * tolerance);
+        const targetB = byName.get(b0)!.dense.map((d, i) => d - eRoot[i]!);
+        const smB = solveLimbPreservingJitter(basisOf.get(b0)!, yOld, targetB.map((t) => t - cap), targetB.map((t) => t + cap));
+        smSub.set(b0, smB);
+        eSub.set(b0, smB.y.map((v, i) => v - targetB[i]!));
+      }
+      for (const b1 of arm1Bones) {
+        const up = byName.get(b1)!.above!;
+        const eUp = eSub.get(up)!;
+        const yOld = yOldOf.get(b1)!;
+        const wOld = Math.max(...out.errors.get(b1)!.map(Math.abs));
+        const cap = Math.min(0.98 * tolerance, wOld + 0.035 * tolerance);
+        const targetB = byName.get(b1)!.dense.map((d, i) => d - eUp[i]!);
+        const smB = solveLimbPreservingJitter(basisOf.get(b1)!, yOld, targetB.map((t) => t - cap), targetB.map((t) => t + cap));
+        smSub.set(b1, smB);
+        eSub.set(b1, smB.y.map((v, i) => v - targetB[i]!));
+      }
+    };
+
+    for (let round = 0; round < 5; round++) {
+      solveChildren();
+      let anyTightened = false;
+      for (let i = 0; i < n; i++) {
+        for (const h of headBones) {
+          const eh = eSub.get(h)![i]!;
+          if (Math.abs(eh) > 0.99 * tolerance) {
+            tightenAround(i, Math.abs(eh) - 0.975 * tolerance);
+            anyTightened = true;
+          }
+        }
+        for (const b of [...arm0Bones, ...arm1Bones]) {
+          const wOld = Math.max(...out.errors.get(b)!.map(Math.abs));
+          const cap = Math.min(0.985 * tolerance, wOld + 0.04 * tolerance);
+          const eb = eSub.get(b)![i]!;
+          if (Math.abs(eb) > cap) {
+            tightenAround(i, Math.abs(eb) - (cap - 0.01 * tolerance));
+            anyTightened = true;
+          }
+        }
+      }
+      if (!anyTightened) break;
+      smRoot = optimizeBasis(basisOf.get(root)!, rootLb, rootUb);
+      eRoot = smRoot.y.map((v, i) => v - targetRoot[i]!);
+      if (round === 4) solveChildren();
+    }
+
+    const updateBone = (b: string, keys: ReducedKey[], e: number[]) => {
+      out.rotate.set(b, keys);
+      out.errors.set(b, e);
+      const worst = worstOf(e.map((_, i) => i), (i) => Math.abs(e[i]!))!;
+      const rowIdx = out.rows.findIndex((r) => r.kind === 'angle' && r.bone === b);
+      if (rowIdx >= 0) {
+        out.rows[rowIdx] = { bone: b, kind: 'angle', before: n, after: keys.length, worst: worst.worst, frame: worst.frame };
+      }
+    };
+
+    updateBone(root, smRoot.keys, eRoot);
+    for (const b of [...headBones, ...arm0Bones, ...arm1Bones]) {
+      updateBone(b, smSub.get(b)!.keys, eSub.get(b)!);
+    }
+  }
+}
+
+
 /** The times the poser samples a track at: the running sum of the frame steps (verify.ts `poseFrames`). */
 export function samplesOf(times: readonly number[]): number[] {
   const samples: number[] = [times[0]!];
