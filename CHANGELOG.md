@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.1](https://github.com/rig-c/pose/compare/v0.22.0...v0.22.1) (2026-10-16)
+
+
+### Bug Fixes
+
+* **reduce:** smooth trunk knots and curve handles within tolerance ([#116](https://github.com/rig-c/pose/issues/116)) ([#168](https://github.com/rig-c/pose/issues/168)) ([e7384f4](https://github.com/rig-c/pose/commit/e7384f4bc3696df4291dd6a0b91d2c756e163ff9))
+
 ## [0.22.0](https://github.com/rig-c/pose/compare/v0.21.0...v0.22.0) (2026-10-15)
 
 
