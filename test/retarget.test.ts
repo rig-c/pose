@@ -6196,4 +6196,122 @@ describe('tools/pelvis.ts: --camera sidecar and residual zoom warning (#170)', (
   }, SLOW);
 });
 
+describe('posture-invariant figure scale and trunk scaley foreshortening (#172)', () => {
+  const N = 45;
+  const DT = 1 / 24;
+  const headRig: NonNullable<RigOpts['bones']> = (b) => [
+    ...b,
+    { name: 'head_ctl', parent: 'neck', x: 0, y: 20 },
+    { name: 'head', parent: 'head_ctl', x: 0, y: 0 },
+    { name: 'eye_r', parent: 'head', x: -6, y: 10 },
+    { name: 'eye_l', parent: 'head', x: 6, y: 10 },
+  ];
+  const mapWithHead = (): Record<string, unknown> => ({
+    ...baseMap(),
+    chains: [
+      { name: 'pelvis', bones: ['hip'], joints: ['r_hip', 'l_hip'], aim: ['leg_r0>leg_l0'] },
+      ...baseChains(),
+      { name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: ['eye_r>eye_l'] },
+    ],
+  });
+
+  function trunkBendPose(): Record<string, unknown> {
+    // Fixed camera (true s = 1.0):
+    // - frames 0..14: upright standing (trunkLen = 100)
+    // - frames 15..29: head thrown back (trunkLen = 106.5, +6.5%)
+    // - frames 30..44: forward bend toward camera (trunkLen = 82, -18%)
+    const trunkRatioAt = (i: number): number => {
+      if (i < 15) return 1.0;
+      if (i < 30) return 1.065;
+      return 0.82;
+    };
+    const m: Motion = { ...BASE, n: N, dt: DT, hip: () => [0, 0], trunk: () => 90, rt: () => -90, rs: () => -90, lt: () => -90, ls: () => -90 };
+    return poseDoc(m, (i, j) => {
+      const ratio = trunkRatioAt(i);
+      const rHip = j.r_hip!.at as Pt;
+      const lHip = j.l_hip!.at as Pt;
+      const mh: Pt = [(rHip[0] + lHip[0]) / 2, (rHip[1] + lHip[1]) / 2];
+      const origNeck = j.neck!.at as Pt;
+      const trunkLen0 = mh[1] - origNeck[1];
+      const newNeckY = mh[1] - trunkLen0 * ratio;
+      const dy = newNeckY - origNeck[1];
+      for (const k of ['neck', 'r_shoulder', 'l_shoulder', 'r_elbow', 'l_elbow', 'r_wrist', 'l_wrist', 'nose', 'r_eye', 'l_eye', 'r_ear', 'l_ear']) {
+        if (j[k]) {
+          const pt = j[k]!.at as Pt;
+          j[k] = { ...j[k]!, at: [pt[0], pt[1] + dy] };
+        }
+      }
+      j.r_knee = { state: 'observed', at: [rHip[0], rHip[1] + 80], score: 0.95 };
+      j.r_ankle = { state: 'observed', at: [rHip[0], rHip[1] + 150], score: 0.95 };
+      j.l_knee = { state: 'observed', at: [lHip[0], lHip[1] + 80], score: 0.95 };
+      j.l_ankle = { state: 'observed', at: [lHip[0], lHip[1] + 150], score: 0.95 };
+    });
+  }
+
+  test('holds s(t) within [0.98, 1.02] on a fixed-camera trunk bend and carries trunk foreshortening/extension on chest:scaley within 3%', () => {
+    const pose = trunkBendPose();
+    const c = setup({ rig: { bones: headRig }, map: mapWithHead(), pose });
+    const camFile = join(c.dir, 'camera.json');
+    const repFile = join(c.dir, 'report.json');
+    const r = retarget(c, ['--bends', 'clamp', '--leg-scale', '0.8,1.05', '--plant-feet', '--camera', camFile, '--report', repFile]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+
+    const cam = JSON.parse(readFileSync(camFile, 'utf8')) as {
+      summary: { minS: number; maxS: number };
+      frames: Array<{ frame: number; s: number }>;
+    };
+    expect(cam.summary.minS).toBeGreaterThanOrEqual(0.98);
+    expect(cam.summary.maxS).toBeLessThanOrEqual(1.02);
+
+    const motion = JSON.parse(readFileSync(c.out, 'utf8')) as {
+      animations: { dance: { tracks: Array<{ bone?: string; property: string; keys: Array<{ t: number; v: number[] }> }> } };
+    };
+    const chestScaleY = motion.animations.dance.tracks.find((tr) => tr.bone === 'chest' && tr.property === 'scaley');
+    expect(chestScaleY).toBeDefined();
+
+    const poses = poseRawAnimation(loadBuild(c.build), 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+    const rigTrunkLen = (idx: number): number => {
+      const b = byName(poses[idx]!.bones);
+      const ch = b.get('chest')!;
+      const nk = b.get('neck')!;
+      return Math.hypot(nk.worldX - ch.worldX, nk.worldY - ch.worldY);
+    };
+    const standLen = rigTrunkLen(0);
+    // Frame 22 (head back, sequence ratio 1.065, clamped at 1.05): within 3% of 1.065.
+    expect(Math.abs(rigTrunkLen(22) / standLen - 1.065) / 1.065).toBeLessThanOrEqual(0.03);
+    // Frame 37 (forward bend, sequence ratio 0.82): within 3% of 0.82.
+    expect(Math.abs(rigTrunkLen(37) / standLen - 0.82) / 0.82).toBeLessThanOrEqual(0.03);
+
+    // Mutant: if rawFigureHeight reads nose-to-ankle instead of posture-invariant measures, forward bend drops s(t) below 0.95.
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm172-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const from = 'if (ar !== null && al !== null && hr !== null && hl !== null) {';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(
+        path,
+        before.replace(
+          from,
+          "if (ar !== null && al !== null) { const ns = heldPt('nose')!; return ar.map((r, i) => Math.max(r[1], al[i]![1]) - ns[i]![1]); } if (false) {",
+        ),
+      );
+      const cMut = setup({ rig: { bones: headRig }, map: mapWithHead(), pose });
+      const mutCamFile = join(cMut.dir, 'camera_mut.json');
+      const rMut = retarget(cMut, ['--bends', 'clamp', '--leg-scale', '0.8,1.05', '--plant-feet', '--camera', mutCamFile], join(d, 'cli.ts'));
+      expect(rMut.status).toBe(0);
+      const mutCam = JSON.parse(readFileSync(mutCamFile, 'utf8')) as { summary: { minS: number } };
+      expect(mutCam.summary.minS).toBeLessThan(0.95);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
+
 

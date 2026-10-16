@@ -219,7 +219,7 @@ export interface MotionKey {
 }
 export interface MotionTrack {
   bone: string;
-  property: 'rotate' | 'translate' | 'scalex';
+  property: 'rotate' | 'translate' | 'scalex' | 'scaley';
   keys: MotionKey[];
 }
 export interface Animation {
@@ -713,19 +713,76 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     const h = heldOf(name);
     return 'never' in h ? null : h.at;
   };
+  const winPercentile = (xs: readonly number[], w: number, q: number): number[] => {
+    const effW = Math.min(w, Math.floor((n - 1) / 2));
+    if (effW <= 0) return [...xs];
+    return xs.map((_, i) => {
+      const c = Math.max(effW, Math.min(n - 1 - effW, i));
+      return percentile(xs.slice(c - effW, c + effW + 1), q);
+    });
+  };
+  const dist2 = (a: Pt, b: Pt): number => Math.hypot(b[0] - a[0], b[1] - a[1]);
   const rawFigureHeight: number[] = (() => {
     const ar = heldPt('r_ankle');
     const al = heldPt('l_ankle');
-    const top = heldPt('nose') ?? heldPt('neck');
-    if (ar !== null && al !== null && top !== null) {
-      const h = ar.map((r, i) => Math.max(r[1], al[i]![1]) - top[i]![1]);
-      if (h.every((v) => v > 1e-6)) return h;
-    }
     const hr = heldPt('r_hip');
     const hl = heldPt('l_hip');
     if (ar !== null && al !== null && hr !== null && hl !== null) {
-      const h = ar.map((r, i) => Math.max(Math.hypot(r[0] - hr[i]![0], r[1] - hr[i]![1]), Math.hypot(al[i]![0] - hl[i]![0], al[i]![1] - hl[i]![1])));
-      if (h.every((v) => v > 1e-6)) return h;
+      const kr = heldPt('r_knee');
+      const kl = heldPt('l_knee');
+      const legSum = ar.map((r, i) =>
+        kr !== null && kl !== null
+          ? Math.max(dist2(hr[i]!, kr[i]!) + dist2(kr[i]!, r), dist2(hl[i]!, kl[i]!) + dist2(kl[i]!, al[i]!))
+          : Math.max(dist2(r, hr[i]!), dist2(al[i]!, hl[i]!)),
+      );
+      if (legSum.every((v) => v > 1e-6)) {
+        if (n > 160) {
+          const seriesList: number[][] = [winPercentile(legSum, 75, STRAIGHT_PERCENTILE)];
+          const rs = heldPt('r_shoulder');
+          const ls = heldPt('l_shoulder');
+          if (rs !== null && ls !== null) {
+            const shW = rs.map((r, i) => dist2(r, ls[i]!));
+            if (shW.every((v) => v > 1e-6)) seriesList.push(winPercentile(shW, 75, STRAIGHT_PERCENTILE));
+          }
+          const re = heldPt('r_eye');
+          const le = heldPt('l_eye');
+          if (re !== null && le !== null) {
+            const eyeW = re.map((r, i) => dist2(r, le[i]!));
+            if (eyeW.every((v) => v > 1e-6)) seriesList.push(winPercentile(eyeW, 75, STRAIGHT_PERCENTILE));
+          }
+          if (kr !== null && kl !== null) {
+            const thighMin = hr.map((r, i) => Math.min(dist2(r, kr[i]!), dist2(hl[i]!, kl[i]!)));
+            if (thighMin.every((v) => v > 1e-6)) seriesList.push(winPercentile(thighMin, 75, 0.5));
+          }
+          const rel = heldPt('r_elbow');
+          const lel = heldPt('l_elbow');
+          const rw = heldPt('r_wrist');
+          const lw = heldPt('l_wrist');
+          if (rs !== null && ls !== null && rel !== null && lel !== null && rw !== null && lw !== null) {
+            const armSum = rs.map((r, i) => Math.max(dist2(r, rel[i]!) + dist2(rel[i]!, rw[i]!), dist2(ls[i]!, lel[i]!) + dist2(lel[i]!, lw[i]!)));
+            if (armSum.every((v) => v > 1e-6)) seriesList.push(winPercentile(armSum, 75, 0.5));
+          }
+          if (seriesList.length >= 3) {
+            const norms = seriesList.map((s) => s.map((v) => v / s[0]!));
+            const cons = legSum.map((_, i) => {
+              let minR = Infinity;
+              let maxR = -Infinity;
+              for (const nr of norms) {
+                if (nr[i]! < minR) minR = nr[i]!;
+                if (nr[i]! > maxR) maxR = nr[i]!;
+              }
+              return minR > 1 ? minR : maxR < 1 ? maxR : 1;
+            });
+            if (cons.every((c) => Math.abs(c - 1) <= 0.02)) {
+              return cons.map((c) => c * legSum[0]!);
+            }
+          }
+          const out = winPercentile(legSum, 1, STRAIGHT_PERCENTILE);
+          out[0] = legSum[0]!;
+          return out;
+        }
+        return legSum;
+      }
     }
     if (t !== null) {
       const [pa, pb] = t.scale.pose;
@@ -761,6 +818,8 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     };
   })();
   const poseScale: number[] | null = t !== null && scale !== null && n > 25 && !inPlace ? continuousScale : null;
+  let trunkScaleBone: string | null = null;
+  let trunkScale: number[] | null = null;
   if (legScaleOn) {
     const limits = opts.legScale as [number, number];
     const rawSegments: Array<{ chain: string; bone: string; joints: [string, string]; kind: string; lengths: number[]; ownStraight: number }> = [];
@@ -817,6 +876,43 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       scales.set(seg.bone, ls.scale);
     }
     if (legScale.length === 0 && !p.any) p.add('LEGS_MAP', '--leg-scale scales the leg segments (two of one side\'s hip, knee and ankle), and the map aims none');
+    const isTrunkPair = (a: string, b: string): boolean => (a === 'mid_hip' && (b === 'neck' || b === 'mid_shoulder')) || (b === 'mid_hip' && (a === 'neck' || a === 'mid_shoulder'));
+    const trunkChain = map.chains.find((c) => c.bones.length === 1 && isTrunkPair(c.joints[0]!, c.joints[1]!));
+    if (!inPlace && trunkChain !== undefined && !p.any) {
+      const tb = trunkChain.bones[0]!;
+      const from = series.get(trunkChain.joints[0]!)!;
+      const to = series.get(trunkChain.joints[1]!)!;
+      const rawT = from.map((f, i) => dist2(f, to[i]!));
+      const frameScale = (i: number): number => (!inPlace && n > 25 && rawFigureHeight[0]! > 1e-6 && rawFigureHeight[i]! > 1e-6 ? rawFigureHeight[i]! / rawFigureHeight[0]! : 1);
+      const normT = rawT.map((l, i) => l / frameScale(i));
+      const standingT = median(normT);
+      if (standingT > 1e-6) {
+        const rawRatio = normT.map((l) => l / standingT);
+        const re = heldPt('r_eye');
+        const le = heldPt('l_eye');
+        let effRatio = rawRatio;
+        if (re !== null && le !== null) {
+          const mh = series.get('mid_hip') ?? from;
+          const rawEH = mh.map((h, i) => dist2(h, [(re[i]![0] + le[i]![0]) / 2, (re[i]![1] + le[i]![1]) / 2]));
+          const normEH = rawEH.map((l, i) => l / frameScale(i));
+          const standingEH = median(normEH);
+          if (standingEH > 1e-6) {
+            effRatio = rawRatio.map((r, i) => (r > 1 ? Math.min(r, Math.max(1, normEH[i]! / standingEH)) : r));
+          }
+        }
+        const minR = Math.max(0.5, Math.min(...effRatio));
+        const supFloor = Math.min(limits[0], minR);
+        const sy = effRatio.map((r, i) => {
+          const supported = plantOn && feet !== null && (feet.support[i] !== null || feet.tracked?.some((tr) => i >= tr.frames[0] && i <= tr.frames[1]) === true);
+          const lo = supported ? supFloor : limits[0];
+          return Math.min(Math.max(r, lo), limits[1]);
+        });
+        if (effRatio.some((v) => Math.abs(v - 1) > 0.04) && sy.some((v) => Math.abs(r6(v) - 1) > 0)) {
+          trunkScaleBone = tb;
+          trunkScale = sy;
+        }
+      }
+    }
   }
   if (opts.stance !== undefined && opts.stance !== 'off' && !plantOn) p.add('STANCE', `--stance ${opts.stance} plants the free foot beside the supporting one that --plant-feet holds, and --plant-feet is not given`);
   if (opts.floor !== undefined && !plantOn) p.add('FLOOR', `--floor ${opts.floor} is the floor --plant-feet plants every support span on, and --plant-feet is not given`);
@@ -1431,6 +1527,9 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       if (!scales.has(b) && solvedKey(b, 0) === undefined) continue;
       tracks.push({ bone: b, property: 'scalex', keys: Array.from({ length: n }, (_, i) => ({ t: keyTimes[i]!, v: [r6(solvedKey(b, i)?.scale ?? scales.get(b)?.[i] ?? 1)] })) });
     }
+  }
+  if (trunkScaleBone !== null && trunkScale !== null) {
+    tracks.push({ bone: trunkScaleBone, property: 'scaley', keys: trunkScale.map((v, i) => ({ t: keyTimes[i]!, v: [r6(v)] })) });
   }
   if (translateTrack !== null) tracks.push(translateTrack);
   if (headNodTrack !== null) tracks.push(headNodTrack);
