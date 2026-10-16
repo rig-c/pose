@@ -17,7 +17,7 @@ import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, rea
 import { artRangeLine, chainsMoving, raisedLine, RAISED_WITHIN, reachLine, switchLine, uncoveredFolds } from './switch.ts';
 import { landed, measureFeet, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
 import { legsOf, PLANT_SWITCH, STANCE_BOUNDS } from './legs.ts';
-import { M2_IDENTITY, mulM2, reduceKeys, reduceScale, reduceUnderScale, SCALE_REDUCE, setupLocal, type M2, type ReduceBone, type Reduced, type ReduceRow, type UnderBone } from './reduce.ts';
+import { M2_IDENTITY, mulM2, reduceKeys, reduceScale, reduceUnderScale, SCALE_REDUCE, setupLocal, smoothTrunk, type M2, type ReduceBone, type Reduced, type ReduceRow, type UnderBone } from './reduce.ts';
 import type { BlendHold, Closure, Floor, LegScale, Lowered, Side, Stance, SupportScaleRun } from './legs.ts';
 import { faceLine } from './face.ts';
 
@@ -443,6 +443,15 @@ function reduceTracks(r: ReturnType<typeof retarget>, map: JointMap, rest: Rest,
   for (const [bone, keys] of out.rotate) rotate.get(bone)!.keys = keys;
   if (hipTrack !== undefined && out.hip !== null) hipTrack.keys = out.hip;
   if (scalex.size === 0) return out;
+
+  // #116: smooth the trunk-and-head chain within the stated tolerance while keeping limb landings and jitter within 0.04.
+  const trunkBones = new Set(
+    map.chains
+      .filter((c) => c.bones.length === 1 && !(c.joints.includes('r_hip') && c.joints.includes('l_hip')))
+      .map((c) => c.bones[0]!),
+  );
+  smoothTrunk(r.times, bones, tolerance, out, trunkBones);
+  for (const [bone, keys] of out.rotate) rotate.get(bone)!.keys = keys;
 
   // #94: the scales of the bones the key formula holds for, then the bones under a scaled bone, parents first.
   const rows = new Map<string, ReduceRow>();
