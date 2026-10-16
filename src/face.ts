@@ -5,7 +5,7 @@
  * and map each configured axis into its declared range by compression (never
  * clipping, so motion changes at the extremes survive).
  */
-import type { FaceAxis, FaceMap } from './map.ts';
+import type { BodyMap, FaceAxis, FaceMap } from './map.ts';
 
 type Pt = [number, number];
 
@@ -257,3 +257,174 @@ export function faceLine(f: FaceReading): string {
   }
   return `${joints}: ${readPart}; mapped ${axes.join(', ')}`;
 }
+
+/** Threshold in degrees at or above which a frame is listed on `BODY` as needing a turned-body drawing (`rig-c/pose#173`). */
+export const BODY_TURN_DEG = 45;
+
+export interface BodyReading {
+  /** Camera-normalised standing widths in picture pixels (at frame 0's scale). */
+  standing: {
+    shoulder: number;
+    hip: number;
+  };
+  read: {
+    yaw: FaceSpan;
+    opening: FaceSpan;
+    rawYaw: number[];
+  };
+  /** Inclusive `[first, last]` frame spans where `|yaw| >= BODY_TURN_DEG` (`45°`). */
+  over45: Array<[number, number]>;
+  /** Frame indices where `|yaw| >= BODY_TURN_DEG` (`45°`). */
+  framesOver45: number[];
+  /** Present when the map declares `body.yaw`. */
+  yaw?: FaceAxisReading;
+}
+
+/**
+ * Read per-frame body yaw (degrees) from camera-normalised shoulder width
+ * (`r_shoulder`, `l_shoulder`) and hip width (`r_hip`, `l_hip`), projected
+ * perpendicular to the trunk (`mid_hip → neck`) so raising one shoulder or
+ * tilting the torso in 2D roll does not distort the horizontal torso width,
+ * against the sequence's standing width (`yaw ≈ acos(w / w_standing)`,
+ * `rig-c/pose#173`).
+ *
+ * Sign convention (matching `readFaceAngles`):
+ * - `yaw > 0`: torso turned toward the subject's right (viewer-left, left shoulder nearer).
+ * - `yaw < 0`: torso turned toward the subject's left (viewer-right, right shoulder nearer).
+ */
+export function readBodyYaw(
+  rShoulder: readonly Pt[],
+  lShoulder: readonly Pt[],
+  rHip: readonly Pt[] | null,
+  lHip: readonly Pt[] | null,
+  neck: readonly Pt[] | null,
+  scale: readonly number[] | null,
+  faceYaw: readonly number[] | null,
+): { standing: { shoulder: number; hip: number }; yaw: number[] } {
+  const n = rShoulder.length;
+  const hasHips = rHip !== null && lHip !== null && rHip.length === n && lHip.length === n;
+  const wSh: number[] = [];
+  const wHip: number[] = [];
+  const signs: number[] = [];
+  const revSh: boolean[] = [];
+
+  for (let i = 0; i < n; i++) {
+    const rS = rShoulder[i]!;
+    const lS = lShoulder[i]!;
+    const s = scale !== null && scale[i] !== undefined && scale[i]! > 1e-6 ? scale[i]! : 1;
+    const mS: Pt = [0.5 * (rS[0] + lS[0]), 0.5 * (rS[1] + lS[1])];
+    const mH: Pt = hasHips ? [0.5 * (rHip[i]![0] + lHip[i]![0]), 0.5 * (rHip[i]![1] + lHip[i]![1])] : [mS[0], mS[1] + 100];
+    const top: Pt = neck !== null && neck[i] !== undefined ? neck[i]! : mS;
+    const tx = top[0] - mH[0];
+    const ty = top[1] - mH[1];
+    const tl = Math.hypot(tx, ty);
+    const nx = tl > 1e-6 ? -ty / tl : 1;
+    const ny = tl > 1e-6 ? tx / tl : 0;
+
+    const projSh = ((lS[0] - rS[0]) * nx + (lS[1] - rS[1]) * ny) / s;
+    const absSh = Math.abs(projSh);
+    wSh.push(absSh);
+    revSh.push(projSh < -1e-6);
+
+    if (hasHips) {
+      const rH = rHip[i]!;
+      const lH = lHip[i]!;
+      const projHip = ((lH[0] - rH[0]) * nx + (lH[1] - rH[1]) * ny) / s;
+      wHip.push(Math.abs(projHip));
+    } else {
+      wHip.push(absSh);
+    }
+
+    const neckOff = neck !== null && neck[i] !== undefined ? ((mS[0] - neck[i]![0]) * nx + (mS[1] - neck[i]![1]) * ny) / s : 0;
+    const fy = faceYaw !== null && faceYaw[i] !== undefined ? faceYaw[i]! : 0;
+    let sign = 1;
+    if (Math.abs(neckOff) > 0.05 * Math.max(1, absSh)) sign = neckOff >= 0 ? 1 : -1;
+    else if (Math.abs(fy) > 0.5) sign = fy >= 0 ? 1 : -1;
+    else {
+      const shear = (mS[0] - mH[0]) * nx + (mS[1] - mH[1]) * ny;
+      if (Math.abs(shear) > 1e-6) sign = shear >= 0 ? 1 : -1;
+      else if (i > 0) sign = signs[i - 1]!;
+    }
+    signs.push(sign);
+  }
+
+  const openN = Math.min(n, 48);
+  const sh0 = Math.max(1e-6, Math.min(median(wSh.slice(0, openN)), median(wSh)));
+  const hip0 = Math.max(1e-6, Math.min(median(wHip.slice(0, openN)), median(wHip)));
+
+  const yaw: number[] = [];
+  for (let i = 0; i < n; i++) {
+    if (revSh[i]) {
+      yaw.push(signs[i]! * 90);
+      continue;
+    }
+    const rS = Math.min(1, wSh[i]! / sh0);
+    const rH = hasHips ? Math.min(1, wHip[i]! / hip0) : rS;
+    const mx = Math.min(Math.max(rS, rH), rS / 0.65);
+    const mn = Math.min(rS, rH);
+    const alpha = Math.max(0, Math.min(1, (mx - 0.85) / 0.1));
+    const w = Math.max(0, Math.min(1, alpha * Math.max(rS, rH) + (1 - alpha) * mn));
+    const mag = Math.acos(w) * DEG;
+    yaw.push(mag < 1e-6 ? 0 : signs[i]! * mag);
+  }
+
+  return {
+    standing: { shoulder: r3(sh0), hip: r3(hasHips ? hip0 : 0) },
+    yaw,
+  };
+}
+
+export function readBody(
+  body: BodyMap | undefined,
+  rShoulder: readonly Pt[],
+  lShoulder: readonly Pt[],
+  rHip: readonly Pt[] | null,
+  lHip: readonly Pt[] | null,
+  neck: readonly Pt[] | null,
+  scale: readonly number[] | null,
+  faceYaw: readonly number[] | null,
+): BodyReading {
+  const { standing, yaw } = readBodyYaw(rShoulder, lShoulder, rHip, lHip, neck, scale, faceYaw);
+  const openN = Math.min(yaw.length, 48);
+  const framesOver45: number[] = [];
+  const over45: Array<[number, number]> = [];
+  for (let i = 0; i < yaw.length; i++) {
+    if (Math.abs(yaw[i]!) >= BODY_TURN_DEG) {
+      framesOver45.push(i);
+      const last = over45[over45.length - 1];
+      if (last !== undefined && last[1] === i - 1) last[1] = i;
+      else over45.push([i, i]);
+    }
+  }
+  return {
+    standing,
+    read: {
+      yaw: spanOf(yaw),
+      opening: spanOf(yaw.slice(0, openN)),
+      rawYaw: yaw.map(r3),
+    },
+    over45,
+    framesOver45,
+    ...(body?.yaw === undefined ? {} : { yaw: mapFaceAxis(yaw, body.yaw) }),
+  };
+}
+
+export function bodyLine(b: BodyReading): string {
+  const openEnd = Math.min(b.read.rawYaw.length, 48) - 1;
+  const openAbs = Math.max(Math.abs(b.read.opening.min), Math.abs(b.read.opening.max));
+  const spans = b.over45.map(([lo, hi]) => {
+    const slice = b.read.rawYaw.slice(lo, hi + 1);
+    const sMin = Math.min(...slice);
+    const sMax = Math.max(...slice);
+    const where = lo === hi ? `frame ${lo}` : `frames ${lo}–${hi}`;
+    return `${where} (${lo === hi ? `${sg(sMax)}°` : `${sg(sMin)}° … ${sg(sMax)}°`})`;
+  });
+  const overPart = b.framesOver45.length === 0
+    ? `≥ ${BODY_TURN_DEG}°: none`
+    : `≥ ${BODY_TURN_DEG}° on ${b.framesOver45.length} frame(s): ${spans.join(', ')}`;
+  const head = `r_shoulder + l_shoulder, r_hip + l_hip (standing shoulder ${b.standing.shoulder.toFixed(1)}px, hip ${b.standing.hip.toFixed(1)}px): read yaw ${sg(b.read.yaw.min)}° … ${sg(b.read.yaw.max)}° (${f1(b.read.yaw.range)}°), opening (frames 0–${openEnd}) ${sg(b.read.opening.min)}° … ${sg(b.read.opening.max)}° (max |yaw| ${f1(openAbs)}°); ${overPart}`;
+  if (b.yaw === undefined) return head;
+  const ax = b.yaw;
+  return `${head}; mapped yaw → bone "${ax.bone}" [${ax.limits[0]}, ${ax.limits[1]}]° (knee [${ax.knee[0]}, ${ax.knee[1]}]°): ${sg(ax.mapped.min)}° … ${sg(ax.mapped.max)}° (scale ${ax.scale[0].toFixed(3)}/${ax.scale[1].toFixed(3)}, r=${ax.corr.toFixed(3)})`;
+}
+

@@ -109,11 +109,15 @@ export interface FaceMap {
   yaw?: FaceAxis;
   pitch?: FaceAxis;
 }
+export interface BodyMap {
+  yaw?: FaceAxis;
+}
 export interface JointMap {
   chains: Chain[];
   translate: Translate | null;
   alternates: AlternateSet[];
   face?: FaceMap;
+  body?: BodyMap;
 }
 
 /** What a slot of the built rig shows at setup, and every attachment any skin gives it. */
@@ -144,7 +148,7 @@ export function readMap(text: string, where: string): JointMap {
     p.throwIfAny();
     throw new Error('unreachable');
   }
-  refuseUnknownKeys(p, 'MAP_KEYS', where, doc, ['spec', 'note', 'chains', 'translate', 'alternates', 'face']);
+  refuseUnknownKeys(p, 'MAP_KEYS', where, doc, ['spec', 'note', 'chains', 'translate', 'alternates', 'face', 'body']);
   if (doc.spec !== MAP_SPEC) p.add('MAP_SPEC', `${where} "spec" is ${typeName(doc.spec)}; this reader reads "${MAP_SPEC}"`);
   const chains: Chain[] = [];
   if (!Array.isArray(doc.chains) || doc.chains.length === 0) {
@@ -245,8 +249,9 @@ export function readMap(text: string, where: string): JointMap {
   }
   const alternates = 'alternates' in doc ? readAlternates(p, where, doc.alternates, chains, translate) : [];
   const face = 'face' in doc ? readFaceMap(p, where, doc.face) : undefined;
+  const body = 'body' in doc ? readBodyMap(p, where, doc.body) : undefined;
   p.throwIfAny();
-  return { chains, translate, alternates, ...(face === undefined ? {} : { face }) };
+  return { chains, translate, alternates, ...(face === undefined ? {} : { face }), ...(body === undefined ? {} : { body }) };
 }
 
 function readFaceMap(p: Problems, where: string, raw: unknown): FaceMap | undefined {
@@ -280,6 +285,34 @@ function readFaceMap(p: Problems, where: string, raw: unknown): FaceMap | undefi
     }
   }
   return out;
+}
+
+function readBodyMap(p: Problems, where: string, raw: unknown): BodyMap | undefined {
+  const bw = `${where} "body"`;
+  if (!isObject(raw)) {
+    p.add('MAP_BODY_SHAPE', `${bw} is ${typeName(raw)}; it is { yaw: { bone, range: [min, max] } }`);
+    return undefined;
+  }
+  refuseUnknownKeys(p, 'MAP_KEYS', bw, raw, ['yaw']);
+  if (!('yaw' in raw)) {
+    p.add('MAP_BODY_SHAPE', `${bw} does not name "yaw"; it must name "yaw"`);
+    return undefined;
+  }
+  const aw = `${bw} "yaw"`;
+  const ax = raw.yaw;
+  if (!isObject(ax)) {
+    p.add('MAP_BODY_SHAPE', `${aw} is ${typeName(ax)}; it is { bone, range: [min, max] }`);
+    return undefined;
+  }
+  refuseUnknownKeys(p, 'MAP_KEYS', aw, ax, ['bone', 'range']);
+  const bone = typeof ax.bone === 'string' && ax.bone !== '' ? ax.bone : null;
+  if (bone === null) p.add('MAP_BODY_BONE', `${aw} "bone" is ${typeName(ax.bone)}; it must name a bone`);
+  const v = ax.range;
+  if (!Array.isArray(v) || v.length !== 2 || !v.every((x) => typeof x === 'number' && Number.isFinite(x)) || (v[0] as number) > 0 || (v[1] as number) < 0 || (v[0] as number) >= (v[1] as number)) {
+    p.add('MAP_BODY_RANGE', `${aw} "range" is ${JSON.stringify(v)}; it must be [min, max], two finite numbers of degrees with min ≤ 0 ≤ max and min < max`);
+    return undefined;
+  }
+  return bone === null ? undefined : { yaw: { bone, range: [v[0] as number, v[1] as number] } };
 }
 
 const SET_SHAPE = '{ name, slots: { "<slot>": "<attachment>" }, hides?: [slot], chains: [chain], pose: { "<joint>": [x, y] }, drawn?: { "<bone>": deg }, offsets?: { "<bone>": [dx, dy] }, turn?: { "<bone>": [min, max] }, frames?: [[first, last], …], place?: "by-hip" }';
@@ -612,6 +645,19 @@ export function resolveMap(map: JointMap, rest: Rest, where: string, slots: RigS
         p.add('MAP_BONE_EXISTS', `${label} — bone "${ax.bone}" is not in the rig; its bones are ${listed}`);
         continue;
       }
+      const prev = owner.get(ax.bone);
+      if (prev !== undefined) p.add('MAP_BONE_ONCE', `bone "${ax.bone}" is in ${prev.startsWith('"') ? prev : `chain "${prev}"`} and in ${label}; a bone carries one rotate track`);
+      owner.set(ax.bone, label);
+      const o = rest.get(ax.bone)!;
+      if (Math.hypot(o.a, o.c) < 1e-9) p.add('MAP_AIM_LENGTH', `${label} — bone "${ax.bone}" has a collapsed x axis at setup (scale 0)`);
+    }
+  }
+  if (map.body?.yaw !== undefined) {
+    const ax = map.body.yaw;
+    const label = '"body.yaw"';
+    if (!rest.has(ax.bone)) {
+      p.add('MAP_BONE_EXISTS', `${label} — bone "${ax.bone}" is not in the rig; its bones are ${listed}`);
+    } else {
       const prev = owner.get(ax.bone);
       if (prev !== undefined) p.add('MAP_BONE_ONCE', `bone "${ax.bone}" is in ${prev.startsWith('"') ? prev : `chain "${prev}"`} and in ${label}; a bone carries one rotate track`);
       owner.set(ax.bone, label);

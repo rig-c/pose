@@ -19,7 +19,7 @@ import { landed, measureFeet, measureLanding, measurePosture, measureShear, pose
 import { legsOf, PLANT_SWITCH, STANCE_BOUNDS } from './legs.ts';
 import { M2_IDENTITY, mulM2, reduceKeys, reduceScale, reduceUnderScale, SCALE_REDUCE, setupLocal, smoothTrunk, type M2, type ReduceBone, type Reduced, type ReduceRow, type UnderBone } from './reduce.ts';
 import type { BlendHold, Closure, Floor, LegScale, Lowered, Side, Stance, SupportScaleRun } from './legs.ts';
-import { faceLine } from './face.ts';
+import { bodyLine, faceLine } from './face.ts';
 
 export interface RetargetArgs extends RetargetOptions {
   rig: string;
@@ -161,6 +161,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     }
     if (r.stance !== null) for (const l of stanceLines(r.stance, r.times)) say(`  STANCE ${l}`);
     if (r.face !== null) say(`  FACE   ${faceLine(r.face)}`);
+    if (r.body !== null) say(`  BODY   ${bodyLine(r.body)}`);
 
     // --reduce (#32): the dense keys thinned top-down, before anything reads the tracks.
     const reduced = a.reduce === undefined ? null : reduceTracks(r, map, rest, a.reduce, a.reduceHip);
@@ -192,6 +193,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         ...(map.translate === null ? [] : [map.translate.bone]),
         ...(map.face?.yaw === undefined ? [] : [map.face.yaw.bone]),
         ...(map.face?.pitch === undefined ? [] : [map.face.pitch.bone]),
+        ...(map.body?.yaw === undefined ? [] : [map.body.yaw.bone]),
       ];
       const below = new Map<string, string[]>();
       for (const m of new Set(mapped)) {
@@ -365,6 +367,15 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
                 ...(r.face.pitch === undefined ? {} : { pitch: { bone: r.face.pitch.bone, limits: r.face.pitch.limits, knee: r.face.pitch.knee, read: r.face.pitch.read, mapped: r.face.pitch.mapped, scale: r.face.pitch.scale, corr: r.face.pitch.corr } }),
               },
             }),
+        body: r.body === null
+          ? null
+          : {
+              standing: r.body.standing,
+              read: { yaw: r.body.read.yaw, opening: r.body.read.opening },
+              over45: r.body.over45,
+              framesOver45: r.body.framesOver45,
+              ...(r.body.yaw === undefined ? {} : { yaw: { bone: r.body.yaw.bone, limits: r.body.yaw.limits, knee: r.body.yaw.knee, read: r.body.yaw.read, mapped: r.body.yaw.mapped, scale: r.body.yaw.scale, corr: r.body.yaw.corr } }),
+            },
         legScale: r.legScale.map(({ scale: _scale, asked: _asked, ...rest }) => rest),
         pivot: r.pivot,
         stance: r.stance === null ? null : { tolerance: r.stance.tolerance, release: r.stance.release, minSeconds: r.stance.minSeconds, bounds: r.stance.bounds, ...(r.stance.range === undefined ? {} : { range: r.stance.range }), runs: r.stance.runs, over: r.stance.over },
