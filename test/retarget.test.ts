@@ -6065,3 +6065,135 @@ describe('trunk smoothing under --reduce (#116): knot and handle smoothing keeps
   }, SLOW);
 });
 
+describe('tools/pelvis.ts: --camera sidecar and residual zoom warning (#170)', () => {
+  const N = 36;
+  const DT = 1 / 24;
+  const PELVIS_TOOL = join(ROOT, 'tools', 'pelvis.ts');
+  const headRig: NonNullable<RigOpts['bones']> = (b) => [
+    ...b,
+    { name: 'head_ctl', parent: 'neck', x: 0, y: 20 },
+    { name: 'head', parent: 'head_ctl', x: 0, y: 0 },
+    { name: 'eye_r', parent: 'head', x: -6, y: 10 },
+    { name: 'eye_l', parent: 'head', x: 6, y: 10 },
+  ];
+  const mapWithHead = (): Record<string, unknown> => ({
+    ...baseMap(),
+    chains: [
+      { name: 'pelvis', bones: ['hip'], joints: ['r_hip', 'l_hip'], aim: ['leg_r0>leg_l0'] },
+      ...baseChains(),
+      { name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: ['eye_r>eye_l'] },
+    ],
+  });
+
+  function runPelvis(args: string[]): { status: number; stdout: string; stderr: string } {
+    const p = spawnSync(process.execPath, [PELVIS_TOOL, ...args], { cwd: ROOT, encoding: 'utf8' });
+    return { status: p.status ?? 1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
+  }
+
+  function zoomedPelvisPose(inPlace = false): Record<string, unknown> {
+    // Window 0..17 has 16% camera zoom (1.00 -> 1.16); window 18..35 holds steady zoom (1.16 -> 1.18).
+    // In both windows the dancer performs the same periodic crouch + lateral sway over a planted right foot.
+    const zoomAt = (i: number): number => (i < 18 ? 1 + (0.16 * i) / 18 : 1.16 + (0.02 * (i - 18)) / 17);
+    const m: Motion = { ...BASE, n: N, dt: DT, hip: () => [0, 0], trunk: () => 90 };
+    const doc = poseDoc(m, (i, j) => {
+      const z = inPlace ? 1 : zoomAt(i);
+      const crouch = 1 - 0.08 * (0.5 - 0.5 * Math.cos((2 * Math.PI * (i % 9)) / 9));
+      const swayDeg = 6 * Math.sin((2 * Math.PI * (i % 18)) / 18);
+      const swayRad = swayDeg * RAD;
+      // Right ankle planted at (200, 500) in canonical space; camera zooms around top-left (0, 0).
+      const rAnk: Pt = [200, 500];
+      const legLen = 150 * crouch;
+      const dx = -legLen * Math.sin(swayRad);
+      const dy = -legLen * Math.cos(swayRad);
+      const rHip: Pt = [rAnk[0] + dx, rAnk[1] + dy];
+      const rKnee: Pt = [rAnk[0] + dx * (70 / 150), rAnk[1] + dy * (70 / 150)];
+      const lHip: Pt = [rHip[0] + 30, rHip[1]];
+      const lKnee: Pt = [rKnee[0] + 30, rKnee[1]];
+      const lAnk: Pt = [rAnk[0] + 30, rAnk[1]];
+      const mh: Pt = [(rHip[0] + lHip[0]) / 2, (rHip[1] + lHip[1]) / 2];
+      const origR = j.r_hip!.at as Pt;
+      const origL = j.l_hip!.at as Pt;
+      const origMh: Pt = [(origR[0] + origL[0]) / 2, (origR[1] + origL[1]) / 2];
+      const shiftX = mh[0] - origMh[0];
+      const shiftY = mh[1] - origMh[1];
+      for (const k of Object.keys(j)) {
+        const pt = j[k]!.at as Pt;
+        j[k] = { ...j[k]!, at: [(pt[0] + shiftX) * z, (pt[1] + shiftY) * z] };
+      }
+      j.r_hip = { state: 'observed', at: [rHip[0] * z, rHip[1] * z], score: 0.95 };
+      j.l_hip = { state: 'observed', at: [lHip[0] * z, lHip[1] * z], score: 0.95 };
+      j.r_knee = { state: 'observed', at: [rKnee[0] * z, rKnee[1] * z], score: 0.95 };
+      j.l_knee = { state: 'observed', at: [lKnee[0] * z, lKnee[1] * z], score: 0.95 };
+      j.r_ankle = { state: 'observed', at: [rAnk[0] * z, rAnk[1] * z], score: 0.95 };
+      j.l_ankle = { state: 'observed', at: [lAnk[0] * z, lAnk[1] * z], score: 0.95 };
+    });
+    return inPlace ? { ...doc, travel: 'in-place' } : doc;
+  }
+
+  test('with --camera, zoomed windows pass and agree within 0.01; without --camera, warns and keeps raw ratios; refuses malformed camera and fails on mutant camera', () => {
+    const pose = zoomedPelvisPose(false);
+    const c = setup({ rig: { bones: headRig }, map: mapWithHead(), pose });
+    const repFile = join(c.dir, 'report.json');
+    const camFile = join(c.dir, 'camera.json');
+    const r = retarget(c, ['--bends', 'clamp', '--leg-scale', '0.8,1.05', '--plant-feet', '--report', repFile, '--camera', camFile]);
+    expect(r.status).toBe(0);
+
+    const outCam = join(c.dir, 'bands_cam.json');
+    const pCam = runPelvis(['--build', c.build, '--pose', c.pose, '--map', c.map, '--report', repFile, '--camera', camFile, '--windows', '0-17,18-35', '--out', outCam]);
+    expect(pCam.status).toBe(0);
+    expect(pCam.stdout).not.toContain('warning:');
+    expect(pCam.stdout).not.toContain('FAIL');
+
+    const bandsCam = JSON.parse(readFileSync(outCam, 'utf8')) as {
+      bands: Array<{
+        window: [number, number];
+        vertical: { ratio: number };
+        lateral: { ratio: number };
+        rebound: { median: number };
+      }>;
+    };
+    const [b0, b1] = bandsCam.bands as [typeof bandsCam.bands[0], typeof bandsCam.bands[0]];
+    expect(b0.vertical.ratio).toBeGreaterThanOrEqual(0.85);
+    expect(b0.vertical.ratio).toBeLessThanOrEqual(1.15);
+    expect(b0.lateral.ratio).toBeGreaterThanOrEqual(0.85);
+    expect(b0.lateral.ratio).toBeLessThanOrEqual(1.15);
+    expect(Math.abs(b0.vertical.ratio - b1.vertical.ratio)).toBeLessThanOrEqual(0.01);
+    expect(Math.abs(b0.lateral.ratio - b1.lateral.ratio)).toBeLessThanOrEqual(0.01);
+    expect(Math.abs(b0.rebound.median - b1.rebound.median)).toBeLessThanOrEqual(0.01);
+
+    // Without --camera on the zoomed sequence: warning line appears, raw ratios still print.
+    const outRaw = join(c.dir, 'bands_raw.json');
+    const pRaw = runPelvis(['--build', c.build, '--pose', c.pose, '--map', c.map, '--report', repFile, '--windows', '0-17,18-35', '--out', outRaw]);
+    expect(pRaw.status).toBe(0);
+    const rawLines = pRaw.stdout.trim().split('\n');
+    expect(rawLines[0]).toMatch(/^warning: sequence has residual camera zoom s /);
+    expect(rawLines.slice(1).join('\n')).toContain('window 0–17:');
+    expect(pRaw.stdout).toContain('FAIL');
+    const bandsRaw = JSON.parse(readFileSync(outRaw, 'utf8')) as typeof bandsCam;
+    expect(bandsRaw.bands[0]!.vertical.ratio).toBeGreaterThan(1.15);
+
+    // Negative control 1: mutant camera with flat s=1 fails the vertical band on 0-17.
+    const mutCamFile = join(c.dir, 'camera_mut.json');
+    const camObj = JSON.parse(readFileSync(camFile, 'utf8')) as { spec: string; frames: Array<{ frame: number; t: number; s: number }> };
+    writeFileSync(mutCamFile, JSON.stringify({ ...camObj, frames: camObj.frames.map((f) => ({ ...f, s: 1 })) }));
+    const pMut = runPelvis(['--build', c.build, '--pose', c.pose, '--map', c.map, '--report', repFile, '--camera', mutCamFile, '--windows', '0-17,18-35']);
+    expect(pMut.status).toBe(0);
+    expect(pMut.stdout).toContain('FAIL');
+
+    // Negative control 2: invalid --camera spec is refused with exit 2.
+    const badCamFile = join(c.dir, 'camera_bad.json');
+    writeFileSync(badCamFile, JSON.stringify({ spec: 'wrong/1', frames: [] }));
+    const pBad = runPelvis(['--build', c.build, '--pose', c.pose, '--map', c.map, '--report', repFile, '--camera', badCamFile, '--windows', '0-17']);
+    expect(pBad.status).toBe(2);
+    expect(pBad.stderr).toContain('expected "rig-pose-camera/1"');
+
+    // In-place sequence without --camera: no warning line printed.
+    const inPlaceFile = join(c.dir, 'pose_inplace.json');
+    writeFileSync(inPlaceFile, JSON.stringify({ ...JSON.parse(readFileSync(c.pose, 'utf8')), travel: 'in-place' }));
+    const pInPlace = runPelvis(['--build', c.build, '--pose', inPlaceFile, '--map', c.map, '--report', repFile, '--windows', '0-17']);
+    expect(pInPlace.status).toBe(0);
+    expect(pInPlace.stdout).not.toContain('warning:');
+  }, SLOW);
+});
+
+

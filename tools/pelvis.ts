@@ -4,11 +4,16 @@
  * Not shipped.
  *
  *   bun tools/pelvis.ts --build <dir> --pose <reference.pose.json> --map <map.json> \
- *     --report <retarget report.json> --windows 88-181,183-261 [--name dance] [--min-score 0.3] \
- *     [--out <bands.json>] [--plot <paths.png>]
+ *     --report <retarget report.json> --windows 88-181,183-261 [--camera <camera.json>] \
+ *     [--name dance] [--min-score 0.3] [--out <bands.json>] [--plot <paths.png>]
  *
  * - Reference: mid_hip as read (no hold, no smoothing; a frame counts where both
- *   hips are good), picture px, y down. Rig: the translated bone's world origin.
+ *   hips are good), picture px, y down — or, with `--camera <camera.json>`
+ *   (`rig-pose-camera/1`, rig-c/pose#170), read through the camera sidecar `s(t)`
+ *   (and under `--plant-feet`, placed from the supporting ankle by `plantHip`
+ *   with each segment divided by `s(t)`). Without `--camera` on a sequence that
+ *   has residual camera zoom, a one-line warning names the zoom range while
+ *   keeping the raw ratios reproducible. Rig: the translated bone's world origin.
  * - Vertical: the hip's height range over the window, in that side's median leg
  *   length (hip → ankle: the reference's mean of both sides' |hip → ankle| per
  *   frame, the rig's mean of both thighs' origin → ankle tip; medians over all
@@ -30,8 +35,9 @@ import { join } from 'node:path';
 import { readModel } from 'rig-c/core';
 import { Plate, type RGBA } from 'rig-c/plate';
 import type { Body18 } from '../src/joints.ts';
+import { figureScaleOf, plantHip, type Feet, type Side } from '../src/legs.ts';
 import { readMap, pointAt } from '../src/map.ts';
-import { personTrack, readPoseSequence } from '../src/pose.ts';
+import { personTrack, readPoseSequence, TRAVEL_IN_PLACE } from '../src/pose.ts';
 import { pointOn } from '../src/retarget.ts';
 import { poseFrames } from '../src/verify.ts';
 
@@ -51,9 +57,20 @@ const posePath = flag('pose');
 const map = readMap(readFileSync(flag('map'), 'utf8'), flag('map'));
 const report = JSON.parse(readFileSync(flag('report'), 'utf8')) as {
   options: Record<string, unknown>;
-  feet: { supports: Array<{ side: 'r' | 'l'; frames: [number, number] }>; jumps: Array<[number, number]> } | null;
+  scale?: { factor: number; pose: number; rig: number } | null;
+  legScale?: Array<{ bone: string; straight: number }>;
+  bends?: Array<{ joint: string; frame: number }>;
+  feet: {
+    legLength: Record<Side, number>;
+    supports: Array<{ side: Side; frames: [number, number] }>;
+    jumps: Array<[number, number]>;
+    steps: Feet['steps'];
+    changes: Feet['changes'];
+    tracked?: Array<{ side: Side; frames: [number, number] }>;
+  } | null;
 };
 const windows = flag('windows').split(',').map((w) => w.split('-').map(Number) as [number, number]);
+const cameraPath = args.includes('--camera') ? flag('camera') : null;
 const name = flag('name', 'dance');
 const minScore = Number(flag('min-score', '0.3'));
 const out = args.includes('--out') ? flag('out') : null;
@@ -68,6 +85,46 @@ const doc = readModel(readFileSync(join(build, 'skeleton.model.json'), 'utf8'), 
 const posed = poseFrames(doc, name, times);
 const lengths = new Map(doc.bones.map((b) => [b.name, b.length ?? 0]));
 
+const readCameraScale = (file: string): number[] => {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(file, 'utf8'));
+  } catch (e) {
+    process.stderr.write(`pelvis.ts: ${file} is not valid JSON (${(e as Error).message})\n`);
+    process.exit(2);
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    process.stderr.write(`pelvis.ts: ${file} must be a JSON object\n`);
+    process.exit(2);
+  }
+  const obj = raw as Record<string, unknown>;
+  if (obj.spec !== 'rig-pose-camera/1') {
+    process.stderr.write(`pelvis.ts: ${file} "spec" is ${JSON.stringify(obj.spec)}; expected "rig-pose-camera/1"\n`);
+    process.exit(2);
+  }
+  if (!Array.isArray(obj.frames) || obj.frames.length !== n) {
+    process.stderr.write(`pelvis.ts: ${file} "frames" has length ${Array.isArray(obj.frames) ? obj.frames.length : typeof obj.frames}; expected ${n} (matching ${posePath})\n`);
+    process.exit(2);
+  }
+  return obj.frames.map((entry: unknown, i: number) => {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      process.stderr.write(`pelvis.ts: ${file} "frames"[${i}] is not an object\n`);
+      process.exit(2);
+    }
+    const f = entry as Record<string, unknown>;
+    if (f.frame !== i) {
+      process.stderr.write(`pelvis.ts: ${file} "frames"[${i}].frame is ${JSON.stringify(f.frame)}; expected ${i}\n`);
+      process.exit(2);
+    }
+    if (typeof f.s !== 'number' || !Number.isFinite(f.s) || !(f.s > 0)) {
+      process.stderr.write(`pelvis.ts: ${file} "frames"[${i}].s is ${JSON.stringify(f.s)}; expected a finite number > 0\n`);
+      process.exit(2);
+    }
+    return f.s;
+  });
+};
+const camS: number[] | null = cameraPath !== null ? readCameraScale(cameraPath) : null;
+
 const median = (xs: number[]): number => {
   const s = xs.filter(Number.isFinite).sort((a, b) => a - b);
   const m = s.length >> 1;
@@ -77,23 +134,41 @@ const at = (i: number, j: string): Pt | null => {
   const v = pointOn(frames[i]!, j as Body18, minScore);
   return typeof v === 'string' ? null : v;
 };
+const heldSeries = (j: string): Pt[] | null => {
+  const raw = Array.from({ length: n }, (_, i) => at(i, j));
+  const first = raw.findIndex((p) => p !== null);
+  if (first < 0) return null;
+  const out: Pt[] = new Array<Pt>(n);
+  for (let i = 0; i < first; i++) out[i] = raw[first]!;
+  let last = raw[first]!;
+  for (let i = first; i < n; i++) {
+    if (raw[i] !== null) last = raw[i]!;
+    out[i] = last;
+  }
+  return out;
+};
 const dist = (a: Pt, b: Pt) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 
-// The reference.
-const refHip: Array<Pt | null> = Array.from({ length: n }, (_, i) => at(i, 'mid_hip'));
-const refWidth = median(Array.from({ length: n }, (_, i) => {
-  const r = at(i, 'r_hip');
-  const l = at(i, 'l_hip');
-  return r && l ? dist(r, l) : NaN;
-}));
-const refLeg = median(Array.from({ length: n }, (_, i) => {
-  const ls = (['r', 'l'] as const).map((s) => {
-    const h = at(i, `${s}_hip`);
-    const a = at(i, `${s}_ankle`);
-    return h && a ? dist(h, a) : NaN;
-  });
-  return (ls[0]! + ls[1]!) / 2;
-}));
+if (camS === null && seq.travel !== TRAVEL_IN_PLACE && n > 25) {
+  const ar = heldSeries('r_ankle');
+  const al = heldSeries('l_ankle');
+  const top = heldSeries('nose') ?? heldSeries('neck');
+  if (ar !== null && al !== null && top !== null) {
+    const rawH = ar.map((r, i) => Math.max(r[1], al[i]![1]) - top[i]![1]);
+    if (rawH.every((v) => v > 1e-6)) {
+      const s = figureScaleOf(rawH);
+      const minS = Math.min(...s);
+      const maxS = Math.max(...s);
+      if (maxS - minS > 1e-4) {
+        const winS = windows.map(([a, b]) => {
+          const ws = s.slice(a, b + 1);
+          return `${a}–${b}: ${Math.min(...ws).toFixed(4)}–${Math.max(...ws).toFixed(4)}`;
+        }).join(', ');
+        console.log(`warning: sequence has residual camera zoom s ${minS.toFixed(4)}–${maxS.toFixed(4)} (${winS}); pass --camera <camera.json> to remove it`);
+      }
+    }
+  }
+}
 
 // The rig.
 const legChain = (s: 'r' | 'l') => map.chains.find((c) => !c.reach && c.joints[c.joints.length - 1] === `${s}_ankle`)!;
@@ -106,6 +181,107 @@ const rootAt = (i: number, s: 'r' | 'l'): Pt => [posed[i]!.get(roots[s])!.worldX
 const rigWidth = median(posed.map((_, i) => dist(rootAt(i, 'r'), rootAt(i, 'l'))));
 const rigLegSide = { r: median(posed.map((_, i) => dist(rootAt(i, 'r'), tip(i, 'r')))), l: median(posed.map((_, i) => dist(rootAt(i, 'l'), tip(i, 'l')))) };
 const rigLeg = median(posed.map((_, i) => (dist(rootAt(i, 'r'), tip(i, 'r')) + dist(rootAt(i, 'l'), tip(i, 'l'))) / 2));
+
+// The reference.
+const refWidth = median(Array.from({ length: n }, (_, i) => {
+  const r = at(i, 'r_hip');
+  const l = at(i, 'l_hip');
+  return r && l ? dist(r, l) / (camS?.[i] ?? 1) : NaN;
+}));
+const refLeg = median(Array.from({ length: n }, (_, i) => {
+  const ls = (['r', 'l'] as const).map((s) => {
+    const h = at(i, `${s}_hip`);
+    const a = at(i, `${s}_ankle`);
+    return h && a ? dist(h, a) / (camS?.[i] ?? 1) : NaN;
+  });
+  return (ls[0]! + ls[1]!) / 2;
+}));
+const refHip: Array<Pt | null> = (() => {
+  if (camS === null) return Array.from({ length: n }, (_, i) => at(i, 'mid_hip'));
+  const mhSeries = heldSeries('mid_hip');
+  if (mhSeries === null) return new Array<Pt | null>(n).fill(null);
+  const mh0 = mhSeries[0]!;
+  if (report.options.plantFeet === true && report.feet !== null && report.feet.supports.length > 0) {
+    const support = new Array<Side | null>(n).fill(null);
+    for (const sp of report.feet.supports) for (let i = sp.frames[0]; i <= sp.frames[1]; i++) support[i] = sp.side;
+    const feet: Feet = {
+      legLength: report.feet.legLength,
+      support,
+      supports: report.feet.supports,
+      jumps: report.feet.jumps,
+      steps: report.feet.steps ?? [],
+      changes: report.feet.changes ?? [],
+      ...(report.feet.tracked !== undefined ? { tracked: report.feet.tracked } : {}),
+    };
+    const straightByBone = new Map((report.legScale ?? []).map((x) => [x.bone, x.straight]));
+    const clampedKnee: Record<Side, Set<number>> = { r: new Set<number>(), l: new Set<number>() };
+    if (report.options.bends !== 'allow') {
+      for (const b of report.bends ?? []) {
+        if (b.joint === 'r_knee') clampedKnee.r.add(b.frame);
+        if (b.joint === 'l_knee') clampedKnee.l.add(b.frame);
+      }
+    }
+    const seriesCache = new Map<string, Pt[]>();
+    const pt = (i: number, j: string): Pt => {
+      let s = seriesCache.get(j);
+      if (s === undefined) {
+        s = heldSeries(j) ?? new Array<Pt>(n).fill([0, 0]);
+        seriesCache.set(j, s);
+      }
+      return s[i]!;
+    };
+    const offset = (i: number, side: Side): Pt => {
+      const mh = pt(i, 'mid_hip');
+      const hs = pt(i, `${side}_hip`);
+      const rh = pt(i, 'r_hip');
+      const lh = pt(i, 'l_hip');
+      const w = dist(rh, lh);
+      const ch = legChain(side);
+      let legRigX = 0;
+      let legRigY = 0;
+      let prevDir: Pt | null = null;
+      for (let k = 0; k < ch.bones.length; k++) {
+        const b = ch.bones[k]!;
+        const p0 = pt(i, ch.joints[k]!);
+        const p1 = pt(i, ch.joints[k + 1]!);
+        const d = dist(p0, p1);
+        const dir: Pt = k > 0 && clampedKnee[side].has(i) && prevDir !== null
+          ? prevDir
+          : d > 1e-6 ? [(p1[0] - p0[0]) / d, (p1[1] - p0[1]) / d] : [0, 1];
+        prevDir = dir;
+        const str = straightByBone.get(b);
+        const bLen = lengths.get(b) ?? 0;
+        const segLen = str !== undefined && str > 1e-6
+          ? ((d / camS[i]!) / str) * bLen
+          : (d / camS[i]!) * (rigLeg / refLeg);
+        legRigX += dir[0] * segLen;
+        legRigY += -dir[1] * segLen;
+      }
+      const pelvRigX = w > 1e-6 ? ((hs[0] - mh[0]) / w) * rigWidth : ((hs[0] - mh[0]) / (camS[i]! * refWidth)) * rigWidth;
+      const pelvRigY = w > 1e-6 ? -((hs[1] - mh[1]) / w) * rigWidth : -((hs[1] - mh[1]) / (camS[i]! * refWidth)) * rigWidth;
+      return [
+        (legRigX + pelvRigX) * (refWidth / rigWidth),
+        (legRigY + pelvRigY) * (refLeg / rigLeg),
+      ];
+    };
+    const scaleFactor = report.scale?.factor ?? (rigLeg / refLeg);
+    const tfX = (scaleFactor / rigWidth) * refWidth;
+    const tfY = (scaleFactor / rigLeg) * refLeg;
+    const travel = (i: number): Pt => {
+      const mh = pt(i, 'mid_hip');
+      return [(mh[0] - mh0[0]) * tfX, -(mh[1] - mh0[1]) * tfY];
+    };
+    const track = (i: number, side: Side) => pt(i, `${side}_ankle`)[0] * scaleFactor * (refWidth / rigWidth);
+    const follow = seq.travel === TRAVEL_IN_PLACE ? track : undefined;
+    const floorOpt = typeof report.options.floor === 'number' ? report.options.floor * (refLeg / rigLeg) : undefined;
+    const planted = plantHip(feet, offset, travel, [mh0[0], -mh0[1]], floorOpt, follow, track);
+    return planted.hip.map((p, i) => (at(i, 'mid_hip') === null ? null : [p[0], -p[1]]));
+  }
+  return Array.from({ length: n }, (_, i) => {
+    const mh = at(i, 'mid_hip');
+    return mh === null ? null : [mh0[0] + (mh[0] - mh0[0]) / camS[i]!, mh0[1] + (mh[1] - mh0[1]) / camS[i]!];
+  });
+})();
 
 const range = (xs: number[]): number => Math.max(...xs) - Math.min(...xs);
 const jump = new Set<number>();
