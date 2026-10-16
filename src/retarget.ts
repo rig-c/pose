@@ -83,8 +83,8 @@ import type { ArtRange, ByHip, Raised, ReachShort, SlotTrack, Switch, SwitchOpti
 import { clampArt, coveredChains, isRaised, measureArt, overflow, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
 import type { BlendHold, Closure, Feet, Floor, LegScale, PathPose, Posing, Side, Stance } from './legs.ts';
 import { figureScaleOf, holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, percentile, plantHip, posePath, rootOf, scaleSupport, SIDES, stanceOf, stanceRangeOf, STRAIGHT_PERCENTILE, supportsOf, tipOf, unshortenStanceShin } from './legs.ts';
-import type { FaceReading } from './face.ts';
-import { readFace } from './face.ts';
+import type { BodyReading, FaceReading } from './face.ts';
+import { readBody, readFace, readFaceAngles } from './face.ts';
 
 const DEG = 180 / Math.PI;
 
@@ -326,6 +326,8 @@ export interface Retarget {
   byHip: ByHip[];
   /** With "face" in the map (#138): per-frame yaw/pitch reading and range-compressed mapping. */
   face: FaceReading | null;
+  /** Per-frame body yaw read from camera-normalised shoulder and hip width (#173), and optional "body.yaw" dial mapping. */
+  body: BodyReading | null;
   /** Continuous per-frame figure scale relative to frame 0 (`#163`, `#161`). */
   figureScale: FigureScaleReading;
 }
@@ -461,6 +463,10 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     needed.add('nose');
     needed.add('r_eye');
     needed.add('l_eye');
+  }
+  if (map.body !== undefined) {
+    needed.add('r_shoulder');
+    needed.add('l_shoulder');
   }
   const series = new Map<string, Pt[]>();
   const good = new Map<string, boolean[]>();
@@ -1521,6 +1527,31 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       tracks.push({ bone: ax.bone, property: 'rotate', keys: ax.keys.map((v, i) => ({ t: keyTimes[i]!, v: [v] })) });
     }
   }
+  let body: BodyReading | null = null;
+  {
+    const rSh = heldPt('r_shoulder');
+    const lSh = heldPt('l_shoulder');
+    if (rSh !== null && lSh !== null) {
+      const rHip = heldPt('r_hip');
+      const lHip = heldPt('l_hip');
+      const neck = heldPt('neck');
+      const faceYaw = face !== null ? face.read.rawYaw : (() => {
+        const nose = heldPt('nose');
+        const rEye = heldPt('r_eye');
+        const lEye = heldPt('l_eye');
+        if (nose === null || rEye === null || lEye === null) return null;
+        return readFaceAngles(nose, rEye, lEye, heldPt('r_ear'), heldPt('l_ear')).yaw;
+      })();
+      body = readBody(map.body, rSh, lSh, rHip, lHip, neck, !inPlace && n > 25 ? continuousScale : null, faceYaw);
+      const bodyAx = body.yaw;
+      if (bodyAx !== undefined) {
+        const rest0 = restAngle(rest, bodyAx.bone, 'x');
+        const above = mappedAbove(bodyAx.bone);
+        targets.set(bodyAx.bone, bodyAx.keys.map((v, i) => wrap(rest0 + (above === null ? 0 : turn(above, i)) + v)));
+        tracks.push({ bone: bodyAx.bone, property: 'rotate', keys: bodyAx.keys.map((v, i) => ({ t: keyTimes[i]!, v: [v] })) });
+      }
+    }
+  }
   // Scale keys: a scaled leg segment's own scale, or the scale that lands a bone under one at its asked length.
   for (const c of map.chains) {
     for (const b of c.bones) {
@@ -1539,7 +1570,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     animation: { duration: keyTimes[n - 1]!, tracks },
     times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale,
     switches: sw.switches, shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
-    legScale, scales, feet, planted: plantOn, stance, floor, blendHold, closure, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs), raised, byHip, face, figureScale,
+    legScale, scales, feet, planted: plantOn, stance, floor, blendHold, closure, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs), raised, byHip, face, body, figureScale,
   };
 }
 

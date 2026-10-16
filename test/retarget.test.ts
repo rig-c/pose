@@ -6313,5 +6313,111 @@ describe('posture-invariant figure scale and trunk scaley foreshortening (#172)'
   }, SLOW);
 });
 
+describe('#173: body yaw reading from camera-normalised shoulder and hip width', () => {
+  const N = 60;
+  const DT = 1 / 30;
+
+  function bodyTurnPose(): Record<string, unknown> {
+    const m: Motion = { ...BASE, n: N, dt: DT, hip: () => [0, 0], trunk: () => 90, rt: () => -90, rs: () => -90, lt: () => -90, ls: () => -90 };
+    return poseDoc(m, (i, j) => {
+      // Frames 0..47: frontal standing (cos(yaw) = 1.0 -> yaw = 0°)
+      // Frames 48..59: 75° turn to subject's right (cos(75°) ≈ 0.2588 -> yaw ≈ +75°)
+      const deg = i < 48 ? 0 : 75;
+      const c = Math.cos((deg * Math.PI) / 180);
+      const rSh = j.r_shoulder!.at as Pt;
+      const lSh = j.l_shoulder!.at as Pt;
+      const mShX = (rSh[0] + lSh[0]) / 2;
+      const halfSh = ((lSh[0] - rSh[0]) / 2) * c;
+      j.r_shoulder = { ...j.r_shoulder!, at: [mShX - halfSh, rSh[1]] };
+      j.l_shoulder = { ...j.l_shoulder!, at: [mShX + halfSh, lSh[1]] };
+
+      const rHip = j.r_hip!.at as Pt;
+      const lHip = j.l_hip!.at as Pt;
+      const mHipX = (rHip[0] + lHip[0]) / 2;
+      const halfHip = ((lHip[0] - rHip[0]) / 2) * c;
+      j.r_hip = { ...j.r_hip!, at: [mHipX - halfHip, rHip[1]] };
+      j.l_hip = { ...j.l_hip!, at: [mHipX + halfHip, lHip[1]] };
+
+      if (deg > 0) {
+        const nose = j.nose!.at as Pt;
+        j.nose = { ...j.nose!, at: [nose[0] - 4, nose[1]] };
+      }
+    });
+  }
+
+  test('reports BODY yaw (<= 15° on opening, >= 60° on ending turn, frames >= 45° listed) without changing tracks when body is undeclared, and drives body.yaw when declared', () => {
+    const pose = bodyTurnPose();
+    const c = setup({ pose });
+    const repFile = join(c.dir, 'report.json');
+    const r = retarget(c, ['--bends', 'clamp', '--report', repFile]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+
+    const bodyLines = linesOf(r, 'BODY');
+    expect(bodyLines).toHaveLength(1);
+    expect(bodyLines[0]).toContain('opening (frames 0–47)');
+    expect(bodyLines[0]).toContain('≥ 45° on 12 frame(s): frames 48–59');
+
+    const rep = JSON.parse(readFileSync(repFile, 'utf8')) as {
+      body: {
+        standing: { shoulder: number; hip: number };
+        read: { yaw: { min: number; max: number; range: number }; opening: { min: number; max: number } };
+        over45: Array<[number, number]>;
+        framesOver45: number[];
+        yaw?: unknown;
+      };
+    };
+    expect(Math.max(Math.abs(rep.body.read.opening.min), Math.abs(rep.body.read.opening.max))).toBeLessThanOrEqual(15);
+    expect(rep.body.read.yaw.max).toBeGreaterThanOrEqual(60);
+    expect(rep.body.over45).toEqual([[48, 59]]);
+    expect(rep.body.framesOver45).toHaveLength(12);
+    expect(rep.body.yaw).toBeUndefined();
+
+    // With body.yaw declared in map.json, the dial bone is keyed with knee compression and reported.
+    const dialMap = { ...baseMap(), body: { yaw: { bone: 'body_yaw', range: [-30, 30] } } };
+    const cDial = setup({
+      rig: { bones: (b) => [...b, { name: 'body_yaw', parent: 'chest', x: 0, y: 50, rotation: 0, length: 10 }] },
+      map: dialMap,
+      pose,
+    });
+    const repDialFile = join(cDial.dir, 'report_dial.json');
+    const rDial = retarget(cDial, ['--bends', 'clamp', '--report', repDialFile]);
+    expect(rDial.stderr).toBe('');
+    expect(rDial.status).toBe(0);
+    expect(linesOf(rDial, 'BODY')[0]).toContain('mapped yaw → bone "body_yaw" [-30, 30]°');
+
+    const motionUndeclared = JSON.parse(readFileSync(c.out, 'utf8')) as {
+      animations: { dance: { tracks: Array<{ bone?: string; slot?: string; property: string; keys: unknown[] }> } };
+    };
+    const motionDial = JSON.parse(readFileSync(cDial.out, 'utf8')) as {
+      animations: { dance: { tracks: Array<{ bone?: string; slot?: string; property: string; keys: unknown[] }> } };
+    };
+    expect(motionDial.animations.dance.tracks.filter((tr) => tr.bone !== 'body_yaw')).toEqual(motionUndeclared.animations.dance.tracks);
+
+    // Mutant: if readBodyYaw ignores width narrowing and returns 0, over45 is empty.
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm173-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'face.ts');
+      const from = 'const mag = Math.acos(w) * DEG;';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'const mag = 0;'));
+      const cMut = setup({ pose });
+      const mutRepFile = join(cMut.dir, 'report_mut.json');
+      const rMut = retarget(cMut, ['--bends', 'clamp', '--report', mutRepFile], join(d, 'cli.ts'));
+      expect(rMut.status).toBe(0);
+      const mutRep = JSON.parse(readFileSync(mutRepFile, 'utf8')) as { body: { over45: unknown[] } };
+      expect(mutRep.body.over45).toEqual([]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
+
 
 
