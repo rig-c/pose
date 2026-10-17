@@ -1426,6 +1426,8 @@ export interface Raised {
   short: ReachShort[];
   /** The frames whose upper arm the set's `turn` held: the forearm re-aimed at the placed wrist. */
   upperHeld: number[];
+  /** For a head-anchored chain (`anchor`, rig-c/pose#191): each frame where the set's `turn` clamp saturated and left a non-zero wrist residual, in rig world units. */
+  saturated?: Array<{ frame: number; residual: number }>;
   /** The arm's reach (from |l0 − l1| to l0 + l1, world units from the shoulder) and the farthest target from the shoulder over the span. */
   reach: { min: number; max: number; farthest: number };
 }
@@ -1459,7 +1461,8 @@ export function raisedLine(e: Raised | ByHip, times: readonly number[]): string 
   const w = anchorOf(e);
   const units = 'hips' in e ? e.hips : e.eyes;
   const med = (vs: readonly P2[]): P2 => [median(vs.map((v) => v[0])), median(vs.map((v) => v[1]))];
-  const held = e.upperHeld.length === 0 ? 'the upper arm within its turn on every frame' : `the upper arm held by the set's turn on ${e.upperHeld.length} frame(s) (${framesText(e.upperHeld)}), the forearm re-aimed`;
+  const satText = e.saturated !== undefined && e.saturated.length > 0 ? `; residual ${e.saturated.map((s) => `f${s.frame} ${s.residual.toFixed(2)}u`).join(', ')}` : '';
+  const held = e.upperHeld.length === 0 ? 'the upper arm within its turn on every frame' : `the upper arm held by the set's turn on ${e.upperHeld.length} frame(s) (${framesText(e.upperHeld)}${satText}), the forearm re-aimed`;
   const out = e.short.length === 0 ? 'every target in reach' : `out of reach on ${e.short.reduce((k, s) => k + s.frames[1] - s.frames[0] + 1, 0)} frame(s) (REACH)`;
   return `set "${e.set}" chain "${e.chain}" ${spanOf(e.frames, times)}: the wrist placed against ${w.against}; ${w.unitOne} (median) rig ${units.rig.toFixed(2)} units, reference ${units.reference.toFixed(2)} px; wrist − ${w.centre} in ${w.unit} (x right, y up), median reference ${xy(med(e.reference))}, placed ${xy(med(e.placed))}, before ${xy(med(e.before))}, after ${xy(med(e.after))}; worst |rig − reference| before ${xy(e.worst.before)}, after ${xy(e.worst.after)}; worst |after − placed| ${e.worst.placed.toFixed(2)}; ${held}; ${out}`;
 }

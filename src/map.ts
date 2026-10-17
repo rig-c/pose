@@ -104,6 +104,8 @@ export interface AlternateSet {
   symmetric?: boolean;
   /** `support` (rig-c/pose#188): the set's chains whose bones anchor to the set's `drawn` local angles while the non-support chains track the active gesture. */
   support?: string[];
+  /** `anchor` (rig-c/pose#191): the set's two-bone arm chains whose hand-tip is anchored to the set's `drawn` head-local offset while the set shows. */
+  anchor?: string[];
 }
 export interface YawSet {
   set: string;
@@ -439,7 +441,7 @@ function readAlternates(p: Problems, where: string, raw: unknown, chains: readon
       p.add('MAP_ALT_SHAPE', `${aw} is ${typeName(a)}; a set is ${SET_SHAPE}`);
       return;
     }
-    refuseUnknownKeys(p, 'MAP_KEYS', aw, a, ['name', 'note', 'slots', 'hides', 'chains', 'pose', 'drawn', 'offsets', 'turn', 'frames', 'place', 'symmetric', 'support']);
+    refuseUnknownKeys(p, 'MAP_KEYS', aw, a, ['name', 'note', 'slots', 'hides', 'chains', 'pose', 'drawn', 'offsets', 'turn', 'frames', 'place', 'symmetric', 'support', 'anchor']);
     const name = typeof a.name === 'string' && a.name !== '' ? a.name : null;
     if (name === null) p.add('MAP_ALT_NAME', `${aw} "name" is ${typeName(a.name)}; it must be a non-empty string`);
     else if (names.has(name)) p.add('MAP_ALT_NAME', `${aw} "name" "${name}" names two sets`);
@@ -602,7 +604,48 @@ function readAlternates(p: Problems, where: string, raw: unknown, chains: readon
         if (ok) support = sup;
       }
     }
-    if (ok && name !== null && cs !== null) out.push({ name, slots, hides, chains: cs, pose, drawn, offsets, turn, frames, ...(place === null ? {} : { place }), ...(symmetric === undefined ? {} : { symmetric }), ...(support === undefined ? {} : { support }) });
+    let anchor: string[] | undefined;
+    if ('anchor' in a) {
+      const anc = typeof a.anchor === 'string' && a.anchor !== '' ? [a.anchor] : strings(a.anchor);
+      if (anc === null || anc.length === 0 || anc.some((s) => s === '')) {
+        p.add('MAP_ALT_ANCHOR', `${label} "anchor" is ${JSON.stringify(a.anchor)}; it must name one or more of the set's chains (${(cs ?? []).join(', ') || 'none'})`);
+        ok = false;
+      } else {
+        if (new Set(anc).size !== anc.length) {
+          p.add('MAP_ALT_ANCHOR', `${label} "anchor" names a chain twice: ${anc.join(', ')}`);
+          ok = false;
+        }
+        const outside = anc.filter((c) => !(cs ?? []).includes(c));
+        if (outside.length > 0) {
+          p.add('MAP_ALT_ANCHOR', `${label} "anchor" names chain ${outside.map((c) => `"${c}"`).join(', ')}, which is not in the set's chains (${(cs ?? []).join(', ') || 'none'})`);
+          ok = false;
+        }
+        const ancChains = own.filter((c) => anc.includes(c.name));
+        const nonTwo = ancChains.filter((c) => c.bones.length !== 2);
+        if (nonTwo.length > 0) {
+          p.add('MAP_ALT_ANCHOR', `${label} "anchor" chain ${nonTwo.map((c) => `"${c.name}" (${c.bones.length} bone(s))`).join(', ')} is not a two-bone chain; a head-anchored chain solves a two-bone arm`);
+          ok = false;
+        }
+        if (a.symmetric === true) {
+          p.add('MAP_ALT_ANCHOR', `${label} names both "symmetric" and "anchor"; a set either normalises both arms symmetrically or anchors an arm to the head`);
+          ok = false;
+        }
+        const supRaw = typeof a.support === 'string' ? [a.support] : strings(a.support) ?? [];
+        const bothSup = anc.filter((c) => supRaw.includes(c));
+        if (bothSup.length > 0) {
+          p.add('MAP_ALT_ANCHOR', `${label} names chain ${bothSup.map((c) => `"${c}"`).join(', ')} in both "support" and "anchor"; a chain is anchored one way`);
+          ok = false;
+        }
+        const ancBones = ancChains.flatMap((c) => c.bones);
+        const missing = ancBones.filter((b) => !(b in drawn));
+        if (missing.length > 0) {
+          p.add('MAP_ALT_ANCHOR', `${label} "anchor" chain has no "drawn" angle for ${missing.map((b) => `"${b}"`).join(', ')}; a head-anchored chain derives its head-local offset from its drawn angles`);
+          ok = false;
+        }
+        if (ok) anchor = anc;
+      }
+    }
+    if (ok && name !== null && cs !== null) out.push({ name, slots, hides, chains: cs, pose, drawn, offsets, turn, frames, ...(place === null ? {} : { place }), ...(symmetric === undefined ? {} : { symmetric }), ...(support === undefined ? {} : { support }), ...(anchor === undefined ? {} : { anchor }) });
   });
   return out;
 }

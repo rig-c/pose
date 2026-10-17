@@ -7418,4 +7418,234 @@ describe('#190: beat nod: the residual the neck-length clamp removes from head.t
   }, SLOW);
 });
 
+describe('#191: head-anchored end-effector two-link IK inside art turn range', () => {
+  const N = 16;
+  const DT = 1 / 24;
+  const rigOpts: RigOpts = {
+    bones: (b) => [
+      ...b,
+      { name: 'head', parent: 'neck', x: 0, y: 20 },
+      { name: 'eye_r', parent: 'head', x: -6, y: 10 },
+      { name: 'eye_l', parent: 'head', x: 6, y: 10 },
+    ],
+    extra: {
+      sleeve_l0: { k4_l0: { image: 'seg.png', x: 30, y: 0, rotation: -90 } },
+      sleeve_l1: { k4_l1: { image: 'seg.png', x: 30, y: 0, rotation: -90 } },
+    },
+  };
+
+  test('MAP_ALT_ANCHOR and ANCHOR_HEAD refuse malformed declarations by name', () => {
+    const m: Motion = { ...BASE, n: N, dt: DT, trunk: () => 90, hip: () => [0, 0], lu: () => -35, lf: () => 90 };
+    const kp = positions(m, 0);
+    const makeMap = (altPatch: Record<string, unknown>, includeHeadChain = true): Record<string, unknown> => ({
+      ...baseMap(),
+      chains: [
+        ...baseChains().map((c) => (c.name === 'arm_r' || c.name === 'arm_l' ? { ...c, bend: 'free' } : c)),
+        ...(includeHeadChain ? [{ name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: ['eye_r>eye_l'] }] : []),
+      ],
+      alternates: [
+        {
+          name: 'K4_hand_up',
+          slots: { sleeve_l0: 'k4_l0', sleeve_l1: 'k4_l1' },
+          chains: ['arm_l'],
+          pose: {
+            r_eye: kp.r_eye!,
+            l_eye: kp.l_eye!,
+            l_shoulder: kp.l_shoulder!,
+            l_elbow: kp.l_elbow!,
+            l_wrist: kp.l_wrist!,
+          },
+          drawn: { sleeve_l0: -35, sleeve_l1: 90 },
+          turn: { sleeve_l0: [-20, 20], sleeve_l1: [-20, 20] },
+          ...altPatch,
+        },
+      ],
+    });
+    const pose = poseDoc(m);
+
+    const rBadChain = retarget(setup({ rig: rigOpts, map: makeMap({ anchor: 'leg_l' }), pose }));
+    expect(rBadChain.status).toBe(1);
+    expect(rBadChain.stderr).toContain('MAP_ALT_ANCHOR');
+
+    const rMissingDrawn = retarget(
+      setup({
+        rig: rigOpts,
+        map: makeMap({ anchor: 'arm_l', drawn: { sleeve_l0: -35 } }),
+        pose,
+      }),
+    );
+    expect(rMissingDrawn.status).toBe(1);
+    expect(rMissingDrawn.stderr).toContain('MAP_ALT_ANCHOR');
+
+    const rConflictSup = retarget(
+      setup({
+        rig: rigOpts,
+        map: makeMap({ anchor: 'arm_l', support: 'arm_l' }),
+        pose,
+      }),
+    );
+    expect(rConflictSup.status).toBe(1);
+    expect(rConflictSup.stderr).toContain('MAP_ALT_ANCHOR');
+
+    const rNoHead = retarget(setup({ rig: rigOpts, map: makeMap({ anchor: 'arm_l' }, false), pose }));
+    expect(rNoHead.status).toBe(1);
+    expect(rNoHead.stderr).toContain('ANCHOR_HEAD');
+  });
+
+  test('#191 head-local IK + mutants: holds hand-tip-to-head local offset at 0.00u on unclamped frames, reports saturated frames with residual, keeps all non-anchored tracks byte-identical, and distinguishes head-local from world-fixed and off', () => {
+    // Drawn pose: trunk=90°, head=0°, lu=-35°, lf=90°.
+    // Sequence:
+    // - frames 0..11: trunk leans up to +6° and head rolls +10° while 2D wrist drifts away by +15° on lu/lf (reachable within ±20° turn -> 0.00u head-local residual).
+    // - frames 12..15: trunk leans -18° and head rolls -22°, forcing sleeve_l0/l1 against the ±20° turn clamp -> reported in `saturated`.
+    const mKey: Motion = { ...BASE, n: N, dt: DT, trunk: () => 90, hip: () => [0, 0], lu: () => -35, lf: () => 90 };
+    const kp = positions(mKey, 0);
+    const mSeq: Motion = {
+      ...BASE,
+      n: N,
+      dt: DT,
+      hip: () => [0, 0],
+      trunk: (i) => (i < 12 ? 90 + 6 * Math.sin((i / 11) * Math.PI) : 72),
+      lu: () => -22,
+      lf: () => 104,
+    };
+    const pose = poseDoc(mSeq, (i, j) => {
+      const headDeg = i < 12 ? 10 * Math.sin((i / 11) * Math.PI) : -22;
+      const rad = (headDeg * Math.PI) / 180;
+      const rE = j.r_eye!.at as Pt;
+      const lE = j.l_eye!.at as Pt;
+      const cx = 0.5 * (rE[0] + lE[0]);
+      const cy = 0.5 * (rE[1] + lE[1]);
+      const half = 0.5 * Math.hypot(lE[0] - rE[0], lE[1] - rE[1]);
+      j.r_eye = { state: 'observed', at: [cx - half * Math.cos(rad), cy + half * Math.sin(rad)], score: 0.95 };
+      j.l_eye = { state: 'observed', at: [cx + half * Math.cos(rad), cy - half * Math.sin(rad)], score: 0.95 };
+    });
+    const makeMap = (withAnchor: boolean): Record<string, unknown> => ({
+      ...baseMap(),
+      chains: [
+        ...baseChains().map((c) => (c.name === 'arm_r' || c.name === 'arm_l' ? { ...c, bend: 'free' } : c)),
+        { name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: ['eye_r>eye_l'] },
+      ],
+      alternates: [
+        {
+          name: 'K4_hand_up',
+          slots: { sleeve_l0: 'k4_l0', sleeve_l1: 'k4_l1' },
+          chains: ['arm_l'],
+          pose: {
+            r_eye: kp.r_eye!,
+            l_eye: kp.l_eye!,
+            l_shoulder: kp.l_shoulder!,
+            l_elbow: kp.l_elbow!,
+            l_wrist: kp.l_wrist!,
+          },
+          drawn: { sleeve_l0: -35, sleeve_l1: 90 },
+          turn: { sleeve_l0: [-20, 20], sleeve_l1: [-20, 20] },
+          ...(withAnchor ? { anchor: 'arm_l' } : {}),
+        },
+      ],
+    });
+
+    const cAnc = setup({ rig: rigOpts, map: makeMap(true), pose });
+    const repFile = join(cAnc.dir, 'report.json');
+    const rAnc = retarget(cAnc, ['--raised-by-head', '--report', repFile]);
+    expect(rAnc.stderr).toBe('');
+    expect(rAnc.status).toBe(0);
+    expect(rAnc.stdout).toContain('residual f12');
+
+    const rep = JSON.parse(readFileSync(repFile, 'utf8')) as {
+      raised: Array<{ saturated?: Array<{ frame: number; residual: number }> }>;
+    };
+    const satFrames = new Set((rep.raised[0]?.saturated ?? []).map((s) => s.frame));
+    expect(satFrames.has(12)).toBe(true);
+    for (let i = 0; i < 12; i++) expect(satFrames.has(i)).toBe(false);
+
+    // Measure posed hand-tip-to-head offset in head-local and world frames.
+    const buildAnc = loadBuild(cAnc.build);
+    const setupPose = byName(poseRawAnimation(buildAnc, 'dance', [0], {}, 'setup')[0]!.bones);
+    const s0 = setupPose.get('sleeve_l0')!;
+    const h0 = setupPose.get('head')!;
+    const l0 = 70;
+    const l1 = 60;
+    const wDrawn: Pt = [
+      s0.worldX + l0 * Math.cos((-35 * Math.PI) / 180) + l1 * Math.cos((90 * Math.PI) / 180),
+      s0.worldY + l0 * Math.sin((-35 * Math.PI) / 180) + l1 * Math.sin((90 * Math.PI) / 180),
+    ];
+    const dDrawnWorld: Pt = [wDrawn[0] - h0.worldX, wDrawn[1] - h0.worldY];
+
+    const measureOffsets = (buildDir: string) => {
+      const poses = poseRawAnimation(loadBuild(buildDir), 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+      const localErrs: number[] = [];
+      const worldErrs: number[] = [];
+      for (let i = 0; i < N; i++) {
+        const b = byName(poses[i]!.bones);
+        const sl0 = b.get('sleeve_l0')!;
+        const sl1 = b.get('sleeve_l1')!;
+        const hd = b.get('head')!;
+        const a0 = Math.atan2(sl0.c, sl0.a) * DEG;
+        const a1 = Math.atan2(sl1.c, sl1.a) * DEG;
+        expect(Math.abs(wrap(a0 - -35))).toBeLessThanOrEqual(20.005);
+        expect(Math.abs(wrap(a1 - 90))).toBeLessThanOrEqual(20.005);
+        const w: Pt = [sl1.worldX + sl1.a * l1, sl1.worldY + sl1.c * l1];
+        const dw: Pt = [w[0] - hd.worldX, w[1] - hd.worldY];
+        worldErrs.push(Math.hypot(dw[0] - dDrawnWorld[0], dw[1] - dDrawnWorld[1]));
+        const hRot = Math.atan2(hd.c, hd.a) - Math.atan2(h0.c, h0.a);
+        const c = Math.cos(-hRot);
+        const s = Math.sin(-hRot);
+        const dLocal: Pt = [dw[0] * c - dw[1] * s, dw[0] * s + dw[1] * c];
+        localErrs.push(Math.hypot(dLocal[0] - dDrawnWorld[0], dLocal[1] - dDrawnWorld[1]));
+      }
+      return { localErrs, worldErrs };
+    };
+
+    const mAnc = measureOffsets(cAnc.build);
+    for (let i = 0; i < 12; i++) {
+      expect(mAnc.localErrs[i]!).toBeLessThanOrEqual(0.05);
+    }
+
+    // Mutants: HEAD_ANCHOR_FRAME = 'off' and 'world-fixed'.
+    mkdirSync(MUTANTS, { recursive: true });
+    const dOff = mkdtempSync(join(MUTANTS, 'm191-off-'));
+    const dWorld = mkdtempSync(join(MUTANTS, 'm191-world-'));
+    try {
+      for (const [d, mode] of [
+        [dOff, 'off'],
+        [dWorld, 'world-fixed'],
+      ] as const) {
+        cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+        cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+        cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+        const path = join(d, 'src', 'retarget.ts');
+        const from = "export const HEAD_ANCHOR_FRAME: 'head-local' | 'world-fixed' | 'off' = 'head-local';";
+        const before = readFileSync(path, 'utf8');
+        expect(before.split(from)).toHaveLength(2);
+        writeFileSync(path, before.replace(from, `export const HEAD_ANCHOR_FRAME: 'head-local' | 'world-fixed' | 'off' = '${mode}';`));
+      }
+
+      const cOff = setup({ rig: rigOpts, map: makeMap(true), pose });
+      const rOff = retarget(cOff, ['--raised-by-head'], join(dOff, 'cli.ts'));
+      expect(rOff.status).toBe(0);
+      const mOff = measureOffsets(cOff.build);
+      expect(Math.max(...mOff.localErrs.slice(0, 12))).toBeGreaterThan(12);
+
+      // Bar 3: every track other than sleeve_l0.rotate and sleeve_l1.rotate is byte-identical.
+      const motAnc = motionOf(cAnc.out).animations.dance!.tracks;
+      const motOff = motionOf(cOff.out).animations.dance!.tracks;
+      const nonArm = (ts: typeof motAnc) =>
+        ts.filter((t) => !('bone' in t && (t.bone === 'sleeve_l0' || t.bone === 'sleeve_l1') && t.property === 'rotate'));
+      expect(nonArm(motAnc)).toEqual(nonArm(motOff));
+
+      const cWorld = setup({ rig: rigOpts, map: makeMap(true), pose });
+      const rWorld = retarget(cWorld, ['--raised-by-head'], join(dWorld, 'cli.ts'));
+      expect(rWorld.status).toBe(0);
+      const mWorld = measureOffsets(cWorld.build);
+      // On frame 5 (head rolled +10°), world-fixed holds worldErr ~ 0 while head-local drift exceeds 5u.
+      expect(mWorld.worldErrs[5]!).toBeLessThanOrEqual(0.05);
+      expect(mWorld.localErrs[5]!).toBeGreaterThan(5);
+    } finally {
+      rmSync(dOff, { recursive: true, force: true });
+      rmSync(dWorld, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
+
 
