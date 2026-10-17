@@ -6590,6 +6590,160 @@ describe('#173: body yaw reading from camera-normalised shoulder and hip width',
   }, SLOW);
 });
 
+describe('#179 and #181: wrist-to-head distance gate for --raised-by-head and detrended running median baseline for head nod', () => {
+  test('#179: --raised-by-head places a set whose key wrist lies within 2 eye distances of the head even when upper arm drawn is outside 60°..120°, and does not head-place a set whose wrist is farther; mutant re-enabling upper-arm gate fails', () => {
+    const N = 16;
+    const DT = 1 / 24;
+    const headBones = (b: BoneSpec[]): BoneSpec[] => [
+      ...b,
+      { name: 'head', parent: 'neck', x: 0, y: 20 },
+      { name: 'eye_r', parent: 'head', x: -6, y: 10 },
+      { name: 'eye_l', parent: 'head', x: 6, y: 10 },
+    ];
+    const rigOpts: RigOpts = {
+      bones: headBones,
+      extra: {
+        sleeve_r0: { seg_up: { image: 'seg.png', x: 30, y: 0, rotation: -90 } },
+        sleeve_l0: { seg_far: { image: 'seg.png', x: 30, y: 0, rotation: -90 } },
+      },
+    };
+    // Right arm: drawn sleeve_r0 = 40° (outside 60°..120°!), key wrist at (-5, 65) within 1.5 eye_dist (18px) of head centre (0, 65).
+    // Left arm: drawn sleeve_l0 = 80° (inside 60°..120°!), key wrist at (80, 65), 6.7 eye_dist (> 2) from head centre (0, 65).
+    const m: Motion = {
+      ...BASE,
+      n: N,
+      dt: DT,
+      trunk: () => 90,
+      hip: () => [0, 0],
+      ru: () => 115,
+      rf: () => 65,
+      lu: () => 80,
+      lf: () => 0,
+    };
+    const keyPos = positions(m, 0);
+    const mapSpec: Record<string, unknown> = {
+      ...baseMap(),
+      chains: [
+        ...baseChains().map((c) => (c.name === 'arm_r' || c.name === 'arm_l' ? { ...c, bend: 'free' } : c)),
+        { name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: ['eye_r>eye_l'] },
+      ],
+      alternates: [
+        {
+          name: 'K_both',
+          slots: { sleeve_r0: 'seg_up', sleeve_l0: 'seg_far' },
+          chains: ['arm_r', 'arm_l'],
+          pose: {
+            r_eye: keyPos.r_eye!,
+            l_eye: keyPos.l_eye!,
+            r_shoulder: keyPos.r_shoulder!,
+            r_elbow: keyPos.r_elbow!,
+            r_wrist: [keyPos.r_eye![0] + 2, keyPos.r_eye![1]],
+            l_shoulder: keyPos.l_shoulder!,
+            l_elbow: keyPos.l_elbow!,
+            l_wrist: [keyPos.l_eye![0] + 60, keyPos.l_eye![1]],
+          },
+          drawn: { sleeve_r0: 40, sleeve_r1: 65, sleeve_l0: 80, sleeve_l1: 0 },
+          turn: { sleeve_r0: [-90, 90], sleeve_r1: [-90, 90], sleeve_l0: [-90, 90], sleeve_l1: [-90, 90] },
+        },
+      ],
+    };
+    const pose = poseDoc(m, (_i, j) => {
+      j.r_wrist = { state: 'observed', at: [keyPos.r_eye![0] + 2, keyPos.r_eye![1]], score: 0.9 };
+      j.l_wrist = { state: 'observed', at: [keyPos.l_eye![0] + 60, keyPos.l_eye![1]], score: 0.9 };
+    });
+    const c = setup({ rig: rigOpts, map: mapSpec, pose });
+    const r = retarget(c, ['--raised-by-head']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    const raised = linesOf(r, 'RAISED');
+    expect(raised.some((l) => l.includes('chain "arm_r"'))).toBe(true);
+    expect(raised.some((l) => l.includes('chain "arm_l"'))).toBe(false);
 
+    // Mutant: re-enabling the upper-arm angle gate (isRaised(drawn) only) drops arm_r (drawn 40°) and head-places arm_l (drawn 80°).
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm179-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const from = 'const up = isChainHeadPlaced(set, c, drawn);';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'const up = headOk !== null && drawn !== undefined && isRaised(drawn);'));
+      const cMut = setup({ rig: rigOpts, map: mapSpec, pose });
+      const rMut = retarget(cMut, ['--raised-by-head'], join(d, 'cli.ts'));
+      expect(rMut.status).toBe(0);
+      const mutRaised = linesOf(rMut, 'RAISED');
+      expect(mutRaised.some((l) => l.includes('chain "arm_r"'))).toBe(false);
+      expect(mutRaised.some((l) => l.includes('chain "arm_l"'))).toBe(true);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
 
+  test('#181: detrended running median nod baseline preserves beat-to-beat oscillation across slow baseline drift with <= 10% frames at the ±2% clamp; mutant using frame 0 baseline pins >= 70% of frames at the clamp', () => {
+    const N = 60;
+    const DT = 1 / 24;
+    const headRig: NonNullable<RigOpts['bones']> = (b) => [
+      ...b,
+      { name: 'head', parent: 'neck', x: 0, y: 50 },
+      { name: 'eye_r', parent: 'head', x: -6, y: 10 },
+      { name: 'eye_l', parent: 'head', x: 6, y: 10 },
+    ];
+    const mapWithHead = (): Record<string, unknown> => ({
+      ...baseMap(),
+      chains: [
+        { name: 'pelvis', bones: ['hip'], joints: ['r_hip', 'l_hip'], aim: ['leg_r0>leg_l0'] },
+        ...baseChains(),
+        { name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: ['eye_r>eye_l'] },
+      ],
+    });
+    // Slow baseline drift of -4 rig units after frame 10 + beat oscillation of ±0.7 rig units (within maxNod = 1.0u).
+    const driftNodPose = () => {
+      const m: Motion = { ...BASE, n: N, dt: DT, hip: () => [0, 0], trunk: () => 90, rt: () => -90, rs: () => -90, lt: () => -90, ls: () => -90 };
+      return poseDoc(m, (i, j) => {
+        j.r_ankle = { state: 'observed', at: [-20, 350], score: 0.9 };
+        j.l_ankle = { state: 'observed', at: [20, 320], score: 0.9 };
+        const drift = i < 10 ? (-4 * i) / 10 : -4;
+        const beat = 0.7 * Math.sin((i / 6) * 2 * Math.PI);
+        const dyPic = -(drift + beat) / SCALE;
+        const r = j.r_eye!.at as Pt;
+        const l = j.l_eye!.at as Pt;
+        j.r_eye = { state: 'observed', at: [r[0], r[1] + dyPic], score: 0.9 };
+        j.l_eye = { state: 'observed', at: [l[0], l[1] + dyPic], score: 0.9 };
+      });
+    };
+    const c = setup({ rig: { bones: headRig }, map: mapWithHead(), pose: driftNodPose() });
+    const r = retarget(c, ['--bends', 'clamp', '--plant-feet']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    const headTrans = motionOf(c.out).animations.dance!.tracks.find((t) => t.bone === 'head' && t.property === 'translate')!;
+    const maxNod = 0.02 * 50; // 1.0u
+    const clampedCount = headTrans.keys.filter((k) => Math.abs((k.v as number[])[1]!) >= maxNod - 1e-3).length;
+    expect(clampedCount / N).toBeLessThanOrEqual(0.1);
+
+    // Mutant: reverting nodBase to frame 0 pins >= 70% of frames at -maxNod.
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm181-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const from = 'const rawNod = refEN.map((v, i) => (v - nodBase[i]!) * nodScale!);';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'const rawNod = refEN.map((v) => (v - refEN[0]!) * nodScale!);\n        const p90Nod0 = 0;').replace('if (p90Nod > maxNod', 'if (p90Nod0 > maxNod'));
+      const cMut = setup({ rig: { bones: headRig }, map: mapWithHead(), pose: driftNodPose() });
+      const rMut = retarget(cMut, ['--bends', 'clamp', '--plant-feet'], join(d, 'cli.ts'));
+      expect(rMut.status).toBe(0);
+      const mutTrans = motionOf(cMut.out).animations.dance!.tracks.find((t) => t.bone === 'head' && t.property === 'translate')!;
+      const mutClamped = mutTrans.keys.filter((k) => Math.abs((k.v as number[])[1]!) >= maxNod - 1e-3).length;
+      expect(mutClamped / N).toBeGreaterThanOrEqual(0.7);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
 

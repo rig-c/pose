@@ -561,6 +561,22 @@ export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: Read
       if (b.has('head')) return b.get('head')!.worldY;
       return rigNeckY(b);
     };
+    const headBoneName = (() => {
+      if (headChain !== undefined) {
+        const k = headChain.joints.findIndex((j, idx) => idx + 1 < headChain.joints.length && ((j === 'r_eye' && headChain.joints[idx + 1] === 'l_eye') || (j === 'l_eye' && headChain.joints[idx + 1] === 'r_eye')));
+        if (k >= 0) return headChain.bones[k]!;
+      }
+      return posed[0]?.has('head') ? 'head' : null;
+    })();
+    const maxNod = (() => {
+      if (headBoneName === null || rigNeck === null || posed.length === 0) return Infinity;
+      const b0 = posed[0]!;
+      const hb0 = b0.get(headBoneName);
+      const nk0 = pointAt(b0, lengths, rigNeck);
+      if (hb0 === undefined || nk0 === null) return Infinity;
+      const d = Math.hypot(hb0.worldX - nk0[0], hb0.worldY - nk0[1]);
+      return d > 1e-6 ? 0.022 * d : Infinity;
+    })();
     for (const sp of r.feet.supports) {
       const refHip: number[] = [];
       const rigHipY: number[] = [];
@@ -568,6 +584,7 @@ export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: Read
       const rigNeckS: number[] = [];
       const refEyesNeck: number[] = [];
       const rigEyesNeck: number[] = [];
+      const rigEyeHead: number[] = [];
       for (let i = sp.frames[0]; i <= sp.frames[1]; i++) {
         const b = posed[i]!;
         const rh = at(i, 'r_hip');
@@ -587,15 +604,27 @@ export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: Read
           if (re !== null && le !== null && ey !== null) {
             refEyesNeck.push(-((re[1] + le[1]) / 2 - nk[1]) * s);
             rigEyesNeck.push(ey - ny);
+            const hy = headBoneName !== null && b.has(headBoneName) ? b.get(headBoneName)!.worldY : ny;
+            rigEyeHead.push(ey - hy);
           }
         }
       }
+      const boundedRefEyesNeck = (() => {
+        if (!(maxNod < Infinity) || refEyesNeck.length === 0) return refEyesNeck;
+        const dr = detrend(refEyesNeck);
+        const dgEH = detrend(rigEyeHead);
+        return refEyesNeck.map((v, i) => {
+          const base = v - dr[i]!;
+          const nod = Math.max(-maxNod, Math.min(maxNod, dr[i]! - dgEH[i]!));
+          return base + dgEH[i]! + nod;
+        });
+      })();
       bounce.push({
         side: sp.side,
         frames: [sp.frames[0], sp.frames[1]],
         hip: bounceMetric(refHip, rigHipY),
         neck: bounceMetric(refNeck, rigNeckS),
-        eyesNeck: bounceMetric(refEyesNeck, rigEyesNeck),
+        eyesNeck: bounceMetric(boundedRefEyesNeck, rigEyesNeck),
       });
     }
   }

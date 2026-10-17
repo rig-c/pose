@@ -410,4 +410,45 @@ describe('#162: between two behind-the-torso sets, an arm that leaves tolerance 
   });
 });
 
+describe('#180: a set is left with hysteresis, a foreshortened limb weighs less, and behind/front gaps pick the nearer set by hand position', () => {
+  test('synthetic: foreshortened limb reduced weight + leave hysteresis holds the set across a mid-span excursion and trailing shelf, while mutant without hysteresis drops it', async () => {
+    const s = behindToBehindSweep();
+    // On frames 15..28, arm_r stays at -100° (0° from K4).
+    // On frames 15..20, arm_l is at 90° (0° from K4).
+    // On frames 21..25 (5 frames = 0.208s < switchMin 0.25s), arm_l is foreshortened (fraction 0.30 < 0.35) and turns to +20° (70° raw diff -> 35° weighted <= 25 + 15 = 40°).
+    // On frames 26..28, arm_l returns to +60° (30° raw diff <= 40° hysteresis shelf).
+    const n = 40;
+    const armR = Array.from({ length: n }, (_, i) => (i >= 15 && i <= 28 ? -100 : -90));
+    const armL = Array.from({ length: n }, (_, i) => {
+      if (i < 15) return -90;
+      if (i <= 20) return 90;
+      if (i <= 25) return 20;
+      if (i <= 28) return 60;
+      return -90;
+    });
+    const fractions = new Map<string, number[]>([
+      ['arm_r0', new Array<number>(n).fill(1)],
+      ['arm_l0', Array.from({ length: n }, (_, i) => (i >= 21 && i <= 25 ? 0.3 : 1))],
+    ]);
+    const targets = new Map<string, number[]>([
+      ['arm_r0', armR],
+      ['arm_l0', armL],
+    ]);
+    const opts: SwitchOptions = {
+      ...s.opts,
+      shortInfo: { cutoff: 0.35, fractions },
+    };
+    const sw = selectSwitches(s.map, targets, s.times, s.duration, s.slots, opts);
+    const k4 = sw.switches.find((x) => x.set === 'K4');
+    expect(k4?.frames).toEqual([15, 28]);
 
+    // Mutant: dropping leave hysteresis (SWITCH_LEAVE_HYSTERESIS = 0 and SHORT_SWITCH_WEIGHT = 1) cuts K4 short at frame 20.
+    const swNoHyst = selectSwitches(s.map, targets, s.times, s.duration, s.slots, {
+      ...opts,
+      switchHysteresis: 0,
+      shortInfo: undefined,
+    });
+    const k4NoHyst = swNoHyst.switches.find((x) => x.set === 'K4');
+    expect(k4NoHyst?.frames).toEqual([15, 20]);
+  });
+});
