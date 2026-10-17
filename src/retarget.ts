@@ -1380,6 +1380,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       const set = map.alternates.find((a) => a.name === s.set)!;
       const art: ArtRange[] = [];
       for (const cn of s.chains) {
+        if (sw.chainHolds?.some((h) => h.chain === cn && h.set !== s.set && h.frames[0] <= s.frames[0] && h.frames[1] >= s.frames[1]) === true) continue;
         const c = map.chains.find((x) => x.name === cn)!;
         const drawn = set.drawn[c.bones[0]!];
         const up = isChainHeadPlaced(set, c, drawn);
@@ -1632,6 +1633,45 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     const { set, chain, frames, seconds, ...body } = entry;
     if (job.anchor.kind === 'head') raised.push({ set, chain, frames, seconds, eyes: unit, ...body });
     else byHip.push({ set, chain, frames, seconds, hips: unit, ...body });
+  }
+  if (opts.short !== 'off') {
+    for (const s of short) {
+      if (s.step === undefined || s.across === true) continue;
+      const cov = covered.get(s.chain);
+      const [lo, hi] = s.frames;
+      if (lo <= 0 || hi + 1 >= n) continue;
+      if (cov?.[lo - 1] !== true && cov?.[hi + 1] !== true) continue;
+      const tg = targets.get(s.bone)!;
+      const startA = tg[lo - 1]!;
+      const total = wrap(tg[hi + 1]! - startA);
+      const steps = hi - lo + 2;
+      for (let k = lo; k <= hi; k++) {
+        tg[k] = wrap(startA + ((k - lo + 1) / steps) * total);
+      }
+      s.step = r3(total / steps);
+    }
+    const holds = sw.chainHolds ?? [];
+    for (const h of holds) {
+      const swParent = sw.switches.find((s) => s.set === h.set && s.frames[0] === h.frames[0] && s.frames[1] > h.frames[1]);
+      if (!swParent) continue;
+      const nextH = holds.find((nh) => nh.chain === h.chain && nh.frames[0] > h.frames[1] && nh.frames[0] - h.frames[1] <= 10);
+      if (!nextH) continue;
+      const lo = h.frames[1] + 1;
+      const hi = nextH.frames[0] - 1;
+      if (lo > hi || lo <= 0 || hi + 1 >= n) continue;
+      const ch = map.chains.find((c) => c.name === h.chain);
+      if (!ch) continue;
+      const steps = hi - lo + 2;
+      for (const b of ch.bones) {
+        const tg = targets.get(b);
+        if (!tg) continue;
+        const startA = tg[lo - 1]!;
+        const total = wrap(tg[hi + 1]! - startA);
+        for (let k = lo; k <= hi; k++) {
+          tg[k] = wrap(startA + ((k - lo + 1) / steps) * total);
+        }
+      }
+    }
   }
 
   // The legs on their final targets: a bone under a scaled bone is keyed through
@@ -2038,24 +2078,26 @@ export function capShortSteps(
     }
     let segEnd = segStart;
     while (segEnd + 1 < n && covered?.[segEnd + 1] !== true) segEnd++;
-    if (segEnd - segStart >= 1) {
+    const loBound = Math.max(0, segStart - 1);
+    const hiBound = Math.min(n - 1, segEnd + 1);
+    if (hiBound - loBound >= 2) {
       const u: number[] = new Array<number>(n).fill(0);
-      u[segStart] = angles[segStart]!;
-      for (let i = segStart + 1; i <= segEnd; i++) u[i] = u[i - 1]! + wrap(angles[i]! - angles[i - 1]!);
+      u[loBound] = angles[loBound]!;
+      for (let i = loBound + 1; i <= hiBound; i++) u[i] = u[i - 1]! + wrap(angles[i]! - angles[i - 1]!);
       const fits = (lo: number, hi: number) => Math.abs(u[hi]! - u[lo]!) <= stepCap * (hi - lo);
       interface Win { lo: number; hi: number; asked: number }
       const wins: Win[] = [];
-      for (let k = segStart + 1; k <= segEnd; k++) {
+      for (let k = loBound + 1; k <= hiBound; k++) {
         if (!(Math.min(fraction[k - 1]!, fraction[k]!) < fractionCutoff)) continue;
         const jump = u[k]! - u[k - 1]!;
         if (Math.abs(jump) <= stepCap) continue;
         let h = 1;
-        let lo = Math.max(segStart, k - h - 1);
-        let hi = Math.min(segEnd, k + h);
-        while (!fits(lo, hi) && (lo > segStart || hi < segEnd)) {
+        let lo = Math.max(loBound, k - h - 1);
+        let hi = Math.min(hiBound, k + h);
+        while (!fits(lo, hi) && (lo > loBound || hi < hiBound)) {
           h++;
-          lo = Math.max(segStart, k - h - 1);
-          hi = Math.min(segEnd, k + h);
+          lo = Math.max(loBound, k - h - 1);
+          hi = Math.min(hiBound, k + h);
         }
         wins.push({ lo, hi, asked: jump });
       }
@@ -2072,9 +2114,9 @@ export function capShortSteps(
         }
         if (changed) continue;
         for (const w of wins) {
-          if (fits(w.lo, w.hi) || (w.lo === segStart && w.hi === segEnd)) continue;
-          w.lo = Math.max(segStart, w.lo - 1);
-          w.hi = Math.min(segEnd, w.hi + 1);
+          if (fits(w.lo, w.hi) || (w.lo === loBound && w.hi === hiBound)) continue;
+          w.lo = Math.max(loBound, w.lo - 1);
+          w.hi = Math.min(hiBound, w.hi + 1);
           changed = true;
         }
       }

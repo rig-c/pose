@@ -452,3 +452,188 @@ describe('#180: a set is left with hysteresis, a foreshortened limb weighs less,
     expect(k4NoHyst?.frames).toEqual([15, 20]);
   });
 });
+
+describe('#187: gesture sets switch both arms on one frame t_switch, keep the short-arc measured path without inverted forearms, and hold a behind-the-back arm across a one-sided set', () => {
+  const wrapDeg = (d: number): number => {
+    const r = ((((d + 180) % 360) + 360) % 360) - 180;
+    return r === -180 ? 180 : r;
+  };
+
+  test('Rule 1 + mutant: adjacent gesture sets (including a front set replacing setup slots) switch both arms on one shared frame t_switch without dropping to the base arm', async () => {
+    const n = 30;
+    const fps = 24;
+    const times = Array.from({ length: n }, (_, i) => i / fps);
+    const slots: RigSlots = new Map([
+      ['forearm_r_back', { setup: null, attachments: new Set(['K3_r']), bone: 'arm_r0' }],
+      ['forearm_l_under', { setup: null, attachments: new Set(['K3_l']), bone: 'arm_l0' }],
+      ['topwear', { setup: 'topwear', attachments: new Set(['topwear', 'K2_top', 'K3_top']), bone: 'chest' }],
+      ['forearm_r', { setup: 'forearm_r', attachments: new Set(['forearm_r', 'K2_r']), bone: 'arm_r0' }],
+      ['forearm_l_mid', { setup: null, attachments: new Set(['K2_l']), bone: 'arm_l0' }],
+      ['forearm_l', { setup: 'forearm_l', attachments: new Set(['forearm_l']), bone: 'arm_l0' }],
+    ]);
+    const map: JointMap = {
+      translate: null,
+      chains: [
+        { name: 'arm_r', bones: ['arm_r0'], joints: ['r_shoulder', 'r_wrist'], aim: ['x'], range: {}, bend: 'free', reach: false },
+        { name: 'arm_l', bones: ['arm_l0'], joints: ['l_shoulder', 'l_wrist'], aim: ['x'], range: {}, bend: 'free', reach: false },
+      ],
+      alternates: [
+        {
+          name: 'K2',
+          slots: { forearm_r: 'K2_r', forearm_l_mid: 'K2_l', topwear: 'K2_top' },
+          hides: ['forearm_l', 'forearm_r_back', 'forearm_l_under'],
+          offsets: {},
+          chains: ['arm_r', 'arm_l'],
+          pose: { r_shoulder: [0, 0], r_wrist: [0, 100], l_shoulder: [0, 0], l_wrist: [0, 100] },
+          drawn: { arm_r0: -80, arm_l0: -80 },
+          turn: { arm_r0: [-20, 20], arm_l0: [-20, 20] },
+          frames: null,
+          place: null,
+        },
+        {
+          name: 'K3',
+          slots: { forearm_r_back: 'K3_r', forearm_l_under: 'K3_l', topwear: 'K3_top' },
+          hides: ['forearm_r', 'forearm_l', 'forearm_l_mid'],
+          offsets: {},
+          chains: ['arm_r', 'arm_l'],
+          pose: { r_shoulder: [0, 0], r_wrist: [0, -100], l_shoulder: [0, 0], l_wrist: [-100, 0] },
+          drawn: { arm_r0: 100, arm_l0: 160 },
+          turn: { arm_r0: [-20, 20], arm_l0: [-20, 20] },
+          frames: null,
+          place: null,
+        },
+      ],
+    };
+    // Frames 0..9: K2 (-80, -80). Frames 10..15 (6-frame gap): arms move across midpoint to K3 (100, 160) on frames 16..29.
+    const armR = Array.from({ length: n }, (_, i) => (i <= 9 ? -80 : i >= 16 ? 100 : -80 + ((i - 9) / 7) * 180));
+    const armL = Array.from({ length: n }, (_, i) => (i <= 9 ? -80 : i >= 16 ? 160 : -80 - ((i - 9) / 7) * 120));
+    const targets = new Map<string, number[]>([
+      ['arm_r0', armR],
+      ['arm_l0', armL],
+    ]);
+    const opts: SwitchOptions = { switchTolerance: 25, switchMin: 0.25, switchAt: 'first' };
+    const sw = selectSwitches(map, targets, times, times[n - 1]!, slots, opts);
+    // Base forearm_r and forearm_l never show on any frame of the gap 10..15.
+    for (let i = 10; i <= 15; i++) {
+      expect(sw.shown.get('forearm_r')![i]).not.toBe('forearm_r');
+      expect(sw.shown.get('forearm_l')![i]).toBeNull();
+    }
+    // Both arms and topwear switch on the exact same single time > 0.
+    const switchTimes = new Set<number>();
+    for (const tr of sw.slotTracks) {
+      for (const k of tr.keys) if (k.t > 0) switchTimes.add(k.t);
+    }
+    expect(switchTimes.size).toBe(1);
+
+    // Mutant: without setup-slot replacement recognition in isChainBehindBase, forearm_r drops to base 'forearm_r' on the gap.
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm187-r1-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      const path = join(d, 'src', 'switch.ts');
+      const src = readFileSync(path, 'utf8');
+      const from = 'if (setupSlots.every((s) => a.slots[s] !== undefined && a.slots[s] !== slots.get(s)?.setup)) return true;';
+      expect(src.split(from)).toHaveLength(2);
+      writeFileSync(path, src.replace(from, 'if (false) return true;'));
+      const mod = (await import(path)) as { selectSwitches: typeof selectSwitches };
+      const swMut = mod.selectSwitches(map, new Map([['arm_r0', [...armR]], ['arm_l0', [...armL]]]), times, times[n - 1]!, slots, opts);
+      const baseFrames = swMut.shown.get('forearm_r')!.map((v, i) => (v === 'forearm_r' ? i : -1)).filter((i) => i >= 0);
+      console.log(`  mutant "#187 Rule 1 (no setup-slot replacement in isChainBehindBase)": base forearm_r frames = ${baseFrames.join(', ')}`);
+      expect(baseFrames.length).toBeGreaterThan(0);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  test('Rule 2 + mutant: across an adjacent switch, a forearm that wound > 180° the long way through inverted angles is unwrapped onto the short arc (|wrap(world - drawn)| <= 90°)', async () => {
+    const s = behindToBehindSweep();
+    const n = 30;
+    const times = Array.from({ length: n }, (_, i) => i / 24);
+    // K0 drawn = -90°, K4 drawn = +90°? Let us set K0.drawn.arm_l0 = +140° and K4.drawn.arm_l0 = -120° (short arc is +100° through ±180°, long arc is -260° through 0°).
+    const map: JointMap = structuredClone(s.map);
+    map.alternates[0]!.drawn.arm_l0 = 140;
+    map.alternates[0]!.pose.l_wrist = [100 * Math.cos((140 * Math.PI) / 180), -100 * Math.sin((140 * Math.PI) / 180)];
+    map.alternates[1]!.drawn.arm_l0 = -120;
+    map.alternates[1]!.pose.l_wrist = [100 * Math.cos((-120 * Math.PI) / 180), -100 * Math.sin((-120 * Math.PI) / 180)];
+    const armR = Array.from({ length: n }, (_, i) => (i <= 9 ? -90 : i >= 16 ? -100 : -95));
+    // On frames 10..15, arm_l winds the LONG way (-260° clockwise from +140° through +90, +40, 0, -40, -80 to -120°).
+    const longWay = [95, 50, 5, -35, -75, -100];
+    const armL = Array.from({ length: n }, (_, i) => (i <= 9 ? 140 : i >= 16 ? -120 : longWay[i - 10]!));
+    const targets = new Map<string, number[]>([
+      ['arm_r0', [...armR]],
+      ['arm_l0', [...armL]],
+    ]);
+    const sw = selectSwitches(map, targets, times, times[n - 1]!, s.slots, s.opts);
+    // On frames 10..15, every frame's angle is within 90° of its active set's drawn angle.
+    for (let i = 10; i <= 15; i++) {
+      const activeDrawn = sw.shown.get('forearm_l_back')![i] === 'K0_l' ? 140 : -120;
+      const diff = Math.abs(wrapDeg(targets.get('arm_l0')![i]! - activeDrawn));
+      expect(diff).toBeLessThanOrEqual(90);
+    }
+
+    // Mutant: without the short-arc unwrap, arm_l passes through 5° and -35° (> 90° from both 140° and -120°).
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm187-r2-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      const path = join(d, 'src', 'switch.ts');
+      const src = readFileSync(path, 'utf8');
+      const from = 'if (Math.abs(totalTurn) > 180 && Math.abs(totalTurn - shortTurn) > 1e-6 && invertsBetween && Math.abs(shortTurn) <= 150) {';
+      expect(src.split(from)).toHaveLength(2);
+      writeFileSync(path, src.replace(from, 'if (false && Math.abs(totalTurn) > 180) {'));
+      const mod = (await import(path)) as { selectSwitches: typeof selectSwitches };
+      const mutTargets = new Map<string, number[]>([
+        ['arm_r0', [...armR]],
+        ['arm_l0', [...armL]],
+      ]);
+      const swMut = mod.selectSwitches(map, mutTargets, times, times[n - 1]!, s.slots, s.opts);
+      let maxDiff = 0;
+      for (let i = 10; i <= 15; i++) {
+        const activeDrawn = swMut.shown.get('forearm_l_back')![i] === 'K0_l' ? 140 : -120;
+        maxDiff = Math.max(maxDiff, Math.abs(wrapDeg(mutTargets.get('arm_l0')![i]! - activeDrawn)));
+      }
+      console.log(`  mutant "#187 Rule 2 (no short-arc unwrap)": max |wrap(world - drawn)| = ${maxDiff.toFixed(1)}°`);
+      expect(maxDiff).toBeGreaterThan(90);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  test('Rule 3 + mutant: in a one-sided gesture set (K4), an arm whose wrist the scan places behind the torso (arm_r) keeps its previous set (K0) and angles', async () => {
+    const s = behindToBehindSweep();
+    const n = s.times.length;
+    const handOffsets = new Map<string, Array<[number, number]>>([
+      ['arm_r', Array.from({ length: n }, (): [number, number] => [0.25, 0.9])],
+      ['arm_l', Array.from({ length: n }, (_, i): [number, number] => (i >= 15 && i <= 22 ? [0.4, -0.8] : [-0.25, 0.9]))],
+    ]);
+    const targets = new Map<string, number[]>([
+      ['arm_r0', [...s.targets.get('arm_r0')!]],
+      ['arm_l0', [...s.targets.get('arm_l0')!]],
+    ]);
+    const sw = selectSwitches(s.map, targets, s.times, s.duration, s.slots, { ...s.opts, handOffsets });
+    // Across all 40 frames (including K4 on 15..22 and both gaps 10..14 and 23..29), arm_r stays on K0_r.
+    for (let i = 0; i < n; i++) {
+      expect(sw.shown.get('forearm_r_back')![i]).toBe('K0_r');
+    }
+    expect(sw.chainHolds!.filter((h) => h.chain === 'arm_r')).toEqual([{ set: 'K0', chain: 'arm_r', frames: [0, n - 1] }]);
+
+    // Mutant: without heldBehindOnSwitch, arm_r switches to K4_r during K4 (frames 15..22).
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm187-r3-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      const path = join(d, 'src', 'switch.ts');
+      const src = readFileSync(path, 'utf8');
+      const from = 'if (!(medDy > 0.5 && inward)) continue;';
+      expect(src.split(from)).toHaveLength(2);
+      writeFileSync(path, src.replace(from, 'if (true) continue;'));
+      const mod = (await import(path)) as { selectSwitches: typeof selectSwitches };
+      const swMut = mod.selectSwitches(s.map, targets, s.times, s.duration, s.slots, { ...s.opts, handOffsets });
+      console.log(`  mutant "#187 Rule 3 (no heldBehindOnSwitch)": forearm_r_back at frame 18 = ${swMut.shown.get('forearm_r_back')![18]}`);
+      expect(swMut.shown.get('forearm_r_back')![18]).toBe('K4_r');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+});
+

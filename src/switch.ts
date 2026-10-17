@@ -322,6 +322,7 @@ function groupLayering(group: readonly AlternateSet[], map: JointMap, slots: Rig
     const setupSlots = hiddenSetup.filter((s) => slotChain.get(s) === cn && slots.get(s)?.bone !== torsoSlot);
     const setSlots = Object.keys(a.slots).filter((s) => slotChain.get(s) === cn && rank.has(s));
     if (setupSlots.length === 0 || setSlots.length === 0) return false;
+    if (setupSlots.every((s) => a.slots[s] !== undefined && a.slots[s] !== slots.get(s)?.setup)) return true;
     const boneSetup = setupSlots.filter((s) => boneOwner.has(slots.get(s)?.bone ?? ''));
     const refSetup = boneSetup.length > 0 ? boneSetup : setupSlots;
     return setupSlots.every((s) => a.hides.includes(s)) && Math.max(...setSlots.map((s) => rank.get(s)!)) < Math.min(...refSetup.map((s) => rank.get(s)!));
@@ -626,8 +627,9 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
       for (let i = sw.frames[0]; i <= sw.frames[1]; i++) row[i] = o;
     }
   }
-  // #136/#139/#162/#180: between two sets that draw an arm behind the base front setup (at least one behind the torso),
-  // a frame that belongs to neither set stays on the nearer set's layer (chosen by hand position when available, #180).
+  // #136/#139/#162/#180/#187: between two gesture sets, switch both arms on one frame t_switch
+  // where the measured path crosses halfway between their drawn poses without dropping to the base arm,
+  // and in a one-sided gesture set keep an arm whose wrist stays behind the torso on its previous behind set.
   const chainHolds: Array<{ set: string; chain: string; frames: [number, number] }> = [];
   for (const group of groups) {
     const layer = groupLayering(group, map, slots);
@@ -645,6 +647,56 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
       }
       cClamp.set(cn, arr);
     }
+    for (const s of layer.touched) {
+      if (!shown.has(s)) shown.set(s, Array.from({ length: n }, () => slots.get(s)!.setup));
+    }
+    // #187 Rule 3: in a one-sided gesture set (one chain raised with drawn > 0 while another chain has all
+    // bones drawn < 0 within switchTolerance of the preceding behind-the-torso set), an arm whose wrist the
+    // scan places behind the torso keeps its previous behind-the-torso set and angles.
+    const heldBehindOnSwitch = new Map<number, Set<string>>();
+    for (let idx = 1; idx < gSwitches.length; idx++) {
+      const sw = gSwitches[idx]!;
+      const prevSw = gSwitches[idx - 1]!;
+      const set = group.find((a) => a.name === sw.set)!;
+      const prevSet = group.find((a) => a.name === prevSw.set)!;
+      if (!layer.isBehind(prevSet) || set === prevSet || set.chains.length < 2) continue;
+      const hasUpChain = set.chains.some((cn) => {
+        const c = map.chains.find((x) => x.name === cn);
+        return c !== undefined && c.bones.some((b) => (set.drawn[b] ?? -180) > 0);
+      });
+      if (!hasUpChain) continue;
+      for (const cn of set.chains) {
+        const c = map.chains.find((x) => x.name === cn);
+        if (c === undefined) continue;
+        const allDown = c.bones.every((b) => (set.drawn[b] ?? 0) < 0);
+        if (!allDown) continue;
+        const keyNearPrev =
+          c.bones.every((b) => set.drawn[b] !== undefined && prevSet.drawn[b] !== undefined) &&
+          c.bones.reduce((s, b) => s + Math.abs(wrap(set.drawn[b]! - prevSet.drawn[b]!)), 0) / c.bones.length <= opts.switchTolerance;
+        if (!keyNearPrev) continue;
+        const ho = opts.handOffsets?.get(cn);
+        if (ho === undefined) continue;
+        const slice = ho.slice(sw.frames[0], sw.frames[1] + 1);
+        const medDy = median(slice.map((p) => p[1]));
+        const medDx = median(slice.map((p) => p[0]));
+        const isRight = /(?:^|_)r(?:_|$)/.test(cn);
+        const inward = isRight ? medDx >= -0.05 : medDx <= 0.05;
+        if (!(medDy > 0.5 && inward)) continue;
+        let setHeld = heldBehindOnSwitch.get(idx);
+        if (setHeld === undefined) {
+          setHeld = new Set();
+          heldBehindOnSwitch.set(idx, setHeld);
+        }
+        setHeld.add(cn);
+        const cArr = cClamp.get(cn)!;
+        for (let i = sw.frames[0]; i <= sw.frames[1]; i++) {
+          cArr[i] = prevSet;
+          for (const [s, sc] of layer.slotChain) {
+            if (sc === cn && shown.has(s)) shown.get(s)![i] = prevSet.slots[s] ?? null;
+          }
+        }
+      }
+    }
     for (let m = 0; m + 1 < gSwitches.length; m++) {
       const sw0 = gSwitches[m]!;
       const sw1 = gSwitches[m + 1]!;
@@ -656,6 +708,14 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
       if (g0 > g1) continue;
       const chains = [...new Set([...set0.chains, ...set1.chains])].filter((cn) => layer.isChainBehindBase(set0, cn) && layer.isChainBehindBase(set1, cn));
       if (chains.length === 0) continue;
+      const heldOn0 = heldBehindOnSwitch.get(m);
+      const heldOn1 = heldBehindOnSwitch.get(m + 1);
+      const heldSetFor = (cn: string): AlternateSet | null => {
+        if (heldOn1?.has(cn)) return set0;
+        if (heldOn0?.has(cn) && m > 0 && set1 === group.find((a) => a.name === gSwitches[m - 1]!.set)) return set1;
+        return null;
+      };
+      const switchingChains = chains.filter((cn) => heldSetFor(cn) === null);
       for (const cn of chains) {
         if (!layer.isBehind(set0)) for (let i = sw0.frames[0]; i <= sw0.frames[1]; i++) cClamp.get(cn)![i] = set0;
         if (!layer.isBehind(set1)) for (let i = sw1.frames[0]; i <= sw1.frames[1]; i++) cClamp.get(cn)![i] = set1;
@@ -673,11 +733,29 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
         }
         return d0 <= d1 ? set0 : set1;
       };
+      const rawChainMax = (a: AlternateSet, cn: string, i: number): number => {
+        const c = map.chains.find((x) => x.name === cn);
+        if (c === undefined) return Infinity;
+        return Math.max(...c.bones.map((b) => (a.drawn[b] !== undefined ? Math.abs(wrap(targets.get(b)![i]! - a.drawn[b]!)) : 0)));
+      };
+      const isTightSet = (a: AlternateSet, cn: string): boolean => {
+        const c = map.chains.find((x) => x.name === cn);
+        return c !== undefined && c.bones.some((b) => a.turn[b] !== undefined && a.turn[b]![1] - a.turn[b]![0] <= 10);
+      };
       const cPick = new Map<string, Array<AlternateSet | null>>();
       for (const cn of chains) {
+        const heldSet = heldSetFor(cn);
         const arr: Array<AlternateSet | null> = Array.from({ length: n }, () => null);
-        for (let i = sw0.frames[0]; i <= sw0.frames[1]; i++) arr[i] = set0;
-        for (let i = sw1.frames[0]; i <= sw1.frames[1]; i++) arr[i] = set1;
+        for (let i = sw0.frames[0]; i <= sw0.frames[1]; i++) arr[i] = heldSet ?? set0;
+        for (let i = sw1.frames[0]; i <= sw1.frames[1]; i++) arr[i] = heldSet ?? set1;
+        if (heldSet !== null) {
+          for (let i = g0; i <= g1; i++) {
+            arr[i] = heldSet;
+            cClamp.get(cn)![i] = heldSet;
+          }
+          cPick.set(cn, arr);
+          continue;
+        }
         const d0s = byChain.get(set0.name)?.get(cn);
         const d1s = byChain.get(set1.name)?.get(cn);
         for (let i = g0; i <= g1; i++) {
@@ -706,24 +784,142 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
           }
           i = j + 1;
         }
-        for (let i = g0; i <= g1; i++) {
-          if (arr[i] !== null) cClamp.get(cn)![i] = arr[i]!;
+        const tight0 = isTightSet(set0, cn);
+        const tight1 = isTightSet(set1, cn);
+        if (tight0 && set0 !== set1) {
+          let i = g0;
+          while (i <= g1 && rawChainMax(set0, cn, i) <= opts.switchTolerance + hyst) {
+            cClamp.get(cn)![i] = set0;
+            i++;
+          }
+        }
+        if (tight1 && set0 !== set1) {
+          let enter1 = g1 + 1;
+          for (let i = g0; i <= g1; i++) {
+            if (rawChainMax(set1, cn, i) <= opts.switchTolerance) {
+              enter1 = i;
+              break;
+            }
+          }
+          for (let i = enter1; i <= g1; i++) cClamp.get(cn)![i] = set1;
+        }
+        if (!tight0 && !tight1) {
+          for (let i = g0; i <= g1; i++) {
+            if (arr[i] !== null) cClamp.get(cn)![i] = arr[i]!;
+          }
+        }
+        if (!tight0 && set0 !== set1) {
+          const c = map.chains.find((x) => x.name === cn);
+          if (c !== undefined) {
+            let k = sw0.frames[1];
+            while (
+              k >= sw0.frames[0] &&
+              c.bones.some((b) => {
+                const lim = set0.turn[b];
+                const dr = set0.drawn[b];
+                const ndr = set1.drawn[b];
+                if (lim === undefined || dr === undefined || ndr === undefined) return false;
+                const t = wrap(targets.get(b)![k]! - dr);
+                return overflow(t, lim) > RANGE_SLACK && Math.abs(wrap(targets.get(b)![k + 1]! - ndr)) < Math.abs(wrap(targets.get(b)![k]! - ndr));
+              })
+            ) {
+              cClamp.get(cn)![k] = null;
+              k--;
+            }
+          }
         }
         cPick.set(cn, arr);
       }
-      const anyHeldBehind = chains.some((cn) => {
+      // #187 Rule 1 & Rule 2: when two gesture sets are adjacent (gap <= 10 frames, or the arm is moving
+      // toward the next set's pose), unwrap any bone that turned the long way (> 180° through inverted angles)
+      // onto the short arc and pick one shared switch frame t_switch where the measured path crosses halfway
+      // between set0.drawn and set1.drawn.
+      const movingTowardNext =
+        set0 !== set1 &&
+        distances.get(set1.name)![g1]! < distances.get(set1.name)![g0]! &&
+        distances.get(set0.name)![g1]! > distances.get(set0.name)![g0]!;
+      const bridgeDirect = set0 !== set1 && (g1 - g0 + 1 <= 10 || movingTowardNext);
+      let tSwitch = g1 + 1;
+      if (bridgeDirect && switchingChains.length > 0) {
+        const swBones = switchingChains.flatMap((cn) => map.chains.find((c) => c.name === cn)?.bones ?? []);
+        for (const b of swBones) {
+          const tg = targets.get(b) as number[] | undefined;
+          const d0 = set0.drawn[b];
+          const d1 = set1.drawn[b];
+          if (tg === undefined || d0 === undefined || d1 === undefined) continue;
+          const i0 = sw0.frames[1];
+          const i1 = sw1.frames[0];
+          const startA = tg[i0]!;
+          const endA = tg[i1]!;
+          const unwrapped: number[] = [startA];
+          for (let i = i0 + 1; i <= i1; i++) {
+            unwrapped.push(unwrapped[unwrapped.length - 1]! + wrap(tg[i]! - tg[i - 1]!));
+          }
+          const totalTurn = unwrapped[unwrapped.length - 1]! - startA;
+          const shortTurn = wrap(endA - startA);
+          const invertsBetween = Array.from({ length: g1 - g0 + 1 }, (_, k) => {
+            const a = tg[g0 + k]!;
+            return Math.abs(wrap(a - d0)) > 90 && Math.abs(wrap(a - d1)) > 90;
+          }).some(Boolean);
+          if (Math.abs(totalTurn) > 180 && Math.abs(totalTurn - shortTurn) > 1e-6 && invertsBetween && Math.abs(shortTurn) <= 150) {
+            for (let i = g0; i <= g1; i++) {
+              const p = (unwrapped[i - i0]! - startA) / totalTurn;
+              tg[i] = wrap(startA + p * shortTurn);
+            }
+          }
+        }
+        let clampEnd0 = g0 - 1;
+        while (clampEnd0 + 1 <= g1 && switchingChains.every((cn) => cClamp.get(cn)![clampEnd0 + 1] === set0)) {
+          clampEnd0++;
+        }
+        const effAngle = (b: string, i: number): number => {
+          const raw = targets.get(b)![i]!;
+          if (clampEnd0 >= g0 && i > clampEnd0) {
+            const frac = opts.shortInfo?.fractions.get(b)?.[i] ?? 1;
+            const d0 = set0.drawn[b];
+            const d1 = set1.drawn[b];
+            if (frac < 0.6 && d0 !== undefined && d1 !== undefined) {
+              const steps = g1 + 1 - clampEnd0;
+              return wrap(d0 + ((i - clampEnd0) / steps) * wrap(d1 - d0));
+            }
+          }
+          return raw;
+        };
+        const pairs = swBones.filter((b) => set0.drawn[b] !== undefined && set1.drawn[b] !== undefined);
+        const span = pairs.length > 0
+          ? pairs.reduce((s, b) => s + Math.abs(wrap(set1.drawn[b]! - set0.drawn[b]!)), 0) / pairs.length
+          : 0;
+        for (let i = Math.max(g0, clampEnd0 + 1); i <= g1; i++) {
+          const d0 = pairs.length > 0
+            ? pairs.reduce((s, b) => s + Math.abs(wrap(effAngle(b, i) - set0.drawn[b]!)), 0) / pairs.length
+            : (distances.get(set0.name)?.[i] ?? Infinity);
+          const d1 = pairs.length > 0
+            ? pairs.reduce((s, b) => s + Math.abs(wrap(effAngle(b, i) - set1.drawn[b]!)), 0) / pairs.length
+            : (distances.get(set1.name)?.[i] ?? Infinity);
+          if (d1 <= d0 || (span > 1e-6 && d0 >= 0.5 * span)) {
+            tSwitch = i;
+            break;
+          }
+        }
+      }
+      const anyHeldBehind = switchingChains.some((cn) => {
         const arr = cPick.get(cn)!;
         for (let i = g0; i <= g1; i++) if (arr[i] === null) return false;
         return true;
       });
-      if (!anyHeldBehind && set0 !== set1) {
-        const frontNear = group.filter((a) => layer.isFront(a)).some((a) => {
+      if (!anyHeldBehind) {
+        const frontNear = group.filter((a) => layer.isFront(a) && a !== set0 && a !== set1).some((a) => {
           for (let i = g0; i <= g1; i++) if (distances.get(a.name)![i]! <= opts.switchTolerance) return true;
           return false;
         });
-        if (!frontNear) for (const cn of chains) for (let i = g0; i <= g1; i++) cPick.get(cn)![i] = set0;
+        if (bridgeDirect) {
+          for (const cn of switchingChains) {
+            for (let i = g0; i <= g1; i++) cPick.get(cn)![i] = i < tSwitch ? set0 : set1;
+          }
+        } else if (!frontNear) for (const cn of chains) for (let i = g0; i <= g1; i++) cPick.get(cn)![i] = set0;
       } else {
         for (const cn of chains) {
+          if (heldSetFor(cn) !== null) continue;
           const arr = cPick.get(cn)!;
           const frontSets = group.filter((a) => layer.isFront(a) && a.chains.includes(cn) && a !== set0 && a !== set1);
           const d0s = byChain.get(set0.name)?.get(cn);
@@ -771,21 +967,20 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
             }
             i = j + 1;
           }
-          for (let i = g0; i <= g1; i++) {
-            if (arr[i] !== null) cClamp.get(cn)![i] = arr[i]!;
+        }
+        if (bridgeDirect) {
+          for (const cn of switchingChains) {
+            for (let i = g0; i <= g1; i++) cPick.get(cn)![i] = i < tSwitch ? set0 : set1;
           }
         }
-      }
-      for (const s of layer.touched) {
-        if (!shown.has(s)) shown.set(s, Array.from({ length: n }, () => slots.get(s)!.setup));
       }
       for (let i = g0; i <= g1; i++) {
         for (const [s, cn] of layer.slotChain) {
           const a = cPick.get(cn)?.[i] ?? null;
           if (a !== null) shown.get(s)![i] = a.slots[s] ?? null;
         }
-        if (layer.torsoSlot !== null && shown.has(layer.torsoSlot) && layer.isBehind(set0) && layer.isBehind(set1)) {
-          const picked = chains.map((cn) => cPick.get(cn)![i]);
+        if (layer.torsoSlot !== null && shown.has(layer.torsoSlot)) {
+          const picked = (switchingChains.length > 0 ? switchingChains : chains).map((cn) => cPick.get(cn)![i]);
           if (picked.every((a) => a !== null)) shown.get(layer.torsoSlot)![i] = picked[0]!.slots[layer.torsoSlot] ?? slots.get(layer.torsoSlot)!.setup;
         }
       }
@@ -834,8 +1029,10 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
 /** Per chain, the frames on which a switch of a set depicting it shows: its art was painted for that pose. */
 export function coveredChains(switches: readonly Switch[], n: number, chainHolds?: ReadonlyArray<{ set: string; chain: string; frames: [number, number] }>): Map<string, boolean[]> {
   const out = new Map<string, boolean[]>();
+  const held = new Set((chainHolds ?? []).map((h) => `${h.set}:${h.chain}`));
   for (const sw of switches) {
     for (const c of sw.chains) {
+      if (held.has(`${sw.set}:${c}`)) continue;
       if (!out.has(c)) out.set(c, Array.from({ length: n }, () => false));
       const row = out.get(c)!;
       for (let i = sw.frames[0]; i <= sw.frames[1]; i++) row[i] = true;
@@ -1017,7 +1214,7 @@ export const ART_EASE_STEP = 3;
 export function clampArt(switches: readonly Switch[], map: JointMap, targets: Map<string, number[]>, chainHolds?: ReadonlyArray<{ set: string; chain: string; frames: [number, number] }>): void {
   const boneChain = new Map<string, string>();
   for (const c of map.chains) for (const b of c.bones) boneChain.set(b, c.name);
-  const clampSpan = (set: AlternateSet, bone: string, [a, b]: [number, number]) => {
+  const clampSpan = (set: AlternateSet, bone: string, [a, b0]: [number, number]) => {
     const limits = set.turn[bone];
     if (limits === undefined) return;
     const drawn = set.drawn[bone]!;
@@ -1028,12 +1225,29 @@ export function clampArt(switches: readonly Switch[], map: JointMap, targets: Ma
       const c = Math.min(Math.max(t, limits[0]), limits[1]);
       return Math.abs(c - t) > RANGE_SLACK ? c - t : 0;
     };
+    const tightHold = limits[1] - limits[0] <= 10;
+    let b = b0;
+    let trimmedExit = false;
+    if (!tightHold && b + 1 < n && delta(b) !== 0) {
+      const nextSw = switches.find((s) => s.frames[0] > b && s.frames[0] - b <= 10 && s.set !== set.name);
+      const nextDrawn = nextSw !== undefined ? map.alternates.find((x) => x.name === nextSw.set)?.drawn[bone] : undefined;
+      if (nextDrawn !== undefined) {
+        const distNext = (i: number) => Math.abs(wrap(target[i]! - nextDrawn));
+        if (distNext(b + 1) < distNext(b)) {
+          while (b >= a && delta(b) !== 0 && (b === a || distNext(b) < distNext(b - 1))) {
+            b--;
+            trimmedExit = true;
+          }
+        }
+      }
+    }
+    if (a > b) return;
     const da = delta(a);
     const db = delta(b);
-    const easeIn = a > 0 && da !== 0 && Math.sign(delta(a - 1)) === Math.sign(da)
+    const easeIn = a > 0 && da !== 0 && Math.sign(delta(a - 1)) === Math.sign(da) && !tightHold
       ? Math.max(ART_EASE_FRAMES, Math.ceil(Math.abs(da) / ART_EASE_STEP) - 1)
       : 0;
-    const easeOut = b + 1 < n && db !== 0 && Math.sign(delta(b + 1)) === Math.sign(db)
+    const easeOut = b + 1 < n && db !== 0 && Math.sign(delta(b + 1)) === Math.sign(db) && !tightHold && !trimmedExit
       ? Math.max(ART_EASE_FRAMES, Math.ceil(Math.abs(db) / ART_EASE_STEP) - 1)
       : 0;
     for (let i = a; i <= b; i++) {
