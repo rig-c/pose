@@ -7278,3 +7278,144 @@ describe('#189: read yaw from the ear chord when the eye span is foreshortened a
   }, SLOW);
 });
 
+describe('#190: beat nod: the residual the neck-length clamp removes from head.translate.y drives pitch_dial and head.rotate in phase', () => {
+  test('couples neck-length clamp vertical residual into pitch_dial.rotate (2.8 °/u) and head.rotate (1.6 °/u) in phase at the beat frequency, adds 0 on un-clamped frames, and flattens when coupling is disabled while keeping lower-body tracks byte-identical', () => {
+    const N = 63;
+    const DT = 1 / 24;
+    const headRig: NonNullable<RigOpts['bones']> = (b) => [
+      ...b,
+      { name: 'head', parent: 'neck', x: 0, y: 50 },
+      { name: 'eye_r', parent: 'head', x: -6, y: 10 },
+      { name: 'eye_l', parent: 'head', x: 6, y: 10 },
+      { name: 'pitch_dial', parent: 'head', x: 0, y: 0 },
+    ];
+    const mapSpec: Record<string, unknown> = {
+      ...baseMap(),
+      chains: [
+        { name: 'pelvis', bones: ['hip'], joints: ['r_hip', 'l_hip'], aim: ['leg_r0>leg_l0'] },
+        ...baseChains(),
+        { name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: ['eye_r>eye_l'] },
+      ],
+      face: {
+        pitch: { bone: 'pitch_dial', range: [-10, 15] },
+      },
+    };
+    // Frames 0..11: gentle nod within kneeNod (0.5 * sin <= 0.82u on maxNod = 1.0u) -> residual === 0 -> pitch_dial === 0° and head.rotate === 0°.
+    // Frames 12..62: 2-cycle beat nod (bin 2 over 63 frames, 0.7619 Hz) with 4.0u amplitude -> clamp removes ±3.0u residual -> drives pitch_dial and head.rotate in phase.
+    // Nose moves vertically with the eyes so raw 2D face pitch (nose vs eyes/ears) is 0° on every frame.
+    const beatNodSignal = (i: number): number => {
+      if (i < 12) return 0.5 * Math.sin(((i / 12) * 2 * Math.PI));
+      return 4.0 * Math.sin(((2 * i) / N) * 2 * Math.PI);
+    };
+    const m: Motion = { ...BASE, n: N, dt: DT, hip: () => [0, 0], trunk: () => 90, rt: () => -90, rs: () => -90, lt: () => -90, ls: () => -90 };
+    const pose = poseDoc(m, (i, j) => {
+      j.r_ankle = { state: 'observed', at: [-20, 350], score: 0.95 };
+      j.l_ankle = { state: 'observed', at: [20, 320], score: 0.95 };
+      const dyPic = -beatNodSignal(i) / SCALE;
+      const rEye = j.r_eye!.at as Pt;
+      const lEye = j.l_eye!.at as Pt;
+      const midEyeY = (rEye[1] + lEye[1]) / 2 + dyPic;
+      const midEyeX = (rEye[0] + lEye[0]) / 2;
+      j.r_eye = { state: 'observed', at: [rEye[0], rEye[1] + dyPic], score: 0.95 };
+      j.l_eye = { state: 'observed', at: [lEye[0], lEye[1] + dyPic], score: 0.95 };
+      j.r_ear = { state: 'observed', at: [midEyeX - 18, midEyeY], score: 0.95 };
+      j.l_ear = { state: 'observed', at: [midEyeX + 18, midEyeY], score: 0.95 };
+      j.nose = { state: 'observed', at: [midEyeX, midEyeY], score: 0.95 };
+    });
+
+    const c = setup({ rig: { bones: headRig }, map: mapSpec, pose });
+    const r = retarget(c, ['--bends', 'clamp']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+
+    const mot = motionOf(c.out).animations.dance!.tracks;
+    const headTrans = mot.find((t) => 'bone' in t && t.bone === 'head' && t.property === 'translate')!.keys.map((k) => (k.v as number[])[1]!);
+    const headRot = mot.find((t) => 'bone' in t && t.bone === 'head' && t.property === 'rotate')!.keys.map((k) => (k.v as number[])[0]!);
+    const pitchRot = mot.find((t) => 'bone' in t && t.bone === 'pitch_dial' && t.property === 'rotate')!.keys.map((k) => (k.v as number[])[0]!);
+
+    // Bar 1: on un-clamped frames (0..11, where |rawNod| <= 0.82u so residual === 0), pitch_dial and head.rotate add 0°.
+    for (let i = 0; i < 12; i++) {
+      expect(Math.abs(headTrans[i]!)).toBeLessThanOrEqual(0.82);
+      expect(pitchRot[i]).toBe(0);
+      expect(headRot[i]).toBe(0);
+    }
+    // On clamped beat frames, pitch_dial and head.rotate move in phase with the beat nod residual.
+    const maxPitch = Math.max(...pitchRot.slice(12).map((v) => Math.abs(v)));
+    const maxHeadRot = Math.max(...headRot.slice(12).map((v) => Math.abs(v)));
+    expect(maxPitch).toBeGreaterThan(6);
+    expect(maxHeadRot).toBeGreaterThan(4);
+    for (let i = 12; i < N; i++) {
+      if (Math.abs(pitchRot[i]!) > 0.5) {
+        expect(Math.sign(pitchRot[i]!)).toBe(Math.sign(headRot[i]!));
+        expect(Math.sign(pitchRot[i]!)).toBe(Math.sign(headTrans[i]!));
+      }
+    }
+
+    // Bar 2: DFT peak frequency of pitch_dial matches the reference vertical head travel within 1 bin and in phase.
+    const dftPeak = (sig: readonly number[]) => {
+      const m0 = sig.reduce((a, b) => a + b, 0) / sig.length;
+      const x = sig.map((v) => v - m0);
+      let bestBin = 1;
+      let bestMag = -1;
+      let bestPhase = 0;
+      for (let k = 1; k <= Math.floor(sig.length / 2); k++) {
+        let re = 0;
+        let im = 0;
+        for (let n = 0; n < sig.length; n++) {
+          const ang = (-2 * Math.PI * k * n) / sig.length;
+          re += x[n]! * Math.cos(ang);
+          im += x[n]! * Math.sin(ang);
+        }
+        const mag = (2 * Math.hypot(re, im)) / sig.length;
+        if (mag > bestMag) {
+          bestMag = mag;
+          bestBin = k;
+          bestPhase = Math.atan2(im, re) * DEG;
+        }
+      }
+      return { bin: bestBin, mag: bestMag, phase: bestPhase };
+    };
+    const refPeak = dftPeak(Array.from({ length: N }, (_, i) => beatNodSignal(i)));
+    const pitchPeak = dftPeak(pitchRot);
+    expect(Math.abs(pitchPeak.bin - refPeak.bin)).toBeLessThanOrEqual(1);
+    expect(pitchPeak.bin).toBe(2);
+    expect(Math.abs(wrap(pitchPeak.phase - refPeak.phase))).toBeLessThan(15);
+
+    // Bar 3: lower-body tracks are byte-identical, and disabling the residual coupling flattens pitch_dial and head.rotate to 0° across the beat.
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm190-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const fromPitch = 'export const NOD_RESIDUAL_PITCH_GAIN = 2.8;';
+      const fromHead = 'export const NOD_RESIDUAL_HEAD_GAIN = 1.6;';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(fromPitch)).toHaveLength(2);
+      expect(before.split(fromHead)).toHaveLength(2);
+      writeFileSync(
+        path,
+        before
+          .replace(fromPitch, 'export const NOD_RESIDUAL_PITCH_GAIN = 0;')
+          .replace(fromHead, 'export const NOD_RESIDUAL_HEAD_GAIN = 0;'),
+      );
+
+      const cMut = setup({ rig: { bones: headRig }, map: mapSpec, pose });
+      const rMut = retarget(cMut, ['--bends', 'clamp'], join(d, 'cli.ts'));
+      expect(rMut.status).toBe(0);
+      const motMut = motionOf(cMut.out).animations.dance!.tracks;
+      for (const lb of ['hip', 'leg_r0', 'leg_r1', 'leg_l0', 'leg_l1']) {
+        expect(mot.filter((t) => 'bone' in t && t.bone === lb)).toEqual(motMut.filter((t) => 'bone' in t && t.bone === lb));
+      }
+      const mutPitch = motMut.find((t) => 'bone' in t && t.bone === 'pitch_dial' && t.property === 'rotate')!.keys.map((k) => (k.v as number[])[0]!);
+      const mutHeadRot = motMut.find((t) => 'bone' in t && t.bone === 'head' && t.property === 'rotate')!.keys.map((k) => (k.v as number[])[0]!);
+      expect(Math.max(...mutPitch.map((v) => Math.abs(v)))).toBe(0);
+      expect(Math.max(...mutHeadRot.map((v) => Math.abs(v)))).toBe(0);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
+

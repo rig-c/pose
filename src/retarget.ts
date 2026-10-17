@@ -98,6 +98,30 @@ const DEG = 180 / Math.PI;
  */
 export const HELD_MISS = 0.01;
 
+/**
+ * Beat-nod phase-coupling gain (`°/unit`) from the vertical residual that the
+ * `±2%` neck-length clamp removes from `head.translate.y` (`rawNod - dy`) onto
+ * `map.face.pitch` (`pitch_dial.rotate`, `rig-c/pose#190`). Measured on the
+ * dancer reference hand pass (`hand/p1` HP2: `+2.8°/unit`).
+ */
+export const NOD_RESIDUAL_PITCH_GAIN = 2.8;
+
+/**
+ * Beat-nod phase-coupling gain (`°/unit`) from the vertical residual that the
+ * `±2%` neck-length clamp removes from `head.translate.y` (`rawNod - dy`) onto
+ * the head chain bone's `rotate` track (`head.rotate`, `rig-c/pose#190`).
+ * Measured on the dancer reference hand pass (`hand/p1` HP2: `+1.6°/unit`).
+ */
+export const NOD_RESIDUAL_HEAD_GAIN = 1.6;
+
+export interface HeadNodReading {
+  bone: string;
+  maxNod: number;
+  rawY: number[];
+  clampedY: number[];
+  residual: number[];
+}
+
 export interface RetargetOptions extends SwitchOptions {
   /** A joint with a score below this is not good on that frame (a joint with no score is). */
   minScore: number;
@@ -334,6 +358,8 @@ export interface Retarget {
   body: BodyReading | null;
   /** Continuous per-frame figure scale relative to frame 0 (`#163`, `#161`). */
   figureScale: FigureScaleReading;
+  /** Per-frame vertical head nod reading (`rawY`, `clampedY`, and clamped `residual`, `#111`, `#181`, `#190`). */
+  headNod: HeadNodReading | null;
 }
 
 export interface FigureScaleFrame {
@@ -1080,6 +1106,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   let headNodBone: string | null = null;
   let headNod: Pt[] | null = null;
   let headNodTrack: MotionTrack | null = null;
+  let headNodReading: HeadNodReading | null = null;
   const posedOrigin = (b: string, i: number): Pt => {
     const own = rest.get(b)!;
     if (t !== null && b === t.bone) return [own.worldX + (travel[i]?.[0] ?? 0), own.worldY + (travel[i]?.[1] ?? 0)];
@@ -1271,6 +1298,8 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
           }
           return Math.max(-maxNod, Math.min(maxNod, v));
         });
+        const residual = rawNod.map((v, i) => v - dy[i]!);
+        headNodReading = { bone: hb, maxNod, rawY: rawNod, clampedY: dy, residual };
         if (dy.some((v) => Math.abs(r3(v)) > 0)) {
           const keys: MotionKey[] = [];
           const nod: Pt[] = [];
@@ -2094,6 +2123,31 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   }
   const solvedKey = (b: string, i: number) => legPoses?.[i]!.solved.get(b);
 
+  // #190: couple the vertical residual removed by the neck-length clamp into head.rotate
+  // in phase (+NOD_RESIDUAL_HEAD_GAIN °/unit), adding 0 on frames where the clamp did not act.
+  if (headNodReading !== null) {
+    const hb = headNodReading.bone;
+    const tg = targets.get(hb);
+    if (tg !== undefined) {
+      const above = mappedAbove(hb);
+      const hc = map.chains.find((c) => c.bones.includes(hb));
+      const limits = hc?.range[hb];
+      const cov = hc !== undefined ? covered.get(hc.name) : undefined;
+      for (let i = 0; i < n; i++) {
+        const res = headNodReading.residual[i]!;
+        if (res === 0) continue;
+        let next = wrap(tg[i]! + NOD_RESIDUAL_HEAD_GAIN * res);
+        if (limits !== undefined && cov?.[i] !== true) {
+          const key = wrap((next - restOf.get(hb)!) - (above === null ? 0 : turn(above, i)));
+          if (overflow(key, limits) > RANGE_SLACK) {
+            next = wrap(next + Math.min(Math.max(key, limits[0]), limits[1]) - key);
+          }
+        }
+        tg[i] = next;
+      }
+    }
+  }
+
   // Keys: the bone's turn less the turn of the nearest mapped bone above it.
   const tracks: Array<MotionTrack | SlotTrack> = [];
   for (const c of map.chains) {
@@ -2129,7 +2183,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       const h = heldOf('l_ear');
       return 'never' in h ? null : h.at;
     })();
-    face = readFace(map.face, series.get('nose')!, series.get('r_eye')!, series.get('l_eye')!, rEar, lEar);
+    face = readFace(map.face, series.get('nose')!, series.get('r_eye')!, series.get('l_eye')!, rEar, lEar, headNodReading?.residual ?? null, NOD_RESIDUAL_PITCH_GAIN);
     for (const axis of ['yaw', 'pitch'] as const) {
       const ax = face[axis];
       if (ax === undefined) continue;
@@ -2260,7 +2314,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     animation: { duration: keyTimes[n - 1]!, tracks },
     times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale,
     switches: sw.switches, shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
-    legScale, scales, feet, planted: plantOn, stance, floor, blendHold, closure, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs), raised, byHip, face, body, figureScale,
+    legScale, scales, feet, planted: plantOn, stance, floor, blendHold, closure, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs), raised, byHip, face, body, figureScale, headNod: headNodReading,
   };
 }
 
