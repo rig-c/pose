@@ -114,6 +114,14 @@ export const NOD_RESIDUAL_PITCH_GAIN = 2.8;
  */
 export const NOD_RESIDUAL_HEAD_GAIN = 1.6;
 
+/**
+ * Reference frame for sets declaring `anchor` (`rig-c/pose#191`): `'head-local'`
+ * rotates the set's drawn hand-tip-to-head offset by the head bone's posed world
+ * turn on each frame; `'world-fixed'` holds the unrotated setup world offset;
+ * `'off'` disables head-anchored end-effector solving.
+ */
+export const HEAD_ANCHOR_FRAME: 'head-local' | 'world-fixed' | 'off' = 'head-local';
+
 export interface HeadNodReading {
   bone: string;
   maxNod: number;
@@ -481,6 +489,10 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   // `place: "by-hip"` (#93) measures against the hip in hip widths: the map must name the rig's two hip points.
   const hips = map.alternates.some((a) => a.place !== undefined && a.place !== null) ? hipOf(map) : null;
   if (hips !== null && 'problem' in hips) p.add('PLACE_HIP', hips.problem);
+  const headAnchorBone = map.alternates.some((a) => a.anchor !== undefined) ? headBoneOf(map) : null;
+  if (map.alternates.some((a) => a.anchor !== undefined) && headAnchorBone === null) {
+    p.add('ANCHOR_HEAD', '"anchor" anchors a set\'s hand to the head bone\'s local frame, and no chain of the map carries the eye line (joints r_eye → l_eye)');
+  }
 
   // Every point the map reads, held where it is not good.
   const needed = new Set<string>();
@@ -1353,11 +1365,147 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   const raised: Raised[] = [];
   const byHip: ByHip[] = [];
   const raisedArt: Array<{ sw: Switch; entries: ArtRange[] }> = [];
-  const raisedJobs: Array<{ anchor: Anchor; sw: Switch; chain: Chain; wrist: (i: number) => Pt; before: Pt[]; reference: Pt[]; placed: Pt[]; refEye: number; rigEye: number; short: Array<{ i: number; how: 'far' | 'near' | 'missed'; shortfall: number }>; upperHeld: number[]; l0: number; l1: number; farthest: number }> = [];
+  const raisedJobs: Array<{ anchor: Anchor; sw: Switch; chain: Chain; wrist: (i: number) => Pt; before: Pt[]; reference: Pt[]; placed: Pt[]; refEye: number; rigEye: number; short: Array<{ i: number; how: 'far' | 'near' | 'missed'; shortfall: number }>; upperHeld: number[]; saturated?: Array<{ frame: number; residual: number }>; l0: number; l1: number; farthest: number }> = [];
   const headOk: Anchor | null = head !== null && !('problem' in head) ? { kind: 'head', joints: head.joints, points: head.points } : null;
   const hipsOk: Anchor | null = hips !== null && !('problem' in hips) ? { kind: 'hip', joints: hips.joints, points: hips.points } : null;
   const fallbackHead = headOf(map);
   const gestureHead: Anchor | null = headOk ?? (!('problem' in fallbackHead) ? { kind: 'head', joints: fallbackHead.joints, points: fallbackHead.points } : null);
+  /**
+   * #191: Posed origin and final world rotation (degrees, including #190's nod-residual coupling
+   * and `headNodTrack` translation) of the head bone `hb` on frame `i`.
+   */
+  const finalHeadPose = (hb: string, i: number): { origin: Pt; rotDeg: number } => {
+    let origin = posedOrigin(hb, i);
+    if (headNodTrack !== null && headNodTrack.bone === hb) {
+      const k = headNodTrack.keys.find((x) => Math.abs(x.t - keyTimes[i]!) < 1e-5);
+      if (k !== undefined && Array.isArray(k.v)) {
+        const pName = rest.get(hb)?.parent ?? null;
+        const pRest = pName !== null ? rest.get(pName) : undefined;
+        if (pName !== null && pRest !== undefined) {
+          const pTurn = turnAbove(pName, i);
+          const rad = pTurn / DEG;
+          const c = Math.cos(rad);
+          const s = Math.sin(rad);
+          const pa = c * pRest.a - s * pRest.c;
+          const pb = c * pRest.b - s * pRest.d;
+          const pc = s * pRest.a + c * pRest.c;
+          const pd = s * pRest.b + c * pRest.d;
+          const [lx, ly] = k.v;
+          origin = [origin[0] + pa * lx + pb * ly, origin[1] + pc * lx + pd * ly];
+        }
+      }
+    }
+    let rotDeg = targets.get(hb)?.[i] ?? restOf.get(hb) ?? 0;
+    if (headNodReading !== null && headNodReading.bone === hb) {
+      const res = headNodReading.residual[i] ?? 0;
+      if (res !== 0) {
+        const above = mappedAbove(hb);
+        const hc = map.chains.find((c) => c.bones.includes(hb));
+        const limits = hc?.range[hb];
+        const cov = hc !== undefined ? covered.get(hc.name) : undefined;
+        let next = wrap(rotDeg + NOD_RESIDUAL_HEAD_GAIN * res);
+        if (limits !== undefined && cov?.[i] !== true) {
+          const key = wrap((next - restOf.get(hb)!) - (above === null ? 0 : turn(above, i)));
+          if (overflow(key, limits) > RANGE_SLACK) {
+            next = wrap(next + Math.min(Math.max(key, limits[0]), limits[1]) - key);
+          }
+        }
+        rotDeg = next;
+      }
+    }
+    return { origin, rotDeg };
+  };
+  /**
+   * #191: For a chain listed in `set.anchor`, compute the target hand-tip position from the set's
+   * `drawn` hand-tip-to-head offset in the `head` bone's local frame (or fixed world offset when
+   * `HEAD_ANCHOR_FRAME === 'world-fixed'`), and solve the two-bone arm inside `set.turn`.
+   */
+  const solveHeadAnchorFrame = (
+    set: (typeof map.alternates)[number],
+    c: Chain,
+    i: number,
+  ): {
+    a0: number;
+    a1: number;
+    targetTip: Pt;
+    placedTip: Pt;
+    achievedTip: Pt;
+    residual: number;
+    saturated: boolean;
+    upperHeld: boolean;
+  } | null => {
+    if (HEAD_ANCHOR_FRAME === 'off' || headAnchorBone === null || c.bones.length < 2) return null;
+    const [b0, b1] = c.bones as [string, string];
+    const drawn0 = set.drawn[b0];
+    const drawn1 = set.drawn[b1];
+    if (drawn0 === undefined || drawn1 === undefined) return null;
+    const S0 = rigPoint(rest, b0);
+    const E0 = rigPoint(rest, b1);
+    const wSpec = c.aim[1] === 'x' ? `${b1}:tip` : c.aim[1]!;
+    const W0 = rigPoint(rest, wSpec);
+    const H0 = rigPoint(rest, headAnchorBone);
+    const headRestRot = restOf.get(headAnchorBone);
+    if (S0 === null || E0 === null || W0 === null || H0 === null || headRestRot === undefined) return null;
+    const l0 = Math.hypot(E0[0] - S0[0], E0[1] - S0[1]);
+    const l1 = Math.hypot(W0[0] - E0[0], W0[1] - E0[1]);
+    const d0 = wrap(Math.atan2(E0[1] - S0[1], E0[0] - S0[0]) * DEG - restOf.get(b0)!);
+    const d1 = wrap(Math.atan2(W0[1] - E0[1], W0[0] - E0[0]) * DEG - restOf.get(b1)!);
+    const r0Drawn = (drawn0 + d0) / DEG;
+    const r1Drawn = (drawn1 + d1) / DEG;
+    const WDrawn: Pt = [
+      S0[0] + l0 * Math.cos(r0Drawn) + l1 * Math.cos(r1Drawn),
+      S0[1] + l0 * Math.sin(r0Drawn) + l1 * Math.sin(r1Drawn),
+    ];
+    const dWorld0: Pt = [WDrawn[0] - H0[0], WDrawn[1] - H0[1]];
+    const drawnHeadRot = set.drawn[headAnchorBone] ?? headRestRot;
+    const { origin: H, rotDeg: headRot } = finalHeadPose(headAnchorBone, i);
+    const dRotRad = HEAD_ANCHOR_FRAME === 'world-fixed' ? 0 : wrap(headRot - drawnHeadRot) / DEG;
+    const cosH = Math.cos(dRotRad);
+    const sinH = Math.sin(dRotRad);
+    const targetTip: Pt = [
+      H[0] + dWorld0[0] * cosH - dWorld0[1] * sinH,
+      H[1] + dWorld0[0] * sinH + dWorld0[1] * cosH,
+    ];
+    const shoulder = posedOrigin(b0, i);
+    const place = reachLimit(H, targetTip, shoulder, l0, l1);
+    const P = place.point;
+    const side: 1 | -1 = wrap(drawn1 + d1 - (drawn0 + d0)) >= 0 ? 1 : -1;
+    const sol = twoBone(shoulder, P, l0, l1, side);
+    const turn0 = set.turn[b0];
+    const turn1 = set.turn[b1];
+    let a0 = sol.upper !== null ? wrap(sol.upper - d0) : drawn0;
+    let a1 = sol.upper !== null ? wrap(sol.fore - d1) : drawn1;
+    let upperHeld = false;
+    let foreHeld = false;
+    if (turn0 !== undefined) {
+      const tt0 = wrap(a0 - drawn0);
+      const cl0 = Math.min(Math.max(tt0, turn0[0]), turn0[1]);
+      if (Math.abs(cl0 - tt0) > RANGE_SLACK) {
+        upperHeld = true;
+        a0 = wrap(drawn0 + cl0);
+        const r0 = (a0 + d0) / DEG;
+        const E: Pt = [shoulder[0] + l0 * Math.cos(r0), shoulder[1] + l0 * Math.sin(r0)];
+        a1 = wrap(Math.atan2(P[1] - E[1], P[0] - E[0]) * DEG - d1);
+      }
+    }
+    if (turn1 !== undefined) {
+      const tt1 = wrap(a1 - drawn1);
+      const cl1 = Math.min(Math.max(tt1, turn1[0]), turn1[1]);
+      if (Math.abs(cl1 - tt1) > RANGE_SLACK) {
+        foreHeld = true;
+        a1 = wrap(drawn1 + cl1);
+      }
+    }
+    const r0 = (a0 + d0) / DEG;
+    const r1 = (a1 + d1) / DEG;
+    const achievedTip: Pt = [
+      shoulder[0] + l0 * Math.cos(r0) + l1 * Math.cos(r1),
+      shoulder[1] + l0 * Math.sin(r0) + l1 * Math.sin(r1),
+    ];
+    const residual = Math.hypot(achievedTip[0] - targetTip[0], achievedTip[1] - targetTip[1]);
+    const saturated = (place.how !== 'in' || upperHeld || foreHeld) && residual > 1e-3;
+    return { a0, a1, targetTip, placedTip: P, achievedTip, residual, saturated, upperHeld };
+  };
   /**
    * #188: For an active raised chain in a set that declares a `support` arm, compute the
    * outward-cleared world angles `[a0, a1]` on frame `i` from the scan's 2D shoulder→wrist
@@ -1595,6 +1743,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     };
     const isChainHeadPlaced = (set: (typeof map.alternates)[number], c: Chain, drawn: number | undefined): boolean => {
       if (headOk === null) return false;
+      if (set.anchor?.includes(c.name) === true) return true;
       const wJoint = c.joints[c.joints.length - 1];
       const ea = set.pose[headOk.joints[0]];
       const eb = set.pose[headOk.joints[1]];
@@ -1736,6 +1885,8 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         const upperAsked: number[] = [];
         const upperOver: number[] = [];
         const heldMiss: number[] = [];
+        const isHeadAnchored = HEAD_ANCHOR_FRAME !== 'off' && set.anchor?.includes(c.name) === true;
+        if (isHeadAnchored) job.saturated = [];
         for (const i of span) {
           const h = pairOn(anchor, i);
           const rc = refCentre(i);
@@ -1745,6 +1896,25 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
           job.reference.push(ref);
           job.before.push([(w[0] - h.centre[0]) / rigEye, (w[1] - h.centre[1]) / rigEye]);
           const shoulder = posedOrigin(b0, i);
+          if (isHeadAnchored) {
+            const ha = solveHeadAnchorFrame(set, c, i);
+            if (ha !== null) {
+              job.farthest = Math.max(job.farthest, Math.hypot(ha.targetTip[0] - shoulder[0], ha.targetTip[1] - shoulder[1]));
+              job.placed.push([(ha.placedTip[0] - h.centre[0]) / rigEye, (ha.placedTip[1] - h.centre[1]) / rigEye]);
+              if (ha.upperHeld) job.upperHeld.push(i);
+              if (ha.saturated) job.saturated!.push({ frame: i, residual: r3(ha.residual) });
+              const tt0 = turn0 === undefined ? 0 : wrap(ha.a0 - set.drawn[b0]!);
+              const tt1 = turn1 === undefined ? 0 : wrap(ha.a1 - set.drawn[b1]!);
+              upperAsked.push(tt0);
+              upperOver.push(0);
+              foreAsked.push(tt1);
+              foreOver.push(0);
+              heldMiss.push(ha.saturated ? ha.residual / rigEye : 0);
+              t0[i] = ha.a0;
+              t1[i] = ha.a1;
+              continue;
+            }
+          }
           const target: Pt = [h.centre[0] + ref[0] * rigEye, h.centre[1] + ref[1] * rigEye];
           let solveTarget: Pt = target;
           if (up && l0 / rigEye <= 3.5 && (turn0 !== undefined || turn1 !== undefined)) {
@@ -1877,11 +2047,27 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       if (art.length > 0) raisedArt.push({ sw: s, entries: art });
     }
   }
-  // #188: Even without --raised-by-head, apply symmetric normalisation and support-arm anchoring on each switch's span.
+  // #188 / #191: Even without --raised-by-head, apply symmetric normalisation, support-arm anchoring, and head-anchored IK on each switch's span.
   for (const s of sw.switches) {
     const set = map.alternates.find((a) => a.name === s.set)!;
     if (set.symmetric === true && headOk === null && hipsOk === null) {
       for (let i = s.frames[0]; i <= s.frames[1]; i++) solveSymmetricFrame(set, i);
+    }
+    if (set.anchor !== undefined && headOk === null && hipsOk === null && HEAD_ANCHOR_FRAME !== 'off') {
+      for (const cn of set.anchor) {
+        if (!s.chains.includes(cn)) continue;
+        const c = map.chains.find((x) => x.name === cn);
+        if (!c || c.bones.length < 2) continue;
+        const t0 = targets.get(c.bones[0]!)!;
+        const t1 = targets.get(c.bones[1]!)!;
+        for (let i = s.frames[0]; i <= s.frames[1]; i++) {
+          const ha = solveHeadAnchorFrame(set, c, i);
+          if (ha !== null) {
+            t0[i] = ha.a0;
+            t1[i] = ha.a1;
+          }
+        }
+      }
     }
     if (set.support !== undefined) {
       for (const cn of s.chains) {
@@ -1944,6 +2130,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       worst: { before: worst(job.before), after: worst(after), placed: r6(Math.max(...after.map((v, k) => Math.hypot(v[0] - job.placed[k]![0], v[1] - job.placed[k]![1])))) },
       short,
       upperHeld: job.upperHeld,
+      ...(job.saturated !== undefined ? { saturated: job.saturated } : {}),
       reach: { min: r6(Math.abs(job.l0 - job.l1)), max: r6(job.l0 + job.l1), farthest: r6(job.farthest) },
     };
     // The unit sits after `seconds`, as the report has always written it.
@@ -1990,7 +2177,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       }
     }
   }
-  // #188: Cover the full shown/bridged span of symmetric sets and support-arm sets after short interpolation.
+  // #188 / #191: Cover the full shown/bridged span of symmetric sets, support-arm sets, and head-anchored chains after short interpolation.
   for (let sIdx = 0; sIdx < sw.switches.length; sIdx++) {
     const s = sw.switches[sIdx]!;
     const set = map.alternates.find((a) => a.name === s.set)!;
@@ -2001,6 +2188,46 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     while (loShow - 1 >= 0 && isSetShownAt(loShow - 1)) loShow--;
     let hiShow = s.frames[1];
     while (hiShow + 1 < n && isSetShownAt(hiShow + 1)) hiShow++;
+    if (set.anchor !== undefined && HEAD_ANCHOR_FRAME !== 'off') {
+      for (const cn of set.anchor) {
+        const c = map.chains.find((x) => x.name === cn);
+        if (!c || c.bones.length < 2) continue;
+        const chainSlots = setSlots.filter(([sl]) => {
+          const sb = slots.get(sl)?.bone;
+          return sb !== undefined && c.bones.includes(sb);
+        });
+        const isChainShownAt = (i: number): boolean =>
+          chainSlots.length > 0
+            ? chainSlots.every(([sl, att]) => sw.shown.get(sl)?.[i] === att)
+            : isSetShownAt(i);
+        let loC = s.frames[0];
+        while (loC - 1 >= 0 && isChainShownAt(loC - 1)) loC--;
+        let hiC = s.frames[1];
+        while (hiC + 1 < n && isChainShownAt(hiC + 1)) hiC++;
+        const t0 = targets.get(c.bones[0]!)!;
+        const t1 = targets.get(c.bones[1]!)!;
+        for (let i = loC; i <= hiC; i++) {
+          const ha = solveHeadAnchorFrame(set, c, i);
+          if (ha !== null) {
+            t0[i] = ha.a0;
+            t1[i] = ha.a1;
+          }
+        }
+        // If `short` or `chainHolds` ramp-interpolated the boundary frame immediately outside the
+        // anchored chain's shown window (`loC - 1` or `hiC + 1`) while a neighbouring set's
+        // attachment is still displayed on that bone, restore that boundary frame from the
+        // neighbouring set's clamped key (`loC - 2` / `hiC + 2`) so the neighbouring set's art
+        // is not bent toward the anchored pose before its slot switches.
+        if (loC >= 2 && covered.get(cn)?.[loC - 1] === true) {
+          t0[loC - 1] = t0[loC - 2]!;
+          t1[loC - 1] = t1[loC - 2]!;
+        }
+        if (hiC + 2 < n && covered.get(cn)?.[hiC + 1] === true) {
+          t0[hiC + 1] = t0[hiC + 2]!;
+          t1[hiC + 1] = t1[hiC + 2]!;
+        }
+      }
+    }
     if (set.symmetric === true) {
       for (let i = loShow; i <= s.frames[1]; i++) solveSymmetricFrame(set, i);
       if (loShow < s.frames[0]) {
@@ -2379,6 +2606,20 @@ function headOf(map: JointMap): Head | { problem: string } {
     }
   }
   return { problem: `${lead}; no chain of the map carries the eye line (joints r_eye → l_eye), so the rig has no eye points to measure` };
+}
+
+/** The rig's head bone (the bone carrying `r_eye → l_eye` or `l_eye → r_eye` in the map), or null if no chain carries the eye line. */
+function headBoneOf(map: JointMap): string | null {
+  for (const c of map.chains) {
+    for (let k = 0; k + 1 < c.joints.length; k++) {
+      const a = c.joints[k]!;
+      const b = c.joints[k + 1]!;
+      if ((a === 'r_eye' && b === 'l_eye') || (a === 'l_eye' && b === 'r_eye')) {
+        return c.bones[k] ?? null;
+      }
+    }
+  }
+  return null;
 }
 
 type ShortSpan = Omit<Short, 'chain' | 'bone' | 'joints'>;
