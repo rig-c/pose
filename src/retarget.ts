@@ -1157,6 +1157,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       handOffsets.set(c.name, arr);
     }
   }
+  const rawTargets = new Map<string, number[]>([...targets].map(([b, arr]) => [b, [...arr]]));
   const sw = selectSwitches(map, targets, keyTimes, keyTimes[n - 1]!, slots, { ...opts, shortInfo, handOffsets });
 
   // The range clamp, outside the spans of a set depicting the bone's chain. Parents
@@ -1326,6 +1327,236 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   const raisedJobs: Array<{ anchor: Anchor; sw: Switch; chain: Chain; wrist: (i: number) => Pt; before: Pt[]; reference: Pt[]; placed: Pt[]; refEye: number; rigEye: number; short: Array<{ i: number; how: 'far' | 'near' | 'missed'; shortfall: number }>; upperHeld: number[]; l0: number; l1: number; farthest: number }> = [];
   const headOk: Anchor | null = head !== null && !('problem' in head) ? { kind: 'head', joints: head.joints, points: head.points } : null;
   const hipsOk: Anchor | null = hips !== null && !('problem' in hips) ? { kind: 'hip', joints: hips.joints, points: hips.points } : null;
+  const fallbackHead = headOf(map);
+  const gestureHead: Anchor | null = headOk ?? (!('problem' in fallbackHead) ? { kind: 'head', joints: fallbackHead.joints, points: fallbackHead.points } : null);
+  /**
+   * #188: For an active raised chain in a set that declares a `support` arm, compute the
+   * outward-cleared world angles `[a0, a1]` on frame `i` from the scan's 2D shoulder→wrist
+   * direction and the head/bun clearance.
+   */
+  const solveSupportActiveFrame = (set: (typeof map.alternates)[number], c: Chain, i: number): [number, number] | null => {
+    if (c.bones.length < 2 || c.joints.length < 3) return null;
+    const [b0, b1] = c.bones as [string, string];
+    const drawn0 = set.drawn[b0];
+    const drawn1 = set.drawn[b1];
+    if (drawn0 === undefined || drawn1 === undefined || !isRaised(drawn0)) return null;
+    const S0 = rigPoint(rest, b0);
+    const E0 = rigPoint(rest, b1);
+    const wSpec = c.aim[1] === 'x' ? `${b1}:tip` : c.aim[1]!;
+    const W0 = rigPoint(rest, wSpec);
+    if (S0 === null || E0 === null || W0 === null) return null;
+    const l0 = Math.hypot(E0[0] - S0[0], E0[1] - S0[1]);
+    const l1 = Math.hypot(W0[0] - E0[0], W0[1] - E0[1]);
+    let rigEye0 = 0.32 * l0;
+    let headX0 = 0;
+    if (gestureHead !== null) {
+      const ha0 = rigPoint(rest, gestureHead.points[0]);
+      const hb0 = rigPoint(rest, gestureHead.points[1]);
+      if (ha0 !== null && hb0 !== null) {
+        const d = Math.hypot(hb0[0] - ha0[0], hb0[1] - ha0[1]);
+        if (d > 1e-6) {
+          rigEye0 = d;
+          headX0 = (ha0[0] + hb0[0]) / 2;
+        }
+      }
+    }
+    const Ex = S0[0] + l0 * Math.cos(drawn0 / DEG);
+    const outSign: 1 | -1 = Ex <= headX0 ? 1 : -1;
+    const clear0 = Math.asin(Math.min(1, (0.55 * rigEye0) / Math.max(1e-6, l0))) * DEG;
+    const clear1 = Math.asin(Math.min(1, (0.90 * rigEye0) / Math.max(1e-6, l1))) * DEG;
+    let swMod = 0;
+    const j0 = c.joints[0]!;
+    const jLast = c.joints[c.joints.length - 1]!;
+    const kp0 = set.pose[j0];
+    const kpLast = set.pose[jLast];
+    const shS = series.get(j0);
+    const wrS = series.get(jLast);
+    if (kp0 !== undefined && kpLast !== undefined && shS !== undefined && wrS !== undefined) {
+      const keySW = pictureAngle(kp0, kpLast);
+      const scanSW = pictureAngle(shS[i]!, wrS[i]!);
+      swMod = Math.max(0, Math.min(6, outSign * wrap(scanSW - keySW)));
+    }
+    const lim0 = set.turn[b0];
+    const lim1 = set.turn[b1];
+    const off0 = outSign * (clear0 + 0.5 * swMod);
+    const off1 = outSign * (clear1 + 0.5 * swMod);
+    const cl0 = lim0 !== undefined ? Math.min(Math.max(off0, lim0[0]), lim0[1]) : off0;
+    const cl1 = lim1 !== undefined ? Math.min(Math.max(off1, lim1[0]), lim1[1]) : off1;
+    return [wrap(drawn0 + cl0), wrap(drawn1 + cl1)];
+  };
+  /**
+   * #188: For a support chain in `set.support`, anchor its bones on frame `i` to `set.drawn`
+   * within a ±2.5° (≤ ±3°) breathing tolerance from the pose's delta relative to the set's
+   * reference pose.
+   */
+  const solveSupportChainFrame = (set: (typeof map.alternates)[number], c: Chain, i: number): void => {
+    for (let k = 0; k < c.bones.length; k++) {
+      const b = c.bones[k]!;
+      const dr = set.drawn[b];
+      if (dr === undefined) continue;
+      const kp0 = c.joints[k] !== undefined ? set.pose[c.joints[k]!] : undefined;
+      const kp1 = c.joints[k + 1] !== undefined ? set.pose[c.joints[k + 1]!] : undefined;
+      const keyAng = kp0 !== undefined && kp1 !== undefined ? pictureAngle(kp0, kp1) : dr;
+      const raw = rawTargets.get(b)?.[i] ?? keyAng;
+      const diff = Math.max(-2.5, Math.min(2.5, 0.1 * wrap(raw - keyAng)));
+      targets.get(b)![i] = wrap(dr + diff);
+    }
+  };
+  /**
+   * #188: For a `set.symmetric === true` gesture set, normalise its two two-bone arm chains
+   * on frame `i` to the set's `drawn` symmetry centre so `|elbow_l.y - elbow_r.y| == 0` and
+   * clamp both forearms so the wrists stay inside the head silhouette.
+   */
+  const solveSymmetricFrame = (set: (typeof map.alternates)[number], i: number): { cR: Chain; cL: Chain; wR: Pt; wL: Pt; hc: Pt; ed: number } | null => {
+    if (set.chains.length !== 2) return null;
+    const c0 = map.chains.find((x) => x.name === set.chains[0]!);
+    const c1 = map.chains.find((x) => x.name === set.chains[1]!);
+    if (c0 === undefined || c1 === undefined || c0.bones.length !== 2 || c1.bones.length !== 2) return null;
+    const S0_0 = rigPoint(rest, c0.bones[0]!);
+    const S0_1 = rigPoint(rest, c1.bones[0]!);
+    if (S0_0 === null || S0_1 === null) return null;
+    const [cR, cL] = S0_0[0] <= S0_1[0] ? [c0, c1] : [c1, c0];
+    const [bR0, bR1] = cR.bones as [string, string];
+    const [bL0, bL1] = cL.bones as [string, string];
+    const wSpecR = cR.aim[1] === 'x' ? `${bR1}:tip` : cR.aim[1]!;
+    const wSpecL = cL.aim[1] === 'x' ? `${bL1}:tip` : cL.aim[1]!;
+    const SR0 = rigPoint(rest, bR0)!;
+    const ER0 = rigPoint(rest, bR1)!;
+    const WR0 = rigPoint(rest, wSpecR)!;
+    const SL0 = rigPoint(rest, bL0)!;
+    const EL0 = rigPoint(rest, bL1)!;
+    const WL0 = rigPoint(rest, wSpecL)!;
+    const lR0 = Math.hypot(ER0[0] - SR0[0], ER0[1] - SR0[1]);
+    const lR1 = Math.hypot(WR0[0] - ER0[0], WR0[1] - ER0[1]);
+    const lL0 = Math.hypot(EL0[0] - SL0[0], EL0[1] - SL0[1]);
+    const lL1 = Math.hypot(WL0[0] - EL0[0], WL0[1] - EL0[1]);
+    const dR0 = wrap(Math.atan2(ER0[1] - SR0[1], ER0[0] - SR0[0]) * DEG - restOf.get(bR0)!);
+    const dR1 = wrap(Math.atan2(WR0[1] - ER0[1], WR0[0] - ER0[0]) * DEG - restOf.get(bR1)!);
+    const dL0 = wrap(Math.atan2(EL0[1] - SL0[1], EL0[0] - SL0[0]) * DEG - restOf.get(bL0)!);
+    const dL1 = wrap(Math.atan2(WL0[1] - EL0[1], WL0[0] - EL0[0]) * DEG - restOf.get(bL1)!);
+    const sr = posedOrigin(bR0, i);
+    const sl = posedOrigin(bL0, i);
+    let hc: Pt = [(sr[0] + sl[0]) / 2, (sr[1] + sl[1]) / 2 + 0.85 * Math.hypot(sl[0] - sr[0], sl[1] - sr[1])];
+    let ed = Math.max(1e-3, 0.30 * Math.hypot(sl[0] - sr[0], sl[1] - sr[1]));
+    if (gestureHead !== null) {
+      const ha = posedPoint(gestureHead.points[0], i);
+      const hb = posedPoint(gestureHead.points[1], i);
+      const d = Math.hypot(hb[0] - ha[0], hb[1] - ha[1]);
+      if (d > 1e-6) {
+        hc = [(ha[0] + hb[0]) / 2, (ha[1] + hb[1]) / 2];
+        ed = d;
+      }
+    }
+    const drawnR0 = set.drawn[bR0]!;
+    const drawnR1 = set.drawn[bR1]!;
+    const drawnL0 = set.drawn[bL0]!;
+    const drawnL1 = set.drawn[bL1]!;
+    const turnR0 = set.turn[bR0] ?? [-20, 20];
+    const turnR1 = set.turn[bR1] ?? [-20, 20];
+    const turnL0 = set.turn[bL0] ?? [-20, 20];
+    const turnL1 = set.turn[bL1] ?? [-20, 20];
+    const rawR0 = rawTargets.get(bR0)?.[i] ?? drawnR0;
+    const rawL0 = rawTargets.get(bL0)?.[i] ?? drawnL0;
+    const offR0 = wrap(rawR0 - drawnR0);
+    const offL0 = wrap(rawL0 - drawnL0);
+    let cOpen = Math.max(-4, Math.min(2, 0.15 * 0.5 * (offR0 - offL0)));
+    const solveTilt = (open: number): { aR0: number; aL0: number; exR: number; eyR: number; exL: number; eyL: number } => {
+      const evalDiff = (deg: number) => {
+        const dR = deg < 0 ? 0.25 * deg : deg;
+        const dL = deg > 0 ? 0.25 * deg : deg;
+        const ar = drawnR0 + Math.min(Math.max(open + dR, turnR0[0]), turnR0[1]);
+        const al = drawnL0 + Math.min(Math.max(-open + dL, turnL0[0]), turnL0[1]);
+        const eyr = sr[1] + lR0 * Math.sin((ar + dR0) / DEG);
+        const eyl = sl[1] + lL0 * Math.sin((al + dL0) / DEG);
+        return eyl - eyr;
+      };
+      let lo = -45;
+      let hi = 45;
+      let fLo = evalDiff(lo);
+      const fHi = evalDiff(hi);
+      let deg: number;
+      if ((fLo <= 0 && fHi <= 0) || (fLo > 0 && fHi > 0)) {
+        deg = Math.abs(fLo) <= Math.abs(fHi) ? lo : hi;
+      } else {
+        for (let it = 0; it < 36; it++) {
+          const mid = 0.5 * (lo + hi);
+          const fMid = evalDiff(mid);
+          if ((fLo <= 0 && fMid <= 0) || (fLo > 0 && fMid > 0)) {
+            lo = mid;
+            fLo = fMid;
+          } else {
+            hi = mid;
+          }
+        }
+        deg = 0.5 * (lo + hi);
+      }
+      const dR = deg < 0 ? 0.25 * deg : deg;
+      const dL = deg > 0 ? 0.25 * deg : deg;
+      let aR0 = drawnR0 + Math.min(Math.max(open + dR, turnR0[0]), turnR0[1]);
+      let aL0 = drawnL0 + Math.min(Math.max(-open + dL, turnL0[0]), turnL0[1]);
+      const eyR0 = sr[1] + lR0 * Math.sin((aR0 + dR0) / DEG);
+      const eyL0 = sl[1] + lL0 * Math.sin((aL0 + dL0) / DEG);
+      if (Math.abs(eyL0 - eyR0) > 1e-4) {
+        const sL = Math.max(-1, Math.min(1, (eyR0 - sl[1]) / Math.max(1e-6, lL0)));
+        const candL = wrap(Math.asin(sL) * DEG - dL0);
+        const tL = wrap(candL - drawnL0);
+        if (tL >= turnL0[0] && tL <= turnL0[1]) aL0 = candL;
+      }
+      const rR0 = (aR0 + dR0) / DEG;
+      const rL0 = (aL0 + dL0) / DEG;
+      return {
+        aR0: wrap(aR0),
+        aL0: wrap(aL0),
+        exR: sr[0] + lR0 * Math.cos(rR0),
+        eyR: sr[1] + lR0 * Math.sin(rR0),
+        exL: sl[0] + lL0 * Math.cos(rL0),
+        eyL: sl[1] + lL0 * Math.sin(rL0),
+      };
+    };
+    const upper = solveTilt(cOpen);
+    const aimFore = (ex: number, ey: number, l1: number, d1: number, drawn1: number, turn1: readonly [number, number], tx: number, ty: number): [number, Pt] => {
+      const want = wrap(Math.atan2(ty - ey, tx - ex) * DEG - d1);
+      const off = Math.min(Math.max(wrap(want - drawn1), turn1[0]), turn1[1]);
+      let a1 = wrap(drawn1 + off);
+      let r1 = (a1 + d1) / DEG;
+      let wx = ex + l1 * Math.cos(r1);
+      let wy = ey + l1 * Math.sin(r1);
+      const xMin = hc[0] - 0.30 * ed;
+      const xMax = hc[0] + 0.30 * ed;
+      const yMin = hc[1] + 0.15 * ed;
+      const yMax = hc[1] + 0.95 * ed;
+      if (wx < xMin || wx > xMax || wy < yMin || wy > yMax) {
+        let bestA = a1;
+        let bestErr = Infinity;
+        for (let step = -200; step <= 200; step++) {
+          const candOff = turn1[0] + ((turn1[1] - turn1[0]) * (step + 200)) / 400;
+          const candA = wrap(drawn1 + candOff);
+          const cr = (candA + d1) / DEG;
+          const cwx = ex + l1 * Math.cos(cr);
+          const cwy = ey + l1 * Math.sin(cr);
+          const ox = cwx < xMin ? xMin - cwx : cwx > xMax ? cwx - xMax : 0;
+          const oy = cwy < yMin ? yMin - cwy : cwy > yMax ? cwy - yMax : 0;
+          const err = (ox + oy) * 1000 + Math.hypot(cwx - tx, cwy - ty);
+          if (err < bestErr) {
+            bestErr = err;
+            bestA = candA;
+          }
+        }
+        a1 = bestA;
+        r1 = (a1 + d1) / DEG;
+        wx = ex + l1 * Math.cos(r1);
+        wy = ey + l1 * Math.sin(r1);
+      }
+      return [a1, [wx, wy]];
+    };
+    const [aR1, wR] = aimFore(upper.exR, upper.eyR, lR1, dR1, drawnR1, turnR1, hc[0] - 0.20 * ed, hc[1] + 0.65 * ed);
+    const [aL1, wL] = aimFore(upper.exL, upper.eyL, lL1, dL1, drawnL1, turnL1, hc[0] + 0.20 * ed, hc[1] + 0.65 * ed);
+    targets.get(bR0)![i] = upper.aR0;
+    targets.get(bR1)![i] = aR1;
+    targets.get(bL0)![i] = upper.aL0;
+    targets.get(bL1)![i] = aL1;
+    return { cR, cL, wR, wL, hc, ed };
+  };
   if (headOk !== null || hipsOk !== null) {
     /** The anchor's two rig points posed on frame i: their midpoint and their distance apart. */
     const pairOn = (an: Anchor, i: number): { centre: Pt; dist: number } => {
@@ -1382,18 +1613,34 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       for (const cn of s.chains) {
         if (sw.chainHolds?.some((h) => h.chain === cn && h.set !== s.set && h.frames[0] <= s.frames[0] && h.frames[1] >= s.frames[1]) === true) continue;
         const c = map.chains.find((x) => x.name === cn)!;
+        if (set.support?.includes(c.name) === true) {
+          for (let i = s.frames[0]; i <= s.frames[1]; i++) solveSupportChainFrame(set, c, i);
+          continue;
+        }
         const drawn = set.drawn[c.bones[0]!];
         const up = isChainHeadPlaced(set, c, drawn);
         const low = hipsOk !== null && set.place?.chains.includes(c.name) === true;
         if (!up && !low && headOk !== null && drawn !== undefined && isRaised(drawn) && c.bones.length >= 1 && c.joints.length >= 2) {
-          const p0 = set.pose[c.joints[0]!];
-          const p1 = set.pose[c.joints[1]!];
-          if (p0 !== undefined && p1 !== undefined) {
-            const key0 = pictureAngle(p0, p1);
+          if (set.support !== undefined && c.bones.length >= 2) {
             const t0 = targets.get(c.bones[0]!)!;
+            const t1 = targets.get(c.bones[1]!)!;
             for (let i = s.frames[0]; i <= s.frames[1]; i++) {
-              const diff = Math.max(-3, Math.min(3, wrap(t0[i]! - key0)));
-              t0[i] = wrap(drawn + diff);
+              const pair = solveSupportActiveFrame(set, c, i);
+              if (pair !== null) {
+                t0[i] = pair[0];
+                t1[i] = pair[1];
+              }
+            }
+          } else {
+            const p0 = set.pose[c.joints[0]!];
+            const p1 = set.pose[c.joints[1]!];
+            if (p0 !== undefined && p1 !== undefined) {
+              const key0 = pictureAngle(p0, p1);
+              const t0 = targets.get(c.bones[0]!)!;
+              for (let i = s.frames[0]; i <= s.frames[1]; i++) {
+                const diff = Math.max(-3, Math.min(3, wrap(t0[i]! - key0)));
+                t0[i] = wrap(drawn + diff);
+              }
             }
           }
         }
@@ -1561,7 +1808,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
           t1[i] = a1;
         }
         // A held upper arm whose re-aimed forearm leaves the wrist more than HELD_MISS short of its placed point: ART-RANGE on the upper arm, with the shortfall.
-        if (turn0 !== undefined) {
+        if (turn0 !== undefined && set.symmetric !== true) {
           for (const [a, b] of runsOf(heldMiss.map((m) => m > HELD_MISS), RANGE_GAP)) {
             let worst = a;
             for (let k = a; k <= b; k++) if (heldMiss[k]! > heldMiss[worst]!) worst = k;
@@ -1570,7 +1817,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
             art.push({ set: set.name, chain: c.name, bone: b0, frames: [first, last], seconds: r6(endOf(last) - keyTimes[first]!), maxOverflow: r3(upperOver[worst]!), turn: r3(upperAsked[worst]!), limits: turn0, clamped: true, shortfall: r3(heldMiss[worst]!), ...(up ? {} : { anchor: 'hip' as const }) });
           }
         }
-        if (turn1 !== undefined) {
+        if (turn1 !== undefined && set.symmetric !== true) {
           for (const [a, b] of runsOf(foreOver.map((o) => o > RANGE_SLACK), RANGE_GAP)) {
             let worst = a;
             for (let k = a; k <= b; k++) if (foreOver[k]! > foreOver[worst]!) worst = k;
@@ -1581,8 +1828,49 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         }
         raisedJobs.push(job);
       }
+      if (set.symmetric === true) {
+        for (let i = s.frames[0]; i <= s.frames[1]; i++) {
+          const sym = solveSymmetricFrame(set, i);
+          if (sym === null) continue;
+          const k = i - s.frames[0];
+          for (const job of raisedJobs) {
+            if (job.sw !== s) continue;
+            const w = job.chain.name === sym.cR.name ? sym.wR : job.chain.name === sym.cL.name ? sym.wL : null;
+            if (w !== null && k >= 0 && k < job.placed.length) {
+              job.placed[k] = [(w[0] - sym.hc[0]) / job.rigEye, (w[1] - sym.hc[1]) / job.rigEye];
+              job.upperHeld = [];
+              job.short = [];
+            }
+          }
+        }
+      }
       art.sort((x, y) => x.frames[0] - y.frames[0]);
       if (art.length > 0) raisedArt.push({ sw: s, entries: art });
+    }
+  }
+  // #188: Even without --raised-by-head, apply symmetric normalisation and support-arm anchoring on each switch's span.
+  for (const s of sw.switches) {
+    const set = map.alternates.find((a) => a.name === s.set)!;
+    if (set.symmetric === true && headOk === null && hipsOk === null) {
+      for (let i = s.frames[0]; i <= s.frames[1]; i++) solveSymmetricFrame(set, i);
+    }
+    if (set.support !== undefined) {
+      for (const cn of s.chains) {
+        const c = map.chains.find((x) => x.name === cn)!;
+        if (set.support.includes(c.name)) {
+          for (let i = s.frames[0]; i <= s.frames[1]; i++) solveSupportChainFrame(set, c, i);
+        } else if (headOk === null && hipsOk === null && c.bones.length >= 2) {
+          const t0 = targets.get(c.bones[0]!)!;
+          const t1 = targets.get(c.bones[1]!)!;
+          for (let i = s.frames[0]; i <= s.frames[1]; i++) {
+            const pair = solveSupportActiveFrame(set, c, i);
+            if (pair !== null) {
+              t0[i] = pair[0];
+              t1[i] = pair[1];
+            }
+          }
+        }
+      }
     }
   }
   p.throwIfAny();
@@ -1669,6 +1957,119 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         const total = wrap(tg[hi + 1]! - startA);
         for (let k = lo; k <= hi; k++) {
           tg[k] = wrap(startA + ((k - lo + 1) / steps) * total);
+        }
+      }
+    }
+  }
+  // #188: Cover the full shown/bridged span of symmetric sets and support-arm sets after short interpolation.
+  for (let sIdx = 0; sIdx < sw.switches.length; sIdx++) {
+    const s = sw.switches[sIdx]!;
+    const set = map.alternates.find((a) => a.name === s.set)!;
+    const setSlots = Object.entries(set.slots);
+    const isSetShownAt = (i: number): boolean =>
+      setSlots.length > 0 && setSlots.every(([sl, att]) => sw.shown.get(sl)?.[i] === att);
+    let loShow = s.frames[0];
+    while (loShow - 1 >= 0 && isSetShownAt(loShow - 1)) loShow--;
+    let hiShow = s.frames[1];
+    while (hiShow + 1 < n && isSetShownAt(hiShow + 1)) hiShow++;
+    if (set.symmetric === true) {
+      for (let i = loShow; i <= s.frames[1]; i++) solveSymmetricFrame(set, i);
+      if (loShow < s.frames[0]) {
+        const loRamp = Math.max(0, loShow - 6);
+        const steps = loShow - loRamp;
+        if (steps >= 2) {
+          for (const cn of set.chains) {
+            const c = map.chains.find((x) => x.name === cn);
+            if (!c) continue;
+            for (const b of c.bones) {
+              const tg = targets.get(b)!;
+              const startA = tg[loRamp]!;
+              const total = wrap(tg[loShow]! - startA);
+              for (let k = loRamp + 1; k < loShow; k++) {
+                tg[k] = wrap(startA + ((k - loRamp) / steps) * total);
+              }
+            }
+          }
+        }
+      }
+      if (hiShow > s.frames[1] && set.chains.length === 2) {
+        const c0 = map.chains.find((x) => x.name === set.chains[0]!);
+        const c1 = map.chains.find((x) => x.name === set.chains[1]!);
+        if (c0 !== undefined && c1 !== undefined && c0.bones.length === 2 && c1.bones.length === 2) {
+          const S0_0 = rigPoint(rest, c0.bones[0]!)!;
+          const S0_1 = rigPoint(rest, c1.bones[0]!)!;
+          const [cR, cL] = S0_0[0] <= S0_1[0] ? [c0, c1] : [c1, c0];
+          const bR0 = cR.bones[0]!;
+          const bL0 = cL.bones[0]!;
+          const SR0 = rigPoint(rest, bR0)!;
+          const ER0 = rigPoint(rest, cR.bones[1]!)!;
+          const SL0 = rigPoint(rest, bL0)!;
+          const EL0 = rigPoint(rest, cL.bones[1]!)!;
+          const lR0 = Math.hypot(ER0[0] - SR0[0], ER0[1] - SR0[1]);
+          const lL0 = Math.hypot(EL0[0] - SL0[0], EL0[1] - SL0[1]);
+          const dR0 = wrap(Math.atan2(ER0[1] - SR0[1], ER0[0] - SR0[0]) * DEG - restOf.get(bR0)!);
+          const dL0 = wrap(Math.atan2(EL0[1] - SL0[1], EL0[0] - SL0[0]) * DEG - restOf.get(bL0)!);
+          for (let i = s.frames[1] + 1; i <= hiShow; i++) {
+            const sr = posedOrigin(bR0, i);
+            const sl = posedOrigin(bL0, i);
+            const baseR = targets.get(bR0)![i]!;
+            const baseL = targets.get(bL0)![i]!;
+            let lo = -20;
+            let hi = 20;
+            const evalD = (deg: number) =>
+              sl[1] + lL0 * Math.sin((baseL + deg + dL0) / DEG) - (sr[1] + lR0 * Math.sin((baseR + deg + dR0) / DEG));
+            let fLo = evalD(lo);
+            for (let it = 0; it < 32; it++) {
+              const mid = 0.5 * (lo + hi);
+              const fMid = evalD(mid);
+              if ((fLo <= 0 && fMid <= 0) || (fLo > 0 && fMid > 0)) {
+                lo = mid;
+                fLo = fMid;
+              } else hi = mid;
+            }
+            const deg = 0.5 * (lo + hi);
+            targets.get(bR0)![i] = wrap(baseR + deg);
+            targets.get(bL0)![i] = wrap(baseL + deg);
+          }
+        }
+      }
+    }
+    if (set.support !== undefined) {
+      const prevSw = sIdx > 0 ? sw.switches[sIdx - 1] : undefined;
+      const loGap = prevSw !== undefined && s.frames[0] - prevSw.frames[1] <= 10 ? prevSw.frames[1] + 1 : loShow;
+      for (const cn of s.chains) {
+        const c = map.chains.find((x) => x.name === cn)!;
+        if (set.support.includes(c.name)) {
+          for (let i = Math.min(loGap, loShow); i <= hiShow; i++) solveSupportChainFrame(set, c, i);
+          const anchorStart = Math.min(loGap, loShow);
+          if (anchorStart >= 2) {
+            for (const b of c.bones) {
+              const tg = targets.get(b)!;
+              tg[anchorStart - 1] = wrap(tg[anchorStart - 2]! + 0.5 * wrap(tg[anchorStart]! - tg[anchorStart - 2]!));
+            }
+          }
+        } else if (c.bones.length >= 2) {
+          const [b0, b1] = c.bones as [string, string];
+          const drawn0 = set.drawn[b0];
+          if (drawn0 !== undefined && isRaised(drawn0)) {
+            const S0 = rigPoint(rest, b0);
+            let headX0 = 0;
+            if (gestureHead !== null) {
+              const ha0 = rigPoint(rest, gestureHead.points[0]);
+              const hb0 = rigPoint(rest, gestureHead.points[1]);
+              if (ha0 !== null && hb0 !== null) headX0 = (ha0[0] + hb0[0]) / 2;
+            }
+            const l0 = S0 !== null && rigPoint(rest, b1) !== null ? Math.hypot(rigPoint(rest, b1)![0] - S0[0], rigPoint(rest, b1)![1] - S0[1]) : 100;
+            const outSign: 1 | -1 = (S0?.[0] ?? 0) + l0 * Math.cos(drawn0 / DEG) <= headX0 ? 1 : -1;
+            const t0 = targets.get(b0)!;
+            const t1 = targets.get(b1)!;
+            for (let i = loShow; i <= hiShow; i++) {
+              const pair = solveSupportActiveFrame(set, c, i);
+              if (pair === null) continue;
+              if (i >= s.frames[0] || outSign * wrap(t0[i]! - pair[0]) < 0) t0[i] = pair[0];
+              if (i >= s.frames[0] || outSign * wrap(t1[i]! - pair[1]) < 0) t1[i] = pair[1];
+            }
+          }
         }
       }
     }
