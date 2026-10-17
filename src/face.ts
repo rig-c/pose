@@ -293,18 +293,35 @@ export function readFace(
   lEye: readonly Pt[],
   rEar: readonly Pt[] | null,
   lEar: readonly Pt[] | null,
+  nodResidual?: readonly number[] | null,
+  pitchGain = 0,
 ): FaceReading {
   const { ears, yaw, pitch } = readFaceAngles(nose, rEye, lEye, rEar, lEar);
+  const coupledPitch =
+    nodResidual !== undefined && nodResidual !== null && nodResidual.length === pitch.length && pitchGain !== 0
+      ? pitch.map((p, i) => (nodResidual[i]! === 0 ? p : p + pitchGain * nodResidual[i]!))
+      : pitch;
+  const basePitch = face.pitch === undefined ? undefined : mapFaceAxis(pitch, face.pitch);
+  const mappedPitch =
+    face.pitch === undefined
+      ? undefined
+      : coupledPitch === pitch
+        ? basePitch!
+        : (() => {
+            const m = mapFaceAxis(coupledPitch, face.pitch);
+            const keys = m.keys.map((v, i) => (nodResidual![i]! === 0 ? basePitch!.keys[i]! : v));
+            return { ...m, mapped: spanOf(keys), corr: corrOf(m.raw, keys), keys };
+          })();
   return {
     ears,
     read: {
       yaw: spanOf(yaw),
-      pitch: spanOf(pitch),
+      pitch: spanOf(coupledPitch),
       rawYaw: yaw,
-      rawPitch: pitch,
+      rawPitch: coupledPitch,
     },
     ...(face.yaw === undefined ? {} : { yaw: mapFaceAxis(yaw, face.yaw) }),
-    ...(face.pitch === undefined ? {} : { pitch: mapFaceAxis(pitch, face.pitch) }),
+    ...(mappedPitch === undefined ? {} : { pitch: mappedPitch }),
   };
 }
 
