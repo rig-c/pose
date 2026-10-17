@@ -182,6 +182,10 @@ export interface Short {
   /** Present when a foreshortened segment (< `SHORT_STEP_FRACTION`) had its per-frame step capped (#110): the one-frame step after capping and the largest step asked, degrees, signed. */
   step?: number;
   asked?: number;
+  /** Present when a horizontal chain across the body (`isAcross`) held its last confident angle (#184). */
+  across?: boolean;
+  /** Largest one-frame turn (degrees, signed) inside a held horizontal-chain span when it reversed beyond `--flip` (#184). */
+  reversed?: number;
 }
 
 /** A limb segment shorter than this fraction of its median picture length has its per-frame angle step capped at `SHORT_STEP_CAP` degrees (rig-c/pose#110). */
@@ -610,30 +614,40 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   }
   p.throwIfAny();
 
-  // The short hold, on every limb segment the pose aims directly (not a reach, and
-  // not a line across the body from a left joint to its right twin — the hip line,
-  // the eye line — whose shortening is the body or head turning, not a limb seen
-  // end-on; #22's cutoff was measured on limb segments only): its picture length
-  // against its own median, on the points the angle was read from.
+  // The short hold, on every segment the pose aims directly (not a reach): its
+  // picture length against its own median, on the points the angle was read from.
+  // A horizontal line across the body (`isAcross`: pelvis, shoulders, head line)
+  // holds and interpolates across spans under `--short` or reversed within a frame
+  // beyond `--flip` (#184), without listing the run as `endOn` (`TURN` reads turned
+  // body/head lines).
   const short: Short[] = [];
   const endOn: EndOn[] = [];
   const fractions = new Map<string, { chain: string; joints: [string, string]; fraction: number[] }>();
-  if (opts.short !== 'off') {
-    const cutoff = opts.short;
+  if (opts.short !== 'off' || opts.flip !== 'off') {
     for (const c of map.chains) {
       if (c.reach) continue;
       c.bones.forEach((b, k) => {
         const joints: [string, string] = [c.joints[k]!, c.joints[k + 1]!];
-        if (isAcross(joints[0], joints[1])) return;
+        const across = isAcross(joints[0], joints[1]);
+        if (!across && opts.short === 'off') return;
         const from = series.get(joints[0])!;
         const to = series.get(joints[1])!;
         const lengths = from.map((f, i) => Math.hypot(to[i]![0] - f[0], to[i]![1] - f[1]));
         const med = median(lengths);
         if (med < 1e-6) {
-          p.add('POSE_SHORT_MEDIAN', `chain "${c.name}" — bone "${b}"'s segment ${joints[0]} → ${joints[1]} has median picture length ${med}px over the ${n} frames; --short measures a frame's length against that median, and there is none to measure against`);
+          if (opts.short !== 'off') {
+            p.add('POSE_SHORT_MEDIAN', `chain "${c.name}" — bone "${b}"'s segment ${joints[0]} → ${joints[1]} has median picture length ${med}px over the ${n} frames; --short measures a frame's length against that median, and there is none to measure against`);
+          }
           return;
         }
         const fraction = lengths.map((l) => l / med);
+        if (across) {
+          const restDir = joints[0].startsWith('r_') ? 0 : 180;
+          const spans = holdAcross(targets.get(b)!, fraction, opts.short, opts.flip, restDir);
+          for (const s of spans) short.push({ chain: c.name, bone: b, joints, ...s });
+          return;
+        }
+        const cutoff = opts.short as number;
         fractions.set(b, { chain: c.name, joints, fraction });
         const spans = holdShort(targets.get(b)!, fraction, cutoff);
         for (const s of spans) short.push({ chain: c.name, bone: b, joints, ...s });
@@ -1912,6 +1926,79 @@ export function holdShort(angles: number[], fraction: readonly number[], cutoff:
   return out;
 }
 
+/**
+ * Hold and interpolate across unconfident spans on a horizontal chain (`isAcross`,
+ * e.g. `r_hip → l_hip`, `r_eye → l_eye`, `r_shoulder → l_shoulder`, rig-c/pose#184),
+ * in place. A frame is unconfident when its picture length over its median is under
+ * `shortCutoff` (with `--short`) or when its angle turns more than `flipThreshold`
+ * from the last confident angle or reverses more than 90° from the line's rest
+ * direction `restDir` (with `--flip`). Each contiguous unconfident run has its
+ * angles interpolated between the confident frames either side (flat at the ends),
+ * the short way round, exactly as `holdShort` does on limb chains.
+ */
+export function holdAcross(
+  angles: number[],
+  fraction: readonly number[],
+  shortCutoff: number | 'off',
+  flipThreshold: number | 'off',
+  restDir = 0,
+): ShortSpan[] {
+  const n = angles.length;
+  if (n === 0 || (shortCutoff === 'off' && flipThreshold === 'off')) return [];
+  const raw = [...angles];
+  const unconf = new Array<boolean>(n).fill(false);
+  let lastConfident = raw[0]!;
+  for (let i = 0; i < n; i++) {
+    const s = shortCutoff !== 'off' && fraction[i]! < shortCutoff;
+    const rev = Math.abs(wrap(raw[i]! - restDir)) > 90;
+    if (!s && !rev) {
+      lastConfident = raw[i]!;
+      break;
+    }
+  }
+  for (let i = 0; i < n; i++) {
+    const isShort = shortCutoff !== 'off' && fraction[i]! < shortCutoff;
+    const isFlipped =
+      flipThreshold !== 'off' &&
+      (Math.abs(wrap(raw[i]! - lastConfident)) > flipThreshold || Math.abs(wrap(raw[i]! - restDir)) > 90);
+    if (isShort || isFlipped) {
+      unconf[i] = true;
+    } else {
+      lastConfident = raw[i]!;
+    }
+  }
+  const out: ShortSpan[] = [];
+  for (let i = 0; i < n; i++) {
+    if (!unconf[i]) continue;
+    let j = i;
+    while (j + 1 < n && unconf[j + 1]) j++;
+    const lo = i - 1;
+    const hi = j + 1;
+    let minFraction = fraction[i]!;
+    for (let k = i + 1; k <= j; k++) minFraction = Math.min(minFraction, fraction[k]!);
+    let maxTurn = 0;
+    for (let k = Math.max(1, i); k <= Math.min(n - 1, j + 1); k++) {
+      const jmp = wrap(raw[k]! - raw[k - 1]!);
+      if (Math.abs(jmp) > Math.abs(maxTurn)) maxTurn = jmp;
+    }
+    if (lo >= 0 || hi < n) {
+      const a = lo >= 0 ? angles[lo]! : angles[hi]!;
+      const b = hi < n ? angles[hi]! : a;
+      const turn = wrap(b - a);
+      for (let k = i; k <= j; k++) angles[k] = lo < 0 ? b : wrap(a + (turn * (k - lo)) / (hi - lo));
+    }
+    const revThreshold = flipThreshold !== 'off' ? flipThreshold : 90;
+    out.push({
+      frames: [i, j],
+      minFraction,
+      across: true,
+      ...(Math.abs(maxTurn) > revThreshold ? { reversed: r3(maxTurn) } : {}),
+    });
+    i = j;
+  }
+  return out;
+}
+
 /** Short spans `gap` frames apart or fewer, as one run each: its first and last frame, and the lowest fraction. */
 export function mergeRuns(spans: readonly ShortSpan[], gap: number): ShortSpan[] {
   const out: ShortSpan[] = [];
@@ -2011,9 +2098,9 @@ export function capShortSteps(
 const spanOf = (frames: [number, number], times: readonly number[]): string =>
   frames[0] === frames[1] ? `frame ${frames[0]} (t=${times[frames[0]]!.toFixed(3)}s)` : `frames ${frames[0]}–${frames[1]} (t=${times[frames[0]]!.toFixed(3)}–${times[frames[1]]!.toFixed(3)}s)`;
 
-export function shortLine(s: Short, times: readonly number[], cutoff: number): string {
+export function shortLine(s: Short, times: readonly number[], cutoff: number | 'off'): string {
+  const sg = (v: number) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}°`;
   if (s.step !== undefined && s.asked !== undefined) {
-    const sg = (v: number) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}°`;
     return `chain "${s.chain}" bone "${s.bone}" (${s.joints[0]} → ${s.joints[1]}) ${spanOf(s.frames, times)}: picture length down to ${s.minFraction.toFixed(2)} of its median, under ${SHORT_STEP_FRACTION.toFixed(2)}, turned ${sg(s.asked)} in one frame (over ${SHORT_STEP_CAP}°); spread to ${sg(s.step)} per frame`;
   }
   const lo = s.frames[0] - 1;
@@ -2023,6 +2110,12 @@ export function shortLine(s: Short, times: readonly number[], cutoff: number): s
     : lo < 0 ? `held flat at frame ${hi}'s angle (the pose starts short)`
       : hi >= times.length ? `held flat at frame ${lo}'s angle (the pose ends short)`
         : `interpolated from frame ${lo}'s angle to frame ${hi}'s, the short way round`;
+  if (s.across === true) {
+    const shortWhy = cutoff !== 'off' && s.minFraction < cutoff ? `picture length down to ${s.minFraction.toFixed(2)} of its median, under ${cutoff}` : null;
+    const revWhy = s.reversed !== undefined ? `reversed ${sg(s.reversed)} in one frame` : null;
+    const why = shortWhy !== null && revWhy !== null ? `${shortWhy}, ${revWhy}` : shortWhy ?? `${revWhy ?? 'reversed'} (picture length down to ${s.minFraction.toFixed(2)} of its median)`;
+    return `chain "${s.chain}" bone "${s.bone}" (${s.joints[0]} → ${s.joints[1]}) ${spanOf(s.frames, times)}: ${why}; its direction is not read — ${held}`;
+  }
   return `chain "${s.chain}" bone "${s.bone}" (${s.joints[0]} → ${s.joints[1]}) ${spanOf(s.frames, times)}: picture length down to ${s.minFraction.toFixed(2)} of its median, under ${cutoff}; its direction is not read — ${held}`;
 }
 
