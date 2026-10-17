@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.0](https://github.com/rig-c/pose/compare/v0.25.0...v0.26.0) (2026-10-17)
+
+
+### Features
+
+* **retarget:** normalise symmetric gesture sets and anchor declared support arms ([#188](https://github.com/rig-c/pose/issues/188)) ([#194](https://github.com/rig-c/pose/issues/194)) ([c82149d](https://github.com/rig-c/pose/commit/c82149deae1f3f7478a53e084a45ec70a8e59236))
+
 ## [0.25.0](https://github.com/rig-c/pose/compare/v0.24.1...v0.25.0) (2026-10-17)
 
 
