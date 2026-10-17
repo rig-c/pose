@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.23.0](https://github.com/rig-c/pose/compare/v0.22.2...v0.23.0) (2026-10-17)
+
+
+### Features
+
+* **face:** switch alternate sets on body and face yaw ([#173](https://github.com/rig-c/pose/issues/173)) ([#178](https://github.com/rig-c/pose/issues/178)) ([fa52622](https://github.com/rig-c/pose/commit/fa526220d59c2a3b0928f5b9d5951a4ee1e288ee))
+* **retarget:** read body yaw from camera-normalised shoulder and hip width ([#173](https://github.com/rig-c/pose/issues/173)) ([#176](https://github.com/rig-c/pose/issues/176)) ([551d7bc](https://github.com/rig-c/pose/commit/551d7bc959196bf4ea8bc7b4d689b16fea160d6b))
+
 ## [0.22.2](https://github.com/rig-c/pose/compare/v0.22.1...v0.22.2) (2026-10-16)
 
 
