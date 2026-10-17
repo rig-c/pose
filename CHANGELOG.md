@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.0](https://github.com/rig-c/pose/compare/v0.24.1...v0.25.0) (2026-10-17)
+
+
+### Features
+
+* **switch:** switch adjacent gesture sets on one frame and keep measured path ([#187](https://github.com/rig-c/pose/issues/187)) ([#192](https://github.com/rig-c/pose/issues/192)) ([9245396](https://github.com/rig-c/pose/commit/92453966859d1e5543985afd9ff3d738c4887131))
+
 ## [0.24.1](https://github.com/rig-c/pose/compare/v0.24.0...v0.24.1) (2026-10-17)
 
 
