@@ -80,7 +80,7 @@ import type { Joint, Travel } from './pose.ts';
 import { TRAVEL_IN_PLACE } from './pose.ts';
 import { Problems, Refusal } from './problems.ts';
 import type { ArtRange, AttachmentKey, ByHip, Raised, ReachShort, SlotTrack, Switch, SwitchOptions } from './switch.ts';
-import { clampArt, coveredChains, isRaised, measureArt, overflow, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
+import { clampArt, coveredChains, isRaised, measureArt, overflow, RAISED_WRIST_EYES, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
 import type { BlendHold, Closure, Feet, Floor, LegScale, PathPose, Posing, Side, Stance } from './legs.ts';
 import { figureScaleOf, holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, percentile, plantHip, posePath, rootOf, scaleSupport, SIDES, stanceOf, stanceRangeOf, STRAIGHT_PERCENTILE, supportsOf, tipOf, unshortenStanceShin } from './legs.ts';
 import type { BodyReading, FaceReading, YawSetSwitch } from './face.ts';
@@ -728,6 +728,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     });
   };
   const dist2 = (a: Pt, b: Pt): number => Math.hypot(b[0] - a[0], b[1] - a[1]);
+  let fixedCamera = false;
   const rawFigureHeight: number[] = (() => {
     const ar = heldPt('r_ankle');
     const al = heldPt('l_ankle');
@@ -780,8 +781,14 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
               return minR > 1 ? minR : maxR < 1 ? maxR : 1;
             });
             if (cons.every((c) => Math.abs(c - 1) <= 0.02)) {
+              fixedCamera = true;
               return cons.map((c) => c * legSum[0]!);
             }
+          }
+          const top = heldPt('nose') ?? heldPt('neck');
+          if (top !== null) {
+            const h = ar.map((r, i) => Math.max(r[1], al[i]![1]) - top[i]![1]);
+            if (h.every((v) => v > 1e-6)) return h;
           }
           const out = winPercentile(legSum, 1, STRAIGHT_PERCENTILE);
           out[0] = legSum[0]!;
@@ -913,7 +920,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
           const lo = supported ? supFloor : limits[0];
           return Math.min(Math.max(r, lo), limits[1]);
         });
-        if (effRatio.some((v) => Math.abs(v - 1) > 0.04) && sy.some((v) => Math.abs(r6(v) - 1) > 0)) {
+        if ((fixedCamera || (n <= 160 && minR < 0.9)) && effRatio.some((v) => Math.abs(v - 1) > 0.04) && sy.some((v) => Math.abs(r6(v) - 1) > 0)) {
           trunkScaleBone = tb;
           trunkScale = sy;
         }
@@ -1112,7 +1119,31 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   p.throwIfAny();
 
   // The switches: with every target known, each set's distance and its spans.
-  const sw = selectSwitches(map, targets, keyTimes, keyTimes[n - 1]!, slots, opts);
+  const shortInfo = opts.short !== 'off' ? { cutoff: opts.short, fractions: new Map([...fractions].map(([b, info]) => [b, info.fraction])) } : undefined;
+  const handOffsets = new Map<string, Array<[number, number]>>();
+  {
+    const rs = series.get('r_shoulder');
+    const ls = series.get('l_shoulder');
+    for (const c of map.chains) {
+      if (c.reach || c.joints.length < 2) continue;
+      const sh = series.get(c.joints[0]!);
+      const wr = series.get(c.joints[c.joints.length - 1]!);
+      if (sh === undefined || wr === undefined) continue;
+      const arr: Array<[number, number]> = [];
+      for (let i = 0; i < n; i++) {
+        const sc = rs !== undefined && ls !== undefined
+          ? Math.hypot(ls[i]![0] - rs[i]![0], ls[i]![1] - rs[i]![1])
+          : c.joints.slice(0, -1).reduce((s, j, k) => {
+              const p0 = series.get(j)?.[i];
+              const p1 = series.get(c.joints[k + 1]!)?.[i];
+              return p0 !== undefined && p1 !== undefined ? s + Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) : s;
+            }, 0);
+        arr.push(sc > 1e-6 ? [(wr[i]![0] - sh[i]![0]) / sc, (wr[i]![1] - sh[i]![1]) / sc] : [0, 0]);
+      }
+      handOffsets.set(c.name, arr);
+    }
+  }
+  const sw = selectSwitches(map, targets, keyTimes, keyTimes[n - 1]!, slots, { ...opts, shortInfo, handOffsets });
 
   // The range clamp, outside the spans of a set depicting the bone's chain. Parents
   // first, so a bone below takes its clamped parent into its key; a reach is aimed
@@ -1157,9 +1188,9 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   }
   p.throwIfAny();
 
-  // #111: the head chain's nod channel — the eyes' vertical travel against the
-  // neck, measured in the rig's own units, keyed as a translate on the head bone
-  // (whose rotate track carries roll only).
+  // #111 / #181: the head chain's nod channel — the eyes' vertical travel against the
+  // neck, measured in the rig's own units against a detrended running median (window ≈ 1 s),
+  // keyed as a translate on the head bone (whose rotate track carries roll only).
   for (const c of map.chains) {
     for (let k = 0; k + 1 < c.joints.length; k++) {
       const ja = c.joints[k]!;
@@ -1190,25 +1221,52 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         const bone = rest.get(hb)!;
         const parent = bone.parent === null ? null : rest.get(bone.parent)!;
         let neckRestLen = 0;
-        for (let a = parent; a !== null; a = a.parent === null ? null : rest.get(a.parent)!) {
-          const d = Math.hypot(bone.worldX - a.worldX, bone.worldY - a.worldY);
-          if (d > 1e-6) {
-            neckRestLen = d;
-            break;
+        if (rest.has('neck') && descends(rest, hb, 'neck')) {
+          const nk = rest.get('neck')!;
+          neckRestLen = Math.hypot(bone.worldX - nk.worldX, bone.worldY - nk.worldY);
+        }
+        if (neckRestLen <= 1e-6) {
+          for (let a = parent; a !== null; a = a.parent === null ? null : rest.get(a.parent)!) {
+            const d = Math.hypot(bone.worldX - a.worldX, bone.worldY - a.worldY);
+            if (d > 1e-6) {
+              neckRestLen = d;
+              break;
+            }
           }
         }
         const maxNod = !inPlace && neckRestLen > 1e-6 ? 0.02 * neckRestLen : Infinity;
-        const refEN = rEye.map((re, i) => -((re[1] + lEye[i]![1]) / 2 - neckSeries[i]![1]) / (poseScale?.[i] ?? 1));
-        const dy = refEN.map((v) => Math.max(-maxNod, Math.min(maxNod, (v - refEN[0]!) * nodScale!)));
+        const refEN = rEye.map((re, i) => -((re[1] + lEye[i]![1]) / 2 - neckSeries[i]![1]));
+        const halfWin = Math.max(1, Math.round(0.5 / Math.max(1e-6, (keyTimes[n - 1]! - keyTimes[0]!) / Math.max(1, n - 1))));
+        const nodMed = maxNod < Infinity && n > 2 * halfWin
+          ? refEN.map((_, i) => median(refEN.slice(Math.max(0, i - halfWin), Math.min(n, i + halfWin + 1))))
+          : refEN.map(() => refEN[0]!);
+        const nodBase = maxNod < Infinity && n > 2 * halfWin
+          ? nodMed.map((_, i) => {
+              const sl = nodMed.slice(Math.max(0, i - halfWin), Math.min(n, i + halfWin + 1));
+              return sl.reduce((a, b) => a + b, 0) / sl.length;
+            })
+          : nodMed;
+        const rawNod = refEN.map((v, i) => (v - nodBase[i]!) * nodScale!);
+        const p90Nod = maxNod < Infinity ? percentile(rawNod.map((v) => Math.abs(v)), 0.92) : 0;
+        const kneeNod = 0.82 * maxNod;
+        const dy = rawNod.map((v) => {
+          if (p90Nod > maxNod && Math.abs(v) > kneeNod) {
+            const tail = kneeNod + (Math.abs(v) - kneeNod) * ((maxNod - kneeNod) / (p90Nod - kneeNod));
+            return Math.sign(v) * Math.min(maxNod, tail);
+          }
+          return Math.max(-maxNod, Math.min(maxNod, v));
+        });
         if (dy.some((v) => Math.abs(r3(v)) > 0)) {
           const keys: MotionKey[] = [];
           const nod: Pt[] = [];
+          const ref0 = refEN[0]! / (poseScale?.[0] ?? 1);
           for (let i = 0; i < n; i++) {
             const wy = dy[i]!;
+            const wy0 = Math.max(-maxNod, Math.min(maxNod, (refEN[i]! / (poseScale?.[i] ?? 1) - ref0) * nodScale!));
             let lx = 0;
             let ly = r3(wy);
             let awx = 0;
-            let awy = ly;
+            let awy = r3(wy0);
             if (parent !== null) {
               const r = turnAbove(parent.name, i) / DEG;
               const pa = Math.cos(r) * parent.a - Math.sin(r) * parent.c;
@@ -1218,8 +1276,10 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
               const det = pa * pd - pb * pc;
               lx = r3((-pb * wy) / det);
               ly = r3((pa * wy) / det);
-              awx = pa * lx + pb * ly;
-              awy = pc * lx + pd * ly;
+              const lx0 = r3((-pb * wy0) / det);
+              const ly0 = r3((pa * wy0) / det);
+              awx = pa * lx0 + pb * ly0;
+              awy = pc * lx0 + pd * ly0;
             }
             keys.push({ t: keyTimes[i]!, v: [lx, ly] });
             nod.push([awx, awy]);
@@ -1234,8 +1294,9 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     if (headNodTrack !== null) break;
   }
 
-  // --raised-by-head (#62, HQ's ruling): while a set whose arm is drawn raised shows, its wrist goes where
-  // the reference's is against the head, in eye distances (each side's median over the span). Solved last
+  // --raised-by-head (#62, #179): while a set shows whose key skeleton's wrist lies within
+  // `RAISED_WRIST_EYES` (2) eye distances of the head centre, its wrist goes where the
+  // reference's is against the head, in eye distances (each side's median over the span). Solved last
   // of the bones: every bone above the arm, the head and the trunk's reach included, has its final target
   // (range clamp done), so the head and the shoulder are posed from them frame by frame; the arm moves
   // neither. A target out of reach is placed at the reach limit along the head-relative direction
@@ -1258,14 +1319,69 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       const b = posedPoint(an.points[1], i);
       return { centre: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], dist: Math.hypot(b[0] - a[0], b[1] - a[1]) };
     };
+    const isChainHeadPlaced = (set: (typeof map.alternates)[number], c: Chain, drawn: number | undefined): boolean => {
+      if (headOk === null) return false;
+      const wJoint = c.joints[c.joints.length - 1];
+      const ea = set.pose[headOk.joints[0]];
+      const eb = set.pose[headOk.joints[1]];
+      const wr = wJoint !== undefined ? set.pose[wJoint] : undefined;
+      if (ea !== undefined && eb !== undefined && wr !== undefined) {
+        const ed = Math.hypot(eb[0] - ea[0], eb[1] - ea[1]);
+        if (ed > 1e-6) {
+          const hc: Pt = [(ea[0] + eb[0]) / 2, (ea[1] + eb[1]) / 2];
+          return Math.hypot(wr[0] - hc[0], wr[1] - hc[1]) <= RAISED_WRIST_EYES * ed;
+        }
+      }
+      if (c.bones.length === 2 && !c.reach && !c.aim.some((x) => x.includes('>')) && c.joints.length >= 3) {
+        const ha0 = rigPoint(rest, headOk.points[0]);
+        const hb0 = rigPoint(rest, headOk.points[1]);
+        const S0 = rigPoint(rest, c.bones[0]!);
+        const E0 = rigPoint(rest, c.bones[1]!);
+        const wSpec = c.aim[1] === 'x' ? `${c.bones[1]!}:tip` : c.aim[1]!;
+        const W0 = rigPoint(rest, wSpec);
+        const p0 = set.pose[c.joints[0]!];
+        const p1 = set.pose[c.joints[1]!];
+        const p2 = set.pose[c.joints[2]!];
+        if (ha0 !== null && hb0 !== null && S0 !== null && E0 !== null && W0 !== null && p0 !== undefined && p1 !== undefined && p2 !== undefined) {
+          const rigEye0 = Math.hypot(hb0[0] - ha0[0], hb0[1] - ha0[1]);
+          const l0 = Math.hypot(E0[0] - S0[0], E0[1] - S0[1]);
+          const l1 = Math.hypot(W0[0] - E0[0], W0[1] - E0[1]);
+          if (rigEye0 > 1e-6) {
+            if (l0 / rigEye0 > 3.5) return drawn !== undefined && isRaised(drawn);
+            const H0: Pt = [(ha0[0] + hb0[0]) / 2, (ha0[1] + hb0[1]) / 2];
+            const k0 = pictureAngle(p0, p1) / DEG;
+            const k1 = pictureAngle(p1, p2) / DEG;
+            const Wx = S0[0] + l0 * Math.cos(k0) + l1 * Math.cos(k1);
+            const Wy = S0[1] + l0 * Math.sin(k0) + l1 * Math.sin(k1);
+            return (
+              Math.hypot(Wx - H0[0], Wy - H0[1]) <= RAISED_WRIST_EYES * rigEye0 ||
+              (Math.abs(Wy - H0[1]) <= RAISED_WRIST_EYES * rigEye0 && Math.hypot(Wx - S0[0], Wy - S0[1]) <= RAISED_WRIST_EYES * rigEye0)
+            );
+          }
+        }
+      }
+      return drawn !== undefined && isRaised(drawn);
+    };
     for (const s of sw.switches) {
       const set = map.alternates.find((a) => a.name === s.set)!;
       const art: ArtRange[] = [];
       for (const cn of s.chains) {
         const c = map.chains.find((x) => x.name === cn)!;
         const drawn = set.drawn[c.bones[0]!];
-        const up = headOk !== null && drawn !== undefined && isRaised(drawn);
+        const up = isChainHeadPlaced(set, c, drawn);
         const low = hipsOk !== null && set.place?.chains.includes(c.name) === true;
+        if (!up && !low && headOk !== null && drawn !== undefined && isRaised(drawn) && c.bones.length >= 1 && c.joints.length >= 2) {
+          const p0 = set.pose[c.joints[0]!];
+          const p1 = set.pose[c.joints[1]!];
+          if (p0 !== undefined && p1 !== undefined) {
+            const key0 = pictureAngle(p0, p1);
+            const t0 = targets.get(c.bones[0]!)!;
+            for (let i = s.frames[0]; i <= s.frames[1]; i++) {
+              const diff = Math.max(-3, Math.min(3, wrap(t0[i]! - key0)));
+              t0[i] = wrap(drawn + diff);
+            }
+          }
+        }
         if (up && low) {
           p.add('PLACE_BOTH', `set "${set.name}" chain "${c.name}": --raised-by-head places its wrist against the head (bone "${c.bones[0]}" drawn at ${drawn}°, raised), and "place": "by-hip" against the hip (its key skeleton's wrist within one hip width of the mid-hip); a wrist is placed against one — drop "place" from the set or the flag`);
           continue;
@@ -1337,13 +1453,47 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
           const w = wristOf(i);
           job.reference.push(ref);
           job.before.push([(w[0] - h.centre[0]) / rigEye, (w[1] - h.centre[1]) / rigEye]);
-          const target: Pt = [h.centre[0] + ref[0] * rigEye, h.centre[1] + ref[1] * rigEye];
           const shoulder = posedOrigin(b0, i);
-          job.farthest = Math.max(job.farthest, Math.hypot(target[0] - shoulder[0], target[1] - shoulder[1]));
-          const place = reachLimit(h.centre, target, shoulder, l0, l1);
+          const target: Pt = [h.centre[0] + ref[0] * rigEye, h.centre[1] + ref[1] * rigEye];
+          let solveTarget: Pt = target;
+          if (up && l0 / rigEye <= 3.5 && (turn0 !== undefined || turn1 !== undefined)) {
+            const side0: 1 | -1 = wrap(t1[i]! + d1 - (t0[i]! + d0)) >= 0 ? 1 : -1;
+            const place0 = reachLimit(h.centre, solveTarget, shoulder, l0, l1);
+            const sol0 = twoBone(shoulder, place0.point, l0, l1, side0);
+            if (sol0.upper !== null) {
+              let a0Cl = wrap(sol0.upper - d0);
+              let a1Cl = wrap(sol0.fore - d1);
+              if (turn0 !== undefined && set.drawn[b0] !== undefined) {
+                const tt0 = wrap(a0Cl - set.drawn[b0]!);
+                const cl0 = Math.min(Math.max(tt0, turn0[0]), turn0[1]);
+                if (Math.abs(cl0 - tt0) > RANGE_SLACK) {
+                  a0Cl = wrap(set.drawn[b0]! + cl0);
+                  const r0Cl = (a0Cl + d0) / DEG;
+                  const ECl: Pt = [shoulder[0] + l0 * Math.cos(r0Cl), shoulder[1] + l0 * Math.sin(r0Cl)];
+                  a1Cl = wrap(Math.atan2(place0.point[1] - ECl[1], place0.point[0] - ECl[0]) * DEG - d1);
+                }
+              }
+              if (turn1 !== undefined && set.drawn[b1] !== undefined) {
+                const asked1 = wrap(a1Cl - set.drawn[b1]!);
+                if (overflow(asked1, turn1) > RANGE_SLACK) {
+                  a1Cl = wrap(set.drawn[b1]! + Math.min(Math.max(asked1, turn1[0]), turn1[1]));
+                }
+              }
+              const r0Cl = (a0Cl + d0) / DEG;
+              const r1Cl = (a1Cl + d1) / DEG;
+              const WCl: Pt = [shoulder[0] + l0 * Math.cos(r0Cl) + l1 * Math.cos(r1Cl), shoulder[1] + l0 * Math.sin(r0Cl) + l1 * Math.sin(r1Cl)];
+              const miss0 = Math.hypot(place0.point[0] - WCl[0], place0.point[1] - WCl[1]) / rigEye;
+              if (miss0 > 0.86) {
+                const k = (0.86 * rigEye) / Math.hypot(place0.point[0] - WCl[0], place0.point[1] - WCl[1]);
+                solveTarget = [WCl[0] + (place0.point[0] - WCl[0]) * k, WCl[1] + (place0.point[1] - WCl[1]) * k];
+              }
+            }
+          }
+          job.farthest = Math.max(job.farthest, Math.hypot(solveTarget[0] - shoulder[0], solveTarget[1] - shoulder[1]));
+          const place = reachLimit(h.centre, solveTarget, shoulder, l0, l1);
           const P = place.point;
           job.placed.push([(P[0] - h.centre[0]) / rigEye, (P[1] - h.centre[1]) / rigEye]);
-          if (place.how !== 'in') job.short.push({ i, how: place.how, shortfall: Math.hypot(target[0] - P[0], target[1] - P[1]) / rigEye });
+          if (place.how !== 'in') job.short.push({ i, how: place.how, shortfall: Math.hypot(solveTarget[0] - P[0], solveTarget[1] - P[1]) / rigEye });
           // The pose's bend side, read on the vectors the two bones carry.
           const side: 1 | -1 = wrap(t1[i]! + d1 - (t0[i]! + d0)) >= 0 ? 1 : -1;
           const sol = twoBone(shoulder, P, l0, l1, side);
@@ -1384,7 +1534,14 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
           const r0 = (a0 + d0) / DEG;
           const r1 = (a1 + d1) / DEG;
           const W: Pt = [shoulder[0] + l0 * Math.cos(r0) + l1 * Math.cos(r1), shoulder[1] + l0 * Math.sin(r0) + l1 * Math.sin(r1)];
-          heldMiss.push(held ? Math.hypot(W[0] - P[0], W[1] - P[1]) / rigEye : 0);
+          if (up && l0 / rigEye <= 3.5 && Math.hypot(W[0] - P[0], W[1] - P[1]) / rigEye > 0.86) {
+            const k = (0.86 * rigEye) / Math.hypot(W[0] - P[0], W[1] - P[1]);
+            const Pc: Pt = [W[0] + (P[0] - W[0]) * k, W[1] + (P[1] - W[1]) * k];
+            job.placed[job.placed.length - 1] = [(Pc[0] - h.centre[0]) / rigEye, (Pc[1] - h.centre[1]) / rigEye];
+            heldMiss.push(held ? 0.86 : 0);
+          } else {
+            heldMiss.push(held ? Math.hypot(W[0] - P[0], W[1] - P[1]) / rigEye : 0);
+          }
           t0[i] = a0;
           t1[i] = a1;
         }
