@@ -105,6 +105,8 @@ interface RigOpts {
   extra?: Record<string, Record<string, Record<string, unknown>>>;
   /** More slots, after the limbs' (one with no `attachment` shows nothing at setup). */
   extraSlots?: Array<Record<string, unknown>>;
+  /** A sets.json (`rig-parts-sets/1`) to write beside rig.json. */
+  sets?: Record<string, unknown>;
 }
 
 /** Write `<dir>/rig/rig.json` and its images; returns the rig directory. */
@@ -143,6 +145,7 @@ function writeRig(dir: string, o: RigOpts = {}): string {
   }
   writeFileSync(join(rigDir, 'rig.json'), JSON.stringify({ spec: 'rigc-rig/1', name: 'stick', images: 'images', skeleton: { width: 400, height: 600 }, bones, slots, skins: { default: skin } }, null, 2));
   if (o.motion !== undefined) writeFileSync(join(rigDir, 'motion.json'), JSON.stringify(o.motion, null, 2));
+  if (o.sets !== undefined) writeFileSync(join(rigDir, 'sets.json'), JSON.stringify(o.sets, null, 2));
   return rigDir;
 }
 
@@ -6412,6 +6415,175 @@ describe('#173: body yaw reading from camera-normalised shoulder and hip width',
       expect(rMut.status).toBe(0);
       const mutRep = JSON.parse(readFileSync(mutRepFile, 'utf8')) as { body: { over45: unknown[] } };
       expect(mutRep.body.over45).toEqual([]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+
+  test('#173 Part 2: switches sets on face and body yaw with hysteresis and --switch-min, refuses unknown sets by name, and reports hides keyed by another track', () => {
+    // 60 frames at 30 fps (dt = 1/30, switchMin = 0.25s = 8 frames):
+    // - Face yaw:
+    //   - frames 1..4 (4 frames < 8): 50° spike -> NOT entered
+    //   - frames 5..14 (10 frames >= 8): 0°
+    //   - frames 15..22 (8 frames >= 8): 50° -> ENTERED at f15
+    //   - frame 23: 40° (>= 35° leave threshold) -> stays in T1!
+    //   - frames 24..59: 0° (< 35° for >= 8 frames) -> LEAVES at f24 (active span 15..23, 2 swaps)
+    // - Body yaw:
+    //   - frames 0..47: 0°
+    //   - frames 48..59 (12 frames >= 8): 75° -> ENTERED at f48, never leaves before end (active span 48..59, 1 swap)
+    const m: Motion = { ...BASE, n: N, dt: DT, hip: () => [0, 0], trunk: () => 90, rt: () => -90, rs: () => -90, lt: () => -90, ls: () => -90 };
+    const pose = poseDoc(m, (i, j) => {
+      const neck = (j.neck as { at: Pt }).at;
+      const midEye: Pt = [neck[0], neck[1] - 35];
+      const dEye = 12;
+      const dEar = 24;
+      j.r_eye = { state: 'observed', at: [midEye[0] - dEye / 2, midEye[1]], score: 0.95 };
+      j.l_eye = { state: 'observed', at: [midEye[0] + dEye / 2, midEye[1]], score: 0.95 };
+      j.r_ear = { state: 'observed', at: [midEye[0] - dEar / 2, midEye[1] + 5], score: 0.95 };
+      j.l_ear = { state: 'observed', at: [midEye[0] + dEar / 2, midEye[1] + 5], score: 0.95 };
+
+      const fYaw = (i >= 1 && i <= 4) || (i >= 15 && i <= 22) ? 50 : i === 23 ? 40 : 0;
+      const ty = Math.tan(fYaw * RAD);
+      j.nose = { state: 'observed', at: [midEye[0] - (ty * dEye) / 1.25, midEye[1] + 5], score: 0.95 };
+
+      const bDeg = i >= 48 ? 75 : 0;
+      const c = Math.cos((bDeg * Math.PI) / 180);
+      const rSh = j.r_shoulder!.at as Pt;
+      const lSh = j.l_shoulder!.at as Pt;
+      const mShX = (rSh[0] + lSh[0]) / 2;
+      const halfSh = ((lSh[0] - rSh[0]) / 2) * c;
+      j.r_shoulder = { ...j.r_shoulder!, at: [mShX - halfSh, rSh[1]] };
+      j.l_shoulder = { ...j.l_shoulder!, at: [mShX + halfSh, lSh[1]] };
+
+      const rHip = j.r_hip!.at as Pt;
+      const lHip = j.l_hip!.at as Pt;
+      const mHipX = (rHip[0] + lHip[0]) / 2;
+      const halfHip = ((lHip[0] - rHip[0]) / 2) * c;
+      j.r_hip = { ...j.r_hip!, at: [mHipX - halfHip, rHip[1]] };
+      j.l_hip = { ...j.l_hip!, at: [mHipX + halfHip, lHip[1]] };
+      if (bDeg > 0) {
+        j.neck = { ...j.neck!, at: [neck[0] - 4, neck[1]] };
+      }
+    });
+
+    const rigOpts: RigOpts = {
+      bones: (bs) => [...bs, { name: 'yaw_dial', parent: 'root' }],
+      extraSlots: [
+        { name: 'head_slot', bone: 'neck', attachment: 'head_base' },
+        { name: 'ear_l', bone: 'neck', attachment: 'ear_base' },
+      ],
+      extra: {
+        head_slot: {
+          head_base: { image: 'seg.png', x: 0, y: 0 },
+          T1_head: { image: 'seg.png', x: 0, y: 0 },
+          T8_head: { image: 'seg.png', x: 0, y: 0 },
+        },
+        ear_l: {
+          ear_base: { image: 'seg.png', x: 0, y: 0 },
+          T8_ear: { image: 'seg.png', x: 0, y: 0 },
+        },
+        sleeve_r0: {
+          T8_sleeve_r0: { image: 'seg.png', x: 30, y: 0, rotation: 90 },
+        },
+      },
+      sets: {
+        spec: 'rig-parts-sets/1',
+        sets: {
+          T1: { slots: { head_slot: 'T1_head' }, hides: ['ear_l'] },
+          T8: { slots: { head_slot: 'T8_head', ear_l: 'T8_ear', sleeve_r0: 'T8_sleeve_r0' }, hides: ['sleeve_l0'] },
+        },
+      },
+    };
+
+    // Unknown set in map.json is refused by name under MAP_SET_EXISTS.
+    const cBad = setup({
+      rig: rigOpts,
+      map: {
+        ...baseMap(),
+        body: { sets: [{ set: 'NO_SUCH_SET', above: 45 }] },
+      },
+      pose,
+    });
+    const rBad = retarget(cBad, ['--bends', 'clamp']);
+    expect(rBad.status).toBe(1);
+    expect(rBad.stderr).toContain('MAP_SET_EXISTS: "body.sets" — set "NO_SUCH_SET" is not in the rig; its sets are T1, T8');
+
+    // Valid map with T1 on face.yaw.sets and T8 on body.sets.
+    const c = setup({
+      rig: rigOpts,
+      map: {
+        ...baseMap(),
+        face: {
+          yaw: {
+            bone: 'yaw_dial',
+            range: [-15, 15],
+            sets: [{ set: 'T1', above: 45 }],
+          },
+        },
+        body: {
+          sets: [{ set: 'T8', above: 45 }],
+        },
+      },
+      pose,
+    });
+    const repFile = join(c.dir, 'report_sets.json');
+    const r = retarget(c, ['--bends', 'clamp', '--switch-min', '0.25', '--report', repFile]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+
+    const faceLines = linesOf(r, 'FACE');
+    const bodyLines = linesOf(r, 'BODY');
+    expect(faceLines[0]).toContain('sets set "T1" (≥ 45°, leave < 35°): frames 15–23 (+40.0° … +50.0°) (2 swaps); hides keyed by another track: slot "ear_l" (slot "ear_l" attachment (set "T8"))');
+    expect(bodyLines[0]).toContain('sets set "T8" (≥ 45°, leave < 35°): frames 48–59 (+75.1° … +75.1°) (1 swap)');
+
+    // Check attachment keys on head_slot, ear_l, sleeve_r0, sleeve_l0.
+    const motion = JSON.parse(readFileSync(c.out, 'utf8')) as {
+      animations: { dance: { tracks: Array<{ slot?: string; property: string; keys: Array<{ t: number; v: string | null }> }> } };
+    };
+    const slotTrack = (s: string) => motion.animations.dance.tracks.find((tr) => tr.slot === s && tr.property === 'attachment');
+    // head_slot enters T1 at f15 (t = 15/30 = 0.5), leaves T1 back to head_base at f24 (t = 24/30 = 0.8), and enters T8 at f48 (t = 48/30 = 1.6).
+    expect(slotTrack('head_slot')?.keys).toEqual([
+      { t: 0.5, v: 'T1_head' },
+      { t: 0.8, v: 'head_base' },
+      { t: 1.6, v: 'T8_head' },
+    ]);
+    // ear_l is hidden by T1 on 15..23, restored to ear_base at f24, and switched to T8_ear by T8 at f48.
+    expect(slotTrack('ear_l')?.keys).toEqual([
+      { t: 0.5, v: null },
+      { t: 0.8, v: 'ear_base' },
+      { t: 1.6, v: 'T8_ear' },
+    ]);
+    // sleeve_l0 is hidden by T8 at f48 and never left before the end (1 key).
+    expect(slotTrack('sleeve_l0')?.keys).toEqual([
+      { t: 1.6, v: null },
+    ]);
+
+    // Mutant: if selectYawSets ignores --switch-min and enters on any single frame >= above, the 4-frame spike 1..4 flips T1 (4 swaps > 2).
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm173p2-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'face.ts');
+      const from = 'if (spanSec(i, j) >= switchMin - 1e-9) {';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from).length).toBeGreaterThanOrEqual(2);
+      writeFileSync(path, before.replaceAll(from, 'if (true) {'));
+      const cMut = setup({
+        rig: rigOpts,
+        map: {
+          ...baseMap(),
+          face: { yaw: { bone: 'yaw_dial', range: [-15, 15], sets: [{ set: 'T1', above: 45 }] } },
+          body: { sets: [{ set: 'T8', above: 45 }] },
+        },
+        pose,
+      });
+      const mutRepFile = join(cMut.dir, 'report_mut.json');
+      const rMut = retarget(cMut, ['--bends', 'clamp', '--switch-min', '0.25', '--report', mutRepFile], join(d, 'cli.ts'));
+      expect(rMut.status).toBe(0);
+      const mutRep = JSON.parse(readFileSync(mutRepFile, 'utf8')) as { face: { sets: Array<{ swaps: number }> } };
+      expect(mutRep.face.sets[0]!.swaps).toBeGreaterThan(2);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }

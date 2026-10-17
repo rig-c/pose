@@ -101,16 +101,23 @@ export interface AlternateSet {
   /** `place: "by-hip"` (rig-c/pose#93): the chains whose wrist `pose` puts within one hip width of the mid-hip, their wrists placed by the offset from the hip while the set shows. Absent or null: the pose's angles. */
   place?: { by: 'hip'; chains: string[] } | null;
 }
+export interface YawSet {
+  set: string;
+  above: number;
+}
 export interface FaceAxis {
   bone: string;
   range: [number, number];
+  sets?: YawSet[];
 }
 export interface FaceMap {
   yaw?: FaceAxis;
   pitch?: FaceAxis;
+  sets?: YawSet[];
 }
 export interface BodyMap {
   yaw?: FaceAxis;
+  sets?: YawSet[];
 }
 export interface JointMap {
   chains: Chain[];
@@ -119,6 +126,13 @@ export interface JointMap {
   face?: FaceMap;
   body?: BodyMap;
 }
+
+/** An alternate attachment set from `sets.json` (`rig-parts-sets/1`, `rig-c/pose#173`). */
+export interface RigSet {
+  slots: Record<string, string>;
+  hides: string[];
+}
+export type RigSets = ReadonlyMap<string, RigSet>;
 
 /** What a slot of the built rig shows at setup, and every attachment any skin gives it. */
 export interface RigSlot {
@@ -254,18 +268,55 @@ export function readMap(text: string, where: string): JointMap {
   return { chains, translate, alternates, ...(face === undefined ? {} : { face }), ...(body === undefined ? {} : { body }) };
 }
 
+function readYawSets(p: Problems, where: string, raw: unknown, shapeCode: string): YawSet[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    p.add(shapeCode, `${where} is ${typeName(raw)}; it must be a non-empty array of { set, above }`);
+    return undefined;
+  }
+  const out: YawSet[] = [];
+  const seen = new Set<string>();
+  raw.forEach((entry: unknown, i: number) => {
+    const ew = `${where}[${i}]`;
+    if (!isObject(entry)) {
+      p.add(shapeCode, `${ew} is ${typeName(entry)}; it is { set, above }`);
+      return;
+    }
+    refuseUnknownKeys(p, 'MAP_KEYS', ew, entry, ['set', 'above']);
+    const set = typeof entry.set === 'string' && entry.set !== '' ? entry.set : null;
+    if (set === null) p.add('MAP_SET_NAME', `${ew} "set" is ${typeName(entry.set)}; it must be a non-empty string`);
+    else if (seen.has(set)) p.add('MAP_SET_NAME', `${ew} "set" "${set}" names two entries`);
+    if (set !== null) seen.add(set);
+    const above = typeof entry.above === 'number' && Number.isFinite(entry.above) && entry.above > 0 ? entry.above : null;
+    if (above === null) p.add('MAP_SET_ABOVE', `${ew} "above" is ${JSON.stringify(entry.above)}; it must be a positive finite number of degrees`);
+    if (set !== null && above !== null) out.push({ set, above });
+  });
+  return out.length > 0 ? out : undefined;
+}
+
+export function faceYawSets(face: FaceMap | undefined): YawSet[] | undefined {
+  return face?.yaw?.sets ?? face?.sets;
+}
+
+export function bodyYawSets(body: BodyMap | undefined): YawSet[] | undefined {
+  return body?.sets ?? body?.yaw?.sets;
+}
+
 function readFaceMap(p: Problems, where: string, raw: unknown): FaceMap | undefined {
   const fw = `${where} "face"`;
   if (!isObject(raw)) {
-    p.add('MAP_FACE_SHAPE', `${fw} is ${typeName(raw)}; it is { yaw?: { bone, range: [min, max] }, pitch?: { bone, range: [min, max] } }`);
+    p.add('MAP_FACE_SHAPE', `${fw} is ${typeName(raw)}; it is { yaw?: { bone, range: [min, max], sets? }, pitch?: { bone, range: [min, max] }, sets? }`);
     return undefined;
   }
-  refuseUnknownKeys(p, 'MAP_KEYS', fw, raw, ['yaw', 'pitch']);
-  if (!('yaw' in raw) && !('pitch' in raw)) {
+  refuseUnknownKeys(p, 'MAP_KEYS', fw, raw, ['yaw', 'pitch', 'sets']);
+  if (!('yaw' in raw) && !('pitch' in raw) && !('sets' in raw)) {
     p.add('MAP_FACE_SHAPE', `${fw} names neither "yaw" nor "pitch"; it must name at least one axis`);
     return undefined;
   }
   const out: FaceMap = {};
+  if ('sets' in raw) {
+    const sets = readYawSets(p, `${fw} "sets"`, raw.sets, 'MAP_FACE_SHAPE');
+    if (sets !== undefined) out.sets = sets;
+  }
   for (const axis of ['yaw', 'pitch'] as const) {
     if (!(axis in raw)) continue;
     const aw = `${fw} "${axis}"`;
@@ -274,14 +325,20 @@ function readFaceMap(p: Problems, where: string, raw: unknown): FaceMap | undefi
       p.add('MAP_FACE_SHAPE', `${aw} is ${typeName(ax)}; it is { bone, range: [min, max] }`);
       continue;
     }
-    refuseUnknownKeys(p, 'MAP_KEYS', aw, ax, ['bone', 'range']);
-    const bone = typeof ax.bone === 'string' && ax.bone !== '' ? ax.bone : null;
-    if (bone === null) p.add('MAP_FACE_BONE', `${aw} "bone" is ${typeName(ax.bone)}; it must name a bone`);
-    const v = ax.range;
-    if (!Array.isArray(v) || v.length !== 2 || !v.every((x) => typeof x === 'number' && Number.isFinite(x)) || (v[0] as number) > 0 || (v[1] as number) < 0 || (v[0] as number) >= (v[1] as number)) {
-      p.add('MAP_FACE_RANGE', `${aw} "range" is ${JSON.stringify(v)}; it must be [min, max], two finite numbers of degrees with min ≤ 0 ≤ max and min < max`);
-    } else if (bone !== null) {
-      out[axis] = { bone, range: [v[0] as number, v[1] as number] };
+    refuseUnknownKeys(p, 'MAP_KEYS', aw, ax, axis === 'yaw' ? ['bone', 'range', 'sets'] : ['bone', 'range']);
+    const sets = axis === 'yaw' && 'sets' in ax ? readYawSets(p, `${aw} "sets"`, ax.sets, 'MAP_FACE_SHAPE') : undefined;
+    const hasBoneOrRange = 'bone' in ax || 'range' in ax || !('sets' in ax);
+    if (hasBoneOrRange) {
+      const bone = typeof ax.bone === 'string' && ax.bone !== '' ? ax.bone : null;
+      if (bone === null) p.add('MAP_FACE_BONE', `${aw} "bone" is ${typeName(ax.bone)}; it must name a bone`);
+      const v = ax.range;
+      if (!Array.isArray(v) || v.length !== 2 || !v.every((x) => typeof x === 'number' && Number.isFinite(x)) || (v[0] as number) > 0 || (v[1] as number) < 0 || (v[0] as number) >= (v[1] as number)) {
+        p.add('MAP_FACE_RANGE', `${aw} "range" is ${JSON.stringify(v)}; it must be [min, max], two finite numbers of degrees with min ≤ 0 ≤ max and min < max`);
+      } else if (bone !== null) {
+        out[axis] = { bone, range: [v[0] as number, v[1] as number], ...(sets === undefined ? {} : { sets }) };
+      }
+    } else if (sets !== undefined) {
+      out.sets = sets;
     }
   }
   return out;
@@ -290,29 +347,43 @@ function readFaceMap(p: Problems, where: string, raw: unknown): FaceMap | undefi
 function readBodyMap(p: Problems, where: string, raw: unknown): BodyMap | undefined {
   const bw = `${where} "body"`;
   if (!isObject(raw)) {
-    p.add('MAP_BODY_SHAPE', `${bw} is ${typeName(raw)}; it is { yaw: { bone, range: [min, max] } }`);
+    p.add('MAP_BODY_SHAPE', `${bw} is ${typeName(raw)}; it is { yaw?: { bone, range: [min, max] }, sets?: [{ set, above }] }`);
     return undefined;
   }
-  refuseUnknownKeys(p, 'MAP_KEYS', bw, raw, ['yaw']);
-  if (!('yaw' in raw)) {
-    p.add('MAP_BODY_SHAPE', `${bw} does not name "yaw"; it must name "yaw"`);
+  refuseUnknownKeys(p, 'MAP_KEYS', bw, raw, ['yaw', 'sets']);
+  if (!('yaw' in raw) && !('sets' in raw)) {
+    p.add('MAP_BODY_SHAPE', `${bw} does not name "yaw" or "sets"; it must name at least one`);
     return undefined;
   }
-  const aw = `${bw} "yaw"`;
-  const ax = raw.yaw;
-  if (!isObject(ax)) {
-    p.add('MAP_BODY_SHAPE', `${aw} is ${typeName(ax)}; it is { bone, range: [min, max] }`);
-    return undefined;
+  const out: BodyMap = {};
+  if ('sets' in raw) {
+    const sets = readYawSets(p, `${bw} "sets"`, raw.sets, 'MAP_BODY_SHAPE');
+    if (sets !== undefined) out.sets = sets;
   }
-  refuseUnknownKeys(p, 'MAP_KEYS', aw, ax, ['bone', 'range']);
-  const bone = typeof ax.bone === 'string' && ax.bone !== '' ? ax.bone : null;
-  if (bone === null) p.add('MAP_BODY_BONE', `${aw} "bone" is ${typeName(ax.bone)}; it must name a bone`);
-  const v = ax.range;
-  if (!Array.isArray(v) || v.length !== 2 || !v.every((x) => typeof x === 'number' && Number.isFinite(x)) || (v[0] as number) > 0 || (v[1] as number) < 0 || (v[0] as number) >= (v[1] as number)) {
-    p.add('MAP_BODY_RANGE', `${aw} "range" is ${JSON.stringify(v)}; it must be [min, max], two finite numbers of degrees with min ≤ 0 ≤ max and min < max`);
-    return undefined;
+  if ('yaw' in raw) {
+    const aw = `${bw} "yaw"`;
+    const ax = raw.yaw;
+    if (!isObject(ax)) {
+      p.add('MAP_BODY_SHAPE', `${aw} is ${typeName(ax)}; it is { bone, range: [min, max] }`);
+      return undefined;
+    }
+    refuseUnknownKeys(p, 'MAP_KEYS', aw, ax, ['bone', 'range', 'sets']);
+    const sets = 'sets' in ax ? readYawSets(p, `${aw} "sets"`, ax.sets, 'MAP_BODY_SHAPE') : undefined;
+    const hasBoneOrRange = 'bone' in ax || 'range' in ax || !('sets' in ax);
+    if (hasBoneOrRange) {
+      const bone = typeof ax.bone === 'string' && ax.bone !== '' ? ax.bone : null;
+      if (bone === null) p.add('MAP_BODY_BONE', `${aw} "bone" is ${typeName(ax.bone)}; it must name a bone`);
+      const v = ax.range;
+      if (!Array.isArray(v) || v.length !== 2 || !v.every((x) => typeof x === 'number' && Number.isFinite(x)) || (v[0] as number) > 0 || (v[1] as number) < 0 || (v[0] as number) >= (v[1] as number)) {
+        p.add('MAP_BODY_RANGE', `${aw} "range" is ${JSON.stringify(v)}; it must be [min, max], two finite numbers of degrees with min ≤ 0 ≤ max and min < max`);
+        return undefined;
+      }
+      if (bone !== null) out.yaw = { bone, range: [v[0] as number, v[1] as number], ...(sets === undefined ? {} : { sets }) };
+    } else if (sets !== undefined) {
+      out.sets = sets;
+    }
   }
-  return bone === null ? undefined : { yaw: { bone, range: [v[0] as number, v[1] as number] } };
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 const SET_SHAPE = '{ name, slots: { "<slot>": "<attachment>" }, hides?: [slot], chains: [chain], pose: { "<joint>": [x, y] }, drawn?: { "<bone>": deg }, offsets?: { "<bone>": [dx, dy] }, turn?: { "<bone>": [min, max] }, frames?: [[first, last], …], place?: "by-hip" }';
@@ -568,8 +639,15 @@ export function rigPoint(rest: Rest, spec: string): [number, number] | null {
   return pointAt(rest, new Map([...rest].map(([n, b]) => [n, b.length])), spec);
 }
 
+export function knownSetsOf(map: JointMap, rigSets: RigSets = new Map()): Map<string, RigSet> {
+  const out = new Map<string, RigSet>();
+  for (const [k, v] of rigSets) out.set(k, v);
+  for (const a of map.alternates) if (!out.has(a.name)) out.set(a.name, { slots: a.slots, hides: a.hides });
+  return out;
+}
+
 /** Check every name the map gives against the rig; every miss is named. */
-export function resolveMap(map: JointMap, rest: Rest, where: string, slots: RigSlots = new Map()): void {
+export function resolveMap(map: JointMap, rest: Rest, where: string, slots: RigSlots = new Map(), rigSets: RigSets = new Map()): void {
   const p = new Problems();
   const all = [...rest.keys()];
   const listed = all.length <= 40 ? all.join(', ') : `${all.slice(0, 40).join(', ')} … (${all.length} in all)`;
@@ -663,6 +741,33 @@ export function resolveMap(map: JointMap, rest: Rest, where: string, slots: RigS
       owner.set(ax.bone, label);
       const o = rest.get(ax.bone)!;
       if (Math.hypot(o.a, o.c) < 1e-9) p.add('MAP_AIM_LENGTH', `${label} — bone "${ax.bone}" has a collapsed x axis at setup (scale 0)`);
+    }
+  }
+  const knownSets = knownSetsOf(map, rigSets);
+  const allSets = [...knownSets.keys()];
+  const setsListed = allSets.length === 0 ? 'none' : allSets.join(', ');
+  const allSlots = [...slots.keys()];
+  const slotsListed = allSlots.length === 0 ? 'none' : allSlots.length <= 40 ? allSlots.join(', ') : `${allSlots.slice(0, 40).join(', ')} … (${allSlots.length} in all)`;
+  for (const [label, declared] of [['"face.yaw.sets"', faceYawSets(map.face)], ['"body.sets"', bodyYawSets(map.body)]] as const) {
+    if (declared === undefined) continue;
+    for (const s of declared) {
+      const def = knownSets.get(s.set);
+      if (def === undefined) {
+        p.add('MAP_SET_EXISTS', `${label} — set "${s.set}" is not in the rig; its sets are ${setsListed}`);
+        continue;
+      }
+      if (slots.size === 0) continue;
+      for (const [slot, att] of Object.entries(def.slots)) {
+        const rs = slots.get(slot);
+        if (rs === undefined) p.add('MAP_ALT_SLOT', `set "${s.set}" — slot "${slot}" is not in the rig; its slots are ${slotsListed}`);
+        else if (!rs.attachments.has(att)) {
+          const has = [...rs.attachments];
+          p.add('MAP_ALT_ATTACHMENT', `set "${s.set}" — slot "${slot}" has no attachment "${att}" under any skin; it has ${has.length === 0 ? 'none' : has.join(', ')}`);
+        }
+      }
+      for (const h of def.hides) {
+        if (!slots.has(h)) p.add('MAP_ALT_HIDES', `set "${s.set}" hides slot "${h}", which is not in the rig; its slots are ${slotsListed}`);
+      }
     }
   }
   resolveAlternates(p, map.alternates, slots);
