@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { poseRawSetup, readModel, type CompiledDocument } from 'rig-c/core';
-import type { InheritMode, Rest, RestBone, RigSlot, RigSlots } from './map.ts';
+import type { InheritMode, Rest, RestBone, RigSet, RigSets, RigSlot, RigSlots } from './map.ts';
 import { isObject, parseJson, Problems, Refusal, typeName } from './problems.ts';
 
 export interface RigInput {
@@ -23,6 +23,32 @@ export interface RigInput {
   name: string;
   /** The motion spec the rig is built with, or null when it has none. */
   motion: string | null;
+  /** Any alternate sets declared in `sets.json` (`rig-parts-sets/1`) beside `rig.json`. */
+  sets: RigSets;
+}
+
+function readRigSets(path: string): RigSets {
+  const out = new Map<string, RigSet>();
+  if (!existsSync(path)) return out;
+  const doc = parseJson(readFileSync(path, 'utf8'), path, 'SETS_JSON');
+  if (!isObject(doc) || (doc.spec !== 'rig-parts-sets/1' && doc.spec !== 'spine-parts-sets/1') || (!isObject(doc.sets) && !Array.isArray(doc.sets))) {
+    throw new Refusal([{ code: 'SETS_SPEC', text: `${path} is not a rig-parts-sets/1 spec with a "sets" object` }]);
+  }
+  const addSet = (name: string, s: unknown) => {
+    if (!isObject(s) || !isObject(s.slots)) return;
+    const slots: Record<string, string> = {};
+    for (const [k, v] of Object.entries(s.slots)) if (typeof v === 'string') slots[k] = v;
+    const hides = Array.isArray(s.hides) ? s.hides.filter((h): h is string => typeof h === 'string') : [];
+    out.set(name, { slots, hides });
+  };
+  if (Array.isArray(doc.sets)) {
+    for (const s of doc.sets) {
+      if (isObject(s) && typeof s.name === 'string') addSet(s.name, s);
+    }
+  } else {
+    for (const [name, s] of Object.entries(doc.sets)) addSet(name, s);
+  }
+  return out;
 }
 
 /**
@@ -49,7 +75,8 @@ export function resolveRig(path: string, baseMotion: string | undefined): RigInp
   if (!isObject(doc) || doc.spec !== 'rigc-rig/1' || typeof doc.name !== 'string') {
     throw new Refusal([{ code: 'RIG_SPEC', text: `${rig} is not a rig spec: "spec" is ${isObject(doc) ? typeName(doc.spec) : typeName(doc)} and "name" ${isObject(doc) ? typeName(doc.name) : '-'}; it must be "rigc-rig/1" with a name` }]);
   }
-  return { rig, name: doc.name, motion };
+  const sets = readRigSets(join(dirname(rig), 'sets.json'));
+  return { rig, name: doc.name, motion, sets };
 }
 
 /** The motion spec the rig is built with, or an empty one under its name. */

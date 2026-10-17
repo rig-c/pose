@@ -7,7 +7,7 @@
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { readMap, resolveMap, type JointMap, type Rest } from './map.ts';
+import { knownSetsOf, readMap, resolveMap, type JointMap, type Rest } from './map.ts';
 import { cleanLine, inferredSource } from './clean.ts';
 import { convertCoco17, personTrack, readPoseSequence, TRAVEL_IN_PLACE, type CameraFrame } from './pose.ts';
 import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './problems.ts';
@@ -108,9 +108,25 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     const rigc = rigcVersion();
     const rest = restOf(doc0);
     const slots = slotsOf(doc0);
-    resolveMap(map, rest, a.map, slots);
+    resolveMap(map, rest, a.map, slots, input.sets);
 
-    const r = retarget(rest, map, frames, times, { ...a, ...(seq.travel !== undefined ? { travel: seq.travel } : {}) }, slots);
+    const r = retarget(rest, map, frames, times, { ...a, ...(seq.travel !== undefined ? { travel: seq.travel } : {}) }, slots, input.sets);
+    if (fragment.length > 0 && ((r.face?.sets?.length ?? 0) > 0 || (r.body?.sets?.length ?? 0) > 0)) {
+      const known = knownSetsOf(map, input.sets);
+      for (const s of [...(r.face?.sets ?? []), ...(r.body?.sets ?? [])]) {
+        const def = known.get(s.set);
+        if (def === undefined) continue;
+        for (const h of def.hides) {
+          for (const tr of fragment) {
+            const tgt = targetOf(tr);
+            if (tgt?.kind === 'slot' && tgt.name === h) {
+              const by = `slot "${h}" ${tr.property} (--merge ${a.merge})`;
+              if (!s.hidesKeyed.some((x) => x.slot === h && x.by === by)) s.hidesKeyed.push({ slot: h, by });
+            }
+          }
+        }
+      }
+    }
     say(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)${a.legScale !== undefined && a.legScale !== 'off' ? `, leg-scale ${a.legScale[0]}–${a.legScale[1]}` : ''}${a.plantFeet === true ? ', plant-feet' : ''}${a.stance !== undefined && a.stance !== 'off' ? `, stance ${a.stance}` : ''}${a.raisedByHead === true ? ', raised-by-head' : ''}${a.carryIdle === true ? ', carry-idle' : ''}${a.merge !== undefined ? `, merge ${a.merge}` : ''}${a.reduce !== undefined ? `, reduce ${a.reduce}°${a.reduceHip !== undefined ? ` (hip ${a.reduceHip} units)` : ''}` : ''}`);
     say(`  RIGC   rig-c ${rigc.version} (${rigc.entry}) gates and poses this run`);
     say(`  CLEAN  ${cleanLine(seq.cleaned!)}`);
@@ -285,7 +301,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     else if (f.meshes.length === 0) say(`  FOLD   rigc render --folds at ${fps} fps: no mesh folds`);
     else for (const m of f.meshes) say(`  FOLD   mesh "${m.attachment}" (slot "${m.slot}") folds on ${m.times.length} frame(s) at ${fps} fps: t=${spans(m.times, 1 / fps)}`);
     const uncovered = f.meshes === null ? null : uncoveredFolds(f.meshes, r.shown, r.times, slots, (slot, att) => chainsMoving(attachmentBones(doc, slot, att), rest, map));
-    if (uncovered !== null && map.alternates.length > 0) {
+    if (uncovered !== null && (map.alternates.length > 0 || (r.face?.sets?.length ?? 0) > 0 || (r.body?.sets?.length ?? 0) > 0)) {
       for (const u of uncovered) say(`  UNCOVERED mesh "${u.attachment}" (slot "${u.slot}"; chains ${u.chains.length === 0 ? 'none' : u.chains.join(', ')}) folds with no switch covering it on ${u.times.length} frame(s): t=${spans(u.times, 1 / fps)}`);
     }
 
@@ -365,6 +381,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
                 read: { yaw: r.face.read.yaw, pitch: r.face.read.pitch },
                 ...(r.face.yaw === undefined ? {} : { yaw: { bone: r.face.yaw.bone, limits: r.face.yaw.limits, knee: r.face.yaw.knee, read: r.face.yaw.read, mapped: r.face.yaw.mapped, scale: r.face.yaw.scale, corr: r.face.yaw.corr } }),
                 ...(r.face.pitch === undefined ? {} : { pitch: { bone: r.face.pitch.bone, limits: r.face.pitch.limits, knee: r.face.pitch.knee, read: r.face.pitch.read, mapped: r.face.pitch.mapped, scale: r.face.pitch.scale, corr: r.face.pitch.corr } }),
+                ...(r.face.sets === undefined ? {} : { sets: r.face.sets }),
               },
             }),
         body: r.body === null
@@ -375,6 +392,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
               over45: r.body.over45,
               framesOver45: r.body.framesOver45,
               ...(r.body.yaw === undefined ? {} : { yaw: { bone: r.body.yaw.bone, limits: r.body.yaw.limits, knee: r.body.yaw.knee, read: r.body.yaw.read, mapped: r.body.yaw.mapped, scale: r.body.yaw.scale, corr: r.body.yaw.corr } }),
+              ...(r.body.sets === undefined ? {} : { sets: r.body.sets }),
             },
         legScale: r.legScale.map(({ scale: _scale, asked: _asked, ...rest }) => rest),
         pivot: r.pivot,

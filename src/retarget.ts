@@ -74,17 +74,17 @@
 import { screenToSpineDegrees } from 'rig-c/transform';
 import type { Body18 } from './joints.ts';
 import { isBody18, VIRTUAL } from './joints.ts';
-import type { Chain, JointMap, Rest, RigSlots } from './map.ts';
-import { aimAngle, aimEnds, descends, partBone, pointParts, rigPoint } from './map.ts';
+import type { Chain, JointMap, Rest, RigSets, RigSlots } from './map.ts';
+import { aimAngle, aimEnds, bodyYawSets, descends, faceYawSets, knownSetsOf, partBone, pointParts, rigPoint } from './map.ts';
 import type { Joint, Travel } from './pose.ts';
 import { TRAVEL_IN_PLACE } from './pose.ts';
 import { Problems, Refusal } from './problems.ts';
-import type { ArtRange, ByHip, Raised, ReachShort, SlotTrack, Switch, SwitchOptions } from './switch.ts';
+import type { ArtRange, AttachmentKey, ByHip, Raised, ReachShort, SlotTrack, Switch, SwitchOptions } from './switch.ts';
 import { clampArt, coveredChains, isRaised, measureArt, overflow, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
 import type { BlendHold, Closure, Feet, Floor, LegScale, PathPose, Posing, Side, Stance } from './legs.ts';
 import { figureScaleOf, holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, percentile, plantHip, posePath, rootOf, scaleSupport, SIDES, stanceOf, stanceRangeOf, STRAIGHT_PERCENTILE, supportsOf, tipOf, unshortenStanceShin } from './legs.ts';
-import type { BodyReading, FaceReading } from './face.ts';
-import { readBody, readFace, readFaceAngles } from './face.ts';
+import type { BodyReading, FaceReading, YawSetSwitch } from './face.ts';
+import { readBody, readFace, readFaceAngles, selectYawSets } from './face.ts';
 
 const DEG = 180 / Math.PI;
 
@@ -432,7 +432,7 @@ function pivotOf(rest: Rest, bone: string | null, legs: ReturnType<typeof legsOf
  * good, when a hinge's side cannot be read off a straight rest, and — with
  * `bends: 'refuse'` — when a hinge bends the wrong way.
  */
-export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partial<Record<Body18, Joint>>>, times: readonly number[], opts: RetargetOptions, slots: RigSlots = new Map()): Retarget {
+export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partial<Record<Body18, Joint>>>, times: readonly number[], opts: RetargetOptions, slots: RigSlots = new Map(), rigSets: RigSets = new Map()): Retarget {
   const p = new Problems();
   const n = frames.length;
   const t0 = times[0]!;
@@ -1526,6 +1526,8 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       targets.set(ax.bone, ax.keys.map((v, i) => wrap(rest0 + (above === null ? 0 : turn(above, i)) + v)));
       tracks.push({ bone: ax.bone, property: 'rotate', keys: ax.keys.map((v, i) => ({ t: keyTimes[i]!, v: [v] })) });
     }
+    const fSets = faceYawSets(map.face);
+    if (fSets !== undefined) face.sets = selectYawSets(face.read.rawYaw, fSets, keyTimes, opts.switchMin);
   }
   let body: BodyReading | null = null;
   {
@@ -1549,6 +1551,82 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         const above = mappedAbove(bodyAx.bone);
         targets.set(bodyAx.bone, bodyAx.keys.map((v, i) => wrap(rest0 + (above === null ? 0 : turn(above, i)) + v)));
         tracks.push({ bone: bodyAx.bone, property: 'rotate', keys: bodyAx.keys.map((v, i) => ({ t: keyTimes[i]!, v: [v] })) });
+      }
+      const bSets = bodyYawSets(map.body);
+      if (bSets !== undefined) body.sets = selectYawSets(body.read.rawYaw, bSets, keyTimes, opts.switchMin);
+    }
+  }
+  const activeYawSets: YawSetSwitch[] = [...(face?.sets ?? []), ...(body?.sets ?? [])];
+  if (activeYawSets.some((s) => s.spans.length > 0)) {
+    const known = knownSetsOf(map, rigSets);
+    const slotOrder: string[] = [];
+    for (const tr of sw.slotTracks) if (!slotOrder.includes(tr.slot)) slotOrder.push(tr.slot);
+    for (const s of activeYawSets) {
+      const def = known.get(s.set);
+      if (def === undefined) continue;
+      for (const sl of [...Object.keys(def.slots), ...def.hides]) {
+        if (!slotOrder.includes(sl)) slotOrder.push(sl);
+      }
+    }
+    const yawExactAt = new Map<string, Set<number>>();
+    for (const s of activeYawSets) {
+      const def = known.get(s.set);
+      if (def === undefined) continue;
+      const values: Array<[string, string | null]> = [...Object.entries(def.slots), ...def.hides.map((h): [string, null] => [h, null])];
+      for (const [sl, v] of values) {
+        if (!sw.shown.has(sl)) sw.shown.set(sl, Array.from({ length: n }, () => slots.get(sl)?.setup ?? null));
+        const row = sw.shown.get(sl)!;
+        for (const [lo, hi] of s.spans) {
+          for (let i = lo; i <= hi; i++) row[i] = v;
+          const exact = yawExactAt.get(sl) ?? new Set<number>();
+          exact.add(lo);
+          if (hi + 1 < n) exact.add(hi + 1);
+          yawExactAt.set(sl, exact);
+        }
+      }
+    }
+    const rebuilt: SlotTrack[] = [];
+    for (const sl of slotOrder) {
+      const row = sw.shown.get(sl);
+      if (row === undefined) continue;
+      let prev = slots.get(sl)?.setup ?? null;
+      const keys: AttachmentKey[] = [];
+      const exact = yawExactAt.get(sl);
+      row.forEach((v, i) => {
+        if (v === prev) return;
+        const t = i === 0 ? 0 : exact?.has(i) === true ? keyTimes[i]! : r6((keyTimes[i - 1]! + keyTimes[i]!) / 2);
+        keys.push({ t, v });
+        prev = v;
+      });
+      if (keys.length > 0) rebuilt.push({ slot: sl, property: 'attachment', keys });
+    }
+    sw.slotTracks.splice(0, sw.slotTracks.length, ...rebuilt);
+  }
+  if (activeYawSets.length > 0) {
+    const known = knownSetsOf(map, rigSets);
+    const otherSlotKeyers = new Map<string, string[]>();
+    const addKeyer = (sl: string, who: string) => {
+      const list = otherSlotKeyers.get(sl) ?? [];
+      if (!list.includes(who)) list.push(who);
+      otherSlotKeyers.set(sl, list);
+    };
+    for (const aSw of sw.switches) {
+      for (const sl of [...Object.keys(aSw.slots), ...aSw.hides]) addKeyer(sl, `set "${aSw.set}"`);
+    }
+    for (const s of activeYawSets) {
+      if (s.spans.length === 0) continue;
+      const def = known.get(s.set);
+      if (def === undefined) continue;
+      for (const sl of [...Object.keys(def.slots), ...def.hides]) addKeyer(sl, `set "${s.set}"`);
+    }
+    for (const s of activeYawSets) {
+      const def = known.get(s.set);
+      if (def === undefined) continue;
+      for (const h of def.hides) {
+        const keyers = (otherSlotKeyers.get(h) ?? []).filter((who) => who !== `set "${s.set}"`);
+        if (keyers.length > 0) {
+          s.hidesKeyed.push({ slot: h, by: `slot "${h}" attachment (${keyers.join(', ')})` });
+        }
       }
     }
   }

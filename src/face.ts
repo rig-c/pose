@@ -5,7 +5,7 @@
  * and map each configured axis into its declared range by compression (never
  * clipping, so motion changes at the extremes survive).
  */
-import type { BodyMap, FaceAxis, FaceMap } from './map.ts';
+import type { BodyMap, FaceAxis, FaceMap, YawSet } from './map.ts';
 
 type Pt = [number, number];
 
@@ -17,6 +17,21 @@ const DEG = 180 / Math.PI;
  * a piecewise-linear knee compresses only the overshoot `[k, peak]` into `[k, limit]`.
  */
 export const FACE_KNEE = 0.8;
+
+/** Hysteresis in degrees for leaving a yaw-selected set (`leave = above - 10°`, `rig-c/pose#173`). */
+export const SET_HYSTERESIS_DEG = 10;
+
+export interface YawSetSwitch {
+  set: string;
+  above: number;
+  leave: number;
+  /** Inclusive `[first, last]` frame spans where the set is shown. */
+  spans: Array<[number, number]>;
+  /** Total number of attachment transitions (enter + leave boundaries inside the clip). */
+  swaps: number;
+  /** Any `hides` slot of this set that is also keyed by another track, with the track that keys it. */
+  hidesKeyed: Array<{ slot: string; by: string }>;
+}
 
 export interface FaceSpan {
   min: number;
@@ -51,6 +66,7 @@ export interface FaceReading {
   };
   yaw?: FaceAxisReading;
   pitch?: FaceAxisReading;
+  sets?: YawSetSwitch[];
 }
 
 const r3 = (v: number): number => {
@@ -246,6 +262,26 @@ export function readFace(
 const f1 = (x: number): string => x.toFixed(1);
 const sg = (x: number): string => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(1)}`;
 
+function formatYawSets(sets: readonly YawSetSwitch[] | undefined, raw: readonly number[]): string {
+  if (sets === undefined || sets.length === 0) return '';
+  const parts = sets.map((s) => {
+    const spanStr = s.spans.length === 0
+      ? 'none (0 swaps)'
+      : `${s.spans.map(([lo, hi]) => {
+          const slice = raw.slice(lo, hi + 1);
+          const sMin = Math.min(...slice);
+          const sMax = Math.max(...slice);
+          const where = lo === hi ? `frame ${lo}` : `frames ${lo}–${hi}`;
+          return `${where} (${lo === hi ? `${sg(sMax)}°` : `${sg(sMin)}° … ${sg(sMax)}°`})`;
+        }).join(', ')} (${s.swaps} swap${s.swaps === 1 ? '' : 's'})`;
+    const hidesStr = s.hidesKeyed.length === 0
+      ? ''
+      : `; hides keyed by another track: ${s.hidesKeyed.map((h) => `slot "${h.slot}" (${h.by})`).join(', ')}`;
+    return `set "${s.set}" (≥ ${s.above}°, leave < ${s.leave}°): ${spanStr}${hidesStr}`;
+  });
+  return `; sets ${parts.join('; ')}`;
+}
+
 export function faceLine(f: FaceReading): string {
   const joints = f.ears ? 'nose against r_eye + l_eye, r_ear + l_ear' : 'nose against r_eye + l_eye (ears absent)';
   const readPart = `read yaw ${sg(f.read.yaw.min)}° … ${sg(f.read.yaw.max)}° (${f1(f.read.yaw.range)}°), pitch ${sg(f.read.pitch.min)}° … ${sg(f.read.pitch.max)}° (${f1(f.read.pitch.range)}°)`;
@@ -255,7 +291,90 @@ export function faceLine(f: FaceReading): string {
     if (ax === undefined) continue;
     axes.push(`${name} → bone "${ax.bone}" [${ax.limits[0]}, ${ax.limits[1]}]° (knee [${ax.knee[0]}, ${ax.knee[1]}]°): ${sg(ax.mapped.min)}° … ${sg(ax.mapped.max)}° (scale ${ax.scale[0].toFixed(3)}/${ax.scale[1].toFixed(3)}, r=${ax.corr.toFixed(3)})`);
   }
-  return `${joints}: ${readPart}; mapped ${axes.join(', ')}`;
+  const mappedPart = axes.length === 0 ? '' : `; mapped ${axes.join(', ')}`;
+  return `${joints}: ${readPart}${mappedPart}${formatYawSets(f.sets, f.read.rawYaw)}`;
+}
+
+/**
+ * Select yaw-switched sets (`rig-c/pose#173` Part 2):
+ * - A set is entered when `raw[i] >= above` for at least `switchMin` seconds,
+ *   and left when `raw[i] < above - SET_HYSTERESIS_DEG` (`above - 10°`) for at
+ *   least `switchMin` seconds.
+ * - Between two frames of the same set separated by `< switchMin`, nothing flips (`#162`).
+ */
+export function selectYawSets(
+  raw: readonly number[],
+  declared: readonly YawSet[] | undefined,
+  times: readonly number[],
+  switchMin: number,
+): YawSetSwitch[] {
+  if (declared === undefined || declared.length === 0 || raw.length === 0) return [];
+  const n = raw.length;
+  const endOf = (i: number): number => (i + 1 < n ? times[i + 1]! : n > 1 ? 2 * times[i]! - times[i - 1]! : times[i]!);
+  const spanSec = (lo: number, hi: number): number => endOf(hi) - times[lo]!;
+
+  return declared.map((decl) => {
+    const above = decl.above;
+    const leave = r3(above - SET_HYSTERESIS_DEG);
+    const active = new Array<boolean>(n).fill(false);
+    let inSet = false;
+    let i = 0;
+    while (i < n) {
+      if (!inSet) {
+        if (raw[i]! >= above) {
+          let j = i;
+          while (j + 1 < n && raw[j + 1]! >= above) j++;
+          if (spanSec(i, j) >= switchMin - 1e-9) {
+            inSet = true;
+            for (let k = i; k <= j; k++) active[k] = true;
+          }
+          i = j + 1;
+        } else {
+          i++;
+        }
+      } else {
+        if (raw[i]! < leave) {
+          let j = i;
+          while (j + 1 < n && raw[j + 1]! < leave) j++;
+          if (spanSec(i, j) >= switchMin - 1e-9) {
+            inSet = false;
+          } else {
+            for (let k = i; k <= j; k++) active[k] = true;
+          }
+          i = j + 1;
+        } else {
+          active[i] = true;
+          i++;
+        }
+      }
+    }
+    // #162: bridge any remaining gap between two spans of the same set shorter than switchMin.
+    for (let k = 0; k < n;) {
+      if (active[k]) {
+        k++;
+        continue;
+      }
+      let j = k;
+      while (j + 1 < n && !active[j + 1]) j++;
+      if (k > 0 && j + 1 < n && active[k - 1] && active[j + 1] && spanSec(k, j) < switchMin - 1e-9) {
+        for (let m = k; m <= j; m++) active[m] = true;
+      }
+      k = j + 1;
+    }
+    const spans: Array<[number, number]> = [];
+    for (let k = 0; k < n; k++) {
+      if (!active[k]) continue;
+      const last = spans[spans.length - 1];
+      if (last !== undefined && last[1] === k - 1) last[1] = k;
+      else spans.push([k, k]);
+    }
+    let swaps = 0;
+    for (const [lo, hi] of spans) {
+      swaps++;
+      if (hi < n - 1) swaps++;
+    }
+    return { set: decl.set, above, leave, spans, swaps, hidesKeyed: [] };
+  });
 }
 
 /** Threshold in degrees at or above which a frame is listed on `BODY` as needing a turned-body drawing (`rig-c/pose#173`). */
@@ -278,6 +397,8 @@ export interface BodyReading {
   framesOver45: number[];
   /** Present when the map declares `body.yaw`. */
   yaw?: FaceAxisReading;
+  /** Present when the map declares `body.sets` or `body.yaw.sets`. */
+  sets?: YawSetSwitch[];
 }
 
 /**
@@ -423,8 +544,9 @@ export function bodyLine(b: BodyReading): string {
     ? `≥ ${BODY_TURN_DEG}°: none`
     : `≥ ${BODY_TURN_DEG}° on ${b.framesOver45.length} frame(s): ${spans.join(', ')}`;
   const head = `r_shoulder + l_shoulder, r_hip + l_hip (standing shoulder ${b.standing.shoulder.toFixed(1)}px, hip ${b.standing.hip.toFixed(1)}px): read yaw ${sg(b.read.yaw.min)}° … ${sg(b.read.yaw.max)}° (${f1(b.read.yaw.range)}°), opening (frames 0–${openEnd}) ${sg(b.read.opening.min)}° … ${sg(b.read.opening.max)}° (max |yaw| ${f1(openAbs)}°); ${overPart}`;
-  if (b.yaw === undefined) return head;
-  const ax = b.yaw;
-  return `${head}; mapped yaw → bone "${ax.bone}" [${ax.limits[0]}, ${ax.limits[1]}]° (knee [${ax.knee[0]}, ${ax.knee[1]}]°): ${sg(ax.mapped.min)}° … ${sg(ax.mapped.max)}° (scale ${ax.scale[0].toFixed(3)}/${ax.scale[1].toFixed(3)}, r=${ax.corr.toFixed(3)})`;
+  const mappedPart = b.yaw === undefined
+    ? ''
+    : `; mapped yaw → bone "${b.yaw.bone}" [${b.yaw.limits[0]}, ${b.yaw.limits[1]}]° (knee [${b.yaw.knee[0]}, ${b.yaw.knee[1]}]°): ${sg(b.yaw.mapped.min)}° … ${sg(b.yaw.mapped.max)}° (scale ${b.yaw.scale[0].toFixed(3)}/${b.yaw.scale[1].toFixed(3)}, r=${b.yaw.corr.toFixed(3)})`;
+  return `${head}${mappedPart}${formatYawSets(b.sets, b.read.rawYaw)}`;
 }
 
