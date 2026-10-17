@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { poseRawAnimation, poseRawSetup, readModel, type CompiledDocument, type RawBone } from 'rig-c/core';
 import { Plate } from 'rig-c/plate';
-import { capShortSteps, holdShort, isAcross, mergeRuns, shortLine, spreadFlips } from '../src/retarget.ts';
+import { capShortSteps, holdAcross, holdShort, isAcross, mergeRuns, shortLine, spreadFlips } from '../src/retarget.ts';
 import { clampArt } from '../src/switch.ts';
 import { clean } from '../src/clean.ts';
 import { loopTrack, type RigcTrack } from '../src/idle.ts';
@@ -6745,5 +6745,102 @@ describe('#179 and #181: wrist-to-head distance gate for --raised-by-head and de
       rmSync(d, { recursive: true, force: true });
     }
   }, SLOW);
-});
 
+  test('#184: a horizontal chain (pelvis) shorter than --short or reversed within a frame holds its last confident angle and interpolates; mutant disabling holdAcross flips hip.rotate past 100° and mirrors leg origins', () => {
+    // Unit check: holdAcross holds frames below cutoff or reversed past threshold and interpolates the short way round.
+    const u = [-5, -5.6, -5.6, 171.8, 174.6, 174.4, -5.0, -2.2, -2.0];
+    const frac = [1, 1, 0.25, 0.17, 0.17, 0.18, 0.28, 1, 1];
+    const spans = holdAcross(u, frac, 0.35, 90, 0);
+    expect(spans).toEqual([
+      {
+        frames: [2, 6],
+        minFraction: 0.17,
+        across: true,
+        reversed: expect.closeTo(-179.4, 5),
+      },
+    ]);
+    for (const a of u) expect(Math.abs(a)).toBeLessThanOrEqual(6);
+
+    // End-to-end check with mutant: pelvis foreshortens to 0.17 of median on frames 8–12 and crosses r_hip.x > l_hip.x on frames 9–11.
+    const N = 20;
+    const DT = 1 / 30;
+    const pelvisMap = (): Record<string, unknown> => ({
+      ...baseMap(),
+      chains: [
+        { name: 'pelvis', bones: ['hip'], joints: ['r_hip', 'l_hip'], aim: ['leg_r0>leg_l0'] },
+        ...baseChains(),
+      ],
+    });
+    const m: Motion = { ...BASE, n: N, dt: DT, hip: () => [0, 0] };
+    const sideTurnPose = poseDoc(m, (i, j) => {
+      // Base hip line is r_hip (-15, 300) → l_hip (+15, 300), length 30 px, slight tilt -5.6° before turn and -2.2° after.
+      const tiltDeg = i <= 7 ? -5.6 : i >= 13 ? -2.2 : -4.0;
+      const rad = -tiltDeg * RAD; // picture y-down
+      if (i >= 8 && i <= 12) {
+        // Collapses to 0.17 * 30 = 5.1 px, and on frames 9–11 crosses so r_hip.x > l_hip.x (reversed ~178°).
+        const crossed = i >= 9 && i <= 11;
+        const half = 2.55;
+        const dx = crossed ? -half : half;
+        const dy = Math.sin(rad) * half;
+        j.r_hip = { state: 'observed', at: [-dx, 300 - dy], score: 0.9 };
+        j.l_hip = { state: 'observed', at: [dx, 300 + dy], score: 0.9 };
+      } else {
+        const half = 15;
+        const dx = Math.cos(rad) * half;
+        const dy = Math.sin(rad) * half;
+        j.r_hip = { state: 'observed', at: [-dx, 300 - dy], score: 0.9 };
+        j.l_hip = { state: 'observed', at: [dx, 300 + dy], score: 0.9 };
+      }
+    });
+    const c = setup({ map: pelvisMap(), pose: sideTurnPose });
+    const r = retarget(c, ['--short', '0.35', '--flip', '90', '--bends', 'clamp']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'FLIP')).toEqual([]);
+    expect(linesOf(r, 'END-ON')).toEqual([]);
+    const holds = linesOf(r, 'HOLD');
+    expect(holds.some((l) => l.includes('chain "pelvis" bone "hip" (r_hip → l_hip) frames 8–12'))).toBe(true);
+    const hipRot = motionOf(c.out).animations.dance!.tracks.find((t) => t.bone === 'hip' && t.property === 'rotate')!;
+    for (const k of hipRot.keys) {
+      const deg = (k.v as number[])[0]!;
+      expect(deg).toBeGreaterThanOrEqual(-10);
+      expect(deg).toBeLessThanOrEqual(10);
+    }
+    const doc = loadBuild(c.build);
+    const poses = poseRawAnimation(doc, 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+    for (const p of poses) {
+      const b = byName(p.bones);
+      expect(b.get('leg_r0')!.worldX).toBeLessThan(b.get('leg_l0')!.worldX);
+    }
+
+    // Mutant: skipping across-body chains in the short/reverse hold lets the crossed 2D hip line flip hip.rotate > 100° and mirror leg_r0/leg_l0.
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm184-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const from = 'const spans = holdAcross(targets.get(b)!, fraction, opts.short, opts.flip, restDir);';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'const spans: ShortSpan[] = [];'));
+      const cMut = setup({ map: pelvisMap(), pose: sideTurnPose });
+      const rMut = retarget(cMut, ['--short', '0.35', '--flip', '90', '--bends', 'clamp'], join(d, 'cli.ts'));
+      expect(rMut.status).toBe(0);
+      expect(linesOf(rMut, 'FLIP').length).toBeGreaterThan(0);
+      const mutRot = motionOf(cMut.out).animations.dance!.tracks.find((t) => t.bone === 'hip' && t.property === 'rotate')!;
+      const maxMutDeg = Math.max(...mutRot.keys.map((k) => Math.abs((k.v as number[])[0]!)));
+      expect(maxMutDeg).toBeGreaterThan(100);
+      const mutDoc = loadBuild(cMut.build);
+      const mutPoses = poseRawAnimation(mutDoc, 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+      const anyMirrored = mutPoses.some((p) => {
+        const b = byName(p.bones);
+        return b.get('leg_r0')!.worldX >= b.get('leg_l0')!.worldX;
+      });
+      expect(anyMirrored).toBe(true);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});

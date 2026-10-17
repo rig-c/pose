@@ -135,8 +135,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     else if (a.plantFeet === true) say('  CAMERA none in the sequence: --plant-feet reads the picture as a fixed camera, so a zoom or a pan in the video moves the floor with it and the floor may step with the picture (tools/scan.py reads the camera, rig-c/pose#63)');
     if (r.scale !== null) say(`  SCALE  ${r.scale.factor.toFixed(5)} rig units per picture px (rig ${r.scale.rig.toFixed(2)} / pose median ${r.scale.pose.toFixed(2)})`);
     for (const h of r.holds) say(`  HOLD   ${holdLine(h, r.times)}`);
+    for (const s of r.short) say(`  ${s.across === true ? 'HOLD  ' : 'SHORT '} ${shortLine(s, r.times, a.short)}`);
     if (a.short !== 'off') {
-      for (const s of r.short) say(`  SHORT  ${shortLine(s, r.times, a.short)}`);
       for (const e of r.endOn) say(`  END-ON ${endOnLine(e, r.times, a.short)}`);
     }
     if (a.flip !== 'off') for (const fl of r.flips) say(`  FLIP   ${flipLine(fl, r.times, a.flip)}`);
