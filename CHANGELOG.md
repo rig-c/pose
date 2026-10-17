@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.0](https://github.com/rig-c/pose/compare/v0.23.0...v0.24.0) (2026-10-17)
+
+
+### Features
+
+* **retarget,switch:** head-wrist raised placement, switch leave hysteresis, and detrended head-nod baseline ([#179](https://github.com/rig-c/pose/issues/179), [#180](https://github.com/rig-c/pose/issues/180), [#181](https://github.com/rig-c/pose/issues/181)) ([#182](https://github.com/rig-c/pose/issues/182)) ([02c0bce](https://github.com/rig-c/pose/commit/02c0bcec5412b4601483f2c330aff80c01df4019))
+
 ## [0.23.0](https://github.com/rig-c/pose/compare/v0.22.2...v0.23.0) (2026-10-17)
 
 
