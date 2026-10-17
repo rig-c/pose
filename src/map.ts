@@ -100,6 +100,10 @@ export interface AlternateSet {
   frames: Array<[number, number]> | null;
   /** `place: "by-hip"` (rig-c/pose#93): the chains whose wrist `pose` puts within one hip width of the mid-hip, their wrists placed by the offset from the hip while the set shows. Absent or null: the pose's angles. */
   place?: { by: 'hip'; chains: string[] } | null;
+  /** `symmetric: true` (rig-c/pose#188): normalise the set's two two-bone arm chains to the drawn symmetry centre and keep their wrists inside the head silhouette while the set shows. */
+  symmetric?: boolean;
+  /** `support` (rig-c/pose#188): the set's chains whose bones anchor to the set's `drawn` local angles while the non-support chains track the active gesture. */
+  support?: string[];
 }
 export interface YawSet {
   set: string;
@@ -435,7 +439,7 @@ function readAlternates(p: Problems, where: string, raw: unknown, chains: readon
       p.add('MAP_ALT_SHAPE', `${aw} is ${typeName(a)}; a set is ${SET_SHAPE}`);
       return;
     }
-    refuseUnknownKeys(p, 'MAP_KEYS', aw, a, ['name', 'note', 'slots', 'hides', 'chains', 'pose', 'drawn', 'offsets', 'turn', 'frames', 'place']);
+    refuseUnknownKeys(p, 'MAP_KEYS', aw, a, ['name', 'note', 'slots', 'hides', 'chains', 'pose', 'drawn', 'offsets', 'turn', 'frames', 'place', 'symmetric', 'support']);
     const name = typeof a.name === 'string' && a.name !== '' ? a.name : null;
     if (name === null) p.add('MAP_ALT_NAME', `${aw} "name" is ${typeName(a.name)}; it must be a non-empty string`);
     else if (names.has(name)) p.add('MAP_ALT_NAME', `${aw} "name" "${name}" names two sets`);
@@ -553,7 +557,52 @@ function readAlternates(p: Problems, where: string, raw: unknown, chains: readon
         else place = { by: 'hip', chains: by.chains };
       }
     }
-    if (ok && name !== null && cs !== null) out.push({ name, slots, hides, chains: cs, pose, drawn, offsets, turn, frames, ...(place === null ? {} : { place }) });
+    let symmetric: boolean | undefined;
+    if ('symmetric' in a) {
+      if (a.symmetric !== true) {
+        p.add('MAP_ALT_SYMMETRIC', `${label} "symmetric" is ${JSON.stringify(a.symmetric)}; it must be true`);
+        ok = false;
+      } else if (own.length !== 2 || !own.every((c) => c.bones.length === 2)) {
+        p.add('MAP_ALT_SYMMETRIC', `${label} "symmetric" is true, and its chains are ${ownList}; a symmetric set normalises a pair of two-bone arm chains`);
+        ok = false;
+      } else {
+        const missing = ownBones.filter((b) => !(b in drawn));
+        if (missing.length > 0) {
+          p.add('MAP_ALT_SYMMETRIC', `${label} "symmetric" is true, and "drawn" has no ${missing.map((b) => `"${b}"`).join(', ')}; a symmetric set normalises both chains around their drawn angles`);
+          ok = false;
+        } else symmetric = true;
+      }
+    }
+    let support: string[] | undefined;
+    if ('support' in a) {
+      const sup = typeof a.support === 'string' && a.support !== '' ? [a.support] : strings(a.support);
+      if (sup === null || sup.length === 0 || sup.some((s) => s === '')) {
+        p.add('MAP_ALT_SUPPORT', `${label} "support" is ${JSON.stringify(a.support)}; it must name one or more of the set's chains (${(cs ?? []).join(', ') || 'none'})`);
+        ok = false;
+      } else {
+        if (new Set(sup).size !== sup.length) {
+          p.add('MAP_ALT_SUPPORT', `${label} "support" names a chain twice: ${sup.join(', ')}`);
+          ok = false;
+        }
+        const outside = sup.filter((c) => !(cs ?? []).includes(c));
+        if (outside.length > 0) {
+          p.add('MAP_ALT_SUPPORT', `${label} "support" names chain ${outside.map((c) => `"${c}"`).join(', ')}, which is not in the set's chains (${(cs ?? []).join(', ') || 'none'})`);
+          ok = false;
+        }
+        if (a.symmetric === true) {
+          p.add('MAP_ALT_SUPPORT', `${label} names both "symmetric" and "support"; a set either normalises both arms symmetrically or anchors a support arm`);
+          ok = false;
+        }
+        const supBones = own.filter((c) => sup.includes(c.name)).flatMap((c) => c.bones);
+        const missing = supBones.filter((b) => !(b in drawn));
+        if (missing.length > 0) {
+          p.add('MAP_ALT_SUPPORT', `${label} "support" chain has no "drawn" angle for ${missing.map((b) => `"${b}"`).join(', ')}; a support chain anchors to its drawn angles`);
+          ok = false;
+        }
+        if (ok) support = sup;
+      }
+    }
+    if (ok && name !== null && cs !== null) out.push({ name, slots, hides, chains: cs, pose, drawn, offsets, turn, frames, ...(place === null ? {} : { place }), ...(symmetric === undefined ? {} : { symmetric }), ...(support === undefined ? {} : { support }) });
   });
   return out;
 }

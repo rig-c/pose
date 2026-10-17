@@ -6844,3 +6844,259 @@ describe('#179 and #181: wrist-to-head distance gate for --raised-by-head and de
     }
   }, SLOW);
 });
+
+describe('#188: symmetric gesture set normalisation and declared support-arm anchoring', () => {
+  const N = 16;
+  const DT = 1 / 24;
+  const headBones = (b: BoneSpec[]): BoneSpec[] => [
+    ...b,
+    { name: 'head', parent: 'neck', x: 0, y: 20 },
+    { name: 'eye_r', parent: 'head', x: -15, y: 10 },
+    { name: 'eye_l', parent: 'head', x: 15, y: 10 },
+  ];
+  const rigOpts: RigOpts = {
+    bones: headBones,
+    extra: {
+      sleeve_r0: { k1_r: { image: 'seg.png', x: 30, y: 0, rotation: -90 }, k3_r: { image: 'seg.png', x: 30, y: 0, rotation: -90 } },
+      sleeve_l0: { k1_l: { image: 'seg.png', x: 30, y: 0, rotation: -90 }, k3_l: { image: 'seg.png', x: 30, y: 0, rotation: -90 } },
+    },
+  };
+
+  test('MAP_ALT_SYMMETRIC and MAP_ALT_SUPPORT refuse malformed declarations by name', () => {
+    const m: Motion = { ...BASE, n: N, dt: DT, trunk: () => 90, hip: () => [0, 0] };
+    const kp = positions(m, 0);
+    const makeMap = (altPatch: Record<string, unknown>): Record<string, unknown> => ({
+      ...baseMap(),
+      chains: [
+        ...baseChains().map((c) => (c.name === 'arm_r' || c.name === 'arm_l' ? { ...c, bend: 'free' } : c)),
+        { name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: ['eye_r>eye_l'] },
+      ],
+      alternates: [
+        {
+          name: 'K_test',
+          slots: { sleeve_r0: 'k1_r', sleeve_l0: 'k1_l' },
+          chains: ['arm_r', 'arm_l'],
+          pose: {
+            r_shoulder: kp.r_shoulder!,
+            r_elbow: kp.r_elbow!,
+            r_wrist: kp.r_wrist!,
+            l_shoulder: kp.l_shoulder!,
+            l_elbow: kp.l_elbow!,
+            l_wrist: kp.l_wrist!,
+          },
+          drawn: { sleeve_r0: 120, sleeve_r1: 30, sleeve_l0: 60, sleeve_l1: 150 },
+          ...altPatch,
+        },
+      ],
+    });
+    const pose = poseDoc(m);
+
+    const rSymFalse = retarget(setup({ rig: rigOpts, map: makeMap({ symmetric: false }), pose }));
+    expect(rSymFalse.status).toBe(1);
+    expect(rSymFalse.stderr).toContain('MAP_ALT_SYMMETRIC');
+
+    const rSymMissingDrawn = retarget(
+      setup({
+        rig: rigOpts,
+        map: makeMap({ symmetric: true, drawn: { sleeve_r0: 120, sleeve_r1: 30, sleeve_l0: 60 } }),
+        pose,
+      }),
+    );
+    expect(rSymMissingDrawn.status).toBe(1);
+    expect(rSymMissingDrawn.stderr).toContain('MAP_ALT_SYMMETRIC');
+
+    const rSupUnknown = retarget(setup({ rig: rigOpts, map: makeMap({ support: 'leg_r' }), pose }));
+    expect(rSupUnknown.status).toBe(1);
+    expect(rSupUnknown.stderr).toContain('MAP_ALT_SUPPORT');
+
+    const rSupMissingDrawn = retarget(
+      setup({
+        rig: rigOpts,
+        map: makeMap({ support: 'arm_l', drawn: { sleeve_r0: 120, sleeve_r1: 30, sleeve_l0: 60 } }),
+        pose,
+      }),
+    );
+    expect(rSupMissingDrawn.status).toBe(1);
+    expect(rSupMissingDrawn.stderr).toContain('MAP_ALT_SUPPORT');
+  });
+
+  test('#188 symmetric rule + mutant: a "symmetric": true set normalises elbow heights (|elbow_l.y - elbow_r.y| <= 0.01u) and clamps wrists inside the head box while keeping lower-body tracks byte-identical', () => {
+    // Symmetric key pose: ru=120°, rf=30°, lu=60°, lf=150°; sequence has asymmetric upper arms (ru=135°, lu=75°: sin(135°)=0.707 vs sin(75°)=0.966 -> 18u height diff) and wide forearms (rf=15°, lf=165°).
+    const mKey: Motion = { ...BASE, n: N, dt: DT, trunk: () => 90, hip: () => [0, 0], ru: () => 120, rf: () => 30, lu: () => 60, lf: () => 150 };
+    const kp = positions(mKey, 0);
+    const mSeq: Motion = { ...BASE, n: N, dt: DT, trunk: () => 90, hip: () => [0, 0], ru: () => 135, rf: () => 15, lu: () => 75, lf: () => 165 };
+    const pose = poseDoc(mSeq);
+    const makeMap = (symmetric: boolean): Record<string, unknown> => ({
+      ...baseMap(),
+      chains: [
+        ...baseChains().map((c) => (c.name === 'arm_r' || c.name === 'arm_l' ? { ...c, bend: 'free' } : c)),
+        { name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: ['eye_r>eye_l'] },
+      ],
+      alternates: [
+        {
+          name: 'K1_sym',
+          slots: { sleeve_r0: 'k1_r', sleeve_l0: 'k1_l' },
+          chains: ['arm_r', 'arm_l'],
+          pose: {
+            r_shoulder: kp.r_shoulder!,
+            r_elbow: kp.r_elbow!,
+            r_wrist: kp.r_wrist!,
+            l_shoulder: kp.l_shoulder!,
+            l_elbow: kp.l_elbow!,
+            l_wrist: kp.l_wrist!,
+          },
+          drawn: { sleeve_r0: 120, sleeve_r1: 30, sleeve_l0: 60, sleeve_l1: 150 },
+          turn: { sleeve_r0: [-35, 35], sleeve_r1: [-35, 35], sleeve_l0: [-35, 35], sleeve_l1: [-35, 35] },
+          ...(symmetric ? { symmetric: true } : {}),
+        },
+      ],
+    });
+
+    const cSym = setup({ rig: rigOpts, map: makeMap(true), pose });
+    const rSym = retarget(cSym, ['--raised-by-head']);
+    expect(rSym.stderr).toBe('');
+    expect(rSym.status).toBe(0);
+
+    const cBase = setup({ rig: rigOpts, map: makeMap(false), pose });
+    const rBase = retarget(cBase, ['--raised-by-head']);
+    expect(rBase.status).toBe(0);
+
+    // Lower-body tracks are byte-identical.
+    const motSym = motionOf(cSym.out).animations.dance!.tracks;
+    const motBase = motionOf(cBase.out).animations.dance!.tracks;
+    for (const lb of ['hip', 'leg_r0', 'leg_r1', 'leg_l0', 'leg_l1']) {
+      expect(motSym.filter((t) => 'bone' in t && t.bone === lb)).toEqual(motBase.filter((t) => 'bone' in t && t.bone === lb));
+    }
+
+    const posesSym = poseRawAnimation(loadBuild(cSym.build), 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+    let maxElbowDiffSym = 0;
+    for (const p of posesSym) {
+      const b = byName(p.bones);
+      const er = b.get('sleeve_r1')!;
+      const el = b.get('sleeve_l1')!;
+      maxElbowDiffSym = Math.max(maxElbowDiffSym, Math.abs(el.worldY - er.worldY));
+      const eyeR = b.get('eye_r')!;
+      const eyeL = b.get('eye_l')!;
+      const hcx = 0.5 * (eyeR.worldX + eyeL.worldX);
+      const ed = Math.hypot(eyeL.worldX - eyeR.worldX, eyeL.worldY - eyeR.worldY);
+      const wxR = er.worldX + er.a * 60;
+      const wxL = el.worldX + el.a * 60;
+      expect(Math.abs(wxR - hcx)).toBeLessThanOrEqual(0.35 * ed + 1e-3);
+      expect(Math.abs(wxL - hcx)).toBeLessThanOrEqual(0.35 * ed + 1e-3);
+    }
+    expect(maxElbowDiffSym).toBeLessThanOrEqual(0.05);
+
+    // Mutant: disabling solveSymmetricFrame leaves the elbows > 15u apart in height.
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm188-sym-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const from = 'if (set.chains.length !== 2) return null;';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'if (true) return null;'));
+      const cMut = setup({ rig: rigOpts, map: makeMap(true), pose });
+      const rMut = retarget(cMut, ['--raised-by-head'], join(d, 'cli.ts'));
+      expect(rMut.status).toBe(0);
+      const posesMut = poseRawAnimation(loadBuild(cMut.build), 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+      let maxElbowDiffMut = 0;
+      for (const p of posesMut) {
+        const b = byName(p.bones);
+        maxElbowDiffMut = Math.max(maxElbowDiffMut, Math.abs(b.get('sleeve_l1')!.worldY - b.get('sleeve_r1')!.worldY));
+      }
+      expect(maxElbowDiffMut).toBeGreaterThan(15);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+
+  test('#188 support-arm rule + mutant: a declared "support" chain stays within ±3° of drawn and the active raised arm clears the head outward while keeping lower-body tracks byte-identical', () => {
+    // K3_v_sign style: right arm raised (drawn 102°, 77°, wrist > 2 eye_dist from head), left arm on waist (drawn -50°, -125°).
+    // On the sequence, left arm has noisy foreshortened swing (-30°, -107°, 20° off drawn).
+    const mKey: Motion = { ...BASE, n: N, dt: DT, trunk: () => 90, hip: () => [0, 0], ru: () => 102, rf: () => 77, lu: () => -50, lf: () => -125 };
+    const kp = positions(mKey, 0);
+    const mSeq: Motion = { ...BASE, n: N, dt: DT, trunk: () => 90, hip: () => [0, 0], ru: () => 102, rf: () => 77, lu: () => -30, lf: () => -107 };
+    const pose = poseDoc(mSeq);
+    const makeMap = (withSupport: boolean): Record<string, unknown> => ({
+      ...baseMap(),
+      chains: [
+        ...baseChains().map((c) => (c.name === 'arm_r' || c.name === 'arm_l' ? { ...c, bend: 'free' } : c)),
+        { name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: ['eye_r>eye_l'] },
+      ],
+      alternates: [
+        {
+          name: 'K3_sup',
+          slots: { sleeve_r0: 'k3_r', sleeve_l0: 'k3_l' },
+          chains: ['arm_r', 'arm_l'],
+          pose: {
+            r_eye: kp.r_eye!,
+            l_eye: kp.l_eye!,
+            r_shoulder: kp.r_shoulder!,
+            r_elbow: kp.r_elbow!,
+            r_wrist: kp.r_wrist!,
+            l_shoulder: kp.l_shoulder!,
+            l_elbow: kp.l_elbow!,
+            l_wrist: kp.l_wrist!,
+          },
+          drawn: { sleeve_r0: 102, sleeve_r1: 77, sleeve_l0: -50, sleeve_l1: -125 },
+          turn: { sleeve_r0: [-20, 20], sleeve_r1: [-20, 20], sleeve_l0: [-20, 20], sleeve_l1: [-20, 20] },
+          ...(withSupport ? { support: 'arm_l' } : {}),
+        },
+      ],
+    });
+
+    const cSup = setup({ rig: rigOpts, map: makeMap(true), pose });
+    const rSup = retarget(cSup, ['--raised-by-head']);
+    expect(rSup.stderr).toBe('');
+    expect(rSup.status).toBe(0);
+
+    const posesSup = poseRawAnimation(loadBuild(cSup.build), 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+    for (const p of posesSup) {
+      const b = byName(p.bones);
+      const l0 = Math.atan2(b.get('sleeve_l0')!.c, b.get('sleeve_l0')!.a) * DEG;
+      const l1 = Math.atan2(b.get('sleeve_l1')!.c, b.get('sleeve_l1')!.a) * DEG;
+      const r0 = Math.atan2(b.get('sleeve_r0')!.c, b.get('sleeve_r0')!.a) * DEG;
+      const r1 = Math.atan2(b.get('sleeve_r1')!.c, b.get('sleeve_r1')!.a) * DEG;
+      expect(Math.abs(wrap(l0 - -50))).toBeLessThanOrEqual(3);
+      expect(Math.abs(wrap(l1 - -125))).toBeLessThanOrEqual(3);
+      expect(r0).toBeGreaterThanOrEqual(102 + 8);
+      expect(r1).toBeGreaterThanOrEqual(77 + 12);
+    }
+
+    // Mutant: disabling solveSupportChainFrame and solveSupportActiveFrame lets arm_l swing > 15° from drawn and leaves arm_r at <= 105°.
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm188-sup-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const from1 = 'const solveSupportChainFrame = (set: (typeof map.alternates)[number], c: Chain, i: number): void => {';
+      const from2 = 'if (c.bones.length < 2 || c.joints.length < 3) return null;';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from1)).toHaveLength(2);
+      expect(before.split(from2)).toHaveLength(2);
+      writeFileSync(
+        path,
+        before
+          .replace(from1, `${from1} if (true) return;`)
+          .replace(from2, 'if (true) return null;'),
+      );
+      const cMut = setup({ rig: rigOpts, map: makeMap(true), pose });
+      const rMut = retarget(cMut, ['--raised-by-head'], join(d, 'cli.ts'));
+      expect(rMut.status).toBe(0);
+      const posesMut = poseRawAnimation(loadBuild(cMut.build), 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+      const b0 = byName(posesMut[0]!.bones);
+      const l0Mut = Math.atan2(b0.get('sleeve_l0')!.c, b0.get('sleeve_l0')!.a) * DEG;
+      const r0Mut = Math.atan2(b0.get('sleeve_r0')!.c, b0.get('sleeve_r0')!.a) * DEG;
+      expect(Math.abs(wrap(l0Mut - -50))).toBeGreaterThan(15);
+      expect(r0Mut).toBeLessThanOrEqual(105);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+

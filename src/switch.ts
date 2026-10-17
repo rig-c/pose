@@ -666,6 +666,7 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
       });
       if (!hasUpChain) continue;
       for (const cn of set.chains) {
+        if (set.support?.includes(cn) === true) continue;
         const c = map.chains.find((x) => x.name === cn);
         if (c === undefined) continue;
         const allDown = c.bones.every((b) => (set.drawn[b] ?? 0) < 0);
@@ -885,7 +886,13 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
           }
           return raw;
         };
-        const pairs = swBones.filter((b) => set0.drawn[b] !== undefined && set1.drawn[b] !== undefined);
+        const activeSwChains = switchingChains.filter((cn) => !set1.support?.includes(cn) && !set0.support?.includes(cn));
+        const measureChains = activeSwChains.length > 0 ? activeSwChains : switchingChains;
+        const measureBones = measureChains.flatMap((cn) => map.chains.find((c) => c.name === cn)?.bones ?? []);
+        const rootBones = measureChains
+          .map((cn) => map.chains.find((c) => c.name === cn)?.bones[0])
+          .filter((b): b is string => b !== undefined && set0.drawn[b] !== undefined && set1.drawn[b] !== undefined);
+        const pairs = measureBones.filter((b) => set0.drawn[b] !== undefined && set1.drawn[b] !== undefined);
         const span = pairs.length > 0
           ? pairs.reduce((s, b) => s + Math.abs(wrap(set1.drawn[b]! - set0.drawn[b]!)), 0) / pairs.length
           : 0;
@@ -896,7 +903,10 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
           const d1 = pairs.length > 0
             ? pairs.reduce((s, b) => s + Math.abs(wrap(effAngle(b, i) - set1.drawn[b]!)), 0) / pairs.length
             : (distances.get(set1.name)?.[i] ?? Infinity);
-          if (d1 <= d0 || (span > 1e-6 && d0 >= 0.5 * span)) {
+          const rootsCrossed =
+            activeSwChains.length === switchingChains.length ||
+            rootBones.every((b) => Math.abs(wrap(effAngle(b, i) - set1.drawn[b]!)) <= Math.abs(wrap(effAngle(b, i) - set0.drawn[b]!)));
+          if ((d1 <= d0 || (span > 1e-6 && d0 >= 0.5 * span)) && rootsCrossed) {
             tSwitch = i;
             break;
           }
