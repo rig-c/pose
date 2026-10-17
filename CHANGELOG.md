@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.0](https://github.com/rig-c/pose/compare/v0.28.0...v0.29.0) (2026-10-17)
+
+
+### Features
+
+* **retarget:** anchor hand-by-the-head alternate sets to head-local offset ([#191](https://github.com/rig-c/pose/issues/191)) ([#202](https://github.com/rig-c/pose/issues/202)) ([431730a](https://github.com/rig-c/pose/commit/431730aa111823028368414a9969e08961bb7f33))
+
 ## [0.28.0](https://github.com/rig-c/pose/compare/v0.27.0...v0.28.0) (2026-10-17)
 
 
