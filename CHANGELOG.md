@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.1](https://github.com/rig-c/pose/compare/v0.24.0...v0.24.1) (2026-10-17)
+
+
+### Bug Fixes
+
+* **retarget:** hold horizontal chains across short or reversed 2D spans ([#184](https://github.com/rig-c/pose/issues/184)) ([#185](https://github.com/rig-c/pose/issues/185)) ([b82ea5e](https://github.com/rig-c/pose/commit/b82ea5e562ba3b898d377a822fa95ab9c0f50304))
+
 ## [0.24.0](https://github.com/rig-c/pose/compare/v0.23.0...v0.24.0) (2026-10-17)
 
 
