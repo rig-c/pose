@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.0](https://github.com/rig-c/pose/compare/v0.27.0...v0.28.0) (2026-10-17)
+
+
+### Features
+
+* **retarget:** couple neck-length clamp vertical residual into pitch_dial and head.rotate ([#190](https://github.com/rig-c/pose/issues/190)) ([#199](https://github.com/rig-c/pose/issues/199)) ([886bebb](https://github.com/rig-c/pose/commit/886bebbe62ba211caf7c40d07087f3d05b364c43))
+
 ## [0.27.0](https://github.com/rig-c/pose/compare/v0.26.0...v0.27.0) (2026-10-17)
 
 
