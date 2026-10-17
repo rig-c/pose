@@ -7100,3 +7100,181 @@ describe('#188: symmetric gesture set normalisation and declared support-arm anc
   }, SLOW);
 });
 
+describe('#189: read yaw from the ear chord when the eye span is foreshortened and the ear chord disagrees with the nose', () => {
+  function sideGazeAndTurnPose(): Record<string, unknown> {
+    return poseDoc({ ...BASE, n: 20 }, (i, joints) => {
+      const neck = (joints.neck as { at: Pt }).at;
+      const midEye: Pt = [neck[0], neck[1] - 35];
+      // 12 of 20 frames (f6..17) have dEye = de0 = 56.18 -> median(de) = 56.18.
+      // - f0..1: held side gaze (de = 0.7972 * de0, xne = 0.0975, xea = 0.2016; w = 1.0)
+      // - f2..4: exit ramp (de/de0 = 0.8014, 0.8145, 0.8352; w = 0.972, 0.711, 0.296)
+      // - f5..7: post-exit smooth frames (de/de0 = 0.8508, 1.0, 1.0; w = 0)
+      // - f18..19: foreshortened normal turn where nose and ear agree (de = 0.7921 * de0, xne = 0.16, xea = 0.20; |xea|/|xne| = 1.25 <= 1.8 -> w = 0)
+      const de0 = 56.18;
+      const dEar = 123.38;
+      let dEye = de0;
+      let xne = (i - 12) * 0.08;
+      let xea = (i - 12) * 0.08;
+      if (i <= 1) {
+        dEye = 0.7972 * de0;
+        xne = 0.0975;
+        xea = 0.2016;
+      } else if (i === 2) {
+        dEye = 0.8014 * de0;
+        xne = 0.1001;
+        xea = 0.1953;
+      } else if (i === 3) {
+        dEye = 0.8145 * de0;
+        xne = 0.0927;
+        xea = 0.1852;
+      } else if (i === 4) {
+        dEye = 0.8352 * de0;
+        xne = 0.0906;
+        xea = 0.1707;
+      } else if (i === 5) {
+        dEye = 0.8508 * de0;
+        xne = 0.0891;
+        xea = 0.1471;
+      } else if (i === 6) {
+        dEye = de0;
+        xne = 0.0915;
+        xea = 0.1267;
+      } else if (i === 7) {
+        dEye = de0;
+        xne = 0.08;
+        xea = 0.08;
+      } else if (i >= 18) {
+        dEye = 0.7921 * de0;
+        xne = 0.16;
+        xea = 0.2;
+      }
+      joints.r_eye = { state: 'observed', at: [midEye[0] - dEye / 2, midEye[1]], score: 0.95 };
+      joints.l_eye = { state: 'observed', at: [midEye[0] + dEye / 2, midEye[1]], score: 0.95 };
+      const midEarX = midEye[0] + xea * dEar;
+      joints.r_ear = { state: 'observed', at: [midEarX - dEar / 2, midEye[1] + 5], score: 0.95 };
+      joints.l_ear = { state: 'observed', at: [midEarX + dEar / 2, midEye[1] + 5], score: 0.95 };
+      const nx = midEye[0] - xne * dEye;
+      joints.nose = { state: 'observed', at: [nx, midEye[1] + 5], score: 0.95 };
+    });
+  }
+
+  test('reads yaw from the ear chord (+21.964°) on the foreshortened side-gaze opening with 0.000°/f jitter, ramps out smoothly across [0.80, 0.85]*median(de), and keeps outside frames byte-identical to the regime-off mutant', () => {
+    const pose = sideGazeAndTurnPose();
+    const rigOpts: RigOpts = {
+      bones: (bs) => [...bs, { name: 'yaw_dial', parent: 'root' }],
+    };
+    const map = { ...baseMap(), face: { yaw: { bone: 'yaw_dial', range: [-30, 30] } } };
+    const c = setup({ rig: rigOpts, map, pose });
+    const r = retarget(c, ['--bends', 'clamp']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+
+    const mot = motionOf(c.out).animations.dance!.tracks;
+    const yawKeys = mot.find((tr) => 'bone' in tr && tr.bone === 'yaw_dial' && tr.property === 'rotate')!.keys.map((k) => k.v[0]!);
+    // On f0..1 (w = 1.0), yaw_dial reaches atan(2 * 0.2016) * DEG = 21.964° with 0.000°/f jitter.
+    expect(yawKeys[0]!).toBeCloseTo(21.964, 2);
+    expect(yawKeys[1]!).toBeCloseTo(21.964, 2);
+    expect(Math.abs(yawKeys[1]! - yawKeys[0]!)).toBe(0);
+
+    // Bar 2 boundary smoothness: across the regime exit (f4 -> f5), max |Δyaw| on boundary ±3 frames (f2..7) <= 5°/f (absolute ceiling) and <= max |Δyaw| inside regime (f0..4) + 2°.
+    let maxInRegime = 0;
+    for (let i = 1; i <= 4; i++) maxInRegime = Math.max(maxInRegime, Math.abs(yawKeys[i]! - yawKeys[i - 1]!));
+    let maxBoundary = 0;
+    for (let i = 2; i <= 7; i++) maxBoundary = Math.max(maxBoundary, Math.abs(yawKeys[i]! - yawKeys[i - 1]!));
+    const exitStep = Math.abs(yawKeys[5]! - yawKeys[4]!);
+    expect(exitStep).toBeLessThan(3.5);
+    expect(maxBoundary).toBeLessThanOrEqual(5);
+    expect(maxBoundary).toBeLessThanOrEqual(maxInRegime + 2);
+
+    // Mutant 1: disabling the earChord regime drops f0..1 back down to ~12.2° while f5..19 are 100% byte-identical.
+    mkdirSync(MUTANTS, { recursive: true });
+    const d1 = mkdtempSync(join(MUTANTS, 'm189-off-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d1, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d1, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d1, 'package.json'));
+      const path = join(d1, 'src', 'face.ts');
+      const from = 'Math.abs(xea[i]!) > EAR_CHORD_K_MIN;';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'false;'));
+
+      const cOff = setup({ rig: rigOpts, map, pose });
+      const rOff = retarget(cOff, ['--bends', 'clamp'], join(d1, 'cli.ts'));
+      expect(rOff.status).toBe(0);
+      const motOff = motionOf(cOff.out).animations.dance!.tracks;
+      const yawOff = motOff.find((tr) => 'bone' in tr && tr.bone === 'yaw_dial' && tr.property === 'rotate')!.keys.map((k) => k.v[0]!);
+      for (let i = 0; i < 2; i++) {
+        expect(yawOff[i]!).toBeLessThan(12.5);
+      }
+      // Every frame with w = 0 (frames 5..19) is byte-identical, and all non-yaw_dial tracks are byte-identical.
+      expect(yawKeys.slice(5)).toEqual(yawOff.slice(5));
+      expect(mot.filter((tr) => !('bone' in tr && tr.bone === 'yaw_dial'))).toEqual(
+        motOff.filter((tr) => !('bone' in tr && tr.bone === 'yaw_dial')),
+      );
+    } finally {
+      rmSync(d1, { recursive: true, force: true });
+    }
+  }, SLOW);
+
+  test('mutant (#189): lowering EAR_CHORD_K_RATIO to 1.0 leaks onto normal foreshortened turns, and a step exit (EAR_CHORD_K_LO = 0.85) snaps by > 8° across the boundary', () => {
+    const pose = sideGazeAndTurnPose();
+    const rigOpts: RigOpts = {
+      bones: (bs) => [...bs, { name: 'yaw_dial', parent: 'root' }],
+    };
+    const map = { ...baseMap(), face: { yaw: { bone: 'yaw_dial', range: [-30, 30] } } };
+    const c = setup({ rig: rigOpts, map, pose });
+    const r = retarget(c, ['--bends', 'clamp']);
+    expect(r.status).toBe(0);
+    const yawKeys = motionOf(c.out).animations.dance!.tracks.find((tr) => 'bone' in tr && tr.bone === 'yaw_dial' && tr.property === 'rotate')!.keys.map((k) => k.v[0]!);
+
+    mkdirSync(MUTANTS, { recursive: true });
+    const d2 = mkdtempSync(join(MUTANTS, 'm189-kratio-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d2, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d2, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d2, 'package.json'));
+      const path = join(d2, 'src', 'face.ts');
+      const from = 'export const EAR_CHORD_K_RATIO = 1.8;';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'export const EAR_CHORD_K_RATIO = 1.0;'));
+
+      const cK1 = setup({ rig: rigOpts, map, pose });
+      const rK1 = retarget(cK1, ['--bends', 'clamp'], join(d2, 'cli.ts'));
+      expect(rK1.status).toBe(0);
+      const motK1 = motionOf(cK1.out).animations.dance!.tracks;
+      const yawK1 = motK1.find((tr) => 'bone' in tr && tr.bone === 'yaw_dial' && tr.property === 'rotate')!.keys.map((k) => k.v[0]!);
+      expect(yawK1.slice(5)).not.toEqual(yawKeys.slice(5));
+      expect(Math.abs(yawK1[19]! - yawKeys[19]!)).toBeGreaterThan(4);
+    } finally {
+      rmSync(d2, { recursive: true, force: true });
+    }
+
+    const d3 = mkdtempSync(join(MUTANTS, 'm189-step-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d3, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d3, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d3, 'package.json'));
+      const path = join(d3, 'src', 'face.ts');
+      const from = 'export const EAR_CHORD_K_LO = 0.8;';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'export const EAR_CHORD_K_LO = 0.85;'));
+
+      const cStep = setup({ rig: rigOpts, map, pose });
+      const rStep = retarget(cStep, ['--bends', 'clamp'], join(d3, 'cli.ts'));
+      expect(rStep.status).toBe(0);
+      const motStep = motionOf(cStep.out).animations.dance!.tracks;
+      const yawStep = motStep.find((tr) => 'bone' in tr && tr.bone === 'yaw_dial' && tr.property === 'rotate')!.keys.map((k) => k.v[0]!);
+      let maxInStep = 0;
+      for (let i = 1; i <= 4; i++) maxInStep = Math.max(maxInStep, Math.abs(yawStep[i]! - yawStep[i - 1]!));
+      const snapStep = Math.abs(yawStep[5]! - yawStep[4]!);
+      expect(snapStep).toBeGreaterThan(8);
+      expect(snapStep).toBeGreaterThan(maxInStep + 2);
+    } finally {
+      rmSync(d3, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+

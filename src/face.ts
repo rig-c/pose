@@ -124,6 +124,37 @@ function corrOf(a: readonly number[], b: readonly number[]): number {
 }
 
 /**
+ * Eye-span foreshortening entry threshold `de < EAR_CHORD_K_DE * median(de)` (`rig-c/pose#189`):
+ * derived from $\cos(31.79^\circ) = 0.85$ ($\approx 32^\circ$ head turn), the foreshortening angle
+ * beyond which the near-planar 2D nose point begins to sit trapped between the foreshortened eyes.
+ */
+export const EAR_CHORD_K_DE = 0.85;
+
+/**
+ * Eye-span foreshortening full-weight threshold `de <= EAR_CHORD_K_LO * median(de)` (`rig-c/pose#189`):
+ * derived from $\cos(36.87^\circ) = 0.80$ ($4/5$, $\approx 37^\circ$ head turn), where the foreshortening
+ * blend weight `w = clamp((EAR_CHORD_K_DE * de0 - de) / ((EAR_CHORD_K_DE - EAR_CHORD_K_LO) * de0), 0, 1)`
+ * reaches `1.0` so the exit from a foreshortened side gaze ramps smoothly instead of snapping at `EAR_CHORD_K_DE`.
+ */
+export const EAR_CHORD_K_LO = 0.8;
+
+/**
+ * Ear-chord to nose-cue disagreement ratio `|xea| > EAR_CHORD_K_RATIO * |xne|` (`rig-c/pose#189`):
+ * derived from the 95th-percentile of `|xea| / |xne|` on confident frames (`|de - median(de)| <= 15%`)
+ * above `EAR_CHORD_K_MIN`, measured at `p95 = 1.7352` on Dancer (`37` frames) and `p95 = 1.1937`
+ * (`p100 = 1.2867`) on Toca (`58` frames) -> `1.8`.
+ */
+export const EAR_CHORD_K_RATIO = 1.8;
+
+/**
+ * Minimum ear-to-eye-midpoint offset `|xea| > EAR_CHORD_K_MIN` (`rig-c/pose#189`):
+ * derived from the 100th-percentile (maximum) detector ear-placement noise `|xea - xne|` on
+ * confident frames (`|de - median(de)| <= 15%`), measured at `p99 = 0.0949, p100 = 0.1094` on Dancer
+ * (`231` frames) and `p99 = 0.1178, p100 = 0.1450` on Toca (`373` frames) -> `0.15` (`16.70°`).
+ */
+export const EAR_CHORD_K_MIN = 0.15;
+
+/**
  * Read per-frame yaw and pitch (degrees) from `nose`, `r_eye`, `l_eye`, and
  * (when both are present) `r_ear` and `l_ear`.
  *
@@ -140,8 +171,10 @@ export function readFaceAngles(
 ): { ears: boolean; yaw: number[]; pitch: number[] } {
   const n = nose.length;
   const ears = rEar !== null && lEar !== null && rEar.length === n && lEar.length === n;
+  const des: number[] = [];
   const xne: number[] = [];
   const xna: number[] = [];
+  const xea: number[] = [];
   const yne: number[] = [];
   const yna: number[] = [];
 
@@ -153,14 +186,17 @@ export function readFaceAngles(
     const ey = El[1] - Er[1];
     const de = Math.hypot(ex, ey);
     if (!(de > 1e-9)) {
+      des.push(des[i - 1] ?? 0);
       xne.push(xne[i - 1] ?? 0);
       yne.push(yne[i - 1] ?? 0);
       if (ears) {
         xna.push(xna[i - 1] ?? 0);
+        xea.push(xea[i - 1] ?? 0);
         yna.push(yna[i - 1] ?? 0);
       }
       continue;
     }
+    des.push(de);
     const ux = ex / de;
     const uy = ey / de;
     const vx = -uy;
@@ -176,18 +212,31 @@ export function readFaceAngles(
       const may = 0.5 * (Ar[1] + Al[1]);
       const da = Math.max(de, (Al[0] - Ar[0]) * ux + (Al[1] - Ar[1]) * uy);
       xna.push(((max - N[0]) * ux + (may - N[1]) * uy) / da);
+      xea.push(((max - mex) * ux + (may - mey) * uy) / da);
       yna.push(((N[0] - max) * vx + (N[1] - may) * vy) / de);
     }
   }
 
+  const de0 = n > 0 ? median(des) : 0;
   const yne0 = median(yne);
   const yna0 = ears ? median(yna) : 0;
   const yaw: number[] = [];
   const pitch: number[] = [];
   for (let i = 0; i < n; i++) {
-    const ty = ears ? (2 * xne[i]! + xna[i]!) / 2 : 2 * xne[i]!;
+    const earChord =
+      ears &&
+      de0 > 1e-9 &&
+      des[i]! < EAR_CHORD_K_DE * de0 &&
+      Math.abs(xea[i]!) > EAR_CHORD_K_RATIO * Math.abs(xne[i]!) &&
+      Math.abs(xea[i]!) > EAR_CHORD_K_MIN;
+    const w = earChord
+      ? EAR_CHORD_K_DE > EAR_CHORD_K_LO
+        ? Math.max(0, Math.min(1, (EAR_CHORD_K_DE * de0 - des[i]!) / ((EAR_CHORD_K_DE - EAR_CHORD_K_LO) * de0)))
+        : 1
+      : 0;
+    const rawYaw = Math.atan(ears ? (2 * xne[i]! + xna[i]!) / 2 : 2 * xne[i]!) * DEG;
     const tp = ears ? (yne[i]! - yne0 + (yna[i]! - yna0)) / 2 : yne[i]! - yne0;
-    yaw.push(Math.atan(ty) * DEG);
+    yaw.push(w > 0 ? w * (Math.atan(2 * xea[i]!) * DEG) + (1 - w) * rawYaw : rawYaw);
     pitch.push(Math.atan(tp) * DEG);
   }
   return { ears, yaw, pitch };
