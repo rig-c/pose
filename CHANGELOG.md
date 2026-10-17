@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.0](https://github.com/rig-c/pose/compare/v0.26.0...v0.27.0) (2026-10-17)
+
+
+### Features
+
+* **face:** read yaw from ear chord on foreshortened side gaze ([#189](https://github.com/rig-c/pose/issues/189)) ([#196](https://github.com/rig-c/pose/issues/196)) ([b5b4cf9](https://github.com/rig-c/pose/commit/b5b4cf9b0b07a0efc191fde9dd609b84781b0188))
+
 ## [0.26.0](https://github.com/rig-c/pose/compare/v0.25.0...v0.26.0) (2026-10-17)
 
 
