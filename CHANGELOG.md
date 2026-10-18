@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.30.0](https://github.com/rig-c/pose/compare/v0.29.1...v0.30.0) (2026-10-18)
+
+
+### Features
+
+* **report:** bind review events to exact clocks and input hashes ([#214](https://github.com/rig-c/pose/issues/214)) ([58a6eeb](https://github.com/rig-c/pose/commit/58a6eebfb249d35c00117d186867288c43d6f954)), closes [#209](https://github.com/rig-c/pose/issues/209)
+
+
+### Bug Fixes
+
+* **retarget:** solve symmetric gesture set diamond in chest-local frame ([#207](https://github.com/rig-c/pose/issues/207)) ([#212](https://github.com/rig-c/pose/issues/212)) ([b420bae](https://github.com/rig-c/pose/commit/b420baee6e0d213e293a407084973493af8d8942))
+
 ## [0.29.1](https://github.com/rig-c/pose/compare/v0.29.0...v0.29.1) (2026-10-18)
 
 
