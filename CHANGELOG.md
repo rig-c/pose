@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.1](https://github.com/rig-c/pose/compare/v0.31.0...v0.31.1) (2026-10-18)
+
+
+### Bug Fixes
+
+* **retarget:** ramp figure scale across airborne gaps and gate mesh folds ([#231](https://github.com/rig-c/pose/issues/231)) ([#232](https://github.com/rig-c/pose/issues/232)) ([a8d5e11](https://github.com/rig-c/pose/commit/a8d5e1186ac4caa7b562be9a3587bcc178199666))
+
 ## [0.31.0](https://github.com/rig-c/pose/compare/v0.30.1...v0.31.0) (2026-10-18)
 
 
