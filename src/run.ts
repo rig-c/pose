@@ -4,9 +4,10 @@
  * measure where the rig landed, read the folds (and which no switch covers),
  * and write — only when every check passed.
  */
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { knownSetsOf, readMap, resolveMap, type JointMap, type Rest } from './map.ts';
 import { cleanLine, inferredSource } from './clean.ts';
 import { convertCoco17, personTrack, readPoseSequence, TRAVEL_IN_PLACE, type CameraFrame } from './pose.ts';
@@ -19,6 +20,7 @@ import { landed, measureFeet, measureLanding, measurePosture, measureShear, pose
 import { legsOf, PLANT_SWITCH, STANCE_BOUNDS } from './legs.ts';
 import { M2_IDENTITY, mulM2, reduceKeys, reduceScale, reduceUnderScale, SCALE_REDUCE, setupLocal, smoothTrunk, type M2, type ReduceBone, type Reduced, type ReduceRow, type UnderBone } from './reduce.ts';
 import type { BlendHold, Closure, Floor, LegScale, Lowered, Side, Stance, SupportScaleRun } from './legs.ts';
+import { reportRenderDomain, writeReport, type ReportInput } from './report.ts';
 import { bodyLine, faceLine } from './face.ts';
 
 export interface RetargetArgs extends RetargetOptions {
@@ -82,6 +84,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
   }
   args.throwIfAny();
   const input = resolveRig(a.rig, a.baseMotion);
+  const rigSnapshot = readReportInput(input.rig);
   const base = baseMotionOf(input);
   const animations = base.animations as Record<string, unknown>;
   if (a.name in animations) refuse([{ code: 'MOTION_NAME_FREE', text: `the rig's motion spec already has an animation "${a.name}" (it has ${Object.keys(animations).join(', ')}); name this one with --name` }]);
@@ -90,8 +93,9 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     refuse([{ code: 'IDLE_NAME', text: `${a.idle !== undefined ? `--idle "${idleName}"` : '--carry-idle reads the animation "idle", and'} the rig's motion spec ${input.motion === null ? '— there is none, so it has no animations' : `${input.motion} has no animation "${idleName}" (it has ${Object.keys(animations).join(', ') || 'none'})`}; name the rig's idle with --idle` }]);
   }
   const fragment = a.merge === undefined ? [] : readFragment(parseJson(readFileSync(a.merge, 'utf8'), a.merge, 'MERGE_JSON'), a.merge);
-  const map = readMap(readFileSync(a.map, 'utf8'), a.map);
-  const poseText = readFileSync(a.pose, 'utf8');
+  const mapSnapshot = readReportInput(a.map), poseSnapshot = readReportInput(a.pose);
+  const map = readMap(mapSnapshot.bytes.toString('utf8'), a.map);
+  const poseText = poseSnapshot.bytes.toString('utf8');
   const seq = a.coco ? convertCoco17(poseText, a.pose) : readPoseSequence(poseText, a.pose);
   if (seq.cleaned === undefined) refuse([{ code: 'POSE_NOT_CLEANED', text: notCleaned(a.pose, a.coco) }]);
   const frames = personTrack(seq, a.person, a.pose);
@@ -305,48 +309,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       for (const u of uncovered) say(`  UNCOVERED mesh "${u.attachment}" (slot "${u.slot}"; chains ${u.chains.length === 0 ? 'none' : u.chains.join(', ')}) folds with no switch covering it on ${u.times.length} frame(s): t=${spans(u.times, 1 / fps)}`);
     }
 
-    if (a.build !== undefined) {
-      // Built again where it will live, not copied: rigc's page paths are relative to the build (#18).
-      rmSync(a.build, { recursive: true, force: true });
-      const kept = buildInto(input.rig, join(scratch, 'with', 'motion.json'), resolve(a.build), a.profile, undefined, a.images);
-      if (!kept.green) refuse([{ code: 'RIG_GATE', text: `rigc build into --build ${a.build} is red where the same build was green in scratch (exit ${kept.run.status}); nothing written` }, ...kept.fails.map((x) => ({ code: 'RIGC', text: x }))]);
-    }
-    writeFileSync(a.out, `${JSON.stringify(motion, null, 2)}\n`);
-    if (a.camera !== undefined) {
-      const ss = r.figureScale.frames.map((x) => x.s);
-      const minS = ss.length === 0 ? 1 : Math.min(...ss);
-      const maxS = ss.length === 0 ? 1 : Math.max(...ss);
-      writeFileSync(a.camera, `${JSON.stringify({
-        spec: 'rig-pose-camera/1',
-        rig: input.name,
-        animation: a.name,
-        frames: r.figureScale.frames.map((f, i) => {
-          const cam = seq.camera?.[i];
-          const camS = cam?.s ?? 1;
-          return {
-            frame: f.frame,
-            t: f.t,
-            s: f.s,
-            rawS: f.rawS,
-            tx: cam?.tx ?? 0,
-            ty: cam?.ty ?? 0,
-            videoS: Number((f.s * camS).toFixed(6)),
-          };
-        }),
-        summary: {
-          minS,
-          maxS,
-          maxStep: r.figureScale.maxStep,
-          endOverStart: r.figureScale.endOverStart,
-        },
-      }, null, 2)}\n`);
-    }
-    if (a.render !== undefined && f.meshes !== null && f.frames !== '') {
-      rmSync(a.render, { recursive: true, force: true });
-      cpSync(f.frames, a.render, { recursive: true });
-    }
-    if (a.report !== undefined) {
-      writeFileSync(a.report, `${JSON.stringify({
+    if (a.report !== undefined) assertReportInputs([rigSnapshot,mapSnapshot,poseSnapshot]);
+    const reportText = a.report === undefined ? null : writeReport({
         spec: 'rig-pose-report/1',
         rigc,
         rig: input.name,
@@ -403,8 +367,49 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         idleKeptOut: idle === null ? null : idle.keptOut,
         merged: fragment.map((tr) => ({ track: trackLabel(tr, groups), keys: tr.keys.length })),
         reduce: reduced === null ? null : { tolerance: a.reduce, hipTolerance: a.reduceHip ?? null, rows: reduced.rows },
+      }, map, { frameTimes: r.times }, f.meshes !== null && doc.slots.length > 0 ? reportRenderDomain(JSON.parse(readFileSync(join(f.frames, '..', 'frames.json'), 'utf8')), a.name) : null, {rig:rigSnapshot.identity,map:mapSnapshot.identity,pose:poseSnapshot.identity});
+    if (a.build !== undefined) {
+      // Built again where it will live, not copied: rigc's page paths are relative to the build (#18).
+      rmSync(a.build, { recursive: true, force: true });
+      const kept = buildInto(input.rig, join(scratch, 'with', 'motion.json'), resolve(a.build), a.profile, undefined, a.images);
+      if (!kept.green) refuse([{ code: 'RIG_GATE', text: `rigc build into --build ${a.build} is red where the same build was green in scratch (exit ${kept.run.status}); nothing written` }, ...kept.fails.map((x) => ({ code: 'RIGC', text: x }))]);
+    }
+    writeFileSync(a.out, `${JSON.stringify(motion, null, 2)}\n`);
+    if (a.camera !== undefined) {
+      const ss = r.figureScale.frames.map((x) => x.s);
+      const minS = ss.length === 0 ? 1 : Math.min(...ss);
+      const maxS = ss.length === 0 ? 1 : Math.max(...ss);
+      writeFileSync(a.camera, `${JSON.stringify({
+        spec: 'rig-pose-camera/1',
+        rig: input.name,
+        animation: a.name,
+        frames: r.figureScale.frames.map((f, i) => {
+          const cam = seq.camera?.[i];
+          const camS = cam?.s ?? 1;
+          return {
+            frame: f.frame,
+            t: f.t,
+            s: f.s,
+            rawS: f.rawS,
+            tx: cam?.tx ?? 0,
+            ty: cam?.ty ?? 0,
+            videoS: Number((f.s * camS).toFixed(6)),
+          };
+        }),
+        summary: {
+          minS,
+          maxS,
+          maxStep: r.figureScale.maxStep,
+          endOverStart: r.figureScale.endOverStart,
+        },
       }, null, 2)}\n`);
     }
+    if (a.render !== undefined && f.meshes !== null && f.frames !== '') {
+      rmSync(a.render, { recursive: true, force: true });
+      cpSync(f.frames, a.render, { recursive: true });
+    }
+    if (a.report !== undefined && reportText !== null) writeFileSync(a.report, reportText);
+
     if (a.camera !== undefined) say(`  wrote ${a.camera} — camera track (${r.figureScale.frames.length} frames)`);
     say(`  wrote ${a.out} — animations: ${Object.keys(motion.animations).join(', ')}`);
     return { lines, written: true };
@@ -793,4 +798,15 @@ export function notCleaned(pose: string, coco: boolean): string {
   const out = pose.endsWith('.json') ? `${pose.slice(0, -'.json'.length)}.clean.json` : `${pose}.clean.json`;
   const what = coco ? `${pose} is COCO-17 (--coco), which carries no "cleaned" record` : `${pose} has no "cleaned" record`;
   return `${what}; retarget reads a sequence rig-pose clean wrote (spikes, occlusion, smoothing; there is no flag to skip it). Run \`rig-pose clean ${coco ? '--coco ' : ''}--pose ${pose} --out ${out}\` (add --loop for one cycle of a gait) and retarget --pose ${out}`;
+}
+
+/** File-bound identities are assembled only in this existing IO boundary. */
+export interface ReportInputSnapshot {file:string;bytes:Buffer;identity:ReportInput;size:number;mtimeMs:number}
+export function readReportInput(file:string):ReportInputSnapshot {
+  const path=realpathSync(resolve(file)),before=statSync(path),bytes=readFileSync(path),after=statSync(path);
+  if(!before.isFile()||before.size!==after.size||before.mtimeMs!==after.mtimeMs)throw new Refusal([{code:'REPORT_INPUTS',text:`${file}: input changed while reading; expected one stable regular file`}]);
+  return {file:resolve(file),bytes,identity:{path:relative(process.cwd(),path).split('\\').join('/'),sha256:createHash('sha256').update(bytes).digest('hex')},size:after.size,mtimeMs:after.mtimeMs};
+}
+export function assertReportInputs(inputs:readonly ReportInputSnapshot[]):void {
+  for(const expected of inputs){const current=readReportInput(expected.file);if(current.identity.path!==expected.identity.path||current.identity.sha256!==expected.identity.sha256||current.size!==expected.size||current.mtimeMs!==expected.mtimeMs)throw new Refusal([{code:'REPORT_INPUTS_CHANGED',text:`${expected.identity.path}: consumed input changed before output writes; expected SHA-256 ${expected.identity.sha256}, found ${current.identity.sha256}`}]);}
 }
