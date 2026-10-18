@@ -5382,7 +5382,7 @@ describe('leg-scale (#148): one straight length per segment for both legs, so co
       cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
       cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
       const path = join(d, 'src', 'retarget.ts');
-      const from = 'const ls = legScaleOf(seg.lengths, limits, straightByKind.get(seg.kind)!);';
+      const from = 'const ls = legScaleOf(seg.lengths, limits, straightByKind.get(seg.kind)! * rigShareOf(seg));';
       const before = readFileSync(path, 'utf8');
       expect(before.split(from)).toHaveLength(2);
       writeFileSync(path, before.replace(from, 'const ls = legScaleOf(seg.lengths, limits, seg.ownStraight);'));
@@ -8435,4 +8435,147 @@ describe('#218: adjacent gesture-set bridges interpolate across the full gap in 
     }
   }, SLOW);
 });
+
+describe('#225: per-leg setup-weighted straight length and clamped asked values in report', () => {
+  const N = 24;
+  const DT = 1 / 24;
+
+  function makeAsymmetricLegCase() {
+    const motion: Motion = {
+      ...BASE,
+      n: N,
+      dt: DT,
+      trunk: () => 90,
+      rt: () => -90,
+      rs: () => -90,
+      lt: () => -90,
+      ls: () => -90,
+      hip: () => [0, 0],
+    };
+    const pose = poseDoc(motion, (i, j) => {
+      const rHip = j.r_hip!.at as Pt;
+      const lHip = j.l_hip!.at as Pt;
+      if (i < 6) {
+        // Left leg starts lower (150 px vs right 146 px) so left leg supports continuously from frame 0.
+        j.l_knee = { state: 'observed', at: [lHip[0], lHip[1] + 80], score: 0.9 };
+        j.l_ankle = { state: 'observed', at: [lHip[0], lHip[1] + 150], score: 0.9 };
+        j.r_knee = { state: 'observed', at: [rHip[0], rHip[1] + 78], score: 0.9 };
+        j.r_ankle = { state: 'observed', at: [rHip[0], rHip[1] + 146], score: 0.9 };
+      } else if (i < 18) {
+        // Both legs straight at 80 + 70 = 150 px for 12/24 frames -> P95 straight is 80 / 70 px on both sides.
+        j.r_knee = { state: 'observed', at: [rHip[0], rHip[1] + 80], score: 0.9 };
+        j.r_ankle = { state: 'observed', at: [rHip[0], rHip[1] + 150], score: 0.9 };
+        j.l_knee = { state: 'observed', at: [lHip[0], lHip[1] + 80], score: 0.9 };
+        j.l_ankle = { state: 'observed', at: [lHip[0], lHip[1] + 150], score: 0.9 };
+      } else {
+        // On frames 18..23, left leg supports at 76.0 + 67.2 = 143.2 px while right leg lifts by 9.4 px (133.8 px: thigh 78.8 px, shin 55.0 px).
+        j.l_knee = { state: 'observed', at: [lHip[0], lHip[1] + 76.0], score: 0.9 };
+        j.l_ankle = { state: 'observed', at: [lHip[0], lHip[1] + 143.2], score: 0.9 };
+        j.r_knee = { state: 'observed', at: [rHip[0], rHip[1] + 78.8], score: 0.9 };
+        j.r_ankle = { state: 'observed', at: [rHip[0], rHip[1] + 133.8], score: 0.9 };
+      }
+    });
+    // Setup rig has asymmetric legs: left leg 81.2 + 70.5 = 151.7 u (+2.29% longer than right leg 78.8 + 69.5 = 148.3 u).
+    return setup({
+      rig: {
+        bones: (bs) =>
+          bs.map((b) => {
+            if (b.name === 'leg_r0') return { ...b, rotation: -90, length: 78.8 };
+            if (b.name === 'leg_r1') return { ...b, x: 78.8, rotation: 0, length: 69.5 };
+            if (b.name === 'leg_l0') return { ...b, rotation: -90, length: 81.2 };
+            if (b.name === 'leg_l1') return { ...b, x: 81.2, rotation: 0, length: 70.5 };
+            return b;
+          }),
+      },
+      map: {
+        ...baseMap(),
+        chains: baseChains().map((ch) => (ch.name === 'leg_r' ? { ...ch, bend: 'free' } : ch)),
+      },
+      pose,
+    });
+  }
+
+  function liftRatioOnSpan(buildDir: string): number {
+    const doc = loadBuild(buildDir);
+    const poses = poseRawAnimation(doc, 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+    const ratios: number[] = [];
+    const seqLift = 9.4; // 143.2 - 133.8 px (rig mean leg 150u / sequence straight leg 150px = 1.0 u/px)
+    for (let i = 18; i < N; i++) {
+      const b = byName(poses[i]!.bones);
+      const rShin = b.get('leg_r1')!;
+      const lShin = b.get('leg_l1')!;
+      const rAnkleY = rShin.worldY + rShin.c * 69.5;
+      const lAnkleY = lShin.worldY + lShin.c * 70.5;
+      ratios.push((rAnkleY - lAnkleY) / seqLift);
+    }
+    ratios.sort((a, b) => a - b);
+    return ratios[Math.floor(ratios.length / 2)]!;
+  }
+
+  test('weights reference straight length by each leg segment\'s setup bone share and records clamped asked values in LEG-SCALE and report.json', () => {
+    const c = makeAsymmetricLegCase();
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--leg-scale', '0.8,1.05', '--plant-feet', '--stance', '0.04', '--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+
+    const legLines = linesOf(r, 'LEG-SCALE');
+    expect(legLines[0]).toContain('chain "leg_r" bone "leg_r0" (r_hip → r_knee): straight length 78.8px');
+    expect(legLines[1]).toContain('chain "leg_r" bone "leg_r1" (r_knee → r_ankle): straight length 69.5px');
+    expect(legLines[1]).toContain('6 frame(s) under 0.8, clamped (frames 18–23) (asked 0.791)');
+    expect(legLines[2]).toContain('chain "leg_l" bone "leg_l0" (l_hip → l_knee): straight length 81.2px');
+    expect(legLines[3]).toContain('chain "leg_l" bone "leg_l1" (l_knee → l_ankle): straight length 70.5px');
+
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as {
+      legScale: Array<{
+        bone: string;
+        straight: number;
+        clamped: Array<{ frames: [number, number]; times: [number, number]; limit: 'low' | 'high'; asked: { min: number; max: number } }>;
+      }>;
+    };
+    const r0 = rep.legScale.find((s) => s.bone === 'leg_r0')!;
+    const r1 = rep.legScale.find((s) => s.bone === 'leg_r1')!;
+    const l0 = rep.legScale.find((s) => s.bone === 'leg_l0')!;
+    const l1 = rep.legScale.find((s) => s.bone === 'leg_l1')!;
+    expect(r0.straight).toBeCloseTo(78.8, 3);
+    expect(r1.straight).toBeCloseTo(69.5, 3);
+    expect(l0.straight).toBeCloseTo(81.2, 3);
+    expect(l1.straight).toBeCloseTo(70.5, 3);
+    expect(r1.clamped).toHaveLength(1);
+    expect(r1.clamped[0]!.frames).toEqual([18, 23]);
+    expect(r1.clamped[0]!.limit).toBe('low');
+    expect(r1.clamped[0]!.times[0]).toBeCloseTo(18 * DT, 5);
+    expect(r1.clamped[0]!.times[1]).toBeCloseTo(23 * DT, 5);
+    expect(r1.clamped[0]!.asked.min).toBeCloseTo(55.0 / 69.5, 6);
+    expect(r1.clamped[0]!.asked.max).toBeCloseTo(55.0 / 69.5, 6);
+
+    const ratio = liftRatioOnSpan(c.build);
+    expect(ratio).toBeCloseTo(8.8 / 9.4, 3);
+    expect(ratio).toBeGreaterThanOrEqual(0.85);
+    expect(ratio).toBeLessThanOrEqual(1.15);
+
+    // Mutant (Bar 3): pooling the straight reference length across both legs without setup-bone weighting pushes the lifted foot ratio past 1.15.
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm225-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const pRet = join(d, 'src', 'retarget.ts');
+      const srcRet = readFileSync(pRet, 'utf8');
+      const fromRet = 'const ls = legScaleOf(seg.lengths, limits, straightByKind.get(seg.kind)! * rigShareOf(seg));';
+      expect(srcRet.split(fromRet)).toHaveLength(2);
+      writeFileSync(pRet, srcRet.replace(fromRet, 'const ls = legScaleOf(seg.lengths, limits, straightByKind.get(seg.kind)!);'));
+
+      const cMut = makeAsymmetricLegCase();
+      const rMut = retarget(cMut, ['--leg-scale', '0.8,1.05', '--plant-feet', '--stance', '0.04'], join(d, 'cli.ts'));
+      expect(rMut.status).toBe(0);
+      const ratioMut = liftRatioOnSpan(cMut.build);
+      expect(ratioMut).toBeGreaterThan(1.15);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
 

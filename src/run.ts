@@ -773,12 +773,23 @@ function legRangeLine(which: 'free' | 'supporting', range: Partial<Record<'r' | 
   return `bound from the leg's own range: on a frame where the picture folds the ${which} leg below ${bounds[0]} of its straight length (hip → ankle, its 95th percentile), the lower bound is that fold — lowest ${sides.join(', ')}; the upper stays ${bounds[1]}`;
 }
 
-/** A LEG-SCALE line: the segment, its straight length, its ratio's spread, and the frames clamped. */
+/** A LEG-SCALE line: the segment, its straight length, its ratio's spread, and the frames clamped (with the asked value, #225). */
 function legScaleLine(l: LegScale, times: readonly number[]): string {
   const span = (x: [number, number]) => (x[0] === x[1] ? `${x[0]}` : `${x[0]}–${x[1]}`);
   const count = (rs: Array<[number, number]>) => rs.reduce((k, x) => k + x[1] - x[0] + 1, 0);
-  const clamp = (rs: Array<[number, number]>, at: number, how: string) => (rs.length === 0 ? `none ${how} ${at}` : `${count(rs)} frame(s) ${how} ${at}, clamped (frames ${rs.map(span).join(', ')})`);
-  return `chain "${l.chain}" bone "${l.bone}" (${l.joints[0]} → ${l.joints[1]}): straight length ${l.straight.toFixed(1)}px (larger 95th percentile of ${times.length} frames, both legs); picture length ÷ straight ${l.ratio.min.toFixed(3)} … ${l.ratio.max.toFixed(3)} (median ${l.ratio.median.toFixed(3)}); scalex keyed in [${l.limits[0]}, ${l.limits[1]}]: ${clamp(l.low, l.limits[0], 'under')}; ${clamp(l.high, l.limits[1], 'over')}`;
+  const val = (r: { min: number; max: number }) => (r.min.toFixed(3) === r.max.toFixed(3) ? r.min.toFixed(3) : `${r.min.toFixed(3)}–${r.max.toFixed(3)}`);
+  const askedOf = (x: [number, number], kind: 'low' | 'high'): string => {
+    const c = l.clamped?.find((r) => r.limit === kind && r.frames[0] === x[0] && r.frames[1] === x[1]);
+    if (c !== undefined) return `asked ${val(c.asked)}`;
+    const sub = l.asked.slice(x[0], x[1] + 1);
+    return sub.length === 0 ? '' : `asked ${val({ min: Math.min(...sub), max: Math.max(...sub) })}`;
+  };
+  const clamp = (rs: Array<[number, number]>, at: number, how: string, kind: 'low' | 'high') => {
+    if (rs.length === 0) return `none ${how} ${at}`;
+    const detail = rs.length === 1 ? ` (${askedOf(rs[0]!, kind)})` : ` (${rs.map((x) => `${span(x)}: ${askedOf(x, kind)}`).join(', ')})`;
+    return `${count(rs)} frame(s) ${how} ${at}, clamped (frames ${rs.map(span).join(', ')})${detail}`;
+  };
+  return `chain "${l.chain}" bone "${l.bone}" (${l.joints[0]} → ${l.joints[1]}): straight length ${l.straight.toFixed(1)}px (larger 95th percentile of ${times.length} frames, both legs); picture length ÷ straight ${l.ratio.min.toFixed(3)} … ${l.ratio.max.toFixed(3)} (median ${l.ratio.median.toFixed(3)}); scalex keyed in [${l.limits[0]}, ${l.limits[1]}]: ${clamp(l.low, l.limits[0], 'under', 'low')}; ${clamp(l.high, l.limits[1], 'over', 'high')}`;
 }
 
 /** A LEG-SCALE past the floor (support) line (rig-c/pose#133): the supporting leg segment scaled below `--leg-scale`'s floor down to #95's bound. */
