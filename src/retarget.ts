@@ -839,13 +839,17 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
               return cons.map((c) => c * legSum[0]!);
             }
           }
-          const top = heldPt('nose') ?? heldPt('neck');
-          if (top !== null) {
-            const h = ar.map((r, i) => Math.max(r[1], al[i]![1]) - top[i]![1]);
-            if (h.every((v) => v > 1e-6)) return h;
+          const segH =
+            rs !== null && ls !== null
+              ? legSum.map((l, i) => l + dist2([(hr[i]![0] + hl[i]![0]) / 2, (hr[i]![1] + hl[i]![1]) / 2], [(rs[i]![0] + ls[i]![0]) / 2, (rs[i]![1] + ls[i]![1]) / 2]))
+              : legSum;
+          const out = winPercentile(segH, 15, STRAIGHT_PERCENTILE);
+          if (feet !== null) {
+            for (const sp of feet.supports) {
+              const m = percentile(segH.slice(sp.frames[0], sp.frames[1] + 1), STRAIGHT_PERCENTILE);
+              for (let i = sp.frames[0]; i <= sp.frames[1]; i++) out[i] = m;
+            }
           }
-          const out = winPercentile(legSum, 1, STRAIGHT_PERCENTILE);
-          out[0] = legSum[0]!;
           return out;
         }
         return legSum;
