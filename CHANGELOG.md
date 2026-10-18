@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.1](https://github.com/rig-c/pose/compare/v0.29.0...v0.29.1) (2026-10-18)
+
+
+### Bug Fixes
+
+* **retarget:** drive nod coupling from clamped head.translate.y and bridge gesture sets in parent-local joint space ([#205](https://github.com/rig-c/pose/issues/205), [#206](https://github.com/rig-c/pose/issues/206)) ([#210](https://github.com/rig-c/pose/issues/210)) ([07df3ca](https://github.com/rig-c/pose/commit/07df3ca53aa40b2f0b7a962c1ea1aad9553d84aa))
+
 ## [0.29.0](https://github.com/rig-c/pose/compare/v0.28.0...v0.29.0) (2026-10-17)
 
 
