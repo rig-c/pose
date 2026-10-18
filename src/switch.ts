@@ -787,14 +787,14 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
         }
         const tight0 = isTightSet(set0, cn);
         const tight1 = isTightSet(set1, cn);
-        if (tight0 && set0 !== set1) {
+        if (tight0 && set0 !== set1 && g1 - g0 + 1 <= 10) {
           let i = g0;
           while (i <= g1 && rawChainMax(set0, cn, i) <= opts.switchTolerance + hyst) {
             cClamp.get(cn)![i] = set0;
             i++;
           }
         }
-        if (tight1 && set0 !== set1) {
+        if (tight1 && set0 !== set1 && g1 - g0 + 1 <= 10) {
           let enter1 = g1 + 1;
           for (let i = g0; i <= g1; i++) {
             if (rawChainMax(set1, cn, i) <= opts.switchTolerance) {
@@ -809,63 +809,53 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
             if (arr[i] !== null) cClamp.get(cn)![i] = arr[i]!;
           }
         }
-        if (!tight0 && set0 !== set1) {
-          const c = map.chains.find((x) => x.name === cn);
-          if (c !== undefined) {
-            let k = sw0.frames[1];
-            while (
-              k >= sw0.frames[0] &&
-              c.bones.some((b) => {
-                const lim = set0.turn[b];
-                const dr = set0.drawn[b];
-                const ndr = set1.drawn[b];
-                if (lim === undefined || dr === undefined || ndr === undefined) return false;
-                const t = wrap(targets.get(b)![k]! - dr);
-                return overflow(t, lim) > RANGE_SLACK && Math.abs(wrap(targets.get(b)![k + 1]! - ndr)) < Math.abs(wrap(targets.get(b)![k]! - ndr));
-              })
-            ) {
-              cClamp.get(cn)![k] = null;
-              k--;
-            }
-          }
-        }
         cPick.set(cn, arr);
       }
-      // #187 Rule 1 & Rule 2: when two gesture sets are adjacent (gap <= 10 frames, or the arm is moving
-      // toward the next set's pose), unwrap any bone that turned the long way (> 180° through inverted angles)
-      // onto the short arc and pick one shared switch frame t_switch where the measured path crosses halfway
+      // #187 Rule 1 & Rule 2 / #206: when two gesture sets are adjacent (gap <= 10 frames),
+      // unwrap any bone that turned the long way (> 180° through inverted angles in its own joint
+      // space — world angle for a chain's root bone, parent-local angle for a child bone) onto the
+      // short arc and pick one shared switch frame t_switch where the measured path crosses halfway
       // between set0.drawn and set1.drawn.
-      const movingTowardNext =
-        set0 !== set1 &&
-        distances.get(set1.name)![g1]! < distances.get(set1.name)![g0]! &&
-        distances.get(set0.name)![g1]! > distances.get(set0.name)![g0]!;
-      const bridgeDirect = set0 !== set1 && (g1 - g0 + 1 <= 10 || movingTowardNext);
+      const bridgeDirect = set0 !== set1 && g1 - g0 + 1 <= 10;
       let tSwitch = g1 + 1;
       if (bridgeDirect && switchingChains.length > 0) {
-        const swBones = switchingChains.flatMap((cn) => map.chains.find((c) => c.name === cn)?.bones ?? []);
-        for (const b of swBones) {
-          const tg = targets.get(b) as number[] | undefined;
-          const d0 = set0.drawn[b];
-          const d1 = set1.drawn[b];
-          if (tg === undefined || d0 === undefined || d1 === undefined) continue;
-          const i0 = sw0.frames[1];
-          const i1 = sw1.frames[0];
-          const startA = tg[i0]!;
-          const endA = tg[i1]!;
-          const unwrapped: number[] = [startA];
-          for (let i = i0 + 1; i <= i1; i++) {
-            unwrapped.push(unwrapped[unwrapped.length - 1]! + wrap(tg[i]! - tg[i - 1]!));
-          }
-          const totalTurn = unwrapped[unwrapped.length - 1]! - startA;
-          const shortTurn = wrap(endA - startA);
-          const invertsBetween = Array.from({ length: g1 - g0 + 1 }, (_, k) => {
-            const a = tg[g0 + k]!;
-            return Math.abs(wrap(a - d0)) > 90 && Math.abs(wrap(a - d1)) > 90;
-          }).some(Boolean);
-          if (Math.abs(totalTurn) > 180 && Math.abs(totalTurn - shortTurn) > 1e-6 && invertsBetween && Math.abs(shortTurn) <= 150) {
-            for (let i = g0; i <= g1; i++) {
-              const p = (unwrapped[i - i0]! - startA) / totalTurn;
-              tg[i] = wrap(startA + p * shortTurn);
+        for (const cn of switchingChains) {
+          const ch = map.chains.find((c) => c.name === cn);
+          if (!ch) continue;
+          for (let bIdx = 0; bIdx < ch.bones.length; bIdx++) {
+            const b = ch.bones[bIdx]!;
+            const parentBone = bIdx > 0 ? ch.bones[bIdx - 1] : undefined;
+            const tg = targets.get(b) as number[] | undefined;
+            const parentTg = parentBone !== undefined ? targets.get(parentBone) : undefined;
+            const d0World = set0.drawn[b];
+            const d1World = set1.drawn[b];
+            if (tg === undefined || d0World === undefined || d1World === undefined) continue;
+            const pd0 = parentBone !== undefined ? set0.drawn[parentBone] : undefined;
+            const pd1 = parentBone !== undefined ? set1.drawn[parentBone] : undefined;
+            const jointAngle = (i: number): number =>
+              parentTg !== undefined ? wrap(tg[i]! - parentTg[i]!) : tg[i]!;
+            const d0 = pd0 !== undefined ? wrap(d0World - pd0) : d0World;
+            const d1 = pd1 !== undefined ? wrap(d1World - pd1) : d1World;
+            const i0 = sw0.frames[1];
+            const i1 = sw1.frames[0];
+            const startA = jointAngle(i0);
+            const endA = jointAngle(i1);
+            const unwrapped: number[] = [startA];
+            for (let i = i0 + 1; i <= i1; i++) {
+              unwrapped.push(unwrapped[unwrapped.length - 1]! + wrap(jointAngle(i) - jointAngle(i - 1)));
+            }
+            const totalTurn = unwrapped[unwrapped.length - 1]! - startA;
+            const shortTurn = wrap(endA - startA);
+            const invertsBetween = Array.from({ length: g1 - g0 + 1 }, (_, k) => {
+              const a = jointAngle(g0 + k);
+              return Math.abs(wrap(a - d0)) > 90 && Math.abs(wrap(a - d1)) > 90;
+            }).some(Boolean);
+            if (Math.abs(totalTurn) > 180 && Math.abs(totalTurn - shortTurn) > 1e-6 && invertsBetween && Math.abs(shortTurn) <= 150) {
+              for (let i = g0; i <= g1; i++) {
+                const p = (unwrapped[i - i0]! - startA) / totalTurn;
+                const localA = wrap(startA + p * shortTurn);
+                tg[i] = parentTg !== undefined ? wrap(parentTg[i]! + localA) : localA;
+              }
             }
           }
         }
@@ -904,7 +894,8 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
             ? pairs.reduce((s, b) => s + Math.abs(wrap(effAngle(b, i) - set1.drawn[b]!)), 0) / pairs.length
             : (distances.get(set1.name)?.[i] ?? Infinity);
           const rootsCrossed =
-            activeSwChains.length === switchingChains.length ||
+            switchingChains.length === 1 ||
+            rootBones.length === 0 ||
             rootBones.every((b) => Math.abs(wrap(effAngle(b, i) - set1.drawn[b]!)) <= Math.abs(wrap(effAngle(b, i) - set0.drawn[b]!)));
           if ((d1 <= d0 || (span > 1e-6 && d0 >= 0.5 * span)) && rootsCrossed) {
             tSwitch = i;
@@ -912,6 +903,9 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
           }
         }
       }
+      const syncBridgeClamp = (cn: string, i: number, picked: AlternateSet) => {
+        if (isTightSet(picked, cn)) cClamp.get(cn)![i] = picked;
+      };
       const anyHeldBehind = switchingChains.some((cn) => {
         const arr = cPick.get(cn)!;
         for (let i = g0; i <= g1; i++) if (arr[i] === null) return false;
@@ -924,7 +918,11 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
         });
         if (bridgeDirect) {
           for (const cn of switchingChains) {
-            for (let i = g0; i <= g1; i++) cPick.get(cn)![i] = i < tSwitch ? set0 : set1;
+            for (let i = g0; i <= g1; i++) {
+              const picked = i < tSwitch ? set0 : set1;
+              cPick.get(cn)![i] = picked;
+              syncBridgeClamp(cn, i, picked);
+            }
           }
         } else if (!frontNear) for (const cn of chains) for (let i = g0; i <= g1; i++) cPick.get(cn)![i] = set0;
       } else {
@@ -980,7 +978,11 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
         }
         if (bridgeDirect) {
           for (const cn of switchingChains) {
-            for (let i = g0; i <= g1; i++) cPick.get(cn)![i] = i < tSwitch ? set0 : set1;
+            for (let i = g0; i <= g1; i++) {
+              const picked = i < tSwitch ? set0 : set1;
+              cPick.get(cn)![i] = picked;
+              syncBridgeClamp(cn, i, picked);
+            }
           }
         }
       }
@@ -1224,7 +1226,7 @@ export const ART_EASE_STEP = 3;
 export function clampArt(switches: readonly Switch[], map: JointMap, targets: Map<string, number[]>, chainHolds?: ReadonlyArray<{ set: string; chain: string; frames: [number, number] }>): void {
   const boneChain = new Map<string, string>();
   for (const c of map.chains) for (const b of c.bones) boneChain.set(b, c.name);
-  const clampSpan = (set: AlternateSet, bone: string, [a, b0]: [number, number]) => {
+  const clampSpan = (set: AlternateSet, bone: string, [a, b]: [number, number]) => {
     const limits = set.turn[bone];
     if (limits === undefined) return;
     const drawn = set.drawn[bone]!;
@@ -1236,28 +1238,14 @@ export function clampArt(switches: readonly Switch[], map: JointMap, targets: Ma
       return Math.abs(c - t) > RANGE_SLACK ? c - t : 0;
     };
     const tightHold = limits[1] - limits[0] <= 10;
-    let b = b0;
-    let trimmedExit = false;
-    if (!tightHold && b + 1 < n && delta(b) !== 0) {
-      const nextSw = switches.find((s) => s.frames[0] > b && s.frames[0] - b <= 10 && s.set !== set.name);
-      const nextDrawn = nextSw !== undefined ? map.alternates.find((x) => x.name === nextSw.set)?.drawn[bone] : undefined;
-      if (nextDrawn !== undefined) {
-        const distNext = (i: number) => Math.abs(wrap(target[i]! - nextDrawn));
-        if (distNext(b + 1) < distNext(b)) {
-          while (b >= a && delta(b) !== 0 && (b === a || distNext(b) < distNext(b - 1))) {
-            b--;
-            trimmedExit = true;
-          }
-        }
-      }
-    }
-    if (a > b) return;
+    const prevNearSw = switches.some((s) => s.frames[1] < a && a - s.frames[1] <= 11);
+    const nextNearSw = switches.some((s) => s.frames[0] > b && s.frames[0] - b <= 11);
     const da = delta(a);
     const db = delta(b);
-    const easeIn = a > 0 && da !== 0 && Math.sign(delta(a - 1)) === Math.sign(da) && !tightHold
+    const easeIn = a > 0 && da !== 0 && Math.sign(delta(a - 1)) === Math.sign(da) && !(tightHold && prevNearSw)
       ? Math.max(ART_EASE_FRAMES, Math.ceil(Math.abs(da) / ART_EASE_STEP) - 1)
       : 0;
-    const easeOut = b + 1 < n && db !== 0 && Math.sign(delta(b + 1)) === Math.sign(db) && !tightHold && !trimmedExit
+    const easeOut = b + 1 < n && db !== 0 && Math.sign(delta(b + 1)) === Math.sign(db) && !(tightHold && nextNearSw)
       ? Math.max(ART_EASE_FRAMES, Math.ceil(Math.abs(db) / ART_EASE_STEP) - 1)
       : 0;
     for (let i = a; i <= b; i++) {

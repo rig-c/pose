@@ -99,18 +99,20 @@ const DEG = 180 / Math.PI;
 export const HELD_MISS = 0.01;
 
 /**
- * Beat-nod phase-coupling gain (`°/unit`) from the vertical residual that the
- * `±2%` neck-length clamp removes from `head.translate.y` (`rawNod - dy`) onto
- * `map.face.pitch` (`pitch_dial.rotate`, `rig-c/pose#190`). Measured on the
- * dancer reference hand pass (`hand/p1` HP2: `+2.8°/unit`).
+ * Beat-nod phase-coupling gain (`°/unit`) from the clamped `head.translate.y`
+ * offset (`clampedY`, bounded by `±2%` of neck length) onto `map.face.pitch`
+ * (`pitch_dial.rotate`, `rig-c/pose#190`, `#205`) when the neck-length clamp
+ * acts on the sequence. Measured on the dancer reference hand pass (`hand/p1`
+ * HP2: `+2.8°/unit`).
  */
 export const NOD_RESIDUAL_PITCH_GAIN = 2.8;
 
 /**
- * Beat-nod phase-coupling gain (`°/unit`) from the vertical residual that the
- * `±2%` neck-length clamp removes from `head.translate.y` (`rawNod - dy`) onto
- * the head chain bone's `rotate` track (`head.rotate`, `rig-c/pose#190`).
- * Measured on the dancer reference hand pass (`hand/p1` HP2: `+1.6°/unit`).
+ * Beat-nod phase-coupling gain (`°/unit`) from the clamped `head.translate.y`
+ * offset (`clampedY`, bounded by `±2%` of neck length) onto the head chain
+ * bone's `rotate` track (`head.rotate`, `rig-c/pose#190`, `#205`) when the
+ * neck-length clamp acts on the sequence. Measured on the dancer reference
+ * hand pass (`hand/p1` HP2: `+1.6°/unit`).
  */
 export const NOD_RESIDUAL_HEAD_GAIN = 1.6;
 
@@ -1396,14 +1398,14 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       }
     }
     let rotDeg = targets.get(hb)?.[i] ?? restOf.get(hb) ?? 0;
-    if (headNodReading !== null && headNodReading.bone === hb) {
-      const res = headNodReading.residual[i] ?? 0;
-      if (res !== 0) {
+    if (headNodReading !== null && headNodReading.bone === hb && headNodReading.residual.some((r) => r !== 0)) {
+      const nodY = headNodReading.clampedY[i] ?? 0;
+      if (nodY !== 0) {
         const above = mappedAbove(hb);
         const hc = map.chains.find((c) => c.bones.includes(hb));
         const limits = hc?.range[hb];
         const cov = hc !== undefined ? covered.get(hc.name) : undefined;
-        let next = wrap(rotDeg + NOD_RESIDUAL_HEAD_GAIN * res);
+        let next = wrap(rotDeg + NOD_RESIDUAL_HEAD_GAIN * nodY);
         if (limits !== undefined && cov?.[i] !== true) {
           const key = wrap((next - restOf.get(hb)!) - (above === null ? 0 : turn(above, i)));
           if (overflow(key, limits) > RANGE_SLACK) {
@@ -2145,15 +2147,38 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       const [lo, hi] = s.frames;
       if (lo <= 0 || hi + 1 >= n) continue;
       if (cov?.[lo - 1] !== true && cov?.[hi + 1] !== true) continue;
+      if (cov?.[lo - 1] === true && cov?.[hi + 1] === true && hi - lo + 1 <= 10) continue;
+      const ch = map.chains.find((c) => c.name === s.chain);
+      const bIdx = ch !== undefined ? ch.bones.indexOf(s.bone) : -1;
+      const parentTg = ch !== undefined && bIdx > 0 ? targets.get(ch.bones[bIdx - 1]!) : undefined;
       const tg = targets.get(s.bone)!;
-      const startA = tg[lo - 1]!;
-      const total = wrap(tg[hi + 1]! - startA);
+      const startA = parentTg !== undefined ? wrap(tg[lo - 1]! - parentTg[lo - 1]!) : tg[lo - 1]!;
+      const endA = parentTg !== undefined ? wrap(tg[hi + 1]! - parentTg[hi + 1]!) : tg[hi + 1]!;
+      const total = wrap(endA - startA);
       const steps = hi - lo + 2;
       for (let k = lo; k <= hi; k++) {
-        tg[k] = wrap(startA + ((k - lo + 1) / steps) * total);
+        const localA = wrap(startA + ((k - lo + 1) / steps) * total);
+        tg[k] = parentTg !== undefined ? wrap(parentTg[k]! + localA) : localA;
       }
       s.step = r3(total / steps);
     }
+    const interpolateChainInJointSpace = (ch: Chain, i0: number, i1: number) => {
+      const steps = i1 - i0;
+      if (steps < 2 || i0 < 0 || i1 >= n) return;
+      for (let bIdx = 0; bIdx < ch.bones.length; bIdx++) {
+        const b = ch.bones[bIdx]!;
+        const tg = targets.get(b);
+        if (!tg) continue;
+        const parentTg = bIdx > 0 ? targets.get(ch.bones[bIdx - 1]!) : undefined;
+        const startA = parentTg !== undefined ? wrap(tg[i0]! - parentTg[i0]!) : tg[i0]!;
+        const endA = parentTg !== undefined ? wrap(tg[i1]! - parentTg[i1]!) : tg[i1]!;
+        const total = wrap(endA - startA);
+        for (let k = i0 + 1; k < i1; k++) {
+          const localA = wrap(startA + ((k - i0) / steps) * total);
+          tg[k] = parentTg !== undefined ? wrap(parentTg[k]! + localA) : localA;
+        }
+      }
+    };
     const holds = sw.chainHolds ?? [];
     for (const h of holds) {
       const swParent = sw.switches.find((s) => s.set === h.set && s.frames[0] === h.frames[0] && s.frames[1] > h.frames[1]);
@@ -2165,19 +2190,10 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       if (lo > hi || lo <= 0 || hi + 1 >= n) continue;
       const ch = map.chains.find((c) => c.name === h.chain);
       if (!ch) continue;
-      const steps = hi - lo + 2;
-      for (const b of ch.bones) {
-        const tg = targets.get(b);
-        if (!tg) continue;
-        const startA = tg[lo - 1]!;
-        const total = wrap(tg[hi + 1]! - startA);
-        for (let k = lo; k <= hi; k++) {
-          tg[k] = wrap(startA + ((k - lo + 1) / steps) * total);
-        }
-      }
+      interpolateChainInJointSpace(ch, lo - 1, hi + 1);
     }
   }
-  // #188 / #191: Cover the full shown/bridged span of symmetric sets, support-arm sets, and head-anchored chains after short interpolation.
+  // #188 / #191 / #206: Cover the full shown/bridged span of symmetric sets, support-arm sets, and head-anchored chains after short interpolation.
   for (let sIdx = 0; sIdx < sw.switches.length; sIdx++) {
     const s = sw.switches[sIdx]!;
     const set = map.alternates.find((a) => a.name === s.set)!;
@@ -2237,12 +2253,16 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
           for (const cn of set.chains) {
             const c = map.chains.find((x) => x.name === cn);
             if (!c) continue;
-            for (const b of c.bones) {
+            for (let bIdx = 0; bIdx < c.bones.length; bIdx++) {
+              const b = c.bones[bIdx]!;
               const tg = targets.get(b)!;
-              const startA = tg[loRamp]!;
-              const total = wrap(tg[loShow]! - startA);
+              const parentTg = bIdx > 0 ? targets.get(c.bones[bIdx - 1]!) : undefined;
+              const startA = parentTg !== undefined ? wrap(tg[loRamp]! - parentTg[loRamp]!) : tg[loRamp]!;
+              const endA = parentTg !== undefined ? wrap(tg[loShow]! - parentTg[loShow]!) : tg[loShow]!;
+              const total = wrap(endA - startA);
               for (let k = loRamp + 1; k < loShow; k++) {
-                tg[k] = wrap(startA + ((k - loRamp) / steps) * total);
+                const localA = wrap(startA + ((k - loRamp) / steps) * total);
+                tg[k] = parentTg !== undefined ? wrap(parentTg[k]! + localA) : localA;
               }
             }
           }
@@ -2257,23 +2277,43 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
           const [cR, cL] = S0_0[0] <= S0_1[0] ? [c0, c1] : [c1, c0];
           const bR0 = cR.bones[0]!;
           const bL0 = cL.bones[0]!;
+          const bR1 = cR.bones[1]!;
+          const bL1 = cL.bones[1]!;
           const SR0 = rigPoint(rest, bR0)!;
-          const ER0 = rigPoint(rest, cR.bones[1]!)!;
+          const ER0 = rigPoint(rest, bR1)!;
           const SL0 = rigPoint(rest, bL0)!;
-          const EL0 = rigPoint(rest, cL.bones[1]!)!;
+          const EL0 = rigPoint(rest, bL1)!;
           const lR0 = Math.hypot(ER0[0] - SR0[0], ER0[1] - SR0[1]);
           const lL0 = Math.hypot(EL0[0] - SL0[0], EL0[1] - SL0[1]);
           const dR0 = wrap(Math.atan2(ER0[1] - SR0[1], ER0[0] - SR0[0]) * DEG - restOf.get(bR0)!);
           const dL0 = wrap(Math.atan2(EL0[1] - SL0[1], EL0[0] - SL0[0]) * DEG - restOf.get(bL0)!);
-          for (let i = s.frames[1] + 1; i <= hiShow; i++) {
+          const iEnd = s.frames[1];
+          const iNext = Math.min(n - 1, hiShow + 1);
+          const spanOut = Math.max(1, iNext - iEnd);
+          const startR0 = targets.get(bR0)![iEnd]!;
+          const startL0 = targets.get(bL0)![iEnd]!;
+          const drawnR0 = set.drawn[bR0] ?? startR0;
+          const drawnL0 = set.drawn[bL0] ?? startL0;
+          const drawnR1 = set.drawn[bR1] ?? targets.get(bR1)![iEnd]!;
+          const drawnL1 = set.drawn[bL1] ?? targets.get(bL1)![iEnd]!;
+          const inR1 = wrap(drawnR1 + (set.turn[bR1]?.[0] ?? 0));
+          const inL1 = wrap(drawnL1 + 0.6 * (set.turn[bL1]?.[1] ?? 0));
+          const endR0 = targets.get(bR0)![iNext]!;
+          const endL0 = targets.get(bL0)![iNext]!;
+          for (let i = iEnd + 1; i <= hiShow; i++) {
+            const u = (i - iEnd) / spanOut;
+            const w = 1 - u;
+            const alpha = 0.25 * u + 0.75 * u * u;
             const sr = posedOrigin(bR0, i);
             const sl = posedOrigin(bL0, i);
-            const baseR = targets.get(bR0)![i]!;
-            const baseL = targets.get(bL0)![i]!;
-            let lo = -20;
-            let hi = 20;
+            const baseR = wrap(startR0 + alpha * wrap(endR0 - startR0));
+            const baseL = wrap(startL0 + alpha * wrap(endL0 - startL0));
+            let lo = -30;
+            let hi = 30;
+            const dR = (deg: number) => (deg < 0 ? 0.25 * deg : deg);
+            const dL = (deg: number) => (deg > 0 ? 0.25 * deg : deg);
             const evalD = (deg: number) =>
-              sl[1] + lL0 * Math.sin((baseL + deg + dL0) / DEG) - (sr[1] + lR0 * Math.sin((baseR + deg + dR0) / DEG));
+              0.4 * w * (sl[1] - sr[1]) + lL0 * Math.sin((baseL + dL(deg) + dL0) / DEG) - lR0 * Math.sin((baseR + dR(deg) + dR0) / DEG);
             let fLo = evalD(lo);
             for (let it = 0; it < 32; it++) {
               const mid = 0.5 * (lo + hi);
@@ -2284,9 +2324,25 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
               } else hi = mid;
             }
             const deg = 0.5 * (lo + hi);
-            targets.get(bR0)![i] = wrap(baseR + deg);
-            targets.get(bL0)![i] = wrap(baseL + deg);
+            const aR0 = wrap(baseR + dR(deg));
+            const aL0 = wrap(baseL + dL(deg));
+            targets.get(bR0)![i] = aR0;
+            targets.get(bL0)![i] = aL0;
+            targets.get(bR1)![i] = wrap(inR1 + 0.45 * wrap(aR0 - drawnR0));
+            targets.get(bL1)![i] = wrap(inL1 + 0.45 * wrap(aL0 - drawnL0));
           }
+        }
+      }
+    }
+    if (set.anchor === undefined && set.symmetric !== true && set.support === undefined && loShow < s.frames[0]) {
+      for (const cn of s.chains) {
+        const c = map.chains.find((x) => x.name === cn);
+        if (!c || c.bones.length < 2) continue;
+        const b1 = c.bones[1]!;
+        const t1 = targets.get(b1)!;
+        const entryWorld1 = t1[s.frames[0]]!;
+        for (let i = loShow; i < s.frames[0]; i++) {
+          t1[i] = entryWorld1;
         }
       }
     }
@@ -2296,12 +2352,22 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       for (const cn of s.chains) {
         const c = map.chains.find((x) => x.name === cn)!;
         if (set.support.includes(c.name)) {
-          for (let i = Math.min(loGap, loShow); i <= hiShow; i++) solveSupportChainFrame(set, c, i);
-          const anchorStart = Math.min(loGap, loShow);
-          if (anchorStart >= 2) {
-            for (const b of c.bones) {
+          for (let i = loShow; i <= hiShow; i++) solveSupportChainFrame(set, c, i);
+          if (loGap < loShow && loGap >= 1) {
+            const i0 = loGap - 1;
+            const i1 = loShow;
+            const steps = i1 - i0;
+            for (let bIdx = 0; bIdx < c.bones.length; bIdx++) {
+              const b = c.bones[bIdx]!;
               const tg = targets.get(b)!;
-              tg[anchorStart - 1] = wrap(tg[anchorStart - 2]! + 0.5 * wrap(tg[anchorStart]! - tg[anchorStart - 2]!));
+              const parentTg = bIdx > 0 ? targets.get(c.bones[bIdx - 1]!) : undefined;
+              const startA = parentTg !== undefined ? wrap(tg[i0]! - parentTg[i0]!) : tg[i0]!;
+              const endA = parentTg !== undefined ? wrap(tg[i1]! - parentTg[i1]!) : tg[i1]!;
+              const total = wrap(endA - startA);
+              for (let k = loGap; k < loShow; k++) {
+                const localA = wrap(startA + ((k - i0) / steps) * total);
+                tg[k] = parentTg !== undefined ? wrap(parentTg[k]! + localA) : localA;
+              }
             }
           }
         } else if (c.bones.length >= 2) {
@@ -2324,6 +2390,18 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
               if (pair === null) continue;
               if (i >= s.frames[0] || outSign * wrap(t0[i]! - pair[0]) < 0) t0[i] = pair[0];
               if (i >= s.frames[0] || outSign * wrap(t1[i]! - pair[1]) < 0) t1[i] = pair[1];
+            }
+            if (loGap <= loShow && loGap >= 1 && loShow + 1 <= hiShow) {
+              const i0 = loGap - 1;
+              const i1 = loShow + 1;
+              const steps = i1 - i0;
+              const startLocal = wrap(t1[i0]! - t0[i0]!);
+              const endLocal = wrap(t1[i1]! - t0[i1]!);
+              const totalLocal = wrap(endLocal - startLocal);
+              for (let k = loGap; k <= loShow; k++) {
+                const localA = wrap(startLocal + ((k - i0) / steps) * totalLocal);
+                t1[k] = wrap(t0[k]! + localA);
+              }
             }
           }
         }
@@ -2350,9 +2428,11 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   }
   const solvedKey = (b: string, i: number) => legPoses?.[i]!.solved.get(b);
 
-  // #190: couple the vertical residual removed by the neck-length clamp into head.rotate
-  // in phase (+NOD_RESIDUAL_HEAD_GAIN °/unit), adding 0 on frames where the clamp did not act.
-  if (headNodReading !== null) {
+  // #190 / #205: when the neck-length clamp acts on the sequence, couple the clamped
+  // head.translate.y (`clampedY`, the signal the gains were calibrated against) into
+  // head.rotate (+NOD_RESIDUAL_HEAD_GAIN °/unit) and pitch_dial.rotate (+NOD_RESIDUAL_PITCH_GAIN °/unit).
+  const nodCoupled = headNodReading !== null && headNodReading.residual.some((r) => r !== 0) ? headNodReading.clampedY : null;
+  if (headNodReading !== null && nodCoupled !== null) {
     const hb = headNodReading.bone;
     const tg = targets.get(hb);
     if (tg !== undefined) {
@@ -2361,9 +2441,9 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       const limits = hc?.range[hb];
       const cov = hc !== undefined ? covered.get(hc.name) : undefined;
       for (let i = 0; i < n; i++) {
-        const res = headNodReading.residual[i]!;
-        if (res === 0) continue;
-        let next = wrap(tg[i]! + NOD_RESIDUAL_HEAD_GAIN * res);
+        const nodY = nodCoupled[i]!;
+        if (nodY === 0) continue;
+        let next = wrap(tg[i]! + NOD_RESIDUAL_HEAD_GAIN * nodY);
         if (limits !== undefined && cov?.[i] !== true) {
           const key = wrap((next - restOf.get(hb)!) - (above === null ? 0 : turn(above, i)));
           if (overflow(key, limits) > RANGE_SLACK) {
@@ -2410,7 +2490,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       const h = heldOf('l_ear');
       return 'never' in h ? null : h.at;
     })();
-    face = readFace(map.face, series.get('nose')!, series.get('r_eye')!, series.get('l_eye')!, rEar, lEar, headNodReading?.residual ?? null, NOD_RESIDUAL_PITCH_GAIN);
+    face = readFace(map.face, series.get('nose')!, series.get('r_eye')!, series.get('l_eye')!, rEar, lEar, nodCoupled, NOD_RESIDUAL_PITCH_GAIN);
     for (const axis of ['yaw', 'pitch'] as const) {
       const ax = face[axis];
       if (ax === undefined) continue;

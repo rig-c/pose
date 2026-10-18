@@ -7278,8 +7278,8 @@ describe('#189: read yaw from the ear chord when the eye span is foreshortened a
   }, SLOW);
 });
 
-describe('#190: beat nod: the residual the neck-length clamp removes from head.translate.y drives pitch_dial and head.rotate in phase', () => {
-  test('couples neck-length clamp vertical residual into pitch_dial.rotate (2.8 °/u) and head.rotate (1.6 °/u) in phase at the beat frequency, adds 0 on un-clamped frames, and flattens when coupling is disabled while keeping lower-body tracks byte-identical', () => {
+describe('#190 / #205: beat nod: clamped head.translate.y drives pitch_dial and head.rotate in phase when the neck-length clamp acts', () => {
+  test('couples clamped head.translate.y into pitch_dial.rotate (2.8 °/u) and head.rotate (1.6 °/u) within ≤ 0.5° in phase at the beat frequency, adds 0 on un-nodded frames, flattens when disabled, and fails Bar 1 when residual is put back in', () => {
     const N = 63;
     const DT = 1 / 24;
     const headRig: NonNullable<RigOpts['bones']> = (b) => [
@@ -7297,15 +7297,16 @@ describe('#190: beat nod: the residual the neck-length clamp removes from head.t
         { name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: ['eye_r>eye_l'] },
       ],
       face: {
-        pitch: { bone: 'pitch_dial', range: [-10, 15] },
+        pitch: { bone: 'pitch_dial', range: [-25, 25] },
       },
     };
-    // Frames 0..11: gentle nod within kneeNod (0.5 * sin <= 0.82u on maxNod = 1.0u) -> residual === 0 -> pitch_dial === 0° and head.rotate === 0°.
-    // Frames 12..62: 2-cycle beat nod (bin 2 over 63 frames, 0.7619 Hz) with 4.0u amplitude -> clamp removes ±3.0u residual -> drives pitch_dial and head.rotate in phase.
+    // Frames 0..11: 0u vertical nod -> clampedY === 0 -> pitch_dial === 0° and head.rotate === 0°.
+    // Frames 12..62: 2-cycle beat nod (bin 2 over 63 frames, 0.7619 Hz) with 12.0u amplitude on maxNod = 1.0u
+    // (clampedY within ±1.0u, unbounded residual up to ±11.0u).
     // Nose moves vertically with the eyes so raw 2D face pitch (nose vs eyes/ears) is 0° on every frame.
     const beatNodSignal = (i: number): number => {
-      if (i < 12) return 0.5 * Math.sin(((i / 12) * 2 * Math.PI));
-      return 4.0 * Math.sin(((2 * i) / N) * 2 * Math.PI);
+      if (i < 12) return 0;
+      return 12.0 * Math.sin(((2 * i) / N) * 2 * Math.PI);
     };
     const m: Motion = { ...BASE, n: N, dt: DT, hip: () => [0, 0], trunk: () => 90, rt: () => -90, rs: () => -90, lt: () => -90, ls: () => -90 };
     const pose = poseDoc(m, (i, j) => {
@@ -7333,17 +7334,28 @@ describe('#190: beat nod: the residual the neck-length clamp removes from head.t
     const headRot = mot.find((t) => 'bone' in t && t.bone === 'head' && t.property === 'rotate')!.keys.map((k) => (k.v as number[])[0]!);
     const pitchRot = mot.find((t) => 'bone' in t && t.bone === 'pitch_dial' && t.property === 'rotate')!.keys.map((k) => (k.v as number[])[0]!);
 
-    // Bar 1: on un-clamped frames (0..11, where |rawNod| <= 0.82u so residual === 0), pitch_dial and head.rotate add 0°.
-    for (let i = 0; i < 12; i++) {
-      expect(Math.abs(headTrans[i]!)).toBeLessThanOrEqual(0.82);
-      expect(pitchRot[i]).toBe(0);
-      expect(headRot[i]).toBe(0);
+    // Bar 1 (#205): pitch_dial.rotate and head.rotate match 2.8 * clampedY and 1.6 * clampedY within ≤ 0.5° on every frame, and are 0 wherever clampedY is 0.
+    expect(headTrans[0]).toBe(0);
+    for (let i = 0; i < N; i++) {
+      if (headTrans[i] === 0) {
+        expect(pitchRot[i]).toBe(0);
+        expect(headRot[i]).toBe(0);
+      }
     }
-    // On clamped beat frames, pitch_dial and head.rotate move in phase with the beat nod residual.
+    let maxErrPitch = 0;
+    let maxErrHead = 0;
+    for (let i = 0; i < N; i++) {
+      maxErrPitch = Math.max(maxErrPitch, Math.abs(pitchRot[i]! - 2.8 * headTrans[i]!));
+      maxErrHead = Math.max(maxErrHead, Math.abs(headRot[i]! - 1.6 * headTrans[i]!));
+    }
+    expect(maxErrPitch).toBeLessThanOrEqual(0.5);
+    expect(maxErrHead).toBeLessThanOrEqual(0.5);
     const maxPitch = Math.max(...pitchRot.slice(12).map((v) => Math.abs(v)));
     const maxHeadRot = Math.max(...headRot.slice(12).map((v) => Math.abs(v)));
-    expect(maxPitch).toBeGreaterThan(6);
-    expect(maxHeadRot).toBeGreaterThan(4);
+    expect(maxPitch).toBeGreaterThan(2.5);
+    expect(maxPitch).toBeLessThanOrEqual(3.0);
+    expect(maxHeadRot).toBeGreaterThan(1.4);
+    expect(maxHeadRot).toBeLessThanOrEqual(1.8);
     for (let i = 12; i < N; i++) {
       if (Math.abs(pitchRot[i]!) > 0.5) {
         expect(Math.sign(pitchRot[i]!)).toBe(Math.sign(headRot[i]!));
@@ -7351,7 +7363,7 @@ describe('#190: beat nod: the residual the neck-length clamp removes from head.t
       }
     }
 
-    // Bar 2: DFT peak frequency of pitch_dial matches the reference vertical head travel within 1 bin and in phase.
+    // Bar 3 (#190 / #205): DFT peak frequency of pitch_dial matches the reference vertical head travel within 1 bin and in phase.
     const dftPeak = (sig: readonly number[]) => {
       const m0 = sig.reduce((a, b) => a + b, 0) / sig.length;
       const x = sig.map((v) => v - m0);
@@ -7381,28 +7393,30 @@ describe('#190: beat nod: the residual the neck-length clamp removes from head.t
     expect(pitchPeak.bin).toBe(2);
     expect(Math.abs(wrap(pitchPeak.phase - refPeak.phase))).toBeLessThan(15);
 
-    // Bar 3: lower-body tracks are byte-identical, and disabling the residual coupling flattens pitch_dial and head.rotate to 0° across the beat.
+    // Mutant A: lower-body tracks are byte-identical, and disabling the coupling flattens pitch_dial and head.rotate to 0°.
+    // Mutant B (#205 Bar 4): putting `headNodReading.residual` back in instead of `headNodReading.clampedY` fails Bar 1 (max |Δ| > 15° > 0.5°).
     mkdirSync(MUTANTS, { recursive: true });
-    const d = mkdtempSync(join(MUTANTS, 'm190-'));
+    const dZero = mkdtempSync(join(MUTANTS, 'm190-zero-'));
+    const dRes = mkdtempSync(join(MUTANTS, 'm205-res-'));
     try {
-      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
-      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
-      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
-      const path = join(d, 'src', 'retarget.ts');
+      cpSync(join(ROOT, 'src'), join(dZero, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(dZero, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(dZero, 'package.json'));
+      const pathZero = join(dZero, 'src', 'retarget.ts');
       const fromPitch = 'export const NOD_RESIDUAL_PITCH_GAIN = 2.8;';
       const fromHead = 'export const NOD_RESIDUAL_HEAD_GAIN = 1.6;';
-      const before = readFileSync(path, 'utf8');
+      const before = readFileSync(pathZero, 'utf8');
       expect(before.split(fromPitch)).toHaveLength(2);
       expect(before.split(fromHead)).toHaveLength(2);
       writeFileSync(
-        path,
+        pathZero,
         before
           .replace(fromPitch, 'export const NOD_RESIDUAL_PITCH_GAIN = 0;')
           .replace(fromHead, 'export const NOD_RESIDUAL_HEAD_GAIN = 0;'),
       );
 
       const cMut = setup({ rig: { bones: headRig }, map: mapSpec, pose });
-      const rMut = retarget(cMut, ['--bends', 'clamp'], join(d, 'cli.ts'));
+      const rMut = retarget(cMut, ['--bends', 'clamp'], join(dZero, 'cli.ts'));
       expect(rMut.status).toBe(0);
       const motMut = motionOf(cMut.out).animations.dance!.tracks;
       for (const lb of ['hip', 'leg_r0', 'leg_r1', 'leg_l0', 'leg_l1']) {
@@ -7412,8 +7426,33 @@ describe('#190: beat nod: the residual the neck-length clamp removes from head.t
       const mutHeadRot = motMut.find((t) => 'bone' in t && t.bone === 'head' && t.property === 'rotate')!.keys.map((k) => (k.v as number[])[0]!);
       expect(Math.max(...mutPitch.map((v) => Math.abs(v)))).toBe(0);
       expect(Math.max(...mutHeadRot.map((v) => Math.abs(v)))).toBe(0);
+
+      cpSync(join(ROOT, 'src'), join(dRes, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(dRes, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(dRes, 'package.json'));
+      const pathRes = join(dRes, 'src', 'retarget.ts');
+      const fromClamped = 'const nodCoupled = headNodReading !== null && headNodReading.residual.some((r) => r !== 0) ? headNodReading.clampedY : null;';
+      expect(before.split(fromClamped)).toHaveLength(2);
+      writeFileSync(
+        pathRes,
+        before.replace(
+          fromClamped,
+          'const nodCoupled = headNodReading !== null && headNodReading.residual.some((r) => r !== 0) ? headNodReading.residual : null;',
+        ),
+      );
+      const cRes = setup({ rig: { bones: headRig }, map: mapSpec, pose });
+      const rRes = retarget(cRes, ['--bends', 'clamp'], join(dRes, 'cli.ts'));
+      expect(rRes.status).toBe(0);
+      const motRes = motionOf(cRes.out).animations.dance!.tracks;
+      const resPitch = motRes.find((t) => 'bone' in t && t.bone === 'pitch_dial' && t.property === 'rotate')!.keys.map((k) => (k.v as number[])[0]!);
+      const resHead = motRes.find((t) => 'bone' in t && t.bone === 'head' && t.property === 'rotate')!.keys.map((k) => (k.v as number[])[0]!);
+      const resErrPitch = Math.max(...resPitch.map((v, i) => Math.abs(v - 2.8 * headTrans[i]!)));
+      const resErrHead = Math.max(...resHead.map((v, i) => Math.abs(v - 1.6 * headTrans[i]!)));
+      expect(resErrPitch).toBeGreaterThan(15);
+      expect(resErrHead).toBeGreaterThan(10);
     } finally {
-      rmSync(d, { recursive: true, force: true });
+      rmSync(dZero, { recursive: true, force: true });
+      rmSync(dRes, { recursive: true, force: true });
     }
   }, SLOW);
 });
@@ -7646,6 +7685,307 @@ describe('#191: head-anchored end-effector two-link IK inside art turn range', (
     }
   }, SLOW);
 });
+
+describe('#206: gesture-set bridges interpolate in joint space, apply set.support only from loShow, and include extended holds in covered', () => {
+  test('joint-space bridge, loShow support start, and extended hold coverage + 3 mutants', () => {
+    const N = 36;
+    const DT = 1 / 24;
+    const att = { image: 'seg.png', x: 30, y: 0, rotation: -90 };
+    const rigOpts: RigOpts = {
+      bones: (b) => [
+        ...b.map((x) => (x.name === 'sleeve_r1' || x.name === 'sleeve_l1' ? { ...x, rotation: 0 } : x)),
+        { name: 'head', parent: 'neck', x: 0, y: 20 },
+        { name: 'eye_r', parent: 'head', x: -6, y: 10 },
+        { name: 'eye_l', parent: 'head', x: 6, y: 10 },
+      ],
+      extra: {
+        sleeve_r0: { k1_r0: att, k2_r0: att, k3_r0: att },
+        sleeve_r1: { k1_r1: att, k2_r1: att, k3_r1: att },
+        sleeve_l0: { k1_l0: att, k2_l0: att, k3_l0: att },
+        sleeve_l1: { k1_l1: att, k2_l1: att, k3_l1: att },
+      },
+    };
+    // Key poses:
+    // K1_sym (symmetric raised, frames 0..7): ru=120, rf=25 (local -95), lu=60, lf=155 (local +95)
+    // K2_hips (hands on hips, frames 12..18, 32..35): ru=-70, rf=-30 (local +40), lu=-110, lf=-150 (local -40)
+    // K3_sup (raised right + support left, frames 22..28): ru=95, rf=85 (local -10), lu=-85, lf=-165 (local -80)
+    const kp1 = positions({ ...BASE, n: 1, dt: DT, trunk: () => 90, hip: () => [0, 0], ru: () => 120, rf: () => 25, lu: () => 60, lf: () => 155 }, 0);
+    const kp2 = positions({ ...BASE, n: 1, dt: DT, trunk: () => 90, hip: () => [0, 0], ru: () => -70, rf: () => -30, lu: () => -110, lf: () => -150 }, 0);
+    const kp3 = positions({ ...BASE, n: 1, dt: DT, trunk: () => 90, hip: () => [0, 0], ru: () => 95, rf: () => 85, lu: () => -85, lf: () => -165 }, 0);
+
+    const mSeq: Motion = {
+      ...BASE,
+      n: N,
+      dt: DT,
+      hip: () => [0, 0],
+      trunk: () => 90,
+      ru: (i) => {
+        if (i <= 7) return 120;
+        if (i === 8) return 90;
+        if (i === 9) return 80;
+        if (i === 10) return 50;
+        if (i === 11) return -55;
+        if (i <= 18) return -70;
+        if (i === 19) return -40;
+        if (i === 20) return -25;
+        if (i === 21) return 45;
+        if (i <= 28) return 95;
+        if (i === 29) return -20;
+        if (i === 30) return -35;
+        if (i === 31) return -50;
+        return -70;
+      },
+      rf: (i) => {
+        if (i <= 7) return 25;
+        if (i === 8) return 35;
+        if (i === 9) return 35;
+        if (i === 10) return 35;
+        if (i === 11) return -20;
+        if (i <= 18) return -30;
+        if (i === 19) return -20;
+        if (i === 20) return 0;
+        if (i === 21) return 45;
+        if (i <= 28) return 85;
+        if (i === 29) return -5;
+        if (i === 30) return -10;
+        if (i === 31) return -20;
+        return -30;
+      },
+      lu: (i) => {
+        if (i <= 7) return 60;
+        if (i === 8) return 45;
+        if (i === 9) return 40;
+        if (i === 10) return 10;
+        if (i === 11) return -85;
+        if (i <= 18) return -110;
+        if (i === 19) return -106;
+        if (i === 20) return -102;
+        if (i === 21) return -92;
+        if (i <= 28) return -85;
+        if (i === 29) return -105;
+        if (i === 30) return -108;
+        return -110;
+      },
+      lf: (i) => {
+        if (i <= 7) return 155;
+        if (i === 8) return 145;
+        if (i === 9) return 145;
+        if (i === 10) return 145;
+        if (i === 11) return -135;
+        if (i <= 18) return -150;
+        if (i === 19) return -152;
+        if (i === 20) return -155;
+        if (i === 21) return -160;
+        if (i <= 28) return -165;
+        if (i <= 31) return -110; // 40° from K2_hips.drawn (-150°), so only syncBridgeClamp puts extended hold 29..31 into cClamp/covered
+        return -150;
+      },
+    };
+    const pose = poseDoc(mSeq);
+    const mapDoc: Record<string, unknown> = {
+      ...baseMap(),
+      chains: [
+        ...baseChains().map((c) =>
+          c.name === 'arm_r'
+            ? { ...c, bend: 'free', range: { sleeve_r0: [-130, 50], sleeve_r1: [-175, 50] } }
+            : c.name === 'arm_l'
+              ? { ...c, bend: 'free', range: { sleeve_l0: [-50, 130], sleeve_l1: [-50, 175] } }
+              : c,
+        ),
+        { name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: ['eye_r>eye_l'] },
+      ],
+      alternates: [
+        {
+          name: 'K1_sym',
+          slots: { back_r0: 'k1_r0', back_r1: 'k1_r1', back_l0: 'k1_l0', back_l1: 'k1_l1', topwear: 'top_k1' },
+          hides: ['sleeve_r0', 'sleeve_r1', 'sleeve_l0', 'sleeve_l1'],
+          chains: ['arm_r', 'arm_l'],
+          pose: {
+            r_shoulder: kp1.r_shoulder!,
+            r_elbow: kp1.r_elbow!,
+            r_wrist: kp1.r_wrist!,
+            l_shoulder: kp1.l_shoulder!,
+            l_elbow: kp1.l_elbow!,
+            l_wrist: kp1.l_wrist!,
+          },
+          drawn: { sleeve_r0: 120, sleeve_r1: 25, sleeve_l0: 60, sleeve_l1: 155 },
+          turn: { sleeve_r0: [-20, 20], sleeve_r1: [-20, 20], sleeve_l0: [-20, 20], sleeve_l1: [-20, 20] },
+          symmetric: true,
+        },
+        {
+          name: 'K2_hips',
+          slots: { sleeve_r0: 'k2_r0', sleeve_r1: 'k2_r1', sleeve_l0: 'k2_l0', sleeve_l1: 'k2_l1', topwear: 'top_k2' },
+          hides: ['back_r0', 'back_r1', 'back_l0', 'back_l1'],
+          chains: ['arm_r', 'arm_l'],
+          pose: {
+            r_shoulder: kp2.r_shoulder!,
+            r_elbow: kp2.r_elbow!,
+            r_wrist: kp2.r_wrist!,
+            l_shoulder: kp2.l_shoulder!,
+            l_elbow: kp2.l_elbow!,
+            l_wrist: kp2.l_wrist!,
+          },
+          drawn: { sleeve_r0: -70, sleeve_r1: -30, sleeve_l0: -110, sleeve_l1: -150 },
+          turn: { sleeve_r0: [-5, 5], sleeve_r1: [-5, 5], sleeve_l0: [-5, 5], sleeve_l1: [-5, 5] },
+        },
+        {
+          name: 'K3_sup',
+          slots: { back_r0: 'k3_r0', back_r1: 'k3_r1', back_l0: 'k3_l0', back_l1: 'k3_l1', topwear: 'top_k3' },
+          hides: ['sleeve_r0', 'sleeve_r1', 'sleeve_l0', 'sleeve_l1'],
+          chains: ['arm_r', 'arm_l'],
+          pose: {
+            r_shoulder: kp3.r_shoulder!,
+            r_elbow: kp3.r_elbow!,
+            r_wrist: kp3.r_wrist!,
+            l_shoulder: kp3.l_shoulder!,
+            l_elbow: kp3.l_elbow!,
+            l_wrist: kp3.l_wrist!,
+          },
+          drawn: { sleeve_r0: 95, sleeve_r1: 85, sleeve_l0: -85, sleeve_l1: -165 },
+          turn: { sleeve_r0: [-20, 20], sleeve_r1: [-20, 20], sleeve_l0: [-15, 15], sleeve_l1: [-15, 15] },
+          support: 'arm_l',
+        },
+      ],
+    };
+
+    const makeCase = () => {
+      const cs = setup({ rig: rigOpts, map: mapDoc, pose });
+      const rigJsonPath = join(cs.rig, 'rig.json');
+      const rigSpec = JSON.parse(readFileSync(rigJsonPath, 'utf8')) as {
+        slots: Array<Record<string, unknown>>;
+        skins: { default: Record<string, Record<string, unknown>> };
+      };
+      rigSpec.slots = [
+        { name: 'back_r0', bone: 'sleeve_r0', attachment: null },
+        { name: 'back_r1', bone: 'sleeve_r1', attachment: null },
+        { name: 'back_l0', bone: 'sleeve_l0', attachment: null },
+        { name: 'back_l1', bone: 'sleeve_l1', attachment: null },
+        { name: 'topwear', bone: 'chest', attachment: 'seg' },
+        ...rigSpec.slots,
+      ];
+      rigSpec.skins.default.back_r0 = { k1_r0: att, k3_r0: att };
+      rigSpec.skins.default.back_r1 = { k1_r1: att, k3_r1: att };
+      rigSpec.skins.default.back_l0 = { k1_l0: att, k3_l0: att };
+      rigSpec.skins.default.back_l1 = { k1_l1: att, k3_l1: att };
+      rigSpec.skins.default.topwear = { seg: att, top_k1: att, top_k2: att, top_k3: att };
+      writeFileSync(rigJsonPath, JSON.stringify(rigSpec, null, 2));
+      return cs;
+    };
+
+    const c = makeCase();
+    const r = retarget(c, ['--bends', 'clamp', '--short', '0.35', '--raised-by-head', '--switch-min', '0.1']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+
+    const tracks = motionOf(c.out).animations.dance!.tracks;
+    const rotOf = (bone: string, f: number): number =>
+      wrap((tracks.find((t) => 'bone' in t && t.bone === bone && t.property === 'rotate')!.keys[f] as { v: number[] }).v[0]!);
+
+    // 1. Across K1 -> K2 bridge (frames 8..11), forearms never invert through ±180° (|rot| stays <= 146°).
+    for (let f = 8; f <= 11; f++) {
+      expect(Math.abs(rotOf('sleeve_r1', f))).toBeLessThanOrEqual(146);
+      expect(Math.abs(rotOf('sleeve_l1', f))).toBeLessThanOrEqual(146);
+    }
+
+    // 2. On frame 19 (first gap frame after K2 [12..18], while K2 is still shown before K3 switches at 21),
+    //    support arm sleeve_l1 bridges smoothly instead of snapping early to K3's -80° support pose.
+    expect(Math.abs(wrap(rotOf('sleeve_l1', 19) - rotOf('sleeve_l1', 18)))).toBeLessThanOrEqual(20);
+
+    // 3. On frame 29..31 (gap between K3 [22..28] and K2 [32..35]), extended hold covers the tight K2_hips frames.
+    expect(Math.abs(wrap(rotOf('sleeve_l1', 30) - rotOf('sleeve_l1', 32)))).toBeLessThanOrEqual(20);
+
+    // Mutants 1, 2, 3:
+    mkdirSync(MUTANTS, { recursive: true });
+    const dM1 = mkdtempSync(join(MUTANTS, 'm206-1-'));
+    const dM2 = mkdtempSync(join(MUTANTS, 'm206-2-'));
+    const dM3 = mkdtempSync(join(MUTANTS, 'm206-3-'));
+    try {
+      for (const d of [dM1, dM2, dM3]) {
+        cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+        cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+        cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      }
+
+      // Mutant 1: world-angle bridge interpolation in switch.ts / retarget.ts flips forearm past 160° on frames 8..11.
+      {
+        const pSw = join(dM1, 'src', 'switch.ts');
+        const swSrc = readFileSync(pSw, 'utf8');
+        const swFrom = 'const parentTg = parentBone !== undefined ? targets.get(parentBone) : undefined;';
+        expect(swSrc.split(swFrom)).toHaveLength(2);
+        writeFileSync(pSw, swSrc.replace(swFrom, 'const parentTg = undefined;'));
+        const pRet = join(dM1, 'src', 'retarget.ts');
+        const src = readFileSync(pRet, 'utf8');
+        const from1 = 'const parentTg = bIdx > 0 ? targets.get(ch.bones[bIdx - 1]!) : undefined;';
+        const from2 = 'targets.get(bR1)![i] = wrap(inR1 + 0.45 * wrap(aR0 - drawnR0));\n            targets.get(bL1)![i] = wrap(inL1 + 0.45 * wrap(aL0 - drawnL0));';
+        const from3 = 'if (set.anchor === undefined && set.symmetric !== true && set.support === undefined && loShow < s.frames[0]) {';
+        expect(src.split(from1)).toHaveLength(2);
+        expect(src.split(from2)).toHaveLength(2);
+        expect(src.split(from3)).toHaveLength(2);
+        writeFileSync(pRet, src.replace(from1, 'const parentTg = undefined;').replace(from2, '').replace(from3, 'if (false) {'));
+        const cM1 = makeCase();
+        const rM1 = retarget(cM1, ['--bends', 'clamp', '--short', '0.35', '--raised-by-head', '--switch-min', '0.1'], join(dM1, 'cli.ts'));
+        expect(rM1.status).toBe(0);
+        const trM1 = motionOf(cM1.out).animations.dance!.tracks;
+        const rotM1 = (bone: string, f: number): number =>
+          wrap((trM1.find((t) => 'bone' in t && t.bone === bone && t.property === 'rotate')!.keys[f] as { v: number[] }).v[0]!);
+        const maxElbowM1 = Math.max(...[8, 9, 10, 11].flatMap((f) => [Math.abs(rotM1('sleeve_r1', f)), Math.abs(rotM1('sleeve_l1', f))]));
+        expect(maxElbowM1).toBeGreaterThan(155);
+      }
+
+      // Mutant 2: set.support applied from Math.min(loGap, loShow) without bridging loGap..loShow-1, snapping frame 19 to K3's -80° support pose while K2 is still shown.
+      {
+        const pRet = join(dM2, 'src', 'retarget.ts');
+        const src = readFileSync(pRet, 'utf8');
+        const from = 'for (let i = loShow; i <= hiShow; i++) solveSupportChainFrame(set, c, i);\n          if (loGap < loShow && loGap >= 1) {';
+        expect(src.split(from)).toHaveLength(2);
+        writeFileSync(
+          pRet,
+          src.replace(
+            from,
+            'for (let i = Math.min(loGap, loShow); i <= hiShow; i++) solveSupportChainFrame(set, c, i);\n          if (false && loGap < loShow && loGap >= 1) {',
+          ),
+        );
+        const cM2 = makeCase();
+        const rM2 = retarget(cM2, ['--bends', 'clamp', '--short', '0.35', '--raised-by-head', '--switch-min', '0.1'], join(dM2, 'cli.ts'));
+        expect(rM2.status).toBe(0);
+        const trM2 = motionOf(cM2.out).animations.dance!.tracks;
+        const rotM2 = (bone: string, f: number): number =>
+          wrap((trM2.find((t) => 'bone' in t && t.bone === bone && t.property === 'rotate')!.keys[f] as { v: number[] }).v[0]!);
+        expect(Math.abs(wrap(rotM2('sleeve_l1', 19) - rotOf('sleeve_l1', 18)))).toBeGreaterThan(30);
+      }
+
+      // Mutant 3: syncBridgeClamp omitted in switch.ts and extended-hold forearm alignment omitted in retarget.ts so extended hold on frame 29..31 is not in cClamp/covered.
+      {
+        const pSw = join(dM3, 'src', 'switch.ts');
+        const src = readFileSync(pSw, 'utf8');
+        const from = 'if (isTightSet(picked, cn)) cClamp.get(cn)![i] = picked;';
+        expect(src.split(from)).toHaveLength(2);
+        writeFileSync(pSw, src.replace(from, ''));
+        const pRet = join(dM3, 'src', 'retarget.ts');
+        const retSrc = readFileSync(pRet, 'utf8');
+        const retFrom = 'if (set.anchor === undefined && set.symmetric !== true && set.support === undefined && loShow < s.frames[0]) {';
+        expect(retSrc.split(retFrom)).toHaveLength(2);
+        writeFileSync(pRet, retSrc.replace(retFrom, 'if (false) {'));
+        const cM3 = makeCase();
+        const rM3 = retarget(cM3, ['--bends', 'clamp', '--short', '0.35', '--raised-by-head', '--switch-min', '0.1'], join(dM3, 'cli.ts'));
+        expect(rM3.status).toBe(0);
+        const trM3 = motionOf(cM3.out).animations.dance!.tracks;
+        const rotM3 = (bone: string, f: number): number =>
+          wrap((trM3.find((t) => 'bone' in t && t.bone === bone && t.property === 'rotate')!.keys[f] as { v: number[] }).v[0]!);
+        const maxJumpM3 = Math.max(
+          Math.abs(wrap(rotM3('sleeve_l1', 29) - rotOf('sleeve_l1', 29))),
+          Math.abs(wrap(rotM3('sleeve_l1', 30) - rotOf('sleeve_l1', 30))),
+        );
+        expect(maxJumpM3).toBeGreaterThan(30);
+      }
+    } finally {
+      rmSync(dM1, { recursive: true, force: true });
+      rmSync(dM2, { recursive: true, force: true });
+      rmSync(dM3, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
 
 
 
