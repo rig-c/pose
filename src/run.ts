@@ -374,6 +374,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       const kept = buildInto(input.rig, join(scratch, 'with', 'motion.json'), resolve(a.build), a.profile, undefined, a.images);
       if (!kept.green) refuse([{ code: 'RIG_GATE', text: `rigc build into --build ${a.build} is red where the same build was green in scratch (exit ${kept.run.status}); nothing written` }, ...kept.fails.map((x) => ({ code: 'RIGC', text: x }))]);
     }
+    // The kept build reads the rig again; its bytes must still match the report.
+    if (a.report !== undefined) assertReportInputs([rigSnapshot,mapSnapshot,poseSnapshot]);
     writeFileSync(a.out, `${JSON.stringify(motion, null, 2)}\n`);
     if (a.camera !== undefined) {
       const ss = r.figureScale.frames.map((x) => x.s);
@@ -808,5 +810,5 @@ export function readReportInput(file:string):ReportInputSnapshot {
   return {file:resolve(file),bytes,identity:{path:relative(process.cwd(),path).split('\\').join('/'),sha256:createHash('sha256').update(bytes).digest('hex')},size:after.size,mtimeMs:after.mtimeMs};
 }
 export function assertReportInputs(inputs:readonly ReportInputSnapshot[]):void {
-  for(const expected of inputs){const current=readReportInput(expected.file);if(current.identity.path!==expected.identity.path||current.identity.sha256!==expected.identity.sha256||current.size!==expected.size||current.mtimeMs!==expected.mtimeMs)throw new Refusal([{code:'REPORT_INPUTS_CHANGED',text:`${expected.identity.path}: consumed input changed before output writes; expected SHA-256 ${expected.identity.sha256}, found ${current.identity.sha256}`}]);}
+  for(const expected of inputs){const current=readReportInput(expected.file);if(current.identity.path!==expected.identity.path||current.identity.sha256!==expected.identity.sha256)throw new Refusal([{code:'REPORT_INPUTS_CHANGED',text:`${expected.identity.path}: consumed input changed before output writes; expected SHA-256 ${expected.identity.sha256}, found ${current.identity.sha256}`}]);}
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -48,6 +48,16 @@ describe('additive report coordinates',()=>{
   const input={frames:2,cleaned:{holds:[{joint:'nose',frames:[0,1]}]}};const a=writeReport(input,map,{frameTimes:[0,1]},null,declaredInputs),b=writeReport(input,map,{frameTimes:[0,1]},null,declaredInputs);expect(a).toBe(b);const out=JSON.parse(a) as {cleaned:{holds:Record<string,unknown>[]}};expect(out.cleaned.holds[0]).not.toHaveProperty('bone');expect(out.cleaned.holds[0]).not.toHaveProperty('bones');
  });
  test('input identities require consumed files and changed buffers are refused',()=>{const dir=mkdtempSync(join(tmpdir(),'pose-input-'));try{const file=join(dir,'map.json'),bytes=' {\"value\":\"β\"}\n';writeFileSync(file,bytes);const read=readReportInput(file);expect(read.bytes.toString('utf8')).toBe(bytes);expect(read.identity.sha256).toBe(createHash('sha256').update(bytes).digest('hex'));assertReportInputs([read]);writeFileSync(file,bytes+' ');expect(()=>assertReportInputs([read])).toThrow('REPORT_INPUTS_CHANGED');expect(()=>writeReport({frames:2},map,{frameTimes:[0,1]},null,undefined as unknown as ReportInputs)).toThrow('REPORT_INPUTS');expect(()=>enrichReport({frames:2,inputs:{}},map,{frameTimes:[0,1]},null,declaredInputs)).toThrow('REPORT_COORDINATE');for(const path of ['/private/absolute.json','C:\\private\\rig.json','\\\\server\\rig.json'])expect(()=>writeReport({frames:2},map,{frameTimes:[0,1]},null,{...declaredInputs,rig:{...declaredInputs.rig,path}})).toThrow('REPORT_INPUTS');expect(JSON.parse(writeReport({frames:2},map,{frameTimes:[0,1]},null,{...declaredInputs,rig:{...declaredInputs.rig,path:'../rig/rig.json'}})).inputs.rig.path).toBe('../rig/rig.json');}finally{rmSync(dir,{recursive:true,force:true});}});
+ test('input identity allows timestamp-only changes to the same bytes',()=>{
+  const dir=mkdtempSync(join(tmpdir(),'pose-input-touch-'));
+  try {
+   const file=join(dir,'pose.json'),bytes='{"frames":[]}\n';writeFileSync(file,bytes);
+   const before=readReportInput(file);utimesSync(file,0,0);
+   expect(readReportInput(file).mtimeMs).not.toBe(before.mtimeMs);
+   expect(readFileSync(file,'utf8')).toBe(bytes);
+   expect(()=>assertReportInputs([before])).not.toThrow();
+  } finally {rmSync(dir,{recursive:true,force:true});}
+ });
  test('actual CLI report adds only metadata and does not change motion bytes on offset pose times',()=>{
   const dir=mkdtempSync(join(tmpdir(),'pose-report-'));try{
    mkdirSync(join(dir,'images'));writeFileSync(join(dir,'rig.json'),JSON.stringify({spec:'rigc-rig/1',name:'report_probe',images:'images',skeleton:{width:100,height:100},bones:[{name:'root'},{name:'probe',parent:'root',length:12,x:3,y:7}],slots:[],skins:{default:{}}}));
@@ -61,6 +71,26 @@ describe('additive report coordinates',()=>{
     cpSync(join(import.meta.dir,'../src'),join(mutant,'src'),{recursive:true});cpSync(cli,join(mutant,'cli.ts'));cpSync(join(import.meta.dir,'../package.json'),join(mutant,'package.json'));const file=join(mutant,'src/run.ts'),original=readFileSync(file,'utf8');expect(original.split('{ frameTimes: r.times }')).toHaveLength(2);writeFileSync(file,original.replace('{ frameTimes: r.times }','{ fps: undefined as unknown as number, frame0: 0, frames: seq.frames.length }'));
     const motion=readFileSync(join(dir,'with-report.json'),'utf8'),previous=readFileSync(join(dir,'report.json'),'utf8');const refused=spawnSync(process.execPath,[join(mutant,'cli.ts'),...args,'--out',join(dir,'with-report.json'),'--report',join(dir,'report.json')],{encoding:'utf8'});expect(refused.status).toBe(1);expect(refused.stdout+refused.stderr).toContain('REPORT_TIMEBASE: fps');expect(readFileSync(join(dir,'with-report.json'),'utf8')).toBe(motion);expect(readFileSync(join(dir,'report.json'),'utf8')).toBe(previous);
     writeFileSync(file,original.replace('if (a.report !== undefined) assertReportInputs([rigSnapshot,mapSnapshot,poseSnapshot]);',"writeFileSync(a.map, readFileSync(a.map, 'utf8') + ' '); if (a.report !== undefined) assertReportInputs([rigSnapshot,mapSnapshot,poseSnapshot]);"));const beforeMap=readFileSync(join(dir,'map.json'));try{const changed=spawnSync(process.execPath,[join(mutant,'cli.ts'),...args,'--out',join(dir,'with-report.json'),'--report',join(dir,'report.json')],{encoding:'utf8'});expect(changed.status).toBe(1);expect(changed.stdout+changed.stderr).toContain('REPORT_INPUTS_CHANGED');expect(readFileSync(join(dir,'with-report.json'),'utf8')).toBe(motion);expect(readFileSync(join(dir,'report.json'),'utf8')).toBe(previous);}finally{writeFileSync(join(dir,'map.json'),beforeMap);}
+    const check='if (a.report !== undefined) assertReportInputs([rigSnapshot,mapSnapshot,poseSnapshot]);';
+    writeFileSync(file,"import { utimesSync as touchReportInput } from 'node:fs';\n"+original.replace(check,'touchReportInput(a.map,0,0); '+check));
+    const touched=spawnSync(process.execPath,[join(mutant,'cli.ts'),...args,'--out',join(dir,'with-report.json'),'--report',join(dir,'report.json')],{encoding:'utf8'});
+    expect(touched.status,touched.stdout+touched.stderr).toBe(0);
+    expect(readFileSync(join(dir,'with-report.json'),'utf8')).toBe(motion);
+    expect(readFileSync(join(dir,'report.json'),'utf8')).toBe(previous);
+
+    const consumption='const kept = buildInto(input.rig,';expect(original.split(consumption)).toHaveLength(2);
+    writeFileSync(file,original.replace(consumption,"writeFileSync(input.rig, readFileSync(input.rig, 'utf8') + ' '); "+consumption));
+    const rig=join(dir,'rig.json'),beforeRig=readFileSync(rig),build=join(dir,'late-build');
+    try {
+     const late=spawnSync(process.execPath,[join(mutant,'cli.ts'),...args,'--build',build,'--out',join(dir,'with-report.json'),'--report',join(dir,'report.json')],{encoding:'utf8'});
+     expect(late.status,late.stdout+late.stderr).toBe(1);
+     expect(late.stdout+late.stderr).toContain('REPORT_INPUTS_CHANGED');
+     // The compatible edited rig reached the real final build; report/motion
+     // keep their previous bytes rather than certifying its older rig hash.
+     expect(readFileSync(join(build,'skeleton.model.json'),'utf8')).toContain('report_probe');
+     expect(readFileSync(join(dir,'with-report.json'),'utf8')).toBe(motion);
+     expect(readFileSync(join(dir,'report.json'),'utf8')).toBe(previous);
+    } finally {writeFileSync(rig,beforeRig);}
    }finally{rmSync(mutant,{recursive:true,force:true});}
    const report=JSON.parse(readFileSync(join(dir,'report.json'),'utf8')) as {frameTimes:number[];landings:{frame:number;t:number}[];inputs:ReportInputs};for(const key of ['rig','map','pose'] as const){const path=join(dir,key+'.json');expect(report.inputs[key]).toEqual({path:relative(process.cwd(),realpathSync(path)).split('\\').join('/'),sha256:createHash('sha256').update(readFileSync(path)).digest('hex')});}expect(report.frameTimes).toEqual([0,.5,1]);for(const event of report.landings)expect(event.t).toBe(report.frameTimes[event.frame]!);
   }finally{rmSync(dir,{recursive:true,force:true});}
