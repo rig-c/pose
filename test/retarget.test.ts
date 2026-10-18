@@ -8578,4 +8578,164 @@ describe('#225: per-leg setup-weighted straight length and clamped asked values 
   }, SLOW);
 });
 
+describe('crouch-invariant per-frame figure scale across support spans (#226)', () => {
+  const N = 180;
+  const DT = 1 / 24;
+  const spans = [
+    { idx: 1, side: 'l' as const, a: 0, b: 35 },
+    { idx: 2, side: 'r' as const, a: 36, b: 59 },
+    { idx: 3, side: 'l' as const, a: 60, b: 109 },
+    { idx: 4, side: 'r' as const, a: 110, b: 149 },
+    { idx: 5, side: 'l' as const, a: 150, b: 179 },
+  ];
+
+  function crouchDancePose(): Record<string, unknown> {
+    const m: Motion = {
+      ...BASE,
+      n: N,
+      dt: DT,
+      trunk: () => 90,
+      rt: () => -90,
+      rs: () => -90,
+      lt: () => -90,
+      ls: () => -90,
+      hip: () => [0, 0],
+    };
+    return poseDoc(m, (i, j) => {
+      // Clip-wide camera scale grows +25% across the sequence so 5-series consensus exceeds ±2%.
+      const camZ = 1.0 + (0.25 * i) / (N - 1);
+      const sp = spans.find((s) => i >= s.a && i <= s.b)!;
+      const u = (i - sp.a) / Math.max(1, sp.b - sp.a);
+      // Support leg foreshortens in the interior of spans 2-5 (after the 3-frame plant blend) and stands straight at the span edges.
+      let legFrac = 1.0;
+      let headDrop = 0;
+      if (sp.idx === 2) {
+        legFrac = u >= 0.25 && u <= 0.65 ? 0.9 : 1.0;
+        headDrop = u >= 0.25 && u <= 0.65 ? 10 : 0;
+      } else if (sp.idx === 3) {
+        // Span 3 has a deep crouch followed by pre-jump extension where nose rises while straight segment length stays constant.
+        legFrac = u >= 0.2 && u <= 0.55 ? 0.84 : 1.0;
+        headDrop = u >= 0.2 && u <= 0.55 ? 32 : u >= 0.75 ? -22 : 0;
+      } else if (sp.idx === 4) {
+        legFrac = u >= 0.25 && u <= 0.65 ? 0.86 : 1.0;
+        headDrop = u >= 0.25 && u <= 0.65 ? 14 : 0;
+      } else if (sp.idx === 5) {
+        legFrac = u >= 0.25 && u <= 0.65 ? 0.92 : 1.0;
+        headDrop = u >= 0.25 && u <= 0.65 ? 8 : 0;
+      }
+      const floorY = 350 * camZ;
+      const supLen = 150 * camZ * legFrac;
+      const freeLift = 12 * camZ;
+      const mhY = floorY - supLen;
+      const rHipX = -15 * camZ;
+      const lHipX = 15 * camZ;
+      j.r_hip = { state: 'observed', at: [rHipX, mhY], score: 0.95 };
+      j.l_hip = { state: 'observed', at: [lHipX, mhY], score: 0.95 };
+      const setLeg = (side: 'r' | 'l', x: number, ankleY: number) => {
+        const thigh = (80 / 150) * (ankleY - mhY);
+        j[`${side}_knee`] = { state: 'observed', at: [x, mhY + thigh], score: 0.95 };
+        j[`${side}_ankle`] = { state: 'observed', at: [x, ankleY], score: 0.95 };
+      };
+      if (sp.side === 'l') {
+        setLeg('l', lHipX, floorY);
+        setLeg('r', rHipX, floorY - freeLift);
+      } else {
+        setLeg('r', rHipX, floorY);
+        setLeg('l', lHipX, floorY - freeLift);
+      }
+      const trunkLen = 100 * camZ;
+      const shY = mhY - trunkLen;
+      j.neck = { state: 'observed', at: [0, shY], score: 0.95 };
+      j.r_shoulder = { state: 'observed', at: [-25 * camZ, shY], score: 0.95 };
+      j.l_shoulder = { state: 'observed', at: [25 * camZ, shY], score: 0.95 };
+      j.r_elbow = { state: 'observed', at: [-25 * camZ, shY + 45 * camZ], score: 0.95 };
+      j.l_elbow = { state: 'observed', at: [25 * camZ, shY + 45 * camZ], score: 0.95 };
+      j.r_wrist = { state: 'observed', at: [-25 * camZ, shY + 85 * camZ], score: 0.95 };
+      j.l_wrist = { state: 'observed', at: [25 * camZ, shY + 85 * camZ], score: 0.95 };
+      const noseY = shY - 30 * camZ + headDrop * camZ;
+      j.nose = { state: 'observed', at: [0, noseY], score: 0.95 };
+      j.r_eye = { state: 'observed', at: [-6 * camZ, noseY - 5 * camZ], score: 0.95 };
+      j.l_eye = { state: 'observed', at: [6 * camZ, noseY - 5 * camZ], score: 0.95 };
+      j.r_ear = { state: 'observed', at: [-12 * camZ, noseY - 5 * camZ], score: 0.95 };
+      j.l_ear = { state: 'observed', at: [12 * camZ, noseY - 5 * camZ], score: 0.95 };
+    });
+  }
+
+  function spanHipVerticalRatios(buildDir: string, pose: Record<string, unknown>): Map<string, number> {
+    const doc = loadBuild(buildDir);
+    const poses = poseRawAnimation(doc, 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+    const frames = (pose.frames as Array<{ people: Array<{ joints: Record<string, { at: Pt }> }> }>).map((f) => f.people[0]!.joints);
+    const rigL = 150;
+    const seqL = 150 * 1.07;
+    const out = new Map<string, number>();
+    for (const sp of spans.slice(1)) {
+      const ankJ = `${sp.side}_ankle`;
+      const shinB = sp.side === 'l' ? 'leg_l1' : 'leg_r1';
+      const rv: number[] = [];
+      const sv: number[] = [];
+      for (let i = sp.a; i <= sp.b; i++) {
+        const b = byName(poses[i]!.bones);
+        const r0 = b.get('leg_r0')!;
+        const l0 = b.get('leg_l0')!;
+        const shin = b.get(shinB)!;
+        const footY = shin.worldY + shin.c * 70;
+        const midHipY = (r0.worldY + l0.worldY) / 2;
+        rv.push((midHipY - footY) / rigL);
+        const j = frames[i]!;
+        const seqMidHipY = (j.r_hip!.at[1] + j.l_hip!.at[1]) / 2;
+        sv.push((j[ankJ]!.at[1] - seqMidHipY) / seqL);
+      }
+      const wr = Math.max(...rv) - Math.min(...rv);
+      const ws = Math.max(...sv) - Math.min(...sv);
+      out.set(`span ${sp.idx}`, wr / ws);
+    }
+    return out;
+  }
+
+  test('keeps hip-vertical amplitude ratio within 0.85..1.15 on spans 2..5; mutant restoring vertical ankle-nose height fails on span 3 by name', () => {
+    const pose = crouchDancePose();
+    const c = setup({ pose });
+    const r = retarget(c, ['--bends', 'clamp', '--leg-scale', '0.8,1.05', '--plant-feet']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+
+    const ratios = spanHipVerticalRatios(c.build, pose);
+    for (const name of ['span 2', 'span 3', 'span 4', 'span 5']) {
+      const v = ratios.get(name)!;
+      expect(v, `${name} hip-vertical ratio ${v.toFixed(3)} must be in 0.85..1.15`).toBeGreaterThanOrEqual(0.85);
+      expect(v, `${name} hip-vertical ratio ${v.toFixed(3)} must be in 0.85..1.15`).toBeLessThanOrEqual(1.15);
+    }
+
+    // Mutant (Bar 3): restoring vertical ankle-to-nose height shrinks continuousScale in the crouch and stretches it before takeoff, dropping span 3 below 0.85.
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm226-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const pRet = join(d, 'src', 'retarget.ts');
+      const srcRet = readFileSync(pRet, 'utf8');
+      const fromRet = 'const segH =';
+      expect(srcRet.split(fromRet)).toHaveLength(2);
+      writeFileSync(
+        pRet,
+        srcRet.replace(
+          fromRet,
+          "const top = heldPt('nose') ?? heldPt('neck'); if (top !== null) { const h = ar.map((r, i) => Math.max(r[1], al[i]![1]) - top[i]![1]); if (h.every((v) => v > 1e-6)) return h; }\n          const segH =",
+        ),
+      );
+
+      const cMut = setup({ pose });
+      const rMut = retarget(cMut, ['--bends', 'clamp', '--leg-scale', '0.8,1.05', '--plant-feet'], join(d, 'cli.ts'));
+      expect(rMut.status).toBe(0);
+      const mutRatios = spanHipVerticalRatios(cMut.build, pose);
+      const span3Mut = mutRatios.get('span 3')!;
+      expect(span3Mut, `mutant span 3 hip-vertical ratio ${span3Mut.toFixed(3)} must fail (< 0.85)`).toBeLessThan(0.85);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
+
 
