@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.30.1](https://github.com/rig-c/pose/compare/v0.30.0...v0.30.1) (2026-10-18)
+
+
+### Bug Fixes
+
+* **readme:** use neutral fixture names and remove exam canonical flags ([#219](https://github.com/rig-c/pose/issues/219)) ([#221](https://github.com/rig-c/pose/issues/221)) ([b4127ca](https://github.com/rig-c/pose/commit/b4127cab362742702dff878272313b36aec9fcd4))
+* **retarget,legs:** bridge adjacent gesture sets in joint space and arch-blend short stances ([#218](https://github.com/rig-c/pose/issues/218)) ([#220](https://github.com/rig-c/pose/issues/220)) ([8da4a8c](https://github.com/rig-c/pose/commit/8da4a8cbd98fcebdf6fd84f34e8611cfe78ae726))
+
 ## [0.30.0](https://github.com/rig-c/pose/compare/v0.29.1...v0.30.0) (2026-10-18)
 
 
