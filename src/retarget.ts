@@ -937,8 +937,24 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         }
       }
     }
+    const rigLenByKind = new Map<string, number[]>();
     for (const seg of rawSegments) {
-      const ls = legScaleOf(seg.lengths, limits, straightByKind.get(seg.kind)!);
+      const len = rest.get(seg.bone)?.length ?? 0;
+      if (len > 1e-6) {
+        const list = rigLenByKind.get(seg.kind) ?? [];
+        list.push(len);
+        rigLenByKind.set(seg.kind, list);
+      }
+    }
+    const rigShareOf = (seg: (typeof rawSegments)[number]): number => {
+      const lens = rigLenByKind.get(seg.kind);
+      const rigLen = rest.get(seg.bone)?.length ?? 0;
+      if (lens === undefined || lens.length < 2 || !(rigLen > 1e-6)) return 1;
+      const meanRigLen = lens.reduce((a, b) => a + b, 0) / lens.length;
+      return Math.abs(rigLen - meanRigLen) > 1e-3 * meanRigLen ? rigLen / meanRigLen : 1;
+    };
+    for (const seg of rawSegments) {
+      const ls = legScaleOf(seg.lengths, limits, straightByKind.get(seg.kind)! * rigShareOf(seg));
       legScale.push({ chain: seg.chain, bone: seg.bone, joints: seg.joints, ...ls });
       scales.set(seg.bone, ls.scale);
     }

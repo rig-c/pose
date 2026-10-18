@@ -295,11 +295,18 @@ export interface SupportScaleRun {
   clamped?: { bound: number; hipRise: number };
 }
 
+export interface ClampedScaleRun {
+  frames: [number, number];
+  limit: 'low' | 'high';
+  /** The lowest and highest scale asked (`picture length ÷ straight`) on the clamped run's frames (#225). */
+  asked: { min: number; max: number };
+}
+
 export interface LegScale {
   chain: string;
   bone: string;
   joints: [string, string];
-  /** The straight length: the larger of the two sides' 95th-percentile picture lengths for this segment (#148), px. */
+  /** The straight length: the larger of the two sides' 95th-percentile picture lengths for this segment (#148), weighted by the bone's setup length share when the rig's legs differ at setup (#225), px. */
   straight: number;
   /** The picture length over the straight length, before the clamp: lowest, median, highest. */
   ratio: { min: number; median: number; max: number };
@@ -308,6 +315,8 @@ export interface LegScale {
   /** Runs of frames clamped at the low and at the high limit. */
   low: Array<[number, number]>;
   high: Array<[number, number]>;
+  /** Runs of frames clamped at the low or high limit, with the asked scale range on each run (#225). */
+  clamped?: ClampedScaleRun[];
   /** The scale keyed on each frame (clamped). */
   scale: number[];
   /** The scale the pose asked for on each frame before the clamp floor (`min(ratio, limits[1])`, rig-c/pose#107). */
@@ -321,7 +330,7 @@ export interface LegScale {
   support?: SupportScaleRun[];
 }
 
-/** One segment's scale per frame: picture length ÷ straight length (the larger of the two sides' 95th percentiles, #148), clamped; its asked scale without the clamp floor (#107); and the runs clamped. */
+/** One segment's scale per frame: picture length ÷ straight length (the larger of the two sides' 95th percentiles, #148, scaled per leg when setup leg lengths differ, #225), clamped; its asked scale without the clamp floor (#107); and the runs clamped with their asked values (#225). */
 export function legScaleOf(lengths: readonly number[], limits: [number, number], straight = percentile(lengths, STRAIGHT_PERCENTILE)): Omit<LegScale, 'chain' | 'bone' | 'joints'> {
   const ratio = lengths.map((l) => l / straight);
   const scale = ratio.map((r) => Math.min(Math.max(r, limits[0]), limits[1]));
@@ -329,12 +338,23 @@ export function legScaleOf(lengths: readonly number[], limits: [number, number],
   const sorted = [...ratio].sort((a, b) => a - b);
   const mid = sorted.length >> 1;
   const median = sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+  const low = runs(ratio.map((r) => r < limits[0]));
+  const high = runs(ratio.map((r) => r > limits[1]));
+  const spanAsked = ([a, b]: [number, number]): { min: number; max: number } => {
+    const sub = ratio.slice(a, b + 1);
+    return { min: Math.min(...sub), max: Math.max(...sub) };
+  };
+  const clamped: ClampedScaleRun[] = [
+    ...low.map((frames) => ({ frames, limit: 'low' as const, asked: spanAsked(frames) })),
+    ...high.map((frames) => ({ frames, limit: 'high' as const, asked: spanAsked(frames) })),
+  ];
   return {
     straight,
     ratio: { min: sorted[0]!, median, max: sorted[sorted.length - 1]! },
     limits,
-    low: runs(ratio.map((r) => r < limits[0])),
-    high: runs(ratio.map((r) => r > limits[1])),
+    low,
+    high,
+    ...(clamped.length > 0 ? { clamped } : {}),
     scale,
     asked,
   };
