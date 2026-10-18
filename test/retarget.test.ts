@@ -9,6 +9,7 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1593,10 +1594,11 @@ describe('the pelvis tilts and the trunk reaches from the posed hip for the shou
     edit?.(doc);
     const run = (hipsInferred: boolean) => {
       const seq = clean(readPoseSequence(JSON.stringify(doc), 'fixture'), { loop: false, legs: 1, rest: 1, hipsInferred }, undefined, 'fixture').seq;
-      writeFileSync(c.pose, writePoseSequence(seq));
+      const poseBytes = writePoseSequence(seq);
+      writeFileSync(c.pose, poseBytes);
       const report = join(c.dir, 'report.json');
       const r = retarget(c, ['--report', report]);
-      return { r, motion: readFileSync(c.out, 'utf8'), report: JSON.parse(readFileSync(report, 'utf8')) as Record<string, unknown> };
+      return { r, motion: readFileSync(c.out, 'utf8'), report: JSON.parse(readFileSync(report, 'utf8')) as Record<string, unknown>, poseSHA: createHash('sha256').update(poseBytes).digest('hex') };
     };
     return { plain: run(false), flagged: run(true) };
   };
@@ -1624,7 +1626,15 @@ describe('the pelvis tilts and the trunk reaches from the posed hip for the shou
     expect(qf.frames).toEqual({ ...(qp.frames as object), tilt: 0 });
     expect(qf.sway).toEqual(qp.sway);
     expect((flagged.report.cleaned as { params: unknown }).params).toEqual({ loop: false, legs: 1, rest: 1, hipsInferred: { by: 'declared' } });
-    const rest = (rep: Record<string, unknown>) => ({ ...rep, posture: null, cleaned: null });
+    // Different cleaned input bytes must have different provenance, even when motion agrees.
+    for (const run of [plain, flagged]) {
+      const inputs = run.report.inputs as { pose: { sha256: string } };
+      expect(inputs.pose.sha256).toBe(run.poseSHA);
+    }
+    const rest = (rep: Record<string, unknown>) => {
+      const inputs = rep.inputs as { pose: Record<string, unknown> };
+      return { ...rep, posture: null, cleaned: null, inputs: { ...inputs, pose: { ...inputs.pose, sha256: null } } };
+    };
     expect(rest(flagged.report)).toEqual(rest(plain.report));
   }, SLOW);
 
