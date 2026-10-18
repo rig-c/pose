@@ -23,6 +23,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
       # The bin shim is a Node script and the CLI test runs it through node.
       - uses: actions/setup-node@v4
@@ -32,6 +34,10 @@ jobs:
       - run: bun run typecheck
       - run: bun run lint
       - run: bun run test
+        env:
+          GATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GATE_PR_BODY: ${{ github.event.pull_request.body }}
 
   # The job below is @rig-c/parts' `ships` job, copied whole: a landing that
   # changes a packed file under a type release-please hides is refused, with a
