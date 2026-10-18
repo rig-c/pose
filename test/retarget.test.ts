@@ -8143,3 +8143,296 @@ describe('#207: symmetric gesture set solves the diamond in the chest-local fram
   }, SLOW);
 });
 
+describe('#218: adjacent gesture-set bridges interpolate across the full gap in joint space, inner-reach wrist steps preserve upper-arm clamp sign, and short stance spans before flight arch-blend hip y', () => {
+  const N = 36;
+  const DT = 1 / 24;
+  const att = { image: 'seg.png', x: 30, y: 0, rotation: -90 };
+  const rigOpts: RigOpts = {
+    bones: (b) => [
+      ...b.map((x) => (x.name === 'sleeve_r1' || x.name === 'sleeve_l1' ? { ...x, rotation: 0 } : x)),
+      { name: 'head', parent: 'neck', x: 0, y: 20 },
+      { name: 'eye_r', parent: 'head', x: -6, y: 10 },
+      { name: 'eye_l', parent: 'head', x: 6, y: 10 },
+    ],
+    extra: {
+      sleeve_r0: { k1_r0: att, k2_r0: att, k3_r0: att },
+      sleeve_r1: { k1_r1: att, k2_r1: att, k3_r1: att },
+      sleeve_l0: { k1_l0: att, k2_l0: att, k3_l0: att },
+      sleeve_l1: { k1_l1: att, k2_l1: att, k3_l1: att },
+    },
+  };
+
+  test('#218 full-gap joint-space bridge + short-stance arch blend + mutants', () => {
+    const kp1 = positions({ ...BASE, n: 1, dt: DT, trunk: () => 90, hip: () => [0, 0], ru: () => 120, rf: () => 25, lu: () => 60, lf: () => 155 }, 0);
+    const kp2 = positions({ ...BASE, n: 1, dt: DT, trunk: () => 90, hip: () => [0, 0], ru: () => -70, rf: () => -30, lu: () => -110, lf: () => -150 }, 0);
+    const kp3 = positions({ ...BASE, n: 1, dt: DT, trunk: () => 90, hip: () => [0, 0], ru: () => 95, rf: () => 85, lu: () => -85, lf: () => -165 }, 0);
+
+    const mSeq: Motion = {
+      ...BASE,
+      n: N,
+      dt: DT,
+      hip: () => [0, 0],
+      trunk: () => 90,
+      ru: (i) => {
+        if (i <= 7) return 120;
+        if (i === 8) return 90;
+        if (i === 9) return 80;
+        if (i === 10) return 50;
+        if (i === 11) return -55;
+        if (i <= 18) return -70;
+        if (i === 19) return -40;
+        if (i === 20) return -25;
+        if (i === 21) return 45;
+        if (i <= 28) return 95;
+        if (i === 29) return -20;
+        if (i === 30) return -35;
+        if (i === 31) return -50;
+        return -70;
+      },
+      rf: (i) => {
+        if (i <= 7) return 25;
+        if (i === 8) return 35;
+        if (i === 9) return 35;
+        if (i === 10) return 35;
+        if (i === 11) return -20;
+        if (i <= 18) return -30;
+        if (i === 19) return -20;
+        if (i === 20) return 0;
+        if (i === 21) return 45;
+        if (i <= 28) return 85;
+        if (i === 29) return -5;
+        if (i === 30) return -10;
+        if (i === 31) return -20;
+        return -30;
+      },
+      lu: (i) => {
+        if (i <= 7) return 60;
+        if (i === 8) return 45;
+        if (i === 9) return 40;
+        if (i === 10) return 10;
+        if (i === 11) return -85;
+        if (i <= 18) return -110;
+        if (i === 19) return -106;
+        if (i === 20) return -102;
+        if (i === 21) return -92;
+        if (i <= 28) return -85;
+        if (i === 29) return -105;
+        if (i === 30) return -108;
+        return -110;
+      },
+      lf: (i) => {
+        if (i <= 7) return 155;
+        if (i === 8) return 145;
+        if (i === 9) return 145;
+        if (i === 10) return 145;
+        if (i === 11) return -135;
+        if (i <= 18) return -150;
+        if (i === 19) return -152;
+        if (i === 20) return -155;
+        if (i === 21) return -160;
+        if (i <= 28) return -165;
+        if (i <= 31) return -110;
+        return -150;
+      },
+    };
+    const pose = poseDoc(mSeq);
+    const mapDoc: Record<string, unknown> = {
+      ...baseMap(),
+      chains: [
+        ...baseChains().map((c) =>
+          c.name === 'arm_r'
+            ? { ...c, bend: 'free', range: { sleeve_r0: [-130, 50], sleeve_r1: [-175, 50] } }
+            : c.name === 'arm_l'
+              ? { ...c, bend: 'free', range: { sleeve_l0: [-50, 130], sleeve_l1: [-50, 175] } }
+              : c,
+        ),
+        { name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: ['eye_r>eye_l'] },
+      ],
+      alternates: [
+        {
+          name: 'K1_sym',
+          slots: { back_r0: 'k1_r0', back_r1: 'k1_r1', back_l0: 'k1_l0', back_l1: 'k1_l1', topwear: 'top_k1' },
+          hides: ['sleeve_r0', 'sleeve_r1', 'sleeve_l0', 'sleeve_l1'],
+          chains: ['arm_r', 'arm_l'],
+          pose: {
+            r_shoulder: kp1.r_shoulder!,
+            r_elbow: kp1.r_elbow!,
+            r_wrist: kp1.r_wrist!,
+            l_shoulder: kp1.l_shoulder!,
+            l_elbow: kp1.l_elbow!,
+            l_wrist: kp1.l_wrist!,
+          },
+          drawn: { sleeve_r0: 120, sleeve_r1: 25, sleeve_l0: 60, sleeve_l1: 155 },
+          turn: { sleeve_r0: [-20, 20], sleeve_r1: [-20, 20], sleeve_l0: [-20, 20], sleeve_l1: [-20, 20] },
+          symmetric: true,
+        },
+        {
+          name: 'K2_hips',
+          slots: { sleeve_r0: 'k2_r0', sleeve_r1: 'k2_r1', sleeve_l0: 'k2_l0', sleeve_l1: 'k2_l1', topwear: 'top_k2' },
+          hides: ['back_r0', 'back_r1', 'back_l0', 'back_l1'],
+          chains: ['arm_r', 'arm_l'],
+          pose: {
+            r_shoulder: kp2.r_shoulder!,
+            r_elbow: kp2.r_elbow!,
+            r_wrist: kp2.r_wrist!,
+            l_shoulder: kp2.l_shoulder!,
+            l_elbow: kp2.l_elbow!,
+            l_wrist: kp2.l_wrist!,
+          },
+          drawn: { sleeve_r0: -70, sleeve_r1: -30, sleeve_l0: -110, sleeve_l1: -150 },
+          turn: { sleeve_r0: [-5, 5], sleeve_r1: [-5, 5], sleeve_l0: [-5, 5], sleeve_l1: [-5, 5] },
+        },
+        {
+          name: 'K3_sup',
+          slots: { back_r0: 'k3_r0', back_r1: 'k3_r1', back_l0: 'k3_l0', back_l1: 'k3_l1', topwear: 'top_k3' },
+          hides: ['sleeve_r0', 'sleeve_r1', 'sleeve_l0', 'sleeve_l1'],
+          chains: ['arm_r', 'arm_l'],
+          pose: {
+            r_shoulder: kp3.r_shoulder!,
+            r_elbow: kp3.r_elbow!,
+            r_wrist: kp3.r_wrist!,
+            l_shoulder: kp3.l_shoulder!,
+            l_elbow: kp3.l_elbow!,
+            l_wrist: kp3.l_wrist!,
+          },
+          drawn: { sleeve_r0: 95, sleeve_r1: 85, sleeve_l0: -85, sleeve_l1: -165 },
+          turn: { sleeve_r0: [-20, 20], sleeve_r1: [-20, 20], sleeve_l0: [-15, 15], sleeve_l1: [-15, 15] },
+          support: 'arm_l',
+        },
+      ],
+    };
+
+    const makeCase = () => {
+      const cs = setup({ rig: rigOpts, map: mapDoc, pose });
+      const rigJsonPath = join(cs.rig, 'rig.json');
+      const rigSpec = JSON.parse(readFileSync(rigJsonPath, 'utf8')) as {
+        slots: Array<Record<string, unknown>>;
+        skins: { default: Record<string, Record<string, unknown>> };
+      };
+      rigSpec.slots = [
+        { name: 'back_r0', bone: 'sleeve_r0', attachment: null },
+        { name: 'back_r1', bone: 'sleeve_r1', attachment: null },
+        { name: 'back_l0', bone: 'sleeve_l0', attachment: null },
+        { name: 'back_l1', bone: 'sleeve_l1', attachment: null },
+        { name: 'topwear', bone: 'chest', attachment: 'seg' },
+        ...rigSpec.slots,
+      ];
+      rigSpec.skins.default.back_r0 = { k1_r0: att, k3_r0: att };
+      rigSpec.skins.default.back_r1 = { k1_r1: att, k3_r1: att };
+      rigSpec.skins.default.back_l0 = { k1_l0: att, k3_l0: att };
+      rigSpec.skins.default.back_l1 = { k1_l1: att, k3_l1: att };
+      rigSpec.skins.default.topwear = { seg: att, top_k1: att, top_k2: att, top_k3: att };
+      writeFileSync(rigJsonPath, JSON.stringify(rigSpec, null, 2));
+      return cs;
+    };
+
+    const c = makeCase();
+    const r = retarget(c, ['--raised-by-head', '--bends', 'clamp', '--short', '0.35', '--switch-min', '0.1']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+
+    const tr = motionOf(c.out).animations.dance!.tracks;
+    const rotOf = (bone: string, f: number): number =>
+      wrap((tr.find((t) => 'bone' in t && t.bone === bone && t.property === 'rotate')!.keys[f] as { v: number[] }).v[0]!);
+
+    // Across the K3 [22..28] -> K2 [32..35] bridge (frames 28..32), sleeve_l1 interpolates linearly in joint space (interior |Δ²| ≈ 0 on 29..31, max step <= 9°).
+    const maxBridgeD2 = (fn: (b: string, f: number) => number): number => {
+      let mx = 0;
+      for (let i = 29; i <= 31; i++) {
+        const dPrev = wrap(fn('sleeve_l1', i) - fn('sleeve_l1', i - 1));
+        const dNext = wrap(fn('sleeve_l1', i + 1) - fn('sleeve_l1', i));
+        mx = Math.max(mx, Math.abs(dNext - dPrev));
+      }
+      return mx;
+    };
+    expect(maxBridgeD2(rotOf)).toBeLessThan(1e-2);
+    expect(Math.abs(wrap(rotOf('sleeve_l1', 29) - rotOf('sleeve_l1', 28)))).toBeLessThanOrEqual(10);
+
+    // Part 2: short stance span (frames 10..12) between two flights (4..9 and 13..18) arch-blends hip y so peak stance upward acceleration is lower than linear stepIn/(PLANT_BLEND+1).
+    const THIGH_RUN = -95;
+    const SHIN_RUN = -97;
+    const STILL_RUN: Motion = { ...BASE, n: 24, dt: 1 / 24, rt: () => THIGH_RUN, rs: () => SHIN_RUN, lt: () => THIGH_RUN, ls: () => SHIN_RUN, hip: () => [0, 0] };
+    const V_RUN = add(dir(THIGH_RUN, 80), dir(SHIN_RUN, 70));
+    const fRun = (i: number): number => {
+      if (i === 2 || i === 12 || i === 22) return 0.92;
+      if (i === 3 || i === 13) return 0.84;
+      return 1;
+    };
+    const riseRun = (i: number): number => {
+      if (i === 2 || i === 12 || i === 22) return 0.08 * V_RUN[1] - 5;
+      if (i === 3 || i === 13) return 0.16 * V_RUN[1] - 2;
+      if ((i >= 4 && i <= 9) || (i >= 14 && i <= 19)) return 25;
+      return 0;
+    };
+    const liftRun = (i: number): number => (i === 2 || i === 12 || i === 22 ? -(0.08 * V_RUN[1] - 5) : 0);
+    const docRun = {
+      ...poseDoc(STILL_RUN, (i, j) => {
+        const drop: Pt = [(1 - fRun(i)) * V_RUN[0], (1 - fRun(i)) * V_RUN[1] - riseRun(i)];
+        for (const [name, at] of Object.entries(j)) {
+          const a = at.at as Pt;
+          if (name.endsWith('_ankle') || name.endsWith('_knee')) continue;
+          j[name] = { ...at, at: [a[0] + drop[0], a[1] + drop[1]] };
+        }
+        for (const s of ['r', 'l'] as const) {
+          const hip = j[`${s}_hip`]!.at as Pt;
+          const knee = add(hip, dir(THIGH_RUN, 80 * fRun(i)));
+          const ankle = add(knee, dir(SHIN_RUN, 70 * fRun(i)));
+          j[`${s}_knee`] = { state: 'observed', at: knee, score: 0.9 };
+          j[`${s}_ankle`] = { state: 'observed', at: [ankle[0], ankle[1] - liftRun(i)], score: 0.9 };
+        }
+      }),
+      travel: 'in-place',
+    };
+    const cRun = setup({ pose: docRun });
+    const rRun = retarget(cRun, ['--leg-scale', '0.8,1.05', '--plant-feet']);
+    expect(rRun.status).toBe(0);
+    const hipYOf = (outPath: string): number[] =>
+      (motionOf(outPath).animations.dance!.tracks.find((t) => 'bone' in t && t.bone === 'hip' && t.property === 'translate')!.keys as Array<{ v: number[] }>).map(
+        (k) => k.v[1]!,
+      );
+    const hyOurs = hipYOf(cRun.out);
+    const accOurs = hyOurs[10]! - 2 * hyOurs[11]! + hyOurs[12]!;
+
+    mkdirSync(MUTANTS, { recursive: true });
+    const dM1 = mkdtempSync(join(MUTANTS, 'm218-bridge-'));
+    const dM2 = mkdtempSync(join(MUTANTS, 'm218-stance-'));
+    try {
+      for (const d of [dM1, dM2]) {
+        cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+        cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+        cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      }
+      // Mutant 1: disabling full-gap joint-space bridge interpolation produces a > 10° |Δ²| kink on frames 29..31 and raises frame 29's step past 13.5°.
+      const pRet = join(dM1, 'src', 'retarget.ts');
+      const srcRet = readFileSync(pRet, 'utf8');
+      const fromRet = 'if (i0 >= 0 && prevSw!.chains.includes(cn) && s.frames[0] - i0 >= 2 && chainShownInBridge) {';
+      expect(srcRet.split(fromRet)).toHaveLength(2);
+      writeFileSync(pRet, srcRet.replace(fromRet, 'if (false) {'));
+      const cM1 = makeCase();
+      const rM1 = retarget(cM1, ['--raised-by-head', '--bends', 'clamp', '--short', '0.35', '--switch-min', '0.1'], join(dM1, 'cli.ts'));
+      expect(rM1.status).toBe(0);
+      const trM1 = motionOf(cM1.out).animations.dance!.tracks;
+      const rotM1 = (bone: string, f: number): number =>
+        wrap((trM1.find((t) => 'bone' in t && t.bone === bone && t.property === 'rotate')!.keys[f] as { v: number[] }).v[0]!);
+      expect(maxBridgeD2(rotM1)).toBeGreaterThan(10);
+      expect(Math.abs(wrap(rotM1('sleeve_l1', 29) - rotM1('sleeve_l1', 28)))).toBeGreaterThan(13.5);
+
+      // Mutant 2: disabling short-stance arch blend raises stance upward hip acceleration on 10..12 by 0.5 * (planted - travel) = 1.24u.
+      const pLegs = join(dM2, 'src', 'legs.ts');
+      const srcLegs = readFileSync(pLegs, 'utf8');
+      const fromLegs = 'const w = (blendToFlight && blendEnd - blendAt < PLANT_BLEND ? Math.min(stepIn, blendEnd - i + 1) : stepIn) / (PLANT_BLEND + 1);';
+      expect(srcLegs.split(fromLegs)).toHaveLength(2);
+      writeFileSync(pLegs, srcLegs.replace(fromLegs, 'const w = stepIn / (PLANT_BLEND + 1);'));
+      const cM2 = setup({ pose: docRun });
+      const rM2 = retarget(cM2, ['--leg-scale', '0.8,1.05', '--plant-feet'], join(dM2, 'cli.ts'));
+      expect(rM2.status).toBe(0);
+      const hyM2 = hipYOf(cM2.out);
+      const accM2 = hyM2[10]! - 2 * hyM2[11]! + hyM2[12]!;
+      expect(accM2 - accOurs).toBeCloseTo(1.24, 1);
+    } finally {
+      rmSync(dM1, { recursive: true, force: true });
+      rmSync(dM2, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+

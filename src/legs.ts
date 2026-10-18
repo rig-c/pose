@@ -772,6 +772,8 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
   let mode: Mode | null = null;
   let from: Mode | null = null;
   let blendAt = -1;
+  let blendEnd = -1;
+  let blendToFlight = false;
   for (let i = 0; i < n; i++) {
     const s = feet.support[i] ?? null;
     const tr = s === null ? (tracked[i] ?? null) : null;
@@ -793,6 +795,10 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
         from = mode;
         mode = plant(i, s, [here[0] + o[0], here[1] + o[1]]);
         blendAt = i;
+        blendEnd = i;
+        while (blendEnd + 1 < n && (feet.support[blendEnd + 1] ?? null) === s) blendEnd++;
+        blendToFlight =
+          blendEnd + 1 < n && (feet.support[blendEnd + 1] ?? null) === null && (tracked[blendEnd + 1] ?? null) === null;
       }
     } else if (tr !== null) {
       if (mode!.kind !== 'track' || mode!.side !== tr) {
@@ -809,7 +815,8 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
     }
     const to = of(mode!, i);
     if (from !== null && i - blendAt < PLANT_BLEND) {
-      const w = (i - blendAt + 1) / (PLANT_BLEND + 1);
+      const stepIn = i - blendAt + 1;
+      const w = (blendToFlight && blendEnd - blendAt < PLANT_BLEND ? Math.min(stepIn, blendEnd - i + 1) : stepIn) / (PLANT_BLEND + 1);
       const f = of(from, i);
       // #102: blend y only; x takes the new derivation immediately so the planted foot does not slide across the blend.
       hip.push([to[0], f[1] + (to[1] - f[1]) * w]);

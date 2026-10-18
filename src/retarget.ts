@@ -1929,6 +1929,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         const heldMiss: number[] = [];
         const isHeadAnchored = HEAD_ANCHOR_FRAME !== 'off' && set.anchor?.includes(c.name) === true;
         if (isHeadAnchored) job.saturated = [];
+        let prevUpperClampSign: -1 | 0 | 1 = 0;
         for (const i of span) {
           const h = pairOn(anchor, i);
           const rc = refCentre(i);
@@ -1968,8 +1969,12 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
               let a1Cl = wrap(sol0.fore - d1);
               if (turn0 !== undefined && set.drawn[b0] !== undefined) {
                 const tt0 = wrap(a0Cl - set.drawn[b0]!);
-                const cl0 = Math.min(Math.max(tt0, turn0[0]), turn0[1]);
+                let cl0 = Math.min(Math.max(tt0, turn0[0]), turn0[1]);
                 if (Math.abs(cl0 - tt0) > RANGE_SLACK) {
+                  const sign0: 1 | -1 = cl0 < tt0 ? 1 : -1;
+                  if (place0.how === 'in' && prevUpperClampSign !== 0 && sign0 !== prevUpperClampSign) {
+                    cl0 = prevUpperClampSign > 0 ? turn0[1] : turn0[0];
+                  }
                   a0Cl = wrap(set.drawn[b0]! + cl0);
                   const r0Cl = (a0Cl + d0) / DEG;
                   const ECl: Pt = [shoulder[0] + l0 * Math.cos(r0Cl), shoulder[1] + l0 * Math.sin(r0Cl)];
@@ -2006,26 +2011,35 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
             upperAsked.push(0);
             upperOver.push(0);
             heldMiss.push(0);
+            prevUpperClampSign = 0;
             continue;
           }
           let a0 = wrap(sol.upper - d0);
           let a1 = wrap(sol.fore - d1);
           // The set's turn holds the upper arm; the forearm is then re-aimed at the placed wrist from where the held upper arm puts the elbow.
           let held = false;
-          const tt = turn0 === undefined ? 0 : wrap(a0 - set.drawn[b0]!);
-          upperAsked.push(tt);
-          upperOver.push(turn0 === undefined ? 0 : overflow(tt, turn0));
+          let tt = turn0 === undefined ? 0 : wrap(a0 - set.drawn[b0]!);
           if (turn0 !== undefined) {
-            const cl = Math.min(Math.max(tt, turn0[0]), turn0[1]);
+            let cl = Math.min(Math.max(tt, turn0[0]), turn0[1]);
             if (Math.abs(cl - tt) > RANGE_SLACK) {
+              const sign: 1 | -1 = cl < tt ? 1 : -1;
+              if (place.how === 'in' && prevUpperClampSign !== 0 && sign !== prevUpperClampSign) {
+                cl = prevUpperClampSign > 0 ? turn0[1] : turn0[0];
+                tt += prevUpperClampSign * 360;
+              }
               held = true;
+              prevUpperClampSign = cl < tt ? 1 : -1;
               a0 = wrap(set.drawn[b0]! + cl);
               job.upperHeld.push(i);
               const r = (a0 + d0) / DEG;
               const E: Pt = [shoulder[0] + l0 * Math.cos(r), shoulder[1] + l0 * Math.sin(r)];
               a1 = wrap(Math.atan2(P[1] - E[1], P[0] - E[0]) * DEG - d1);
+            } else {
+              prevUpperClampSign = 0;
             }
           }
+          upperAsked.push(tt);
+          upperOver.push(turn0 === undefined ? 0 : overflow(tt, turn0));
           // A forearm the turn still holds: the re-aim failed within the art's range — ART-RANGE.
           const asked = turn1 === undefined ? 0 : wrap(a1 - set.drawn[b1]!);
           const over = turn1 === undefined ? 0 : overflow(asked, turn1);
@@ -2233,7 +2247,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       interpolateChainInJointSpace(ch, lo - 1, hi + 1);
     }
   }
-  // #188 / #191 / #206: Cover the full shown/bridged span of symmetric sets, support-arm sets, and head-anchored chains after short interpolation.
+  // #188 / #191 / #206 / #218: Cover the full shown/bridged span of symmetric sets, support-arm sets, and head-anchored chains after short interpolation.
   for (let sIdx = 0; sIdx < sw.switches.length; sIdx++) {
     const s = sw.switches[sIdx]!;
     const set = map.alternates.find((a) => a.name === s.set)!;
@@ -2242,9 +2256,21 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       setSlots.length > 0 && setSlots.every(([sl, att]) => sw.shown.get(sl)?.[i] === att);
     let loShow = s.frames[0];
     while (loShow - 1 >= 0 && isSetShownAt(loShow - 1)) loShow--;
+    if (
+      loShow === s.frames[0] &&
+      s.frames[0] > 0 &&
+      set.anchor === undefined &&
+      set.symmetric !== true &&
+      set.support === undefined &&
+      setSlots.some(([sl, att]) => sw.shown.get(sl)?.[s.frames[0] - 1] === att)
+    ) {
+      loShow = s.frames[0] - 1;
+    }
     let hiShow = s.frames[1];
     while (hiShow + 1 < n && isSetShownAt(hiShow + 1)) hiShow++;
     if (set.anchor !== undefined && HEAD_ANCHOR_FRAME !== 'off') {
+      const prevSw = sIdx > 0 ? sw.switches[sIdx - 1] : undefined;
+      const i0Bridge = prevSw !== undefined && s.frames[0] - prevSw.frames[1] <= 10 ? prevSw.frames[1] : -1;
       for (const cn of set.anchor) {
         const c = map.chains.find((x) => x.name === cn);
         if (!c || c.bones.length < 2) continue;
@@ -2269,12 +2295,22 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
             t1[i] = ha.a1;
           }
         }
-        // If `short` or `chainHolds` ramp-interpolated the boundary frame immediately outside the
-        // anchored chain's shown window (`loC - 1` or `hiC + 1`) while a neighbouring set's
-        // attachment is still displayed on that bone, restore that boundary frame from the
-        // neighbouring set's clamped key (`loC - 2` / `hiC + 2`) so the neighbouring set's art
-        // is not bent toward the anchored pose before its slot switches.
-        if (loC >= 2 && covered.get(cn)?.[loC - 1] === true) {
+        if (i0Bridge >= 0 && prevSw!.chains.includes(cn) && s.frames[0] - i0Bridge >= 2) {
+          const i1Bridge = s.frames[0];
+          const steps = i1Bridge - i0Bridge;
+          for (let bIdx = 0; bIdx < c.bones.length; bIdx++) {
+            const b = c.bones[bIdx]!;
+            const tg = targets.get(b)!;
+            const parentTg = bIdx > 0 ? targets.get(c.bones[bIdx - 1]!) : undefined;
+            const startA = parentTg !== undefined ? wrap(tg[i0Bridge]! - parentTg[i0Bridge]!) : tg[i0Bridge]!;
+            const endA = parentTg !== undefined ? wrap(tg[i1Bridge]! - parentTg[i1Bridge]!) : tg[i1Bridge]!;
+            const total = wrap(endA - startA);
+            for (let k = i0Bridge + 1; k < i1Bridge; k++) {
+              const localA = wrap(startA + ((k - i0Bridge) / steps) * total);
+              tg[k] = parentTg !== undefined ? wrap(parentTg[k]! + localA) : localA;
+            }
+          }
+        } else if (loC >= 2 && covered.get(cn)?.[loC - 1] === true) {
           t0[loC - 1] = t0[loC - 2]!;
           t1[loC - 1] = t1[loC - 2]!;
         }
@@ -2375,14 +2411,43 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       }
     }
     if (set.anchor === undefined && set.symmetric !== true && set.support === undefined && loShow < s.frames[0]) {
+      const prevSw = sIdx > 0 ? sw.switches[sIdx - 1] : undefined;
+      const i0 = prevSw !== undefined && s.frames[0] - prevSw.frames[1] <= 10 ? prevSw.frames[1] : -1;
       for (const cn of s.chains) {
         const c = map.chains.find((x) => x.name === cn);
         if (!c || c.bones.length < 2) continue;
-        const b1 = c.bones[1]!;
-        const t1 = targets.get(b1)!;
-        const entryWorld1 = t1[s.frames[0]]!;
-        for (let i = loShow; i < s.frames[0]; i++) {
-          t1[i] = entryWorld1;
+        const chainSlots = setSlots.filter(([sl]) => {
+          const sb = slots.get(sl)?.bone;
+          return sb !== undefined && c.bones.includes(sb);
+        });
+        const chainShownInBridge =
+          chainSlots.length === 0 ||
+          chainSlots.some(([sl, att]) => {
+            for (let k = Math.max(0, i0 + 1); k < s.frames[0]; k++) if (sw.shown.get(sl)?.[k] === att) return true;
+            return false;
+          });
+        if (i0 >= 0 && prevSw!.chains.includes(cn) && s.frames[0] - i0 >= 2 && chainShownInBridge) {
+          const i1 = s.frames[0];
+          const steps = i1 - i0;
+          for (let bIdx = 0; bIdx < c.bones.length; bIdx++) {
+            const b = c.bones[bIdx]!;
+            const tg = targets.get(b)!;
+            const parentTg = bIdx > 0 ? targets.get(c.bones[bIdx - 1]!) : undefined;
+            const startA = parentTg !== undefined ? wrap(tg[i0]! - parentTg[i0]!) : tg[i0]!;
+            const endA = parentTg !== undefined ? wrap(tg[i1]! - parentTg[i1]!) : tg[i1]!;
+            const total = wrap(endA - startA);
+            for (let k = i0 + 1; k < i1; k++) {
+              const localA = wrap(startA + ((k - i0) / steps) * total);
+              tg[k] = parentTg !== undefined ? wrap(parentTg[k]! + localA) : localA;
+            }
+          }
+        } else {
+          const b1 = c.bones[1]!;
+          const t1 = targets.get(b1)!;
+          const entryWorld1 = t1[s.frames[0]]!;
+          for (let i = loShow; i < s.frames[0]; i++) {
+            t1[i] = entryWorld1;
+          }
         }
       }
     }
