@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.31.0](https://github.com/rig-c/pose/compare/v0.30.1...v0.31.0) (2026-10-18)
+
+
+### Bug Fixes
+
+* **legs:** remove per-cycle drift in closeLoop and wrap first-cycle plant blend ([#224](https://github.com/rig-c/pose/issues/224)) ([#227](https://github.com/rig-c/pose/issues/227)) ([1021072](https://github.com/rig-c/pose/commit/102107239a8484a980165018ba7e64b588ba0c52))
+* **legs:** weight straight length by per-leg setup bone share and report clamped asked values ([#225](https://github.com/rig-c/pose/issues/225)) ([#229](https://github.com/rig-c/pose/issues/229)) ([2afc34f](https://github.com/rig-c/pose/commit/2afc34fd031d32768f6c5d46b5719759857a84f2))
+* **retarget:** hold crouch-invariant segment height per support span ([#226](https://github.com/rig-c/pose/issues/226)) ([#230](https://github.com/rig-c/pose/issues/230)) ([70f0cfc](https://github.com/rig-c/pose/commit/70f0cfc439612911f48a8fa816149b40f6149de2))
+
 ## [0.30.1](https://github.com/rig-c/pose/compare/v0.30.0...v0.30.1) (2026-10-18)
 
 
