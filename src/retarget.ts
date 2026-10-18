@@ -845,9 +845,21 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
               : legSum;
           const out = winPercentile(segH, 15, STRAIGHT_PERCENTILE);
           if (feet !== null) {
-            for (const sp of feet.supports) {
-              const m = percentile(segH.slice(sp.frames[0], sp.frames[1] + 1), STRAIGHT_PERCENTILE);
-              for (let i = sp.frames[0]; i <= sp.frames[1]; i++) out[i] = m;
+            const ms = feet.supports.map((sp) => percentile(segH.slice(sp.frames[0], sp.frames[1] + 1), STRAIGHT_PERCENTILE));
+            feet.supports.forEach((sp, k) => {
+              for (let i = sp.frames[0]; i <= sp.frames[1]; i++) out[i] = ms[k]!;
+            });
+            for (let k = 0; k + 1 < feet.supports.length; k++) {
+              const a = feet.supports[k]!.frames[1] + 1;
+              const b = feet.supports[k + 1]!.frames[0] - 1;
+              if (a <= b && ms[k + 1]! > ms[k]!) {
+                const start = Math.max(ms[k]!, out[a]!);
+                const end = ms[k + 1]!;
+                for (let i = a; i <= b; i++) {
+                  const u = b > a ? (i - a) / (b - a) : 1;
+                  out[i] = start + (end - start) * u;
+                }
+              }
             }
           }
           return out;

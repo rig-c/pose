@@ -16,6 +16,8 @@
  *      above its `±3` window ceiling.
  *    - `GATE_CLAMP_SATURATION`: clamp saturations at `±20°` on symmetric gesture sets counted and
  *      printed (`0` required).
+ *    - `GATE_REFERENCE_FOLDS` (#231): `folds = 0` across all mesh attachments on every posed frame;
+ *      a reference with no mesh attachments reports `SKIP` (never counted as a pass).
  * 2. Two-reference regression diff against the base output:
  *    - Every track that moved must be claimed by a `Claim-Track: <ref> <track> <frames> #<issue>`
  *      line in the PR body (`GATE_PR_BODY`) or commit messages; any unclaimed track or frame is
@@ -26,8 +28,8 @@
  *      BOTH references (`dancer` and `second`).
  *    - Reintroducing #206's world-space bridge interpolation goes red by name
  *      (`GATE_BRIDGE_ELBOW_INVERT` and `GATE_UNCLAIMED_TRACK`).
- *    - Planted mutants for `GATE_DELTA_CEILING`, `GATE_SWITCH_DELTA`, and `GATE_CLAMP_SATURATION`
- *      each go red by name.
+ *    - Planted mutants for `GATE_DELTA_CEILING`, `GATE_SWITCH_DELTA`, `GATE_CLAMP_SATURATION`, and
+ *      `GATE_REFERENCE_FOLDS` each go red by name.
  *    - A PR change that claims its moved track is green; the same change with the claim removed
  *      is red (`GATE_UNCLAIMED_TRACK`).
  */
@@ -36,7 +38,7 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { poseRawAnimation, readModel, type CompiledDocument, type RawBone } from 'rig-c/core';
+import { poseRawAnimation, poseRawSetup, readModel, type CompiledDocument, type RawBone } from 'rig-c/core';
 import { Plate } from 'rig-c/plate';
 import { clean } from '../src/clean.ts';
 import { readPoseSequence, writePoseSequence } from '../src/pose.ts';
@@ -259,6 +261,7 @@ function setupDancerRef(rootDir: string): RefCase {
     { name: 'back_l0', bone: 'sleeve_l0', attachment: null },
     { name: 'back_l1', bone: 'sleeve_l1', attachment: null },
     { name: 'topwear', bone: 'chest', attachment: 'seg' },
+    { name: 'skirt', bone: 'hip', attachment: 'skirt' },
     ...LIMBS.map((b) => ({ name: b, bone: b, attachment: 'seg' })),
   ];
   const skin: Record<string, Record<string, unknown>> = Object.fromEntries(
@@ -269,6 +272,20 @@ function setupDancerRef(rootDir: string): RefCase {
   skin.back_l0 = { k1_l0: att, k3_l0: att };
   skin.back_l1 = { k1_l1: att, k3_l1: att };
   skin.topwear = { seg: att, top_k1: att, top_k2: att, top_k3: att };
+  skin.skirt = {
+    skirt: {
+      type: 'mesh',
+      image: 'seg.png',
+      uvs: [0, 0, 0, 1, 1, 1, 1, 0],
+      triangles: [0, 1, 3, 1, 2, 3],
+      weights: [
+        [{ bone: 'hip', x: -15, y: 0, weight: 1 }],
+        [{ bone: 'leg_r0', x: 40, y: 0, weight: 1 }],
+        [{ bone: 'leg_l0', x: 40, y: 0, weight: 1 }],
+        [{ bone: 'hip', x: 15, y: 0, weight: 1 }],
+      ],
+    },
+  };
   skin.sleeve_r0 = { ...skin.sleeve_r0, k1_r0: att, k2_r0: att, k3_r0: att };
   skin.sleeve_r1 = { ...skin.sleeve_r1, k1_r1: att, k2_r1: att, k3_r1: att };
   skin.sleeve_l0 = { ...skin.sleeve_l0, k1_l0: att, k2_l0: att, k3_l0: att };
@@ -629,7 +646,47 @@ export interface ContinuityVerdict {
   maxSwitchDelta: number;
   maxSwitchWhere: string;
   clampSaturations: number;
+  foldsStatus: 'PASS' | 'FAIL' | 'SKIP';
+  foldedFrames: number | null;
+  meshCount: number;
   failures: string[];
+}
+
+const DEGENERATE_SHARE = 2 ** -30;
+
+function cross2(xy: readonly number[], triangles: readonly number[], t: number): number {
+  const a = triangles[3 * t]! * 2;
+  const b = triangles[3 * t + 1]! * 2;
+  const c = triangles[3 * t + 2]! * 2;
+  return (xy[b]! - xy[a]!) * (xy[c + 1]! - xy[a + 1]!) - (xy[c]! - xy[a]!) * (xy[b + 1]! - xy[a + 1]!);
+}
+
+function longestEdge(xy: readonly number[], triangles: readonly number[], t: number): number {
+  const ids = [triangles[3 * t]! * 2, triangles[3 * t + 1]! * 2, triangles[3 * t + 2]! * 2] as const;
+  let most = 0;
+  for (const [i, j] of [
+    [0, 1],
+    [1, 2],
+    [2, 0],
+  ] as const) {
+    const dx = xy[ids[j]]! - xy[ids[i]]!;
+    const dy = xy[ids[j] + 1]! - xy[ids[i] + 1]!;
+    most = Math.max(most, Math.hypot(dx, dy));
+  }
+  return most;
+}
+
+function maxMagnitude(xy: readonly number[]): number {
+  let most = 0;
+  for (const v of xy) most = Math.max(most, Math.abs(v));
+  return most;
+}
+
+function triSign(xy: readonly number[], triangles: readonly number[], t: number, scale: number): -1 | 0 | 1 {
+  const twice = cross2(xy, triangles, t);
+  const edge = longestEdge(xy, triangles, t);
+  if (edge === 0 || Math.abs(twice) / edge <= DEGENERATE_SHARE * scale) return 0;
+  return twice > 0 ? 1 : -1;
 }
 
 export interface ContinuityOptions {
@@ -649,6 +706,8 @@ export interface ContinuityOptions {
  * 3. `GATE_SWITCH_DELTA`: no attachment switch frame with `|Δ|` on the support arm (`sleeve_l0`, `sleeve_l1`)
  *    above `switchDeltaCeiling` (default `25°/f`).
  * 4. `GATE_CLAMP_SATURATION`: clamp saturations at `±20°` on symmetric gesture sets counted (`0` required).
+ * 5. `GATE_REFERENCE_FOLDS` (#231): `folds = 0` across all mesh attachments on every posed frame;
+ *    a reference with no mesh attachments reports `SKIP` (never counted as a pass).
  */
 export function checkContinuity(out: RefRunOutput, opts: ContinuityOptions = {}): ContinuityVerdict {
   const deltaCeiling = opts.deltaCeiling ?? 45;
@@ -756,6 +815,14 @@ export function checkContinuity(out: RefRunOutput, opts: ContinuityOptions = {})
     }
   }
 
+  const poses = poseRawAnimation(
+    out.buildDoc,
+    'dance',
+    Array.from({ length: out.ref.n - 1 }, () => out.ref.dt),
+    {},
+    'animation',
+  );
+
   // Count ±20° clamp saturations on symmetric gesture-set frames.
   const symSets = new Map<string, Record<string, number>>();
   for (const alt of mapDoc.alternates ?? []) {
@@ -763,13 +830,6 @@ export function checkContinuity(out: RefRunOutput, opts: ContinuityOptions = {})
   }
   let clampSaturations = 0;
   if (symSets.size > 0) {
-    const poses = poseRawAnimation(
-      out.buildDoc,
-      'dance',
-      Array.from({ length: out.ref.n - 1 }, () => out.ref.dt),
-      {},
-      'animation',
-    );
     const byName = (bones: readonly RawBone[]) => new Map(bones.map((b) => [b.name, b]));
     for (const sw of switches) {
       const drawn = symSets.get(sw.set);
@@ -792,6 +852,56 @@ export function checkContinuity(out: RefRunOutput, opts: ContinuityOptions = {})
     }
   }
 
+  // #231: standing GATE_REFERENCE_FOLDS check across all mesh attachments; SKIP when the rig has no meshes.
+  const setupPose = poseRawSetup(out.buildDoc);
+  const setupMeshes = new Map<string, { slot: string; attachment: string; signs: Int8Array; frames: number[] }>();
+  for (const d of setupPose.drawn) {
+    if (d.kind !== 'mesh') continue;
+    const triCount = Math.floor(d.triangles.length / 3);
+    const scale = maxMagnitude(d.vertices);
+    const signs = new Int8Array(triCount);
+    for (let t = 0; t < triCount; t++) signs[t] = triSign(d.vertices, d.triangles, t, scale);
+    setupMeshes.set(`${d.slot}:${d.attachment}`, { slot: d.slot, attachment: d.attachment, signs, frames: [] });
+  }
+  const meshCount = setupMeshes.size;
+  let foldsStatus: 'PASS' | 'FAIL' | 'SKIP' = 'SKIP';
+  let foldedFrames: number | null = null;
+  if (meshCount > 0) {
+    const foldedFrameSet = new Set<number>();
+    for (let f = 0; f < poses.length; f++) {
+      for (const d of poses[f]!.drawn) {
+        if (d.kind !== 'mesh') continue;
+        const entry = setupMeshes.get(`${d.slot}:${d.attachment}`);
+        if (entry === undefined) continue;
+        const triCount = Math.floor(d.triangles.length / 3);
+        const scale = maxMagnitude(d.vertices);
+        let frameFolded = false;
+        for (let t = 0; t < triCount; t++) {
+          const s0 = entry.signs[t]!;
+          if (s0 === 0) continue;
+          const sf = triSign(d.vertices, d.triangles, t, scale);
+          if (sf === -s0) {
+            frameFolded = true;
+            break;
+          }
+        }
+        if (frameFolded) {
+          entry.frames.push(f);
+          foldedFrameSet.add(f);
+        }
+      }
+    }
+    foldedFrames = foldedFrameSet.size;
+    foldsStatus = foldedFrames === 0 ? 'PASS' : 'FAIL';
+    for (const entry of setupMeshes.values()) {
+      if (entry.frames.length > 0) {
+        failures.push(
+          `GATE_REFERENCE_FOLDS: ${out.ref.name} mesh "${entry.attachment}" (slot "${entry.slot}") folded on ${entry.frames.length} frame(s) [${entry.frames.join(', ')}] (0 required)`,
+        );
+      }
+    }
+  }
+
   return {
     ref: out.ref.name,
     maxDelta,
@@ -801,6 +911,9 @@ export function checkContinuity(out: RefRunOutput, opts: ContinuityOptions = {})
     maxSwitchDelta,
     maxSwitchWhere,
     clampSaturations,
+    foldsStatus,
+    foldedFrames,
+    meshCount,
     failures,
   };
 }
@@ -932,9 +1045,9 @@ export function diffReferenceTracks(base: RefRunOutput, candidate: RefRunOutput,
 
 export function formatGateTable(rows: ReadonlyArray<{ diff: RefDiffVerdict; cont: ContinuityVerdict }>): string {
   const header =
-    'ref      | tracks | moved | claimed | unclaimed | max |Δ| (°/f)              | max bridge |elbow| | max switch |Δ| | clamp sat';
+    'ref      | tracks | moved | claimed | unclaimed | max |Δ| (°/f)              | max bridge |elbow| | max switch |Δ| | clamp sat | folds';
   const sep =
-    '---------+--------+-------+---------+-----------+----------------------------+--------------------+----------------+----------';
+    '---------+--------+-------+---------+-----------+----------------------------+--------------------+----------------+-----------+---------';
   const body = rows.map(({ diff, cont }) => {
     const cRef = diff.ref.padEnd(8);
     const cTr = String(diff.totalTracks).padStart(6);
@@ -945,7 +1058,8 @@ export function formatGateTable(rows: ReadonlyArray<{ diff: RefDiffVerdict; cont
     const cBr = `${cont.maxBridgeElbow.toFixed(2)}°`.padStart(18);
     const cSw = `${cont.maxSwitchDelta.toFixed(2)}°`.padStart(14);
     const cSa = String(cont.clampSaturations).padStart(9);
-    return `${cRef} | ${cTr} | ${cMv} | ${cCl} | ${cUn} | ${cDl} | ${cBr} | ${cSw} | ${cSa}`;
+    const cFo = (cont.foldsStatus === 'SKIP' ? 'SKIP' : `${cont.foldedFrames}/${cont.meshCount}m`).padStart(8);
+    return `${cRef} | ${cTr} | ${cMv} | ${cCl} | ${cUn} | ${cDl} | ${cBr} | ${cSw} | ${cSa} | ${cFo}`;
   });
   return [header, sep, ...body].join('\n');
 }
@@ -1000,6 +1114,13 @@ describe('#208: two-reference regression gate and standing continuity assertions
       { diff: diffSecond, cont: contSecond },
     ]);
     console.log(`\n=== GATE (#208): two-reference regression & continuity ===\n${table}\n`);
+
+    expect(contDancer.foldsStatus).toBe('PASS');
+    expect(contDancer.foldedFrames).toBe(0);
+    expect(contDancer.meshCount).toBe(1);
+    expect(contSecond.foldsStatus).toBe('SKIP');
+    expect(contSecond.foldedFrames).toBeNull();
+    expect(contSecond.meshCount).toBe(0);
 
     expect(contDancer.failures).toEqual([]);
     expect(contSecond.failures).toEqual([]);
@@ -1125,6 +1246,27 @@ describe('#208: two-reference regression gate and standing continuity assertions
         const contSat = checkContinuity({ ...baseDancer, ref: refSat });
         expect(contSat.clampSaturations).toBeGreaterThan(0);
         expect(contSat.failures.some((f) => f.includes('GATE_CLAMP_SATURATION'))).toBe(true);
+      }
+
+      // Mutant for GATE_REFERENCE_FOLDS (#231): a frame that folds a skirt mesh triangle is refused by name,
+      // while a reference with no mesh attachments reports SKIP (never PASS).
+      {
+        const contNoMesh = checkContinuity(baseSecond);
+        expect(contNoMesh.foldsStatus).toBe('SKIP');
+        expect(contNoMesh.foldedFrames).toBeNull();
+
+        const foldDoc: CompiledDocument = structuredClone(baseDancer.buildDoc);
+        const anim = foldDoc.animations.find((a) => a.name === 'dance')!;
+        const r0 = anim.timelines.bones.find((b) => b.name === 'leg_r0')!.timelines.find((t) => t.kind === 'rotate')!;
+        const l0 = anim.timelines.bones.find((b) => b.name === 'leg_l0')!.timelines.find((t) => t.kind === 'rotate')!;
+        r0.keys[15]!.values[0] = 60;
+        r0.keys[15]!.stated.values[0] = 60;
+        l0.keys[15]!.values[0] = -60;
+        l0.keys[15]!.stated.values[0] = -60;
+        const contFold = checkContinuity({ ...baseDancer, buildDoc: foldDoc });
+        expect(contFold.foldsStatus).toBe('FAIL');
+        expect(contFold.foldedFrames).toBe(1);
+        expect(contFold.failures.some((f) => f.includes('GATE_REFERENCE_FOLDS') && f.includes('slot "skirt"') && f.includes('[15]'))).toBe(true);
       }
     } finally {
       rmSync(d205, { recursive: true, force: true });

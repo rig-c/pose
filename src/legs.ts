@@ -942,7 +942,9 @@ export function figureScaleOf(raw: readonly number[], maxStep = FIGURE_SCALE_STE
     if (gap > 0) {
       const needed = Math.abs(b.val - a.val) / gap;
       if (needed > r0) {
-        for (let i = a.hi; i < b.lo; i++) r[i] = needed * 1.0001;
+        for (let i = a.hi; i < b.lo; i++) {
+          r[i] = Math.max(needed, Math.abs(u[i + 1]! - u[i]!)) * 1.0001;
+        }
       }
     }
   }
