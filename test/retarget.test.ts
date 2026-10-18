@@ -9,6 +9,7 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -41,6 +42,28 @@ const wrap = (d: number): number => {
   if (x <= -180) x += 360;
   return x;
 };
+
+/** Project only the declared #209 additions; every legacy value stays exact. */
+function legacyReportRows(value: unknown, additions: readonly string[], turnTimes = false): Record<string, unknown>[] {
+  if (!Array.isArray(value)) throw new Error('report rows must be an array');
+  return value.map((row: unknown) => {
+    if (row === null || typeof row !== 'object' || Array.isArray(row)) throw new Error('report row must be an object');
+    const projected = { ...row } as Record<string, unknown>;
+    for (const key of additions) delete projected[key];
+    if (turnTimes && 'turns' in projected) projected.turns = legacyReportRows(projected.turns, ['t']);
+    return projected;
+  });
+}
+
+test('legacy report projection retains wrong old values and nested signed diagnostics', () => {
+  const rows = [{ frames: [1, 2], seconds: 0.25, times: [0.1, 0.2], moved: { on: { frames: -1, seconds: -0.1, t: 99 } } }];
+  const projected = legacyReportRows(rows, ['times']);
+  expect(projected).toEqual([{ frames: [1, 2], seconds: 0.25, moved: { on: { frames: -1, seconds: -0.1, t: 99 } } }]);
+  expect(projected).not.toEqual([{ frames: [1, 2], seconds: 0.5, moved: rows[0]!.moved }]);
+  expect(projected).not.toEqual([{ frames: [1, 2], seconds: 0.25, moved: { on: { frames: 1, seconds: -0.1, t: 99 } } }]);
+  expect(rows[0]!.times).toEqual([0.1, 0.2]);
+  expect(legacyReportRows([{ turns: [{ frame: 2, jump: 150, t: 0.2 }], times: [0.1, 0.2] }], ['times'], true)).toEqual([{ turns: [{ frame: 2, jump: 150 }] }]);
+});
 
 // --- temp directories ------------------------------------------------------
 
@@ -730,7 +753,7 @@ describe('the flip guard (#15): a segment that turns more than --flip degrees in
     expect(Math.abs(wrap(f[9]! - -70))).toBeLessThan(ANGLE_TOL);
     const rep = JSON.parse(readFileSync(report, 'utf8')) as { options: { flip: unknown }; flips: unknown[] };
     expect(rep.options.flip).toBe(90);
-    expect(rep.flips).toEqual([{ chain: 'arm_l', bone: 'sleeve_l1', joints: ['l_elbow', 'l_wrist'], jump: expect.closeTo(150, 6), turns: [{ frame: 8, jump: expect.closeTo(150, 6) }], frames: [7, 8], h: 1, step: expect.closeTo(50, 6), clipped: null }]);
+    expect(legacyReportRows(rep.flips, ['times'], true)).toEqual([{ chain: 'arm_l', bone: 'sleeve_l1', joints: ['l_elbow', 'l_wrist'], jump: expect.closeTo(150, 6), turns: [{ frame: 8, jump: expect.closeTo(150, 6) }], frames: [7, 8], h: 1, step: expect.closeTo(50, 6), clipped: null }]);
   }, SLOW);
 
   test('control: without the guard the same build turns 150° in one frame (what the guard is for)', () => {
@@ -844,8 +867,8 @@ describe('the short hold (#22): a segment under --short of its median picture le
     expect(misses(c.build, STEADY)).toEqual([]);
     const rep = JSON.parse(readFileSync(report, 'utf8')) as Report;
     expect(rep.options.short).toBe(0.35);
-    expect(rep.short).toEqual([{ chain: 'arm_l', bone: 'sleeve_l1', joints: ['l_elbow', 'l_wrist'], frames: [5, 10], minFraction: expect.closeTo(0.1, 9) }]);
-    expect(rep.endOn).toEqual([{ chain: 'arm_l', bone: 'sleeve_l1', joints: ['l_elbow', 'l_wrist'], frames: [5, 10], seconds: 0.2, minFraction: expect.closeTo(0.1, 9) }]);
+    expect(legacyReportRows(rep.short, ['times'])).toEqual([{ chain: 'arm_l', bone: 'sleeve_l1', joints: ['l_elbow', 'l_wrist'], frames: [5, 10], minFraction: expect.closeTo(0.1, 9) }]);
+    expect(legacyReportRows(rep.endOn, ['times', 'spanSeconds'])).toEqual([{ chain: 'arm_l', bone: 'sleeve_l1', joints: ['l_elbow', 'l_wrist'], frames: [5, 10], seconds: 0.2, minFraction: expect.closeTo(0.1, 9) }]);
   }, SLOW);
 
   // Since #67 a 4-frame shrink, still under END-ON's 0.15 s: clean's 5-frame median takes a 2-frame collapse out as a
@@ -1571,10 +1594,11 @@ describe('the pelvis tilts and the trunk reaches from the posed hip for the shou
     edit?.(doc);
     const run = (hipsInferred: boolean) => {
       const seq = clean(readPoseSequence(JSON.stringify(doc), 'fixture'), { loop: false, legs: 1, rest: 1, hipsInferred }, undefined, 'fixture').seq;
-      writeFileSync(c.pose, writePoseSequence(seq));
+      const poseBytes = writePoseSequence(seq);
+      writeFileSync(c.pose, poseBytes);
       const report = join(c.dir, 'report.json');
       const r = retarget(c, ['--report', report]);
-      return { r, motion: readFileSync(c.out, 'utf8'), report: JSON.parse(readFileSync(report, 'utf8')) as Record<string, unknown> };
+      return { r, motion: readFileSync(c.out, 'utf8'), report: JSON.parse(readFileSync(report, 'utf8')) as Record<string, unknown>, poseSHA: createHash('sha256').update(poseBytes).digest('hex') };
     };
     return { plain: run(false), flagged: run(true) };
   };
@@ -1602,7 +1626,15 @@ describe('the pelvis tilts and the trunk reaches from the posed hip for the shou
     expect(qf.frames).toEqual({ ...(qp.frames as object), tilt: 0 });
     expect(qf.sway).toEqual(qp.sway);
     expect((flagged.report.cleaned as { params: unknown }).params).toEqual({ loop: false, legs: 1, rest: 1, hipsInferred: { by: 'declared' } });
-    const rest = (rep: Record<string, unknown>) => ({ ...rep, posture: null, cleaned: null });
+    // Different cleaned input bytes must have different provenance, even when motion agrees.
+    for (const run of [plain, flagged]) {
+      const inputs = run.report.inputs as { pose: { sha256: string } };
+      expect(inputs.pose.sha256).toBe(run.poseSHA);
+    }
+    const rest = (rep: Record<string, unknown>) => {
+      const inputs = rep.inputs as { pose: Record<string, unknown> };
+      return { ...rep, posture: null, cleaned: null, inputs: { ...inputs, pose: { ...inputs.pose, sha256: null } } };
+    };
     expect(rest(flagged.report)).toEqual(rest(plain.report));
   }, SLOW);
 
@@ -1905,7 +1937,7 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
     expect(rep.options.switchAt).toBe('first');
     // `first` is the default (#31 round 2): each boundary is reported where the selection put it, with its window and its speed.
     const stay = (f: number) => ({ frame: [f, f], frames: 0, seconds: 0, window: [f - 1, f + 1], speed: { old: 60, new: 60 } });
-    expect(rep.switches).toEqual([{ set: 'up', chains: ['arm_r'], slots: { sleeve_r0: 'seg_up', cap_r: 'cap_up' }, hides: ['sleeve_r1'], offsets: {}, from: 0.625, to: 1.375, frames: [5, 10], distance: { max: 0, median: 0 }, artTurn: {}, moved: { on: stay(5), off: stay(11) } }]);
+    expect(legacyReportRows(rep.switches, ['times'])).toEqual([{ set: 'up', chains: ['arm_r'], slots: { sleeve_r0: 'seg_up', cap_r: 'cap_up' }, hides: ['sleeve_r1'], offsets: {}, from: 0.625, to: 1.375, frames: [5, 10], distance: { max: 0, median: 0 }, artTurn: {}, moved: { on: stay(5), off: stay(11) } }]);
     // The bones still land: a switch adds tracks, it moves no key.
     expect(misses(c.build, armed(on))).toEqual([]);
     expect(shows(c.build, 'sleeve_r0')).toEqual(each((i) => (on(i) ? 'seg_up' : 'seg')));
@@ -2210,7 +2242,7 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
       // Read back by rig-c: the upper arm at −100 + 30 on the clamped frames, every other bone (the forearm below it too) on the pose.
       expect(misses(c.build, RANGED, (b, i) => (b === 'sleeve_r0' && lifted(i) ? -70 : angleOf(RANGED, b, i)))).toEqual([]);
       expect(misses(c.build, RANGED).every((m) => m.startsWith('sleeve_r0 '))).toBe(true);
-      expect(reportOf(report).range).toEqual([{ chain: 'arm_r', bone: 'sleeve_r0', frames: [4, 7], seconds: 0.5, maxOverflow: 20, key: 50, limits: [-30, 30] }]);
+      expect(legacyReportRows(reportOf(report).range, ['times', 'spanSeconds'])).toEqual([{ chain: 'arm_r', bone: 'sleeve_r0', frames: [4, 7], seconds: 0.5, maxOverflow: 20, key: 50, limits: [-30, 30] }]);
     }, SLOW);
 
     test('control: without a range the same pose is keyed as given, and nothing is listed', () => {
@@ -2258,7 +2290,7 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
       expect(linesOf(r, 'RANGE')).toEqual([]);
       expect(misses(c.build, RANGED)).toEqual([]);
       const rep = reportOf(report);
-      expect(rep.artRange).toEqual([{ set: 'lift', chain: 'arm_r', bone: 'sleeve_r0', frames: [4, 7], seconds: 0.5, maxOverflow: 20, turn: 30, limits: [-10, 10], clamped: false }]);
+      expect(legacyReportRows(rep.artRange, ['times', 'spanSeconds'])).toEqual([{ set: 'lift', chain: 'arm_r', bone: 'sleeve_r0', frames: [4, 7], seconds: 0.5, maxOverflow: 20, turn: 30, limits: [-10, 10], clamped: false }]);
       expect(rep.switches[0]!.artTurn).toEqual({ sleeve_r0: { max: 30, median: 30 } });
     }, SLOW);
 
@@ -2318,7 +2350,7 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
       expect(linesOf(r, 'TURN')).toEqual([
         'TURN   line "hip" (r_hip → l_hip) frames 5–10 (t=0.167–0.333s): 0.200s picture length down to 0.30 of its median, under 0.5, ≥ 0.15s — the body or head turned, a pose the rig cannot draw',
       ]);
-      expect(reportOf(report).turns).toEqual([{ line: 'hip', joints: ['r_hip', 'l_hip'], frames: [5, 10], seconds: 0.2, minFraction: expect.closeTo(0.3, 9), reversed: false }]);
+      expect(legacyReportRows(reportOf(report).turns, ['times', 'spanSeconds', 'bones'])).toEqual([{ line: 'hip', joints: ['r_hip', 'l_hip'], frames: [5, 10], seconds: 0.2, minFraction: expect.closeTo(0.3, 9), reversed: false }]);
       expect(misses(c.build, T)).toEqual([]);
     }, SLOW);
 
@@ -2340,7 +2372,7 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
       expect(linesOf(r, 'TURN')).toEqual([
         'TURN   line "hip" (r_hip → l_hip) frames 5–10 (t=0.167–0.333s): 0.200s reversed (pointing more than 90° from r_hip → l_hip\'s own way), picture length down to 1.00 of its median, ≥ 0.15s — the body or head turned, a pose the rig cannot draw',
       ]);
-      expect(reportOf(report).turns).toEqual([{ line: 'hip', joints: ['r_hip', 'l_hip'], frames: [5, 10], seconds: 0.2, minFraction: expect.closeTo(1, 9), reversed: true }]);
+      expect(legacyReportRows(reportOf(report).turns, ['times', 'spanSeconds', 'bones'])).toEqual([{ line: 'hip', joints: ['r_hip', 'l_hip'], frames: [5, 10], seconds: 0.2, minFraction: expect.closeTo(1, 9), reversed: true }]);
     }, SLOW);
 
     test('a line the map does not use is read too: the eye line at 0.3 for 6 frames', () => {
@@ -2381,7 +2413,7 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
       const r = retarget(c, ['--report', report]);
       expect(r.status).toBe(0);
       expect(foldTimes(r)).toEqual([0.75, 0.875, 1, 1.125]);
-      expect(reportOf(report).uncovered).toEqual([{ slot: 'arm_mesh', attachment: 'arm_mesh', chains: ['arm_r'], times: [0.75, 0.875, 1, 1.125] }]);
+      expect(legacyReportRows(reportOf(report).uncovered, ['domain'])).toEqual([{ slot: 'arm_mesh', attachment: 'arm_mesh', chains: ['arm_r'], times: [0.75, 0.875, 1, 1.125] }]);
       // No map alternates, no UNCOVERED lines.
       expect(linesOf(r, 'UNCOVERED')).toEqual([]);
     }, SLOW);
@@ -2395,7 +2427,7 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
       expect(r.status).toBe(0);
       expect(linesOf(r, 'SWITCH')[0]).toContain('frames 6–7');
       expect(foldTimes(r)).toEqual([1, 1.125]);
-      expect(reportOf(report).uncovered).toEqual([{ slot: 'arm_mesh', attachment: 'arm_mesh', chains: ['arm_r'], times: [1, 1.125] }]);
+      expect(legacyReportRows(reportOf(report).uncovered, ['domain'])).toEqual([{ slot: 'arm_mesh', attachment: 'arm_mesh', chains: ['arm_r'], times: [1, 1.125] }]);
       expect(linesOf(r, 'UNCOVERED')).toEqual(['UNCOVERED mesh "arm_mesh" (slot "arm_mesh"; chains arm_r) folds with no switch covering it on 2 frame(s): t=1.000–1.125']);
     }, SLOW);
 
@@ -2406,7 +2438,7 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
       expect(r.status).toBe(0);
       expect(slotTracks(c.out).map((t) => t.slot)).toEqual(['sleeve_r0', 'cap_r', 'arm_mesh']);
       expect(foldTimes(r)).toEqual([1, 1.125]);
-      expect(reportOf(report).uncovered).toEqual([{ slot: 'arm_mesh', attachment: 'arm_mesh', chains: ['arm_r'], times: [1, 1.125] }]);
+      expect(legacyReportRows(reportOf(report).uncovered, ['domain'])).toEqual([{ slot: 'arm_mesh', attachment: 'arm_mesh', chains: ['arm_r'], times: [1, 1.125] }]);
     }, SLOW);
   });
 });
@@ -2997,7 +3029,7 @@ describe('#47: --leg-scale and --plant-feet', () => {
     // Lower (by 6 px) from frame 9; 0.1 s is reached on frame 11 (frames 9–11 last 0.125 s, 9–10 0.083 s), so it takes support from frame 9 (#102).
     expect(linesOf(r, 'FEET')).toContain('FEET   supports: r 0–8, l 9–23');
     const rep = JSON.parse(readFileSync(report, 'utf8')) as { feet: { changes: unknown; steps: unknown } };
-    expect(rep.feet.changes).toEqual([{ frame: 0, from: null, to: 'r' }, { frame: 9, from: 'r', to: 'l' }]);
+    expect(legacyReportRows(rep.feet.changes, ['t'])).toEqual([{ frame: 0, from: null, to: 'r' }, { frame: 9, from: 'r', to: 'l' }]);
     expect(rep.feet.steps).toEqual([]);
     const p = posedLegs(c.build);
     expect(spread(p.ankle.r.slice(0, 9))).toBeLessThan(0.01);
