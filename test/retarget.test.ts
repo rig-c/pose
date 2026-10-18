@@ -8737,5 +8737,121 @@ describe('crouch-invariant per-frame figure scale across support spans (#226)', 
   }, SLOW);
 });
 
+describe('continuous figure scale across inter-span airborne gaps (#231)', () => {
+  const N = 240;
+  const DT = 1 / 24;
 
+  function jumpLandingPose(): Record<string, unknown> {
+    const m: Motion = {
+      ...BASE,
+      n: N,
+      dt: DT,
+      trunk: () => 90,
+      rt: () => -90,
+      rs: () => -90,
+      lt: () => -90,
+      ls: () => -90,
+      hip: () => [0, 0],
+    };
+    const doc = poseDoc(m, (i, j) => {
+      // Span 1 [0..70] at camZ = 1.000; Span 2 [71..145] at camZ = 1.145;
+      // airborne jump [146..150] at camZ = 1.197; Span 3 [151..239] at camZ = 1.258
+      // with an 18-frame landing crouch (legFrac = 0.85) before standing upright on 169..239.
+      const camZ = i <= 70 ? 1.0 : i <= 145 ? 1.145 : i <= 150 ? 1.197 : 1.258;
+      let legFrac = 1.0;
+      let jumpLift = 0;
+      if (i >= 146 && i <= 150) {
+        jumpLift = 35 * camZ;
+        legFrac = 1.0;
+      } else if (i >= 151 && i <= 168) {
+        legFrac = 0.85;
+      }
+      const floorY = 380;
+      const ankY = floorY - jumpLift;
+      const supLen = 150 * camZ * legFrac;
+      const mhY = ankY - supLen;
+      const rHipX = -15 * camZ;
+      const lHipX = 15 * camZ;
+      j.r_hip = { state: 'observed', at: [rHipX, mhY], score: 0.95 };
+      j.l_hip = { state: 'observed', at: [lHipX, mhY], score: 0.95 };
+      const setLeg = (side: 'r' | 'l', x: number, ay: number) => {
+        const thigh = (80 / 150) * (ay - mhY);
+        j[`${side}_knee`] = { state: 'observed', at: [x, mhY + thigh], score: 0.95 };
+        j[`${side}_ankle`] = { state: 'observed', at: [x, ay], score: 0.95 };
+      };
+      if (i <= 70) {
+        setLeg('l', lHipX, ankY);
+        setLeg('r', rHipX, ankY - 5 * camZ);
+      } else if (i <= 145) {
+        setLeg('r', rHipX, ankY);
+        setLeg('l', lHipX, ankY - 5 * camZ);
+      } else if (i <= 150) {
+        setLeg('l', lHipX, ankY);
+        setLeg('r', rHipX, ankY);
+      } else {
+        setLeg('l', lHipX, ankY);
+        setLeg('r', rHipX, ankY - 5 * camZ);
+      }
+      const shY = mhY - 100 * camZ;
+      j.neck = { state: 'observed', at: [0, shY], score: 0.95 };
+      j.r_shoulder = { state: 'observed', at: [-25 * camZ, shY], score: 0.95 };
+      j.l_shoulder = { state: 'observed', at: [25 * camZ, shY], score: 0.95 };
+      j.r_elbow = { state: 'observed', at: [-25 * camZ, shY + 45 * camZ], score: 0.95 };
+      j.l_elbow = { state: 'observed', at: [25 * camZ, shY + 45 * camZ], score: 0.95 };
+      j.r_wrist = { state: 'observed', at: [-25 * camZ, shY + 85 * camZ], score: 0.95 };
+      j.l_wrist = { state: 'observed', at: [25 * camZ, shY + 85 * camZ], score: 0.95 };
+      const noseY = shY - 30 * camZ;
+      j.nose = { state: 'observed', at: [0, noseY], score: 0.95 };
+      j.r_eye = { state: 'observed', at: [-6 * camZ, noseY - 5 * camZ], score: 0.95 };
+      j.l_eye = { state: 'observed', at: [6 * camZ, noseY - 5 * camZ], score: 0.95 };
+      j.r_ear = { state: 'observed', at: [-12 * camZ, noseY - 5 * camZ], score: 0.95 };
+      j.l_ear = { state: 'observed', at: [12 * camZ, noseY - 5 * camZ], score: 0.95 };
+    });
+    return cleanedDoc(doc);
+  }
 
+  test('ramps figure scale across an airborne gap into the landing support span with 0% landing-frame scale step; mutant without gap ramp steps > 4% at landing', () => {
+    const pose = jumpLandingPose();
+    const c = setup({ pose });
+    const camPath = join(c.dir, 'camera.json');
+    const repPath = join(c.dir, 'report.json');
+    const r = retarget(c, ['--bends', 'clamp', '--leg-scale', '0.8,1.05', '--plant-feet', '--camera', camPath, '--report', repPath]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+
+    const rep = JSON.parse(readFileSync(repPath, 'utf8')) as { feet: { supports: Array<{ frames: [number, number] }> } };
+    const landSpan = rep.feet.supports.find((sp) => sp.frames[0] >= 151)!;
+    const land = landSpan.frames[0];
+    const cam = JSON.parse(readFileSync(camPath, 'utf8')) as { frames: Array<{ s: number }> };
+    const landingStep = Math.abs(cam.frames[land]!.s - cam.frames[land - 1]!.s) / cam.frames[land - 1]!.s;
+    expect(landingStep).toBeLessThan(0.001);
+
+    // Mutant: removing the inter-span gap ramp leaves the airborne gap as a flat plateau that locks as a false frozen span and steps > 4% on landing.
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm231-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const pRet = join(d, 'src', 'retarget.ts');
+      const srcRet = readFileSync(pRet, 'utf8');
+      const fromRet = 'if (a <= b && ms[k + 1]! > ms[k]!) {';
+      expect(srcRet.split(fromRet)).toHaveLength(2);
+      writeFileSync(pRet, srcRet.replace(fromRet, 'if (false) {'));
+
+      const cMut = setup({ pose });
+      const camMutPath = join(cMut.dir, 'camera.json');
+      const rMut = retarget(
+        cMut,
+        ['--bends', 'clamp', '--leg-scale', '0.8,1.05', '--plant-feet', '--camera', camMutPath],
+        join(d, 'cli.ts'),
+      );
+      expect(rMut.status).toBe(0);
+      const camMut = JSON.parse(readFileSync(camMutPath, 'utf8')) as { frames: Array<{ s: number }> };
+      const mutLandingStep = Math.abs(camMut.frames[land]!.s - camMut.frames[land - 1]!.s) / camMut.frames[land - 1]!.s;
+      expect(mutLandingStep).toBeGreaterThan(0.04);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
