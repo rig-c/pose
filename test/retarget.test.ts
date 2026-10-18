@@ -7986,6 +7986,128 @@ describe('#206: gesture-set bridges interpolate in joint space, apply set.suppor
   }, SLOW);
 });
 
+describe('#207: symmetric gesture set solves the diamond in the chest-local frame so torso lean never collapses an arm into the ±20° clamp', () => {
+  const N = 24;
+  const DT = 1 / 24;
+  const headBones = (b: BoneSpec[]): BoneSpec[] => [
+    ...b,
+    { name: 'head', parent: 'neck', x: 0, y: 20 },
+    { name: 'eye_r', parent: 'head', x: -15, y: 10 },
+    { name: 'eye_l', parent: 'head', x: 15, y: 10 },
+  ];
+  const rigOpts: RigOpts = {
+    bones: headBones,
+    extra: {
+      sleeve_r0: { k1_r: { image: 'seg.png', x: 30, y: 0, rotation: -90 } },
+      sleeve_l0: { k1_l: { image: 'seg.png', x: 30, y: 0, rotation: -90 } },
+    },
+  };
 
+  test('#207 chest-local diamond + mutant: under a 12° torso lean, a "symmetric": true set has 0 clamp saturations at ±20° and keeps non-arm tracks byte-identical, while the world-Y mutant saturates the clamp', () => {
+    const mKey: Motion = { ...BASE, n: N, dt: DT, trunk: () => 90, hip: () => [0, 0], ru: () => 145, rf: () => 45, lu: () => 41, lf: () => 135 };
+    const kp = positions(mKey, 0);
+    // Torso leans up to 12° away from 90° while arms stay raised behind the head.
+    const mSeq: Motion = {
+      ...BASE,
+      n: N,
+      dt: DT,
+      trunk: (i) => 90 + 12 * Math.sin((2 * Math.PI * i) / (N - 1)),
+      hip: () => [0, 0],
+      ru: (i) => 145 + 12 * Math.sin((2 * Math.PI * i) / (N - 1)),
+      rf: (i) => 45 + 12 * Math.sin((2 * Math.PI * i) / (N - 1)),
+      lu: (i) => 41 + 12 * Math.sin((2 * Math.PI * i) / (N - 1)),
+      lf: (i) => 135 + 12 * Math.sin((2 * Math.PI * i) / (N - 1)),
+    };
+    const pose = poseDoc(mSeq);
+    const drawn = { sleeve_r0: 145, sleeve_r1: 45, sleeve_l0: 41, sleeve_l1: 135 };
+    const makeMap = (symmetric: boolean): Record<string, unknown> => ({
+      ...baseMap(),
+      chains: [
+        ...baseChains().map((c) => (c.name === 'arm_r' || c.name === 'arm_l' ? { ...c, bend: 'free' } : c)),
+        { name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: ['eye_r>eye_l'] },
+      ],
+      alternates: [
+        {
+          name: 'K1_lean',
+          slots: { sleeve_r0: 'k1_r', sleeve_l0: 'k1_l' },
+          chains: ['arm_r', 'arm_l'],
+          pose: {
+            r_shoulder: kp.r_shoulder!,
+            r_elbow: kp.r_elbow!,
+            r_wrist: kp.r_wrist!,
+            l_shoulder: kp.l_shoulder!,
+            l_elbow: kp.l_elbow!,
+            l_wrist: kp.l_wrist!,
+          },
+          drawn,
+          turn: { sleeve_r0: [-20, 20], sleeve_r1: [-20, 20], sleeve_l0: [-20, 20], sleeve_l1: [-20, 20] },
+          ...(symmetric ? { symmetric: true } : {}),
+        },
+      ],
+    });
 
+    const c = setup({ rig: rigOpts, map: makeMap(true), pose });
+    const r = retarget(c, ['--raised-by-head', '--bends', 'clamp']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+
+    const cBase = setup({ rig: rigOpts, map: makeMap(false), pose });
+    const rBase = retarget(cBase, ['--raised-by-head', '--bends', 'clamp']);
+    expect(rBase.status).toBe(0);
+
+    // Non-arm tracks are byte-identical.
+    const motSym = motionOf(c.out).animations.dance!.tracks;
+    const motBase = motionOf(cBase.out).animations.dance!.tracks;
+    for (const lb of ['hip', 'chest', 'head', 'leg_r0', 'leg_r1', 'leg_l0', 'leg_l1']) {
+      expect(motSym.filter((t) => 'bone' in t && t.bone === lb)).toEqual(motBase.filter((t) => 'bone' in t && t.bone === lb));
+    }
+
+    const countSaturations = (buildDir: string): number => {
+      const poses = poseRawAnimation(loadBuild(buildDir), 'dance', Array.from({ length: N - 1 }, () => DT), {}, 'animation');
+      let sat = 0;
+      for (const p of poses) {
+        const b = byName(p.bones);
+        for (const bone of ['sleeve_r0', 'sleeve_r1', 'sleeve_l0', 'sleeve_l1'] as const) {
+          const bn = b.get(bone)!;
+          // Bone world rotation + aim offset (0° in stickBones since each arm bone points along +x of its own frame).
+          const wRot = Math.atan2(bn.c, bn.a) * DEG;
+          const turn = Math.abs(wrap(wRot - drawn[bone]));
+          if (turn >= 20 - 1e-3) sat++;
+        }
+      }
+      return sat;
+    };
+    expect(countSaturations(c.build)).toBe(0);
+
+    // Mutant: solving on world shoulder Y (sr[1], sl[1]) without chest-local diamond alignment saturates the ±20° clamp under torso lean.
+    mkdirSync(MUTANTS, { recursive: true });
+    const dM = mkdtempSync(join(MUTANTS, 'm207-lean-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(dM, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(dM, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(dM, 'package.json'));
+      const pRet = join(dM, 'src', 'retarget.ts');
+      const src = readFileSync(pRet, 'utf8');
+      const from1 = 'if (Math.abs(wrap(drawnR0 + drawnL0 - 180)) > 1 && (hc0[0] - erDrawnX > lR1 || elDrawnX - hc0[0] > lL1)) {';
+      const from2 = 'const eyr = SR0[1] + lR0 * Math.sin((ar + dR0) / DEG);\n        const eyl = SL0[1] + lL0 * Math.sin((al + dL0) / DEG);';
+      const from3 = 'const carry = 0.35 * chestTurn;';
+      expect(src.split(from1)).toHaveLength(2);
+      expect(src.split(from2)).toHaveLength(2);
+      expect(src.split(from3)).toHaveLength(2);
+      writeFileSync(
+        pRet,
+        src
+          .replace(from1, 'if (false) {')
+          .replace(from2, 'const eyr = sr[1] + lR0 * Math.sin((ar + dR0) / DEG);\n        const eyl = sl[1] + lL0 * Math.sin((al + dL0) / DEG);')
+          .replace(from3, 'const carry = 0;'),
+      );
+      const cM = setup({ rig: rigOpts, map: makeMap(true), pose });
+      const rM = retarget(cM, ['--raised-by-head', '--bends', 'clamp'], join(dM, 'cli.ts'));
+      expect(rM.status).toBe(0);
+      expect(countSaturations(cM.build)).toBeGreaterThan(0);
+    } finally {
+      rmSync(dM, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
 

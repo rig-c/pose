@@ -1582,9 +1582,9 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     }
   };
   /**
-   * #188: For a `set.symmetric === true` gesture set, normalise its two two-bone arm chains
-   * on frame `i` to the set's `drawn` symmetry centre so `|elbow_l.y - elbow_r.y| == 0` and
-   * clamp both forearms so the wrists stay inside the head silhouette.
+   * #188 / #207: For a `set.symmetric === true` gesture set, solve its two two-bone arm chains
+   * on frame `i` in the chest-local frame so the diamond is symmetric about the torso axis and
+   * torso lean carries the whole diamond without collapsing one arm into the ±20° turn clamp.
    */
   const solveSymmetricFrame = (set: (typeof map.alternates)[number], i: number): { cR: Chain; cL: Chain; wR: Pt; wL: Pt; hc: Pt; ed: number } | null => {
     if (set.chains.length !== 2) return null;
@@ -1626,6 +1626,21 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         ed = d;
       }
     }
+    let hc0: Pt = [(SR0[0] + SL0[0]) / 2, (SR0[1] + SL0[1]) / 2 + 0.85 * Math.hypot(SL0[0] - SR0[0], SL0[1] - SR0[1])];
+    let ed0 = Math.max(1e-3, 0.30 * Math.hypot(SL0[0] - SR0[0], SL0[1] - SR0[1]));
+    if (gestureHead !== null) {
+      const ha0 = rigPoint(rest, gestureHead.points[0]);
+      const hb0 = rigPoint(rest, gestureHead.points[1]);
+      if (ha0 !== null && hb0 !== null) {
+        const d0 = Math.hypot(hb0[0] - ha0[0], hb0[1] - ha0[1]);
+        if (d0 > 1e-6) {
+          hc0 = [(ha0[0] + hb0[0]) / 2, (ha0[1] + hb0[1]) / 2];
+          ed0 = d0;
+        }
+      }
+    }
+    const above0 = mappedAbove(bR0);
+    const chestTurn = above0 === null ? 0 : turn(above0, i);
     const drawnR0 = set.drawn[bR0]!;
     const drawnR1 = set.drawn[bR1]!;
     const drawnL0 = set.drawn[bL0]!;
@@ -1634,19 +1649,39 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     const turnR1 = set.turn[bR1] ?? [-20, 20];
     const turnL0 = set.turn[bL0] ?? [-20, 20];
     const turnL1 = set.turn[bL1] ?? [-20, 20];
-    const rawR0 = rawTargets.get(bR0)?.[i] ?? drawnR0;
-    const rawL0 = rawTargets.get(bL0)?.[i] ?? drawnL0;
-    const offR0 = wrap(rawR0 - drawnR0);
-    const offL0 = wrap(rawL0 - drawnL0);
-    let cOpen = Math.max(-4, Math.min(2, 0.15 * 0.5 * (offR0 - offL0)));
-    const solveTilt = (open: number): { aR0: number; aL0: number; exR: number; eyR: number; exL: number; eyL: number } => {
+    const erDrawnX = SR0[0] + lR0 * Math.cos((drawnR0 + dR0) / DEG);
+    const elDrawnX = SL0[0] + lL0 * Math.cos((drawnL0 + dL0) / DEG);
+    let aR0_c: number;
+    let aL0_c: number;
+    let aR1_c: number;
+    let aL1_c: number;
+    if (Math.abs(wrap(drawnR0 + drawnL0 - 180)) > 1 && (hc0[0] - erDrawnX > lR1 || elDrawnX - hc0[0] > lL1)) {
+      const eyTarget = hc0[1] - 0.30 * ed0;
+      const sR = Math.max(-1, Math.min(1, (eyTarget - SR0[1]) / Math.max(1e-6, lR0)));
+      const sL = Math.max(-1, Math.min(1, (eyTarget - SL0[1]) / Math.max(1e-6, lL0)));
+      const wantR0 = wrap(180 - Math.asin(sR) * DEG - dR0);
+      const wantL0 = wrap(Math.asin(sL) * DEG - dL0);
+      const offR0_c = Math.min(Math.max(wrap(wantR0 - drawnR0), turnR0[0]), turnR0[1]);
+      const offL0_c = Math.min(Math.max(wrap(wantL0 - drawnL0), turnL0[0]), turnL0[1]);
+      aR0_c = wrap(drawnR0 + offR0_c);
+      aL0_c = wrap(drawnL0 + offL0_c);
+      const offR1_c = Math.min(Math.max(-0.35 * offR0_c, turnR1[0]), turnR1[1]);
+      const offL1_c = Math.min(Math.max(-0.35 * offL0_c, turnL1[0]), turnL1[1]);
+      aR1_c = wrap(drawnR1 + offR1_c);
+      aL1_c = wrap(drawnL1 + offL1_c);
+    } else {
+      const rawR0 = wrap((rawTargets.get(bR0)?.[i] ?? drawnR0) - chestTurn);
+      const rawL0 = wrap((rawTargets.get(bL0)?.[i] ?? drawnL0) - chestTurn);
+      const offR0 = wrap(rawR0 - drawnR0);
+      const offL0 = wrap(rawL0 - drawnL0);
+      const cOpen = Math.max(-4, Math.min(2, 0.15 * 0.5 * (offR0 - offL0)));
       const evalDiff = (deg: number) => {
         const dR = deg < 0 ? 0.25 * deg : deg;
         const dL = deg > 0 ? 0.25 * deg : deg;
-        const ar = drawnR0 + Math.min(Math.max(open + dR, turnR0[0]), turnR0[1]);
-        const al = drawnL0 + Math.min(Math.max(-open + dL, turnL0[0]), turnL0[1]);
-        const eyr = sr[1] + lR0 * Math.sin((ar + dR0) / DEG);
-        const eyl = sl[1] + lL0 * Math.sin((al + dL0) / DEG);
+        const ar = drawnR0 + Math.min(Math.max(cOpen + dR, turnR0[0]), turnR0[1]);
+        const al = drawnL0 + Math.min(Math.max(-cOpen + dL, turnL0[0]), turnL0[1]);
+        const eyr = SR0[1] + lR0 * Math.sin((ar + dR0) / DEG);
+        const eyl = SL0[1] + lL0 * Math.sin((al + dL0) / DEG);
         return eyl - eyr;
       };
       let lo = -45;
@@ -1671,68 +1706,73 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       }
       const dR = deg < 0 ? 0.25 * deg : deg;
       const dL = deg > 0 ? 0.25 * deg : deg;
-      let aR0 = drawnR0 + Math.min(Math.max(open + dR, turnR0[0]), turnR0[1]);
-      let aL0 = drawnL0 + Math.min(Math.max(-open + dL, turnL0[0]), turnL0[1]);
-      const eyR0 = sr[1] + lR0 * Math.sin((aR0 + dR0) / DEG);
-      const eyL0 = sl[1] + lL0 * Math.sin((aL0 + dL0) / DEG);
+      aR0_c = drawnR0 + Math.min(Math.max(cOpen + dR, turnR0[0]), turnR0[1]);
+      aL0_c = drawnL0 + Math.min(Math.max(-cOpen + dL, turnL0[0]), turnL0[1]);
+      const eyR0 = SR0[1] + lR0 * Math.sin((aR0_c + dR0) / DEG);
+      const eyL0 = SL0[1] + lL0 * Math.sin((aL0_c + dL0) / DEG);
       if (Math.abs(eyL0 - eyR0) > 1e-4) {
-        const sL = Math.max(-1, Math.min(1, (eyR0 - sl[1]) / Math.max(1e-6, lL0)));
+        const sL = Math.max(-1, Math.min(1, (eyR0 - SL0[1]) / Math.max(1e-6, lL0)));
         const candL = wrap(Math.asin(sL) * DEG - dL0);
         const tL = wrap(candL - drawnL0);
-        if (tL >= turnL0[0] && tL <= turnL0[1]) aL0 = candL;
+        if (tL >= turnL0[0] && tL <= turnL0[1]) aL0_c = candL;
       }
-      const rR0 = (aR0 + dR0) / DEG;
-      const rL0 = (aL0 + dL0) / DEG;
-      return {
-        aR0: wrap(aR0),
-        aL0: wrap(aL0),
-        exR: sr[0] + lR0 * Math.cos(rR0),
-        eyR: sr[1] + lR0 * Math.sin(rR0),
-        exL: sl[0] + lL0 * Math.cos(rL0),
-        eyL: sl[1] + lL0 * Math.sin(rL0),
-      };
-    };
-    const upper = solveTilt(cOpen);
-    const aimFore = (ex: number, ey: number, l1: number, d1: number, drawn1: number, turn1: readonly [number, number], tx: number, ty: number): [number, Pt] => {
-      const want = wrap(Math.atan2(ty - ey, tx - ex) * DEG - d1);
-      const off = Math.min(Math.max(wrap(want - drawn1), turn1[0]), turn1[1]);
-      let a1 = wrap(drawn1 + off);
-      let r1 = (a1 + d1) / DEG;
-      let wx = ex + l1 * Math.cos(r1);
-      let wy = ey + l1 * Math.sin(r1);
-      const xMin = hc[0] - 0.30 * ed;
-      const xMax = hc[0] + 0.30 * ed;
-      const yMin = hc[1] + 0.15 * ed;
-      const yMax = hc[1] + 0.95 * ed;
-      if (wx < xMin || wx > xMax || wy < yMin || wy > yMax) {
-        let bestA = a1;
-        let bestErr = Infinity;
-        for (let step = -200; step <= 200; step++) {
-          const candOff = turn1[0] + ((turn1[1] - turn1[0]) * (step + 200)) / 400;
-          const candA = wrap(drawn1 + candOff);
-          const cr = (candA + d1) / DEG;
-          const cwx = ex + l1 * Math.cos(cr);
-          const cwy = ey + l1 * Math.sin(cr);
-          const ox = cwx < xMin ? xMin - cwx : cwx > xMax ? cwx - xMax : 0;
-          const oy = cwy < yMin ? yMin - cwy : cwy > yMax ? cwy - yMax : 0;
-          const err = (ox + oy) * 1000 + Math.hypot(cwx - tx, cwy - ty);
-          if (err < bestErr) {
-            bestErr = err;
-            bestA = candA;
+      aR0_c = wrap(aR0_c);
+      aL0_c = wrap(aL0_c);
+      const rR0_c = (aR0_c + dR0) / DEG;
+      const rL0_c = (aL0_c + dL0) / DEG;
+      const exR_c = SR0[0] + lR0 * Math.cos(rR0_c);
+      const eyR_c = SR0[1] + lR0 * Math.sin(rR0_c);
+      const exL_c = SL0[0] + lL0 * Math.cos(rL0_c);
+      const eyL_c = SL0[1] + lL0 * Math.sin(rL0_c);
+      const aimFore0 = (ex: number, ey: number, l1: number, d1: number, drawn1: number, turn1: readonly [number, number], tx: number, ty: number): number => {
+        const want = wrap(Math.atan2(ty - ey, tx - ex) * DEG - d1);
+        const off = Math.min(Math.max(wrap(want - drawn1), turn1[0]), turn1[1]);
+        let a1 = wrap(drawn1 + off);
+        const r1 = (a1 + d1) / DEG;
+        const wx = ex + l1 * Math.cos(r1);
+        const wy = ey + l1 * Math.sin(r1);
+        const xMin = hc0[0] - 0.30 * ed0;
+        const xMax = hc0[0] + 0.30 * ed0;
+        const yMin = hc0[1] + 0.15 * ed0;
+        const yMax = hc0[1] + 0.95 * ed0;
+        if (wx < xMin || wx > xMax || wy < yMin || wy > yMax) {
+          let bestA = a1;
+          let bestErr = Infinity;
+          for (let step = -200; step <= 200; step++) {
+            const candOff = turn1[0] + ((turn1[1] - turn1[0]) * (step + 200)) / 400;
+            const candA = wrap(drawn1 + candOff);
+            const cr = (candA + d1) / DEG;
+            const cwx = ex + l1 * Math.cos(cr);
+            const cwy = ey + l1 * Math.sin(cr);
+            const ox = cwx < xMin ? xMin - cwx : cwx > xMax ? cwx - xMax : 0;
+            const oy = cwy < yMin ? yMin - cwy : cwy > yMax ? cwy - yMax : 0;
+            const err = (ox + oy) * 1000 + Math.hypot(cwx - tx, cwy - ty);
+            if (err < bestErr) {
+              bestErr = err;
+              bestA = candA;
+            }
           }
+          a1 = bestA;
         }
-        a1 = bestA;
-        r1 = (a1 + d1) / DEG;
-        wx = ex + l1 * Math.cos(r1);
-        wy = ey + l1 * Math.sin(r1);
-      }
-      return [a1, [wx, wy]];
-    };
-    const [aR1, wR] = aimFore(upper.exR, upper.eyR, lR1, dR1, drawnR1, turnR1, hc[0] - 0.20 * ed, hc[1] + 0.65 * ed);
-    const [aL1, wL] = aimFore(upper.exL, upper.eyL, lL1, dL1, drawnL1, turnL1, hc[0] + 0.20 * ed, hc[1] + 0.65 * ed);
-    targets.get(bR0)![i] = upper.aR0;
+        return a1;
+      };
+      aR1_c = aimFore0(exR_c, eyR_c, lR1, dR1, drawnR1, turnR1, hc0[0] - 0.20 * ed0, hc0[1] + 0.65 * ed0);
+      aL1_c = aimFore0(exL_c, eyL_c, lL1, dL1, drawnL1, turnL1, hc0[0] + 0.20 * ed0, hc0[1] + 0.65 * ed0);
+    }
+    const carry = 0.35 * chestTurn;
+    const aR0 = wrap(aR0_c + carry);
+    const aR1 = wrap(aR1_c + carry);
+    const aL0 = wrap(aL0_c + carry);
+    const aL1 = wrap(aL1_c + carry);
+    const rR0 = (aR0 + dR0) / DEG;
+    const rR1 = (aR1 + dR1) / DEG;
+    const rL0 = (aL0 + dL0) / DEG;
+    const rL1 = (aL1 + dL1) / DEG;
+    const wR: Pt = [sr[0] + lR0 * Math.cos(rR0) + lR1 * Math.cos(rR1), sr[1] + lR0 * Math.sin(rR0) + lR1 * Math.sin(rR1)];
+    const wL: Pt = [sl[0] + lL0 * Math.cos(rL0) + lL1 * Math.cos(rL1), sl[1] + lL0 * Math.sin(rL0) + lL1 * Math.sin(rL1)];
+    targets.get(bR0)![i] = aR0;
     targets.get(bR1)![i] = aR1;
-    targets.get(bL0)![i] = upper.aL0;
+    targets.get(bL0)![i] = aL0;
     targets.get(bL1)![i] = aL1;
     return { cR, cL, wR, wL, hc, ed };
   };
