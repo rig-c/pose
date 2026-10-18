@@ -671,7 +671,7 @@ export function plantHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel:
     const y = floor ?? percentile(heights as number[], 0.5);
     const shifts = feet.supports.map((sp, k) => ({ side: sp.side, frames: [sp.frames[0], sp.frames[1]] as [number, number], shift: y - heights[k]! }));
     const placed = placeHip(feet, offset, travel, start, y, follow);
-    const closure = follow === undefined ? null : closeLoop(placed.hip);
+    const closure = follow === undefined ? null : closeLoop(placed.hip, feet.supports);
     return { hip: placed.hip, floor: { y, given: floor !== undefined, shifts }, blends: placed.blends, closure };
   } finally {
     trackFn = undefined;
@@ -685,15 +685,35 @@ export interface Closure {
 }
 
 /**
- * Close an in-place loop (rig-c/pose#92): the hip's x on frame i moves by
- * −drift · i / (n − 1), drift its x on the last frame less its x on the first,
- * so the last frame's hip x is the first's and the loop carries no net travel.
- * The y is the floor's (#85) and is not touched. In place.
+ * Close an in-place loop (rig-c/pose#92, #224): when support spans repeat across
+ * multiple cycles, measure the per-cycle x drift between matching phase frames
+ * (`cf = 0` of cycle 1 vs cycle `k + 1`) and subtract that linear trend so the
+ * within-cycle offset (`cf 0 → last frame of cycle`) is preserved; on a single
+ * cycle (or when no repeating support spans are given), subtract the whole-clip
+ * displacement `hip[n - 1].x - hip[0].x`. The y is the floor's (#85) and is not
+ * touched. In place.
  */
-export function closeLoop(hip: Pt[]): Closure {
+export function closeLoop(hip: Pt[], supports?: Feet['supports']): Closure {
   const n = hip.length;
-  const drift = n > 1 ? hip[n - 1]![0] - hip[0]![0] : 0;
-  if (n > 1) for (let i = 0; i < n; i++) hip[i]![0] -= (drift * i) / (n - 1);
+  if (n <= 1) return { drift: 0, frames: n };
+  let perFrame = (hip[n - 1]![0] - hip[0]![0]) / (n - 1);
+  if (supports !== undefined && supports.length > 0) {
+    const bySide: Record<Side, number[]> = { r: [], l: [] };
+    for (const sp of supports) {
+      if (sp.frames[0] > 0) bySide[sp.side].push(sp.frames[0]);
+    }
+    const starts = bySide.r.length >= bySide.l.length ? bySide.r : bySide.l;
+    if (starts.length >= 2) {
+      const period = Math.round((starts[starts.length - 1]! - starts[0]!) / (starts.length - 1));
+      const cycles = period > 0 ? Math.floor((n - 1) / period) : 0;
+      if (cycles >= 1 && cycles * period < n) {
+        const span = cycles * period;
+        perFrame = (hip[span]![0] - hip[0]![0]) / span;
+      }
+    }
+  }
+  const drift = perFrame * (n - 1);
+  for (let i = 0; i < n; i++) hip[i]![0] -= perFrame * i;
   return { drift, frames: n };
 }
 
@@ -739,7 +759,7 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
     const b = travel(mode.from);
     let y = mode.at[1] + a[1] - b[1];
     if (mode.carry !== undefined && mode.land !== undefined && mode.end !== undefined && floorY !== null) {
-      if (mode.land < n && mode.land > mode.from) {
+      if ((mode.land < n || follow !== undefined) && mode.land > mode.from) {
         y += mode.carry * ((Math.min(i, mode.land) - mode.from) / (mode.land - mode.from));
       }
       if (i <= mode.end) {
@@ -748,7 +768,7 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
     }
     return [mode.at[0] + a[0] - b[0], y];
   };
-  /** A travel span from `startFrame` off frame `from`'s hip `at`: carried to meet `floorY` at landing when it contains a jump (#103). */
+  /** A travel span from `startFrame` off frame `from`'s hip `at`: carried to meet `floorY` at landing when it contains a jump (#103, and wrapped to frame 0 on an in-place loop, #224). */
   const makeTravel = (startFrame: number, from: number, at: Pt): Mode => {
     let end = startFrame;
     while (end + 1 < n && (feet.support[end + 1] ?? null) === null && (tracked[end + 1] ?? null) === null) end++;
@@ -756,10 +776,11 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
     if (!isJump) return { kind: 'travel', from, at };
     const land = end + 1;
     let carry = 0;
-    if (land < n) {
-      const landSide = (feet.support[land] ?? tracked[land] ?? null)!;
-      const rawLandY = at[1] + travel(land)[1] - travel(from)[1];
-      const targetLandY = floorY - offset(land, landSide)[1];
+    const landIdx = land < n ? land : follow !== undefined ? 0 : -1;
+    const landSide = landIdx >= 0 ? (feet.support[landIdx] ?? tracked[landIdx] ?? null) : null;
+    if (landSide !== null) {
+      const rawLandY = at[1] + travel(landIdx)[1] - travel(from)[1];
+      const targetLandY = floorY - offset(landIdx, landSide)[1];
       carry = targetLandY - rawLandY;
     }
     return { kind: 'travel', from, at, end, land, carry };
@@ -780,7 +801,17 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
     if (i === 0) {
       if (s !== null) {
         const o = offset(0, s);
+        const anchorY = floorY ?? (start[1] + o[1]);
         mode = plant(0, s, [start[0] + o[0], start[1] + o[1]]);
+        // #224: in a periodic in-place loop whose last frame is in flight, the first cycle's plant blends from that flight just like cycles 2..N.
+        if (follow !== undefined && n > 1 && (feet.support[n - 1] ?? null) === null && (tracked[n - 1] ?? null) === null) {
+          from = { kind: 'travel', from: 0, at: [start[0], anchorY - o[1]] };
+          blendAt = 0;
+          blendEnd = 0;
+          while (blendEnd + 1 < n && (feet.support[blendEnd + 1] ?? null) === s) blendEnd++;
+          blendToFlight =
+            blendEnd + 1 < n && (feet.support[blendEnd + 1] ?? null) === null && (tracked[blendEnd + 1] ?? null) === null;
+        }
       } else if (tr !== null) {
         const o = offset(0, tr);
         mode = { kind: 'track', side: tr, anchor: [start[0] + o[0], floorY ?? (start[1] + o[1])], from: 0, at: start };

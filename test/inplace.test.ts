@@ -143,6 +143,91 @@ describe('#92: --plant-feet under travel "in-place"', () => {
       rmSync(d, { recursive: true, force: true });
     }
   });
+
+  test('#224: multi-cycle in-place run — closeLoop removes per-cycle drift only (preserving within-cycle offset), first cycle plant blends from last cycle flight, and whole-clip mutant fails <= 0.01 L bar by name', async () => {
+    // 10 cycles × 20 frames = 200 frames, matching run-a's structure:
+    // r supports cf 0..2, flight cf 3..9, l supports cf 10..12, flight cf 13..19.
+    const C = 20;
+    const CYCLES = 10;
+    const M = C * CYCLES;
+    const L_RIG = 485.0928;
+    const supports: Feet['supports'] = [];
+    const jumps: Array<[number, number]> = [];
+    const support: Array<Side | null> = new Array<Side | null>(M).fill(null);
+    for (let c = 0; c < CYCLES; c++) {
+      const base = c * C;
+      supports.push({ side: 'r', frames: [base + 0, base + 2] });
+      supports.push({ side: 'l', frames: [base + 10, base + 12] });
+      jumps.push([base + 3, base + 9], [base + 13, base + 19]);
+      for (let k = 0; k <= 2; k++) support[base + k] = 'r';
+      for (let k = 10; k <= 12; k++) support[base + k] = 'l';
+    }
+    const feet: Feet = { legLength: { r: L_RIG, l: L_RIG }, support, supports, changes: [], jumps, steps: [] };
+    // Periodic within-cycle offset (+4.1518 u at cf=19 relative to cf=0) plus +2.0543 u/cycle drift on ankle follow:
+    const withinX = (cf: number): number => (cf === 19 ? 4.1518 : (4.1518 * cf) / 19);
+    const withinTravelY = (cf: number): number => (cf === 1 ? 7.3 : cf === 2 ? 15.2 : cf >= 13 ? 17.21 * ((cf - 12) / 8) : 0);
+    const offset = (_i: number, s: Side): Pt => [s === 'r' ? 11.731 : 25.7, -459.833];
+    const travel = (i: number): Pt => {
+      const cf = i % C;
+      const c = Math.floor(i / C);
+      return [c * 2.0543 + withinX(cf), withinTravelY(cf)];
+    };
+    const follow = (i: number, _s: Side): number => {
+      const cf = i % C;
+      const c = Math.floor(i / C);
+      return c * 2.0543 + withinX(cf);
+    };
+
+    const runCheck = (impl: typeof plantHip): { maxLoopDiffL: number; maxAt: string; verdict: string } => {
+      const p = impl(feet, offset, travel, [0, 578.057], 118.224, follow);
+      let maxDiff = 0;
+      let maxAt = '';
+      for (let cf = 0; cf < C; cf++) {
+        const f1 = cf;
+        const fN = (CYCLES - 1) * C + cf;
+        const dx = p.hip[fN]![0] - p.hip[f1]![0];
+        const dy = p.hip[fN]![1] - p.hip[f1]![1];
+        const distL = Math.hypot(dx, dy) / L_RIG;
+        if (distL > maxDiff) {
+          maxDiff = distL;
+          maxAt = `cf=${cf} (dx=${dx.toFixed(4)}, dy=${dy.toFixed(4)})`;
+        }
+      }
+      const verdict = maxDiff <= 0.01 ? 'PASS' : `FAIL LOOP_CLOSURE_WHOLE_CLIP: cycle 1 vs cycle ${CYCLES} max position diff ${maxDiff.toFixed(4)} L > 0.01 L at ${maxAt}`;
+      return { maxLoopDiffL: maxDiff, maxAt, verdict };
+    };
+
+    const fixed = runCheck(plantHip);
+    expect(fixed.verdict).toBe('PASS');
+    expect(fixed.maxLoopDiffL).toBeLessThan(1e-9);
+    // Blend frames now include cycle 1's f0..2 alongside cycles 2..10:
+    const built = plantHip(feet, offset, travel, [0, 578.057], 118.224, follow);
+    expect(built.blends.slice(0, 3).map((b) => b.frame)).toEqual([0, 1, 2]);
+
+    // Mutant (#224 Bar 3): restoring whole-clip displacement (and no wrap blend) fails the <= 0.01 L bar on run-a by name.
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm224-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      const path = join(d, 'src', 'legs.ts');
+      const src = readFileSync(path, 'utf8');
+      const target1 = 'if (supports !== undefined && supports.length > 0)';
+      const target2 = 'if (follow !== undefined && n > 1 && (feet.support[n - 1] ?? null) === null && (tracked[n - 1] ?? null) === null)';
+      expect(src.split(target1)).toHaveLength(2);
+      expect(src.split(target2)).toHaveLength(2);
+      writeFileSync(
+        path,
+        src.replace(target1, 'if (false && supports !== undefined && supports.length > 0)').replace(target2, 'if (false && follow !== undefined)'),
+      );
+      const m = (await import(path)) as { plantHip: typeof plantHip };
+      const mut = runCheck(m.plantHip);
+      console.log(`  #224 run-a loop position diff: ${mut.maxLoopDiffL.toFixed(4)} L (mutant) -> ${fixed.maxLoopDiffL.toFixed(4)} L (fixed)`);
+      expect(mut.maxLoopDiffL).toBeGreaterThan(0.01);
+      expect(mut.verdict).toContain('FAIL LOOP_CLOSURE_WHOLE_CLIP');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
 });
 
 // --- the declaration ---------------------------------------------------------------
