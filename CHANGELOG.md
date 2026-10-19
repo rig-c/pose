@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.33.0](https://github.com/rig-c/pose/compare/v0.32.0...v0.33.0) (2026-10-19)
+
+
+### Features
+
+* **report:** seam spans over the declared neighbour pairs ([#216](https://github.com/rig-c/pose/issues/216)) ([#255](https://github.com/rig-c/pose/issues/255)) ([d387071](https://github.com/rig-c/pose/commit/d3870715d39acffe32013110e9c03c6a96c746a9))
+
 ## [0.32.0](https://github.com/rig-c/pose/compare/v0.31.1...v0.32.0) (2026-10-19)
 
 
