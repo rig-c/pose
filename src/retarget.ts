@@ -296,6 +296,51 @@ export interface RangeDemand {
   limits: [number, number];
 }
 
+/**
+ * A `reach` chain whose aim departs from its pose pair's own picture angle
+ * (rig-c/pose#236), and the two things that make it: the bone's origin sits off
+ * the anchor's (a lever: the target is the pair's end, so a pair turning by θ
+ * about the anchor turns the aim from an origin partway up it by more than θ),
+ * or a bone above it is turned, or translated other than by the anchor's own
+ * travel (which the target carries too, so it cancels). A reading — the keys
+ * are the reach's, unchanged.
+ */
+export interface ReachReading {
+  chain: string;
+  bone: string;
+  /** The pair: the chain's first joint (the translated joint) and its second. */
+  joints: [string, string];
+  /** The anchor (the translated bone), and the setup distance from its origin to the bone's: world units, and as a fraction of the reached length (the pair's median picture length, scaled). */
+  anchor: string;
+  offset: { units: number; ofLength: number };
+  /** The bones above it the animation moves: by a rotate track, or a translate track other than the anchor's. */
+  above: Array<{ bone: string; property: 'rotate' | 'translate'; chain: string | null }>;
+  /** aim − the pair's angle, degrees: the largest |·| over the frames and its frame, and the mean |second difference| of it, °/frame². */
+  departure: { max: number; frame: number; meanD2: number | null };
+  /** Mean |second difference|, °/frame², of the reach's aim and of the pair's own angle, over every frame; and aim ÷ pair (null when the pair is still: its figure rounds to 0). */
+  aimD2: number | null;
+  pairD2: number | null;
+  ratio: number | null;
+}
+
+/**
+ * Mean |second difference| of a series of angles, degrees: |wrap(v[i+1] − v[i])
+ * − wrap(v[i] − v[i−1])| over every i whose three frames `ok` admits (every
+ * frame when it is omitted), and how many triples that was. null on none.
+ */
+export function meanSecondDiff(series: ReadonlyArray<readonly number[]>, ok?: (i: number) => boolean): { value: number | null; triples: number } {
+  let sum = 0;
+  let triples = 0;
+  for (const v of series) {
+    for (let i = 1; i + 1 < v.length; i++) {
+      if (ok !== undefined && !(ok(i - 1) && ok(i) && ok(i + 1))) continue;
+      sum += Math.abs(wrap(v[i + 1]! - v[i]!) - wrap(v[i]! - v[i - 1]!));
+      triples++;
+    }
+  }
+  return { value: triples === 0 ? null : sum / triples, triples };
+}
+
 /** The lines across the body a `TURN` is read on: the subject's right joint, then its left twin. */
 export const TURN_LINES: ReadonlyArray<[string, string, string]> = [['hip', 'r_hip', 'l_hip'], ['shoulder', 'r_shoulder', 'l_shoulder'], ['eye', 'r_eye', 'l_eye']];
 /** A line shorter in the picture than this fraction of its median is turned (rig-c/pose#6: between the front-facing dance's floor, 0.81, and a side-on body's 0.17–0.49). */
@@ -370,6 +415,8 @@ export interface Retarget {
   figureScale: FigureScaleReading;
   /** Per-frame vertical head nod reading (`rawY`, `clampedY`, and clamped `residual`, `#111`, `#181`, `#190`). */
   headNod: HeadNodReading | null;
+  /** Each `reach` chain hanging below a bone the animation turns or translates (#236): its aim's departure from the pose pair's angle. */
+  reach: ReachReading[];
 }
 
 export interface FigureScaleFrame {
@@ -1183,6 +1230,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   };
   const reaches = map.chains.filter((c) => c.reach).sort((x, y) => depth(x.bones[0]!) - depth(y.bones[0]!));
   let aimReach: ((c: Chain) => void) | null = null;
+  const reachAims = new Map<string, { aim: number[]; pair: number[]; length: number }>();
   if (reaches.length > 0 && t !== null && scale !== null) {
     const s = scale.factor;
     const tb = rest.get(t.bone)!;
@@ -1200,6 +1248,8 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       }
       fillLeading(angles, () => p.add('POSE_SEGMENT_ZERO', `chain "${c.name}" — bone "${b}" reaches for ${c.joints[1]}, which the pose puts on the bone's posed origin on every frame; it has no direction`));
       targets.set(b, angles);
+      // #236: the aim as reached, before its own range clamp, beside the pair's own angle (a reading).
+      reachAims.set(c.name, { aim: [...angles], pair: Array.from({ length: n }, (_, i) => pictureAngle(anchor[i]!, end[i]!)), length: median(Array.from({ length: n }, (_, i) => Math.hypot(end[i]![0] - anchor[i]![0], end[i]![1] - anchor[i]![1]) * s)) });
     };
     for (const c of reaches) aimReach(c);
   }
@@ -2753,13 +2803,86 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   if (translateTrack !== null) tracks.push(translateTrack);
   if (headNodTrack !== null) tracks.push(headNodTrack);
   tracks.push(...sw.offsetTracks, ...sw.slotTracks);
+  const reach = reachReadings(rest, map, tracks, reachAims, t?.bone ?? null);
 
   return {
     animation: { duration: keyTimes[n - 1]!, tracks },
     times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale,
     switches: sw.switches, shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
-    legScale, scales, feet, planted: plantOn, stance, floor, blendHold, closure, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs), raised, byHip, face, body, figureScale, headNod: headNodReading,
+    legScale, scales, feet, planted: plantOn, stance, floor, blendHold, closure, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs), raised, byHip, face, body, figureScale, headNod: headNodReading, reach,
   };
+}
+
+/** A reach bone's origin within this many world units of the anchor's, with nothing above it moved, is aimed along the pair: no REACH line. */
+export const REACH_OFFSET = 1e-6;
+
+/** Round a second-difference figure, °/frame², to 1e-4. */
+const r4 = (v: number) => {
+  const r = Math.round(v * 10000) / 10000;
+  return Object.is(r, -0) ? 0 : r;
+};
+
+/**
+ * #236: for each reach chain, the bones above it the animation moves — a rotate
+ * track, or a translate track other than the anchor's (its travel is in the
+ * target too) — and, when there are any, its aim's departure from the pair.
+ */
+function reachReadings(rest: Rest, map: JointMap, tracks: ReadonlyArray<MotionTrack | SlotTrack>, aims: ReadonlyMap<string, { aim: number[]; pair: number[]; length: number }>, anchor: string | null): ReachReading[] {
+  const out: ReachReading[] = [];
+  if (anchor === null) return out;
+  const a0 = rest.get(anchor)!;
+  const moved = new Map<string, Set<'rotate' | 'translate'>>();
+  for (const tr of tracks) {
+    if (!('bone' in tr) || (tr.property !== 'rotate' && tr.property !== 'translate')) continue;
+    if (tr.property === 'translate' && tr.bone === anchor) continue;
+    const s = moved.get(tr.bone) ?? new Set();
+    s.add(tr.property);
+    moved.set(tr.bone, s);
+  }
+  for (const c of map.chains) {
+    const got = aims.get(c.name);
+    if (!c.reach || got === undefined) continue;
+    const b = c.bones[0]!;
+    const above: ReachReading['above'] = [];
+    for (let a = rest.get(b)?.parent ?? null; a !== null; a = rest.get(a)?.parent ?? null) {
+      for (const property of ['rotate', 'translate'] as const) {
+        if (moved.get(a)?.has(property) !== true) continue;
+        above.push({ bone: a, property, chain: property === 'rotate' ? (map.chains.find((x) => x.bones.includes(a))?.name ?? null) : null });
+      }
+    }
+    const bo = rest.get(b)!;
+    const units = Math.hypot(bo.worldX - a0.worldX, bo.worldY - a0.worldY);
+    if (above.length === 0 && units <= REACH_OFFSET) continue;
+    const dep = got.aim.map((v, i) => wrap(v - got.pair[i]!));
+    let frame = 0;
+    for (let i = 1; i < dep.length; i++) if (Math.abs(dep[i]!) > Math.abs(dep[frame]!)) frame = i;
+    const d2 = meanSecondDiff([dep]).value;
+    const aimD2 = meanSecondDiff([got.aim]).value;
+    const pairD2 = meanSecondDiff([got.pair]).value;
+    out.push({
+      chain: c.name,
+      bone: b,
+      joints: [c.joints[0]!, c.joints[1]!],
+      anchor,
+      offset: { units: r3(units), ofLength: got.length > 0 ? r3(units / got.length) : 0 },
+      above,
+      departure: { max: r3(Math.abs(dep[frame] ?? 0)), frame, meanD2: d2 === null ? null : r4(d2) },
+      aimD2: aimD2 === null ? null : r4(aimD2),
+      pairD2: pairD2 === null ? null : r4(pairD2),
+      ratio: aimD2 === null || pairD2 === null || r4(pairD2) === 0 ? null : Number((aimD2 / pairD2).toFixed(3)),
+    });
+  }
+  return out;
+}
+
+/** The `REACH` line of a reach chain whose aim departs from its pair (#236). */
+export function reachCostLine(e: ReachReading, times: readonly number[]): string {
+  const f = (v: number | null) => (v === null ? 'not measured' : `${v.toFixed(4)}°/f²`);
+  const why: string[] = [];
+  if (e.offset.units > REACH_OFFSET) why.push(`its origin sits ${e.offset.units.toFixed(2)} units from the anchor "${e.anchor}"'s at setup (${e.offset.ofLength.toFixed(3)} of the reached length)`);
+  if (e.above.length > 0) why.push(`it hangs below ${e.above.map((x) => `"${x.bone}" (${x.property === 'rotate' ? (x.chain === null ? 'rotate keys' : `turned by chain "${x.chain}"`) : 'translate keys'})`).join(', ')}`);
+  const ratio = e.ratio === null ? (e.pairD2 === 0 ? ' — the pair is still' : '') : ` (${e.ratio.toFixed(2)}×)`;
+  return `chain "${e.chain}" bone "${e.bone}" (${e.joints[0]} → ${e.joints[1]}) is aimed from its posed origin at the pair's end — ${why.join(', and ')}: the aim departs from the pair's own angle by up to ${e.departure.max.toFixed(3)}° (frame ${e.departure.frame}, t=${times[e.departure.frame]!.toFixed(3)}s), mean |Δ²| of the departure ${f(e.departure.meanD2)}; mean |Δ²| aim ${f(e.aimD2)} against the pair's ${f(e.pairD2)}${ratio} — rotation the pose pair does not have, the cost of "reach"; a reading`;
 }
 
 /** What a placed wrist is measured against: the head (#62, the eyes) or the hip (#93, the hips) — two pose joints and the rig's two points. */
