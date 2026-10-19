@@ -5,7 +5,7 @@
  * and write — only when every check passed.
  */
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { knownSetsOf, readMap, resolveMap, type JointMap, type Rest } from './map.ts';
@@ -89,12 +89,18 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
   for (const [flag, path] of [['--map', a.map], ['--pose', a.pose], ['--merge', a.merge]] as const) {
     if (path !== undefined && !existsSync(path)) args.add('ARG_PATH', `${flag} ${path} does not exist`);
   }
-  // A file this run writes goes into a directory that is there already; --build and --render make theirs.
-  for (const [flag, path] of [['--out', a.out], ['--report', a.report], ['--camera', a.camera]] as const) {
+  // rig-c/pose#239: the report is written unless asked elsewhere — beside the motion, as <out>.report.json.
+  const report = a.report ?? defaultReportPath(a.out);
+  // A file this run writes goes into a directory the user named: one that is not there yet is made
+  // after the run is green (one line says so), as --build and --render make theirs; a file in the way is refused.
+  const makeDirs = new Map<string, string[]>();
+  for (const [flag, path] of [['--out', a.out], ['--report', report], ['--camera', a.camera]] as const) {
     if (path === undefined) continue;
     const dir = dirname(path);
-    if (!existsSync(dir)) args.add('ARG_PATH', `${flag} ${path} — directory ${dir} does not exist`);
-    else if (!statSync(dir).isDirectory()) args.add('ARG_PATH', `${flag} ${path} — ${dir} is not a directory`);
+    let up = dir;
+    while (!existsSync(up) && dirname(up) !== up) up = dirname(up);
+    if (!statSync(up).isDirectory()) args.add('ARG_PATH', up === dir ? `${flag} ${path} — ${dir} is not a directory` : `${flag} ${path} — ${up} is a file, so directory ${dir} cannot be made under it`);
+    else if (up !== dir) makeDirs.set(dir, [...(makeDirs.get(dir) ?? []), `${flag} ${path}`]);
   }
   args.throwIfAny();
   const input = resolveRig(a.rig, a.baseMotion);
@@ -120,7 +126,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     // The rig as it stands, through the gate, so the rest pose is rig-c's reading of a green build.
     const g0 = gate(input.rig, base, join(scratch, 'base'), a.profile, a.images);
     if (!g0.green) {
-      refuse([{ code: 'RIG_GATE_BASE', text: `${input.rig} with ${input.motion ?? 'no motion spec'} is red under rigc build --profile ${a.profile} before any animation is added (exit ${g0.run.status})` }, ...g0.fails.map((f) => ({ code: 'RIGC', text: f }))]);
+      refuse([{ code: 'RIG_GATE_BASE', text: `${input.rig} with ${input.motion ?? 'no motion spec'} is red under rigc build --profile ${a.profile} before any animation is added (exit ${g0.run.status})${unreadMotionHint(a.rig, input.motion)}` }, ...g0.fails.map((f) => ({ code: 'RIGC', text: f }))]);
     }
     const doc0 = readBuild(g0.build);
     const rigc = rigcVersion();
@@ -326,8 +332,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       for (const u of uncovered) say(`  UNCOVERED mesh "${u.attachment}" (slot "${u.slot}"; chains ${u.chains.length === 0 ? 'none' : u.chains.join(', ')}) folds with no switch covering it on ${u.times.length} frame(s): t=${spans(u.times, 1 / fps)}`);
     }
 
-    if (a.report !== undefined) assertReportInputs([rigSnapshot,mapSnapshot,poseSnapshot]);
-    const reportText = a.report === undefined ? null : writeReport({
+    assertReportInputs([rigSnapshot,mapSnapshot,poseSnapshot]);
+    const reportText = writeReport({
         spec: 'rig-pose-report/1',
         rigc,
         rig: input.name,
@@ -394,7 +400,11 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       if (!kept.green) refuse([{ code: 'RIG_GATE', text: `rigc build into --build ${a.build} is red where the same build was green in scratch (exit ${kept.run.status}); nothing written` }, ...kept.fails.map((x) => ({ code: 'RIGC', text: x }))]);
     }
     // The kept build reads the rig again; its bytes must still match the report.
-    if (a.report !== undefined) assertReportInputs([rigSnapshot,mapSnapshot,poseSnapshot]);
+    assertReportInputs([rigSnapshot,mapSnapshot,poseSnapshot]);
+    for (const [dir, flags] of makeDirs) {
+      mkdirSync(dir, { recursive: true });
+      tell(madeLine(dir, flags));
+    }
     writeFileSync(a.out, `${JSON.stringify(motion, null, 2)}\n`);
     if (a.camera !== undefined) {
       const ss = r.figureScale.frames.map((x) => x.s);
@@ -429,10 +439,12 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       rmSync(a.render, { recursive: true, force: true });
       cpSync(f.frames, a.render, { recursive: true });
     }
-    if (a.report !== undefined && reportText !== null) writeFileSync(a.report, reportText);
+    const previous = existsSync(report) ? statSync(report).mtime : null;
+    writeFileSync(report, reportText);
 
     if (output === 'summary') for (const l of summaryLines({ gate: gateText, feet: feetReading, stance: r.stance, jitter, landings, times: r.times })) tell(`  ${l}`);
     if (a.camera !== undefined) tell(`  wrote ${a.camera} — camera track (${r.figureScale.frames.length} frames)`);
+    tell(reportLine(report, a.report === undefined, previous));
     tell(`  wrote ${a.out} — animations: ${Object.keys(motion.animations).join(', ')}`);
     return { lines, written: true };
   } finally {
@@ -983,4 +995,30 @@ export function readReportInput(file:string):ReportInputSnapshot {
 }
 export function assertReportInputs(inputs:readonly ReportInputSnapshot[]):void {
   for(const expected of inputs){const current=readReportInput(expected.file);if(current.identity.path!==expected.identity.path||current.identity.sha256!==expected.identity.sha256)throw new Refusal([{code:'REPORT_INPUTS_CHANGED',text:`${expected.identity.path}: consumed input changed before output writes; expected SHA-256 ${expected.identity.sha256}, found ${current.identity.sha256}`}]);}
+}
+
+/** rig-c/pose#239: the report's path when --report is not given — `<out>.report.json`, beside the motion (a trailing `.json` of --out is replaced). */
+export function defaultReportPath(out: string): string {
+  return `${out.endsWith('.json') ? out.slice(0, -'.json'.length) : out}.report.json`;
+}
+
+/** rig-c/pose#239: the line a directory this run made prints — the directory, and the paths that named it. */
+export function madeLine(dir: string, flags: readonly string[]): string {
+  return `  made directory ${dir} — it did not exist; ${flags.join(' and ')} ${flags.length === 1 ? 'is' : 'are'} written into it`;
+}
+
+/** rig-c/pose#239: the report's `wrote` line — whether it was the default, and the mtime of the report it replaced. */
+export function reportLine(report: string, byDefault: boolean, previous: Date | null): string {
+  return `  wrote ${report} — the run's report (rig-pose-report/1)${byDefault ? ', beside --out by default; name another path with --report' : ''}${previous === null ? '' : `; it replaced the report there last written ${previous.toISOString()}`}`;
+}
+
+/**
+ * rig-c/pose#239: `--rig` naming a rig.json reads no motion spec, even with one beside it. When the base
+ * gate is red that way, the refusal says the motion beside it was not read and names the two forms that read it.
+ */
+export function unreadMotionHint(rigArg: string, motion: string | null): string {
+  if (motion !== null) return '';
+  const beside = join(dirname(rigArg), 'motion.json');
+  if (!existsSync(beside) || statSync(rigArg).isDirectory()) return '';
+  return `; ${beside} is beside it and was not read — --rig naming the rig.json reads no motion spec: pass --rig ${dirname(rigArg)} (the directory, which reads the motion.json beside its rig.json) or --base-motion ${beside}`;
 }

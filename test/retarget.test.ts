@@ -1293,22 +1293,31 @@ describe('the command line', () => {
     expect(misses(c.build, BASE)).toEqual([]);
   }, SLOW);
 
-  test('ARG_PATH: --out into a directory that does not exist is refused up front; nothing written', () => {
+  test('--out into a directory that does not exist (#239): made once the run is green, and a line says so', () => {
     const c = setup();
     const out = join(c.dir, 'no', 'such', 'motion.json');
     const r = cli(['retarget', '--rig', c.rig, '--map', c.map, '--pose', c.pose, '--out', out, '--build', c.build]);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout.split('\n')).toContain(`  made directory ${join(c.dir, 'no', 'such')} — it did not exist; --out ${out} and --report ${join(c.dir, 'no', 'such', 'motion.report.json')} are written into it`);
+    expect(existsSync(out)).toBe(true);
+  });
+  test('ARG_PATH: --out under a file is refused up front; nothing written', () => {
+    const c = setup();
+    writeFileSync(join(c.dir, 'no'), '');
+    const out = join(c.dir, 'no', 'such', 'motion.json');
+    const r = cli(['retarget', '--rig', c.rig, '--map', c.map, '--pose', c.pose, '--out', out, '--build', c.build, '--report', join(c.dir, 'report.json')]);
     expect(r.status).toBe(1);
-    expect(fails(r)).toEqual([`FAIL  ARG_PATH: --out ${out} — directory ${join(c.dir, 'no', 'such')} does not exist`]);
+    expect(fails(r)).toEqual([`FAIL  ARG_PATH: --out ${out} — ${join(c.dir, 'no')} is a file, so directory ${join(c.dir, 'no', 'such')} cannot be made under it`]);
     expect(r.stdout).toBe('');
-    expect(existsSync(join(c.dir, 'no'))).toBe(false);
     expect(existsSync(c.build)).toBe(false);
   });
-  test('ARG_PATH: --report into a directory that does not exist, the same', () => {
+  test('ARG_PATH: --report under a file, the same', () => {
     const c = setup();
+    writeFileSync(join(c.dir, 'gone'), '');
     const report = join(c.dir, 'gone', 'report.json');
     const r = retarget(c, ['--report', report]);
     expect(r.status).toBe(1);
-    expect(fails(r)).toEqual([`FAIL  ARG_PATH: --report ${report} — directory ${join(c.dir, 'gone')} does not exist`]);
+    expect(fails(r)).toEqual([`FAIL  ARG_PATH: --report ${report} — ${join(c.dir, 'gone')} is not a directory`]);
     expect(existsSync(c.out)).toBe(false);
     expect(existsSync(c.build)).toBe(false);
   });

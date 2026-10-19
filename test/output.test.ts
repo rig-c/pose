@@ -75,25 +75,26 @@ const namesFree = (line: string, chain: string): boolean => line.includes(`state
 describe('the default output on the public example (#238)', () => {
   // Measured on this commit's parent: the wave printed 41 lines, the longest 260 characters (a LAND/JITTER line);
   // re-cleaned with the hold on, 41 lines and a CLEAN line of 3021 characters. After: 41 and 260; 41 and 366.
-  test('the wave as shipped: at most 41 lines, none longer than 260 characters', () => {
+  // #239 writes the report by default, and its wrote line is one more: re-measured, 42 and 260; 42 and 366.
+  test('the wave as shipped: at most 42 lines, none longer than 260 characters', () => {
     const d = tempDir();
     try {
       const r = run(d);
       expect(r.status).toBe(0);
-      expect(linesOf(r.stdout).length).toBeLessThanOrEqual(41);
+      expect(linesOf(r.stdout).length).toBeLessThanOrEqual(42);
       expect(longest(r.stdout)).toBeLessThanOrEqual(260);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
   }, SLOW);
 
-  test('the wave re-cleaned with the hold on: at most 41 lines, the CLEAN line counts the holds and is at most 366 characters', () => {
+  test('the wave re-cleaned with the hold on: at most 42 lines, the CLEAN line counts the holds and is at most 366 characters', () => {
     const d = tempDir();
     try {
       const pose = heldPose(d);
       const r = run(d, { pose });
       expect(r.status).toBe(0);
-      expect(linesOf(r.stdout).length).toBeLessThanOrEqual(41);
+      expect(linesOf(r.stdout).length).toBeLessThanOrEqual(42);
       expect(longest(r.stdout)).toBeLessThanOrEqual(366);
       const record = readPoseSequence(readFileSync(pose, 'utf8'), pose).cleaned!;
       expect(record.holds!.length).toBeGreaterThan(0);
@@ -112,7 +113,10 @@ describe('--verbose prints what the run printed before #238', () => {
   test('the wave as shipped: --verbose and the default are the same bytes (nothing on it collapses)', () => {
     const d = tempDir();
     try {
-      const a = run(d), b = run(d, { extra: ['--verbose'] });
+      // Each run writes the default report (#239); removed between them, so the second's wrote line does not name a replaced one.
+      const a = run(d);
+      rmSync(join(d, 'out.motion.report.json'));
+      const b = run(d, { extra: ['--verbose'] });
       expect(a.status).toBe(0);
       expect(b.stdout).toBe(a.stdout);
     } finally {
@@ -124,12 +128,14 @@ describe('--verbose prints what the run printed before #238', () => {
     const d = tempDir();
     try {
       const pose = heldPose(d), map = legsOnRest(d);
-      const report = join(d, 'report.json');
-      const def = run(d, { pose, map, extra: ['--bends', 'clamp', '--report', report] });
-      const verbose = run(d, { pose, map, extra: ['--bends', 'clamp', '--verbose'] });
+      // The default report (#239), read and removed before the verbose run so its wrote line does not name a replaced one.
+      const report = join(d, 'out.motion.report.json');
+      const def = run(d, { pose, map, extra: ['--bends', 'clamp'] });
       expect(def.status).toBe(0);
-      expect(verbose.status).toBe(0);
       const rep = JSON.parse(readFileSync(report, 'utf8')) as { bends: BendEvent[]; cleaned: { holds: unknown[]; unheld: unknown[]; seams: unknown[] } };
+      rmSync(report);
+      const verbose = run(d, { pose, map, extra: ['--bends', 'clamp', '--verbose'] });
+      expect(verbose.status).toBe(0);
       const record = readPoseSequence(readFileSync(pose, 'utf8'), pose).cleaned!;
       // The report's cleaned record is the sequence's, whole: the holds, the joints not held and the seams the CLEAN line now counts.
       // (The report adds each record's times and bones beside it; every field of the record is there.)
@@ -269,11 +275,13 @@ describe('--summary: one line per measure, from the records the full lines print
       expect(full.status).toBe(0);
       expect(sum.status).toBe(0);
       const out = linesOf(sum.stdout);
-      // The run line, the five measures, the wrote line.
-      expect(out).toHaveLength(7);
+      // The run line, the five measures, the wrote lines (the report's, #239, and the motion's).
+      expect(out).toHaveLength(8);
       expect(out[0]).toBe(linesOf(full.stdout)[0]);
       expect(out.slice(1, 6).map((l) => l.trim().split(/\s+/)[0])).toEqual(['GATE', 'FEET', 'LIFT', 'JITTER', 'LAND']);
-      expect(out[6]).toBe(linesOf(full.stdout).at(-1)!);
+      expect(out[6]!.trim()).toStartWith('wrote ');
+      expect(out[6]).toContain("the run's report (rig-pose-report/1)");
+      expect(out[7]).toBe(linesOf(full.stdout).at(-1)!);
       expect(tagged(sum, 'GATE')).toEqual(tagged(full, 'GATE'));
       // FEET: the posed build's two lines' figures.
       const posed = tagged(full, 'FEET').filter((l) => l.includes('the posed build') || l.includes('the supporting ankle over each support span'));
