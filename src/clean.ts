@@ -807,7 +807,7 @@ export function untestedText(frames: readonly number[]): string {
 }
 
 /** The record as one line: retarget's CLEAN line, and clean's own summary. */
-export function cleanLine(r: CleanRecord): string {
+export function cleanLine(r: CleanRecord, hold: (r: CleanRecord) => string = holdText): string {
   const { loop, legs, rest } = r.params;
   const windows = legs === 1 && rest === 1 ? 'legs 1, rest 1 — no smoothing' : `legs ${legs}, rest ${rest}`;
   const found = r.spikes.found;
@@ -815,7 +815,28 @@ export function cleanLine(r: CleanRecord): string {
   const spikes = `${found.length === 0 ? 'no spike' : `${found.length} spike(s) replaced (${shown}${found.length > 8 ? `, … ${found.length - 8} more` : ''})`}, ${untestedText(r.spikes.untested)}`;
   const jit = (v: number | null) => (v === null ? 'not measured' : v.toFixed(2));
   const hips = r.params.hipsInferred === undefined ? '' : `; hips inferred (${inferredSource(r)})`;
-  return `${r.spec}: ${windows}, ${loop ? 'loop' : 'no loop'}; ${spikes}; jitter (mean |second difference| of y) ${jit(r.jitter.before)} → ${jit(r.jitter.after)} px/f²${holdText(r)}${hips}`;
+  return `${r.spec}: ${windows}, ${loop ? 'loop' : 'no loop'}; ${spikes}; jitter (mean |second difference| of y) ${jit(r.jitter.before)} → ${jit(r.jitter.after)} px/f²${hold(r)}${hips}`;
+}
+
+/**
+ * The CLEAN line as retarget prints it by default (rig-c/pose#238): `cleanLine`
+ * with the stillness hold's per-joint record replaced by its count — holds,
+ * joints, regions and the frames they span. The record itself is in the
+ * sequence's `cleaned` (`holds`, `unheld`, `seams`), which `--report` writes
+ * whole as its `cleaned`; `--verbose` prints `cleanLine`.
+ */
+export function cleanSummaryLine(r: CleanRecord): string {
+  return cleanLine(r, holdCount);
+}
+
+function holdCount(r: CleanRecord): string {
+  const h = r.params.hold;
+  const holds = r.holds ?? [];
+  if (h === undefined || h === 'off' || holds.length === 0) return holdText(r);
+  const regions = holdRegions(holds);
+  const span = `${regions[0]![0]}–${regions[regions.length - 1]![1]}`;
+  const unheld = (r.unheld ?? []).length, seams = (r.seams ?? []).length;
+  return `; ${holds.length} HOLD(s) over ${new Set(holds.map((x) => x.joint)).size} joint(s) in ${regions.length} region(s), frames ${span}, ${unheld} joint span(s) not held, ${seams} seam(s) (per joint: --report's cleaned.holds, cleaned.unheld, cleaned.seams; --verbose)`;
 }
 
 /**

@@ -176,6 +176,14 @@ retarget
   --report <file>       write the run's measurements (holds, short, endOn, flips, bends, landings, folds,
                         switches, uncovered, turns, range, artRange, raised, byHip,
                         idleDropped, idleKeptOut, merged, reduce) as JSON
+  --verbose             print every line in full (rig-c/pose#238): the CLEAN line with the stillness hold's
+                        per-joint record, one BEND line per frame under --bends clamp, and before a collapsed
+                        POSE_BEND_ONE_WAY refusal the per-frame refusals it stands for. Without it, the CLEAN line
+                        counts the holds (the record: --report's cleaned.holds, cleaned.unheld, cleaned.seams)
+                        and each hinge's wrong-way frames are one line: count, frame range, worst angle
+  --summary             print only the run line, one line per measure — GATE, FEET (the posed build), LIFT
+                        (the STANCE runs), JITTER (the worst ratio), LAND (each kind's worst) — and the wrote
+                        lines: the lines two runs are compared on. Refusals print as without it
   --camera <file>       write the sequence's camera track (rig-pose-camera/1: continuous figure scale s,
                         raw standing height ratio, pan tx/ty, and composite videoS) as a sidecar JSON file
                         without changing motion.json (rig-c/pose#161)
@@ -276,7 +284,8 @@ function legScaleOf(f: Map<string, string>): [number, number] | 'off' {
 }
 
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report', 'camera', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head']);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report', 'camera', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head', 'verbose', 'summary']);
+  if (f.has('verbose') && f.has('summary')) throw new Usage('--verbose and --summary are both given; --verbose prints every line in full and --summary one line per measure, so give one');
   const bends = f.get('bends') ?? 'refuse';
   if (bends !== 'refuse' && bends !== 'clamp') throw new Usage(`--bends is "${bends}"; it must be refuse or clamp`);
   const switchAt = f.get('switch-at') ?? 'first';
@@ -318,6 +327,7 @@ function retargetArgs(argv: string[]): RetargetArgs {
     carryIdle: f.has('carry-idle'),
     merge: f.get('merge'),
     ...reduceOf(f),
+    output: f.has('verbose') ? 'verbose' : f.has('summary') ? 'summary' : 'default',
   };
 }
 
@@ -476,13 +486,17 @@ export function main(argv: string[]): number {
     process.stdout.write(`${pkg.version}\n`);
     return 0;
   }
+  /** retarget --verbose (rig-c/pose#238): a collapsed refusal prints the per-frame lines it stands for before itself. */
+  let verbose = false;
   try {
     if (rest.includes('--help')) {
       process.stdout.write(HELP);
       return 0;
     }
     if (cmd === 'retarget') {
-      runRetarget(retargetArgs(rest), (l) => process.stdout.write(`${l}\n`));
+      const ra = retargetArgs(rest);
+      verbose = ra.output === 'verbose';
+      runRetarget(ra, (l) => process.stdout.write(`${l}\n`));
       return 0;
     }
     if (cmd === 'compare') {
@@ -510,7 +524,10 @@ export function main(argv: string[]): number {
       return 2;
     }
     if (e instanceof Refusal) {
-      for (const p of e.problems) process.stderr.write(`FAIL  ${lineOf(p)}\n`);
+      for (const p of e.problems) {
+        if (verbose) for (const d of p.detail ?? []) process.stderr.write(`FAIL  ${lineOf(d)}\n`);
+        process.stderr.write(`FAIL  ${lineOf(p)}\n`);
+      }
       process.stderr.write(`rig-pose ${cmd}: ${e.problems.length} problem(s) — ${cmd === 'compare' ? 'not compared' : 'nothing written'}\n`);
       return 1;
     }

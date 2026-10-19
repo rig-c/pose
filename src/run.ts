@@ -9,14 +9,14 @@ import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, st
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { knownSetsOf, readMap, resolveMap, type JointMap, type Rest } from './map.ts';
-import { cleanLine, inferredSource } from './clean.ts';
+import { cleanLine, cleanSummaryLine, inferredSource } from './clean.ts';
 import { convertCoco17, personTrack, readPoseSequence, TRAVEL_IN_PLACE, type CameraFrame } from './pose.ts';
 import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './problems.ts';
 import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, readIdle, targetOf, trackLabel, type IdleReading, type RigcTrack, type Target } from './idle.ts';
-import { bendLine, endOnLine, flipLine, holdLine, rangeLine, reachCostLine, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions } from './retarget.ts';
+import { bendGroupLine, bendGroups, bendLine, endOnLine, flipLine, holdLine, rangeLine, reachCostLine, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions } from './retarget.ts';
 import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, readBuild, resolveRig, restOf, slotsOf } from './rigc.ts';
 import { artRangeLine, chainsMoving, raisedLine, RAISED_WITHIN, reachLine, switchLine, uncoveredFolds } from './switch.ts';
-import { jitterLine, landed, measureFeet, measureJitter, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
+import { jitterLine, landed, type FeetReading, type JitterRow, type Landing, measureFeet, measureJitter, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
 import { legsOf, PLANT_SWITCH, STANCE_BOUNDS } from './legs.ts';
 import { M2_IDENTITY, mulM2, reduceKeys, reduceScale, reduceUnderScale, SCALE_REDUCE, setupLocal, smoothTrunk, type M2, type ReduceBone, type Reduced, type ReduceRow, type UnderBone } from './reduce.ts';
 import type { BlendHold, Closure, Floor, FreeAnkleShift, LegScale, LegSegmentRatio, Lowered, Side, Stance, SupportScaleRun } from './legs.ts';
@@ -55,6 +55,14 @@ export interface RetargetArgs extends RetargetOptions {
   reduce?: number;
   /** With reduce: thin the hip's translate keys within this many rig units. */
   reduceHip?: number;
+  /**
+   * What stdout carries (rig-c/pose#238). `default`: the CLEAN line's hold record
+   * as a count and each hinge's wrong-way frames as one line; `verbose`: every
+   * line in full, as before #238; `summary`: the run line, one line per measure
+   * (GATE, FEET, LIFT, JITTER, LAND) and the `wrote` lines. Refusals are the
+   * same in all three and the gate is the same gate.
+   */
+  output?: 'default' | 'verbose' | 'summary';
 }
 
 export interface RunResult {
@@ -64,9 +72,15 @@ export interface RunResult {
 
 export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunResult {
   const lines: string[] = [];
-  const say = (l: string) => {
+  const output = a.output ?? 'default';
+  /** A line every mode prints: the run line, the summary lines, the `wrote` lines. */
+  const tell = (l: string) => {
     lines.push(l);
     log(l);
+  };
+  /** A line of the full output: default and --verbose print it; --summary does not. */
+  const say = (l: string) => {
+    if (output !== 'summary') tell(l);
   };
   const refuse = (problems: readonly Problem[]): never => {
     throw new Refusal(problems);
@@ -131,9 +145,9 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         }
       }
     }
-    say(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)${a.legScale !== undefined && a.legScale !== 'off' ? `, leg-scale ${a.legScale[0]}–${a.legScale[1]}` : ''}${a.plantFeet === true ? ', plant-feet' : ''}${a.stance !== undefined && a.stance !== 'off' ? `, stance ${a.stance}` : ''}${a.raisedByHead === true ? ', raised-by-head' : ''}${a.carryIdle === true ? ', carry-idle' : ''}${a.merge !== undefined ? `, merge ${a.merge}` : ''}${a.reduce !== undefined ? `, reduce ${a.reduce}°${a.reduceHip !== undefined ? ` (hip ${a.reduceHip} units)` : ''}` : ''}`);
+    tell(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)${a.legScale !== undefined && a.legScale !== 'off' ? `, leg-scale ${a.legScale[0]}–${a.legScale[1]}` : ''}${a.plantFeet === true ? ', plant-feet' : ''}${a.stance !== undefined && a.stance !== 'off' ? `, stance ${a.stance}` : ''}${a.raisedByHead === true ? ', raised-by-head' : ''}${a.carryIdle === true ? ', carry-idle' : ''}${a.merge !== undefined ? `, merge ${a.merge}` : ''}${a.reduce !== undefined ? `, reduce ${a.reduce}°${a.reduceHip !== undefined ? ` (hip ${a.reduceHip} units)` : ''}` : ''}`);
     say(`  RIGC   rig-c ${rigc.version} (${rigc.entry}) gates and poses this run`);
-    say(`  CLEAN  ${cleanLine(seq.cleaned!)}`);
+    say(`  CLEAN  ${output === 'verbose' ? cleanLine(seq.cleaned!) : cleanSummaryLine(seq.cleaned!)}`);
     if (a.smoothAlias !== undefined) say(`  SMOOTH --smooth is carried by clean; ignored (given ${a.smoothAlias}; this sequence was cleaned with legs ${seq.cleaned!.params.legs}, rest ${seq.cleaned!.params.rest})`);
     if (seq.camera !== undefined) say(`  CAMERA ${cameraLine(seq.camera, times, seq.cameraSource)}`);
     else if (a.plantFeet === true) say('  CAMERA none in the sequence: --plant-feet reads the picture as a fixed camera, so a zoom or a pan in the video moves the floor with it and the floor may step with the picture (tools/scan.py reads the camera, rig-c/pose#63)');
@@ -144,7 +158,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       for (const e of r.endOn) say(`  END-ON ${endOnLine(e, r.times, a.short)}`);
     }
     if (a.flip !== 'off') for (const fl of r.flips) say(`  FLIP   ${flipLine(fl, r.times, a.flip)}`);
-    for (const e of r.bends) say(`  BEND   ${bendLine(e)} — clamped straight`);
+    if (output === 'verbose') for (const e of r.bends) say(`  BEND   ${bendLine(e)} — clamped straight`);
+    else for (const g of bendGroups(r.bends)) say(`  BEND   ${bendGroupLine(g, 'clamp')}`);
     for (const e of r.turns) say(`  TURN   ${turnLine(e, r.times)}`);
     for (const u of r.turnsUnread) say(`  TURN   line "${u.line}" (${u.joints[0]} → ${u.joints[1]}) not measured: ${u.why}`);
     if (map.alternates.length > 0) {
@@ -250,7 +265,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     if (!g1.green) {
       refuse([{ code: 'RIG_GATE', text: `rigc build --profile ${a.profile} is red with "${a.name}" in (exit ${g1.run.status}); nothing written` }, ...g1.fails.map((f) => ({ code: 'RIGC', text: f }))]);
     }
-    say(`  GATE   rigc build --profile ${a.profile}: green${g1.summary === null ? '' : ` — ${g1.summary}`}`);
+    const gateText = gateLine(a.profile, g1.summary);
+    say(`  GATE   ${gateText}`);
 
     const doc = readBuild(g1.build);
     const posed = poseFrames(doc, a.name, r.times);
@@ -292,12 +308,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     const legBones = legBonesOf(map);
     const feetReading = legBones === null ? null : measureFeet(posed, lengths, r, legBones);
     if (feetReading !== null) {
-      const f = feetReading;
-      say(`  FEET   the posed build, outside jumps: the lowest ankle's vertical range ${f.lowest.range.toFixed(2)} units = ${f.lowest.legs.toFixed(4)} leg lengths (rig leg r ${f.legLength.r.toFixed(1)}, l ${f.legLength.l.toFixed(1)} units) over ${f.lowest.frames} frames`);
-      const worst = (k: 'verticalLegs' | 'horizontalLegs') => f.plants.reduce<(typeof f.plants)[number] | null>((m, x) => (m === null || x[k] > m[k] ? x : m), null);
-      const wv = worst('verticalLegs');
-      const wh = worst('horizontalLegs');
-      if (wv !== null && wh !== null) say(`  FEET   the supporting ankle over each support span: worst vertical range ${wv.vertical.toFixed(2)} units = ${wv.verticalLegs.toFixed(4)} leg lengths (${wv.side} ${wv.frames[0]}–${wv.frames[1]}), worst horizontal drift ${wh.horizontal.toFixed(2)} units = ${wh.horizontalLegs.toFixed(4)} leg lengths (${wh.side} ${wh.frames[0]}–${wh.frames[1]})`);
+      for (const l of posedFeetLines(feetReading)) say(`  FEET   ${l}`);
     }
     const shear = r.scales.size === 0 ? [] : measureShear(doc, posed, r.scales.keys());
     for (const x of shear) say(`  SHEAR  bone "${x.bone}": art sheared up to ${x.shear.toFixed(2)}° (frame ${x.frame}); world x axis ${x.x[0].toFixed(3)} … ${x.x[1].toFixed(3)}, y axis ${x.y[0].toFixed(3)} … ${x.y[1].toFixed(3)} of setup — a scaled bone, or one under it; a reading`);
@@ -420,13 +431,91 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     }
     if (a.report !== undefined && reportText !== null) writeFileSync(a.report, reportText);
 
-    if (a.camera !== undefined) say(`  wrote ${a.camera} — camera track (${r.figureScale.frames.length} frames)`);
-    say(`  wrote ${a.out} — animations: ${Object.keys(motion.animations).join(', ')}`);
+    if (output === 'summary') for (const l of summaryLines({ gate: gateText, feet: feetReading, stance: r.stance, jitter, landings, times: r.times })) tell(`  ${l}`);
+    if (a.camera !== undefined) tell(`  wrote ${a.camera} — camera track (${r.figureScale.frames.length} frames)`);
+    tell(`  wrote ${a.out} — animations: ${Object.keys(motion.animations).join(', ')}`);
     return { lines, written: true };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
 }
+
+/** The GATE line's text: the profile and rig-c's own summary of the green build. */
+export function gateLine(profile: string, summary: string | null): string {
+  return `rigc build --profile ${profile}: green${summary === null ? '' : ` — ${summary}`}`;
+}
+
+/** The FEET lines of the posed build: the lowest ankle's range, and the supporting ankle's worst over the support spans. */
+export function posedFeetLines(f: FeetReading): string[] {
+  const out = [`the posed build, outside jumps: the lowest ankle's vertical range ${lowestText(f)} (rig leg r ${f.legLength.r.toFixed(1)}, l ${f.legLength.l.toFixed(1)} units) over ${f.lowest.frames} frames`];
+  const plant = plantText(f);
+  if (plant !== null) out.push(`the supporting ankle over each support span: ${plant}`);
+  return out;
+}
+
+const lowestText = (f: FeetReading): string => `${f.lowest.range.toFixed(2)} units = ${f.lowest.legs.toFixed(4)} leg lengths`;
+
+function plantText(f: FeetReading): string | null {
+  const worst = (k: 'verticalLegs' | 'horizontalLegs') => f.plants.reduce<(typeof f.plants)[number] | null>((m, x) => (m === null || x[k] > m[k] ? x : m), null);
+  const wv = worst('verticalLegs');
+  const wh = worst('horizontalLegs');
+  if (wv === null || wh === null) return null;
+  return `worst vertical range ${wv.vertical.toFixed(2)} units = ${wv.verticalLegs.toFixed(4)} leg lengths (${wv.side} ${wv.frames[0]}–${wv.frames[1]}), worst horizontal drift ${wh.horizontal.toFixed(2)} units = ${wh.horizontalLegs.toFixed(4)} leg lengths (${wh.side} ${wh.frames[0]}–${wh.frames[1]})`;
+}
+
+/** What `--summary` reads (rig-c/pose#238): the same records the full lines print. */
+export interface SummaryInput {
+  gate: string;
+  feet: FeetReading | null;
+  stance: Stance | null;
+  jitter: readonly JitterRow[];
+  landings: readonly Landing[];
+  times: readonly number[];
+}
+
+/**
+ * `--summary`'s lines (rig-c/pose#238), one per measure, in the order a second
+ * run is compared on: GATE (the GATE line), FEET (the posed build's two FEET
+ * lines, joined), LIFT (the STANCE runs counted), JITTER (the JITTER rows' worst
+ * ratio) and LAND (each landing kind's worst against its tolerance). Each figure
+ * is formatted as the full line formats it, from the same record.
+ */
+export function summaryLines(x: SummaryInput): string[] {
+  const out = [`GATE   ${x.gate}`];
+  if (x.feet === null) out.push('FEET   not measured: the map maps no legs');
+  else {
+    const plant = plantText(x.feet);
+    out.push(`FEET   lowest ankle's vertical range ${lowestText(x.feet)} over ${x.feet.lowest.frames} frames; supporting ankle ${plant ?? 'over no support span'}`);
+  }
+  if (x.stance === null) out.push('LIFT   not read (no --stance)');
+  else {
+    const own = x.stance.runs.filter((r) => r.absorbed !== true);
+    const count = (state: Stance['runs'][number]['state']) => {
+      const rs = own.filter((r) => r.state === state);
+      return { runs: rs.length, frames: rs.reduce((t, r) => t + r.frames[1] - r.frames[0] + 1, 0), rs };
+    };
+    const lifted = count('lifted'), both = count('both'), below = count('below');
+    const top = lifted.rs.reduce<Stance['runs'][number] | null>((m, r) => (m === null || r.maxHeight > m.maxHeight ? r : m), null);
+    out.push(`LIFT   lifted ${lifted.runs} run(s), ${lifted.frames} frame(s)${top === null ? '' : `, highest ${top.maxHeight.toFixed(4)} leg lengths (${top.side} ${spanText(top.frames)})`}; planted both ${both.runs} run(s), ${both.frames} frame(s); below ${below.runs} run(s), ${below.frames} frame(s); ${x.stance.over.length} past the bounds`);
+  }
+  const read = x.jitter.filter((j) => j.ratio !== null);
+  const worst = read.reduce<JitterRow | null>((m, j) => (m === null || j.ratio! > m.ratio! ? j : m), null);
+  const still = x.jitter.filter((j) => j.triples > 0 && j.ratio === null).length;
+  const unread = x.jitter.filter((j) => j.triples === 0).length;
+  out.push(`JITTER ${x.jitter.length} bone(s): ${worst === null ? 'no ratio read' : `worst ${worst.ratio!.toFixed(2)}× on bone "${worst.bone}" (${worst.rig!.toFixed(4)}°/f² against its pair's ${worst.pair!.toFixed(4)}°/f²)`}; ${still} still pair(s), ${unread} not measured`);
+  const kinds: Array<[Landing['kind'], string, string]> = [['angle', 'aim', '°'], ['origin', 'origin', ' units'], ['scale', 'scale', ' of its setup length'], ['foot', 'ankle', ' units']];
+  const parts = kinds.flatMap(([kind, what, unit]) => {
+    const ls = x.landings.filter((l) => l.kind === kind);
+    if (ls.length === 0) return [];
+    const w = ls.reduce((m, l) => (l.worst > m.worst ? l : m));
+    const tol = kind === 'foot' ? Number(w.tolerance.toPrecision(3)) : w.tolerance;
+    return [`${what} ${ls.length}, worst ${w.worst.toPrecision(3)}${unit} on bone "${w.bone}" at frame ${w.frame} (t=${x.times[w.frame]!.toFixed(3)}s), tolerance ${tol}${unit}`];
+  });
+  out.push(`LAND   ${x.landings.length} landed: ${parts.join('; ') || 'none'}`);
+  return out;
+}
+
+const spanText = (x: [number, number]) => (x[0] === x[1] ? `${x[0]}` : `${x[0]}–${x[1]}`);
 
 /**
  * The retarget's rotate tracks (and with a hip tolerance, its translate) thinned

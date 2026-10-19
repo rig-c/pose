@@ -611,11 +611,18 @@ describe('a hinge bent the wrong way', () => {
     const c = setup({ pose: poseDoc(BENT) });
     const r = retarget(c);
     expect(r.status).toBe(1);
-    expect(fails(r)).toEqual([
-      'FAIL  POSE_BEND_ONE_WAY: chain "arm_r" hinge r_elbow, frame 7 (t=0.875s) — inner angle -15.0°; it bends counter-clockwise (+) at rest (20.0°), so the angle must stay ≥ 0',
-    ]);
+    // #238: one line per hinge — count, frame range, worst, and the remedy; --verbose puts the per-frame line before it.
+    const collapsed = 'FAIL  POSE_BEND_ONE_WAY: chain "arm_r" hinge r_elbow, 1 frame(s) in 1 run(s), frame 7 (t=0.875s) — worst inner angle -15.0° at frame 7 (t=0.875s); it bends counter-clockwise (+) at rest (20.0°), so the angle must stay ≥ 0; seen from the front, the side a hinge\'s picture falls on is not its limit, so for front-facing material state "bend": "free" on chain "arm_r"; keep a side ("rest", "ccw", "cw") only for a side view, where the picture\'s side is the joint\'s own; a near-straight knee\'s noise takes --bends clamp or --bend-tolerance <deg> (each frame: --verbose)';
+    expect(fails(r)).toEqual([collapsed]);
     expect(existsSync(c.out)).toBe(false);
     expect(existsSync(c.build)).toBe(false);
+    const v = retarget(c, ['--verbose']);
+    expect(v.status).toBe(1);
+    expect(fails(v)).toEqual([
+      'FAIL  POSE_BEND_ONE_WAY: chain "arm_r" hinge r_elbow, frame 7 (t=0.875s) — inner angle -15.0°; it bends counter-clockwise (+) at rest (20.0°), so the angle must stay ≥ 0',
+      collapsed,
+    ]);
+    expect(existsSync(c.out)).toBe(false);
   }, SLOW);
 
   test('control: --bends clamp writes, lists the frame and lays the forearm along the upper arm', () => {
@@ -624,7 +631,7 @@ describe('a hinge bent the wrong way', () => {
     expect(r.status).toBe(0);
     const bends = linesOf(r, 'BEND');
     expect(bends).toHaveLength(1);
-    expect(bends[0]).toContain('chain "arm_r" hinge r_elbow, frame 7 (t=0.875s) — inner angle -15.0°');
+    expect(bends[0]).toContain('chain "arm_r" hinge r_elbow, 1 frame(s) in 1 run(s), frame 7 (t=0.875s) — worst inner angle -15.0° at frame 7 (t=0.875s)');
     expect(bends[0]).toContain('clamped straight');
     const poses = poseRawAnimation(loadBuild(c.build), 'dance', Array.from({ length: BENT.n - 1 }, () => BENT.dt));
     const f7 = byName(poses[7]!.bones);
@@ -647,7 +654,7 @@ describe('a hinge bent the wrong way', () => {
     const r = retarget(c);
     expect(r.status).toBe(1);
     expect(fails(r)).toEqual([
-      'FAIL  MAP_BEND_SIDE: chain "leg_l" — the hinge at l_knee is straight at rest (inner angle 0.000°), so the rest pose does not say which way it bends; state "bend": "ccw", "cw" or "free"',
+      'FAIL  MAP_BEND_SIDE: chain "leg_l" — the hinge at l_knee is straight at rest (inner angle 0.000°), so the rest pose does not say which way it bends; state "bend": "ccw", "cw" or "free" — seen from the front, the side a hinge\'s picture falls on is not its limit, so for front-facing material state "bend": "free" on chain "leg_l"; keep a side ("rest", "ccw", "cw") only for a side view, where the picture\'s side is the joint\'s own',
     ]);
     expect(existsSync(c.out)).toBe(false);
   }, SLOW);
