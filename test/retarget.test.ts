@@ -378,6 +378,8 @@ function retarget(c: Case, extra: string[] = [], cliPath = CLI): Ran {
 }
 const fails = (r: Ran): string[] => r.stderr.split('\n').filter((l) => l.startsWith('FAIL  '));
 const linesOf = (r: Ran, tag: string): string[] => r.stdout.split('\n').map((l) => l.trim()).filter((l) => l.startsWith(`${tag} `));
+/** The STANCE lines past the #237 `unit` line, which every --stance run prints first. */
+const stanceRuns = (r: Ran): string[] => linesOf(r, 'STANCE').filter((l) => !l.startsWith('STANCE unit: '));
 
 /**
  * The report's documented top level (#83): the README's `--report` paragraph, its names outside its
@@ -3463,7 +3465,7 @@ describe('#47: --leg-scale and --plant-feet', () => {
         worst = Math.max(worst, Math.hypot(after.ankle.l[i]![0] - before.ankle.l[i]![0], after.ankle.l[i]![1] - before.ankle.l[i]![1]));
         above = Math.min(above, after.ankle.l[i]![1] - after.ankle.r[i]![1]);
       }
-      return { status: r.status, stance: linesOf(r, 'STANCE'), worst, above };
+      return { status: r.status, stance: stanceRuns(r), worst, above };
     }
 
     test('a lift of 0.15 leg lengths stays a lift: the foot keeps the pose\'s height, and STANCE lists it', () => {
@@ -3471,7 +3473,9 @@ describe('#47: --leg-scale and --plant-feet', () => {
       expect(k.status).toBe(0);
       expect(k.stance).toHaveLength(3);
       expect(k.stance[0]).toStartWith('STANCE planted both: free foot l frames 0–7 (t=0.000–0.292s)');
-      expect(k.stance[1]).toStartWith('STANCE lifted: free foot l frames 8–15 (t=0.333–0.625s) — its ankle up to 0.1500 leg lengths above the supporting one in the picture, over the tolerance 0.07 leg lengths (planted again under 0.8 of it, 0.0560); the pose\'s height kept');
+      // #237: the shin is clamped at 0.8 on every lifted frame, so the rig's free ankle hangs below the
+      // pose's there; before #237 this line said "the pose's height kept", which was not true of any frame.
+      expect(k.stance[1]).toBe('STANCE lifted: free foot l frames 8–15 (t=0.333–0.625s) — its ankle up to 0.1500 leg lengths above the supporting one in the picture, over the tolerance 0.07 leg lengths (r 10.5 / l 10.5 px) (planted again under 0.8 of it, 0.0560); the pose\'s height not kept on any of its 8 frame(s); on 8 (frames 8–15) --leg-scale\'s clamps moved the free ankle off it, up to 0.0541 leg lengths (8.1 px of FEET\'s) below the pose\'s (leg lengths: the rig\'s l leg at setup, thigh origin → ankle, 150.0 units)');
       expect(k.stance[2]).toStartWith('STANCE planted both: free foot l frames 16–23');
       expect(k.worst).toBeLessThan(1e-3);
       // The lift shows on the rig (the shin scaled 0.8 at its clamp: 0.2 of its 70 units, along a near-vertical shin).
@@ -3490,9 +3494,9 @@ describe('#47: --leg-scale and --plant-feet', () => {
       const r = retarget(c, [...FLAGS, '--stance', '0.07', '--report', report]);
       expect(r.stderr).toBe('');
       expect(r.status).toBe(0);
-      const st = linesOf(r, 'STANCE');
+      const st = stanceRuns(r);
       expect(st).toHaveLength(1);
-      expect(st[0]).toStartWith('STANCE planted both: free foot l frames 0–23 (t=0.000–0.958s) — its ankle up to 0.0300 leg lengths above the supporting one in the picture, within the tolerance 0.07 leg lengths; its leg stretched by k ');
+      expect(st[0]).toStartWith('STANCE planted both: free foot l frames 0–23 (t=0.000–0.958s) — its ankle up to 0.0300 leg lengths above the supporting one in the picture, within the tolerance 0.07 leg lengths (r 10.5 / l 10.5 px); its leg stretched by k ');
       const kmax = Number(/\(largest ([0-9.]+)\)/.exec(st[0]!)![1]);
       expect(kmax).toBeGreaterThan(1);
       expect(kmax).toBeLessThan(1.08);
@@ -3517,7 +3521,7 @@ describe('#47: --leg-scale and --plant-feet', () => {
       const r = retarget(c, [...FLAGS, '--stance', '0.2']);
       expect(r.stderr).toBe('');
       expect(r.status).toBe(0);
-      const st = linesOf(r, 'STANCE');
+      const st = stanceRuns(r);
       expect(st[0]).toContain('(largest 1.0800)');
       const over = st.filter((l) => l.startsWith('STANCE past the bounds: free foot l frames 8–15'));
       expect(over).toHaveLength(1);
@@ -3578,7 +3582,7 @@ describe('#47: --leg-scale and --plant-feet', () => {
       const c = setup({ pose: gait() });
       const plain = retarget(c, FLAGS);
       expect(plain.status).toBe(0);
-      expect(linesOf(plain, 'STANCE')[0]).toStartWith('STANCE planted both: free foot l frames 0–23');
+      expect(stanceRuns(plain)[0]).toStartWith('STANCE planted both: free foot l frames 0–23');
       const dense = posedLegs(c.build);
       const before = keysIn(c.out);
       expect(floorGap(dense)).toBeLessThan(PLANT_TOL);
@@ -9039,7 +9043,7 @@ describe('#237: --stance and --leg-scale name their unit, and LEG-SCALE and STAN
     expect(Math.abs(free.below!.legLengths - want)).toBeLessThan(1e-4);
     expect(rep!.feet.rigLeg.l).toBeCloseTo(RIG_LEG, 3);
     expect(free.below!.legLengths).toBeCloseTo(free.below!.units / rep!.feet.rigLeg.l, 12);
-    expect(line).toContain(`; its leg free (the other foot supporting) on 9 of its 9 clamped frame(s) (frames 8–16): the clamps on that leg left the free ankle up to ${free.below!.legLengths.toFixed(4)} leg lengths (${(free.below!.legLengths * rep!.feet.legLength.l).toFixed(1)} px of FEET's) below (leg lengths: the rig's l leg at setup, thigh origin → ankle, ${rep!.feet.rigLeg.l.toFixed(1)} units) the picture's`);
+    expect(line).toContain(`; its leg free (the other foot supporting) on 9 of its 9 clamped frame(s) (frames 8–16): the clamps on that leg left the free ankle up to ${free.below!.legLengths.toFixed(4)} leg lengths (${(free.below!.legLengths * rep!.feet.legLength.l).toFixed(1)} px of FEET's) below the picture's (the leg at picture length ÷ straight) (leg lengths: the rig's l leg at setup, thigh origin → ankle, ${rep!.feet.rigLeg.l.toFixed(1)} units)`);
     // The supporting leg is never clamped here: no free clause.
     expect(ls.find((x) => x.includes('bone "leg_r0"'))).not.toContain('free');
   }, SLOW);

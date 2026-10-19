@@ -960,6 +960,8 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   // straight lengths --leg-scale scales against, so the minimum read here is the one it would clamp.
   const segments: LegSegmentRatio[] = [];
   {
+    /** Without --leg-scale nothing is keyed: [1, 1] only lets `legScaleOf` read the ratio. */
+    const limits: [number, number] = legScaleOn ? (opts.legScale as [number, number]) : [1, 1];
     const rawSegments: Array<{ chain: string; bone: string; joints: [string, string]; kind: string; lengths: number[]; ownStraight: number }> = [];
     for (const c of map.chains) {
       if (c.reach) continue;
@@ -1028,8 +1030,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       return Math.abs(rigLen - meanRigLen) > 1e-3 * meanRigLen ? rigLen / meanRigLen : 1;
     };
     for (const seg of rawSegments) {
-      const straight = straightByKind.get(seg.kind)! * rigShareOf(seg);
-      const ls = legScaleOf(seg.lengths, legScaleOn ? (opts.legScale as [number, number]) : [1, 1], straight);
+      const ls = legScaleOf(seg.lengths, limits, straightByKind.get(seg.kind)! * rigShareOf(seg));
       const row = segments.find((x) => x.bone === seg.bone)!;
       row.straight = ls.straight;
       row.ratio = ls.ratio;

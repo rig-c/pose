@@ -756,7 +756,7 @@ export function stanceLines(st: Stance, times: readonly number[], unit?: StanceU
     if (r.moved === undefined) return "the pose's height kept";
     const all = r.frames[1] - r.frames[0] + 1;
     const head = r.moved.count === all ? `the pose's height not kept on any of its ${all} frame(s)` : `the pose's height kept on ${all - r.moved.count} of its ${all} frame(s)`;
-    return `${head}; on ${r.moved.count} (frames ${r.moved.frames.map(spanOf).join(', ')}) --leg-scale's clamps moved the free ankle off it, ${shiftText(r.moved, unit)} the pose's`;
+    return `${head}; on ${r.moved.count} (frames ${r.moved.frames.map(spanOf).join(', ')}) --leg-scale's clamps moved the free ankle off it, ${shiftText(r.moved, unit, "the pose's")}`;
   };
   const release = `planted again under ${st.release} of it, ${(st.release * st.tolerance).toFixed(4)}`;
   const NAME: Record<Stance['runs'][number]['state'], string> = { both: 'planted-both', lifted: 'lifted', below: 'below' };
@@ -801,11 +801,11 @@ export function stanceUnitLine(tolerance: number, u: StanceUnit): string {
 }
 
 /** A free ankle's shift by the clamps, in its rig leg and in FEET's px: `up to 0.1500 leg lengths (22.6 px) above, up to … below`. */
-function shiftText(m: FreeAnkleShift, unit: { legLength: Record<Side, number> | null; rigLeg: Record<Side, number> | null } | undefined): string {
+function shiftText(m: FreeAnkleShift, unit: { legLength: Record<Side, number> | null; rigLeg: Record<Side, number> | null } | undefined, against: string): string {
   const one = (x: { legLengths: number }, way: string) => `up to ${x.legLengths.toFixed(4)} leg lengths${unit?.legLength == null ? '' : ` (${(x.legLengths * unit.legLength[m.side]).toFixed(1)} px of FEET's)`} ${way}`;
-  const parts = [...(m.above === null ? [] : [one(m.above, 'above')]), ...(m.below === null ? [] : [one(m.below, 'below')])];
+  const parts = [...(m.above === null ? [] : [one(m.above, `above ${against}`)]), ...(m.below === null ? [] : [one(m.below, `below ${against}`)])];
   const leg = unit?.rigLeg == null ? '' : ` (leg lengths: the rig's ${m.side} leg at setup, thigh origin → ankle, ${unit.rigLeg[m.side].toFixed(1)} units)`;
-  return `${parts.length === 0 ? 'by 0 leg lengths, at' : parts.join(' and ')}${leg}`;
+  return `${parts.length === 0 ? `by 0 leg lengths, at ${against}` : parts.join(' and ')}${leg}`;
 }
 
 /** The FEET segment line (rig-c/pose#237): a mapped leg segment's picture length ÷ straight, read with or without --leg-scale. */
@@ -848,7 +848,7 @@ export function legScaleLine(l: LegScale, times: readonly number[], legLength: R
   const limitsPx = `${(l.limits[0] * l.straight).toFixed(1)}–${(l.limits[1] * l.straight).toFixed(1)}px`;
   const clampedFrames = count(l.low) + count(l.high);
   const free = l.free !== undefined
-    ? `; its leg free (the other foot supporting) on ${l.free.count} of its ${clampedFrames} clamped frame(s) (frames ${l.free.frames.map(span).join(', ')}): the clamps on that leg left the free ankle ${shiftText(l.free, { legLength, rigLeg })} the picture's (the leg at picture length ÷ straight)`
+    ? `; its leg free (the other foot supporting) on ${l.free.count} of its ${clampedFrames} clamped frame(s) (frames ${l.free.frames.map(span).join(', ')}): the clamps on that leg left the free ankle ${shiftText(l.free, { legLength, rigLeg }, "the picture's (the leg at picture length ÷ straight)")}`
     : clampedFrames > 0 && legLength !== null ? `; its leg free on none of its ${clampedFrames} clamped frame(s)` : '';
   return `chain "${l.chain}" bone "${l.bone}" (${l.joints[0]} → ${l.joints[1]}): straight length ${l.straight.toFixed(1)}px (larger 95th percentile of ${times.length} frames, both legs)${share}; picture length ÷ straight ${l.ratio.min.toFixed(3)} … ${l.ratio.max.toFixed(3)} (median ${l.ratio.median.toFixed(3)}); scalex keyed in [${l.limits[0]}, ${l.limits[1]}] of the straight length (${limitsPx}): ${clamp(l.low, l.limits[0], 'under', 'low')}; ${clamp(l.high, l.limits[1], 'over', 'high')}${free}`;
 }
