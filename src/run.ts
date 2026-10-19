@@ -13,10 +13,10 @@ import { cleanLine, inferredSource } from './clean.ts';
 import { convertCoco17, personTrack, readPoseSequence, TRAVEL_IN_PLACE, type CameraFrame } from './pose.ts';
 import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './problems.ts';
 import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, readIdle, targetOf, trackLabel, type IdleReading, type RigcTrack, type Target } from './idle.ts';
-import { bendLine, endOnLine, flipLine, holdLine, rangeLine, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions } from './retarget.ts';
+import { bendLine, endOnLine, flipLine, holdLine, rangeLine, reachCostLine, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions } from './retarget.ts';
 import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, readBuild, resolveRig, restOf, slotsOf } from './rigc.ts';
 import { artRangeLine, chainsMoving, raisedLine, RAISED_WITHIN, reachLine, switchLine, uncoveredFolds } from './switch.ts';
-import { landed, measureFeet, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
+import { jitterLine, landed, measureFeet, measureJitter, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
 import { legsOf, PLANT_SWITCH, STANCE_BOUNDS } from './legs.ts';
 import { M2_IDENTITY, mulM2, reduceKeys, reduceScale, reduceUnderScale, SCALE_REDUCE, setupLocal, smoothTrunk, type M2, type ReduceBone, type Reduced, type ReduceRow, type UnderBone } from './reduce.ts';
 import type { BlendHold, Closure, Floor, FreeAnkleShift, LegScale, LegSegmentRatio, Lowered, Side, Stance, SupportScaleRun } from './legs.ts';
@@ -159,6 +159,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     if (map.alternates.some((x) => x.place !== undefined && x.place !== null) && r.byHip.length === 0) say(`  BY-HIP none — no set with "place": "by-hip" showed; no key moved`);
     for (const e of r.byHip) say(`  BY-HIP ${raisedLine(e, r.times)}`);
     for (const e of r.byHip) if (e.short.length > 0) say(`  REACH  ${reachLine(e, r.times)}`);
+    for (const e of r.reach) say(`  REACH  ${reachCostLine(e, r.times)}`);
     for (const e of r.artRange) say(`  ART-RANGE ${artRangeLine(e, r.times)}`);
     for (const l of r.legScale) say(`  LEG-SCALE ${legScaleLine(l, r.times, r.feet?.legLength ?? null, r.rigLeg)}`);
     for (const l of r.legScale) for (const s of l.support ?? []) say(`  LEG-SCALE ${supportScaleLine(l, s, r.times)}`);
@@ -279,6 +280,9 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       else p.add('POSE_LANDS', `${line} — the rig does not turn the way the key formula assumes (a constraint, a scaled or sheared parent, a non-normal inherit mode)${carriedAbove(l.bone)}`);
     }
     p.throwIfAny();
+    // #236: each keyed bone's jitter as posed, against its map pair's — names the bone that moved a group's ratio.
+    const jitter = measureJitter(posed, map, r, frames, a.minScore);
+    for (const j of jitter) say(`  JITTER ${jitterLine(j)}`);
 
     const lengths = new Map(doc.bones.map((b) => [b.name, b.length ?? 0]));
     const hips = seq.cleaned?.params.hipsInferred;
@@ -328,11 +332,13 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         flips: r.flips,
         gate: g1.summary,
         landings,
+        jitter,
         posture,
         folds: f.meshes,
         switches: r.switches,
         uncovered,
         turns: r.turns,
+        reach: r.reach,
         range: r.range,
         artRange: r.artRange,
         raised: r.raised,

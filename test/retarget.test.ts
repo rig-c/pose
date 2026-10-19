@@ -1793,6 +1793,116 @@ describe('the pelvis tilts and the trunk reaches from the posed hip for the shou
       expect(existsSync(c.out)).toBe(false);
     }, SLOW);
   }
+
+  // --- #236: what "reach" costs, named ---------------------------------------------
+
+  type ReachRow = { chain: string; bone: string; anchor: string; offset: { units: number; ofLength: number }; above: Array<{ bone: string; property: string; chain: string | null }>; departure: { max: number; frame: number; meanD2: number | null }; aimD2: number | null; pairD2: number | null; ratio: number | null };
+  type JitterRow = { bone: string; chain: string; against: string | null; rig: number | null; pair: number | null; ratio: number | null; triples: number; reach: boolean };
+  const costRun = (o: { rig?: RigOpts; map: Record<string, unknown>; pose?: Record<string, unknown> }) => {
+    const c = setup(o);
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    const doc = JSON.parse(readFileSync(report, 'utf8')) as { reach: ReachRow[]; jitter: JitterRow[] };
+    return { r, reach: doc.reach, jitter: doc.jitter, costLines: linesOf(r, 'REACH').filter((l) => l.startsWith('REACH  chain ')) };
+  };
+  /** The trunk on the hip's origin: the stick rig with the chest (and what hangs from it) moved down onto the hip. */
+  const onHip = (bs: BoneSpec[]): BoneSpec[] => bs.map((b) => (b.name === 'chest' ? { ...b, y: 0 } : b));
+  const reachTrunk = (): Record<string, unknown> => ({ ...baseMap(), chains: baseChains().map((c) => (c.name === 'trunk' ? { ...c, reach: true } : c)) });
+
+  test('REACH: a reach below a turning pelvis prints its departure from the pair, naming the pelvis and the lever', () => {
+    const { reach, costLines, jitter } = costRun({ rig: { bones: ctlBones }, map: pelvisMap(true), pose: pelvisPose() });
+    expect(costLines).toHaveLength(1);
+    expect(costLines[0]).toStartWith('REACH  chain "trunk" bone "chest" (mid_hip → mid_shoulder) is aimed from its posed origin at the pair\'s end — its origin sits 75.00 units from the anchor "hip"\'s at setup');
+    expect(costLines[0]).toContain('it hangs below "hip" (turned by chain "pelvis")');
+    expect(reach).toHaveLength(1);
+    const row = reach[0]!;
+    expect(row.above).toEqual([{ bone: 'hip', property: 'rotate', chain: 'pelvis' }]);
+    expect(row.offset.units).toBe(75);
+    // The pelvis tilts ±12° and the chest's origin sits 75 units up it: the aim is not the pair's angle.
+    expect(row.departure.max).toBeGreaterThan(1);
+    expect(row.departure.meanD2).toBeGreaterThan(0);
+    // The JITTER line names the same bone as a reach.
+    expect(jitter.find((j) => j.bone === 'chest')?.reach).toBe(true);
+  }, SLOW);
+
+  test('REACH control: the same trunk without "reach" prints none, and the report\'s reach is empty', () => {
+    const { reach, costLines } = costRun({ rig: { bones: ctlBones }, map: pelvisMap(false), pose: pelvisPose() });
+    expect(costLines).toEqual([]);
+    expect(reach).toEqual([]);
+  }, SLOW);
+
+  test('REACH control: a reach with no pelvis chain, its bone on the anchor\'s origin, is aimed along the pair and prints none', () => {
+    const { reach, costLines, jitter } = costRun({ rig: { bones: onHip }, map: reachTrunk() });
+    expect(costLines).toEqual([]);
+    expect(reach).toEqual([]);
+    const chest = jitter.find((j) => j.bone === 'chest')!;
+    expect(chest.reach).toBe(true);
+    expect(chest.ratio).toBeCloseTo(1, 2);
+  }, SLOW);
+
+  test('REACH: with no pelvis chain, a bone whose origin sits up the pair still departs from it (the lever), and says so without a turned bone', () => {
+    const { reach, costLines, jitter } = costRun({ map: reachTrunk() });
+    expect(costLines).toHaveLength(1);
+    expect(costLines[0]).toContain('its origin sits 75.00 units from the anchor "hip"\'s at setup');
+    expect(costLines[0]).not.toContain('hangs below');
+    expect(reach[0]!.above).toEqual([]);
+    // The aim from 75 units up a 150-unit reach turns by about twice the pair's turn.
+    expect(reach[0]!.ratio!).toBeGreaterThan(1.5);
+    expect(jitter.find((j) => j.bone === 'chest')!.ratio!).toBeGreaterThan(1.5);
+  }, SLOW);
+});
+
+describe('JITTER: each keyed bone against its map pair (#236)', () => {
+  type JitterRow = { bone: string; chain: string; against: string | null; rig: number | null; pair: number | null; ratio: number | null; triples: number; reach: boolean };
+  const run = (cliPath = CLI) => {
+    const c = setup();
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--report', report], cliPath);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    return { lines: linesOf(r, 'JITTER'), jitter: (JSON.parse(readFileSync(report, 'utf8')) as { jitter: JitterRow[] }).jitter };
+  };
+  const worst = (rows: JitterRow[]) => rows.reduce((m, x) => ((x.ratio ?? 0) > (m.ratio ?? 0) ? x : m));
+
+  test('a line for every bone a chain keys, in map order; on the synthetic pose each is its pair\'s (1.00×)', () => {
+    const { lines, jitter } = run();
+    const keyed = baseChains().flatMap((c) => c.bones);
+    expect(jitter.map((j) => j.bone)).toEqual(keyed);
+    expect(lines).toHaveLength(keyed.length);
+    expect(lines[0]).toStartWith('JITTER bone "chest" (chain "trunk", mid_hip → neck): mean |Δ²| of the keyed local rotation as posed ');
+    expect(jitter.find((j) => j.bone === 'sleeve_r1')!.against).toBe('sleeve_r0');
+    expect(jitter.find((j) => j.bone === 'sleeve_r0')!.against).toBe('chest');
+    for (const j of jitter) {
+      expect(j.triples).toBe(BASE.n - 2);
+      if (j.ratio !== null) expect(Math.abs(j.ratio - 1)).toBeLessThan(0.02);
+    }
+  }, SLOW);
+
+  test('mutant: one bone\'s aim made noisy (±2° on alternate frames) — its JITTER names it, the worst ratio of the run', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const from = '  // Keys: the bone\'s turn less the turn of the nearest mapped bone above it.\n';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, `${from}  { const noisy = targets.get('leg_l1')!; for (let i = 0; i < n; i++) noisy[i] = noisy[i]! + (i % 2 === 0 ? 2 : -2); }\n`));
+      const { lines, jitter } = run(join(d, 'cli.ts'));
+      const w = worst(jitter);
+      expect(w.bone).toBe('leg_l1');
+      expect(w.ratio!).toBeGreaterThan(3);
+      expect(lines.find((l) => l.startsWith('JITTER bone "leg_l1"'))).toMatch(/\(\d+\.\d\d×\)/);
+      // Its neighbours keep their pair's figure: the noise is named on the one bone that carries it.
+      for (const j of jitter) if (j.bone !== 'leg_l1' && j.ratio !== null) expect(Math.abs(j.ratio - 1)).toBeLessThan(0.02);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
 });
 
 // --- the kept build is the same bytes wherever it is made (#18) ---------------
@@ -1834,6 +1944,12 @@ describe('examples/wave runs as the README says', () => {
     expect(linesOf(r, 'LAND')).toHaveLength(11);
     expect(linesOf(r, 'FOLD')).toEqual(['FOLD   the rig has no slots, so it draws nothing to fold; not measured']);
     expect(existsSync(out)).toBe(true);
+    // #236's readings: a JITTER line per keyed bone; the wave's trunk does not reach, so no REACH line.
+    expect(linesOf(r, 'JITTER')).toHaveLength(10);
+    expect(linesOf(r, 'REACH')).toEqual([]);
+    // The readings moved no byte: the motion the wave wrote before #236 (v0.31.1), byte for byte.
+    // A change that moves the wave's motion on purpose updates this hash in the same PR, and says why.
+    expect(createHash('sha256').update(readFileSync(out)).digest('hex')).toBe('bd1ca2506217c21769169b884a306ad2defabaadecb93abd0572969291aa2e59');
   }, SLOW);
 });
 
