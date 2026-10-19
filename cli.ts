@@ -61,12 +61,14 @@ clean (required before retarget; rig-c/pose#67)
 
 retarget
   --rig <path>          the rig spec rigc builds from: a rig.json, or a directory holding one
-                        (with its motion.json beside it — @rig-c/parts writes the pair to <out>/rig/)
+                        (with its motion.json beside it — @rig-c/parts writes the pair to <out>/rig/); naming
+                        the rig.json reads no motion spec, so a rig that needs its motion is given as the directory
   --map <map.json>      rig-pose-map/1: which bones carry which joints
   --pose <pose.json>    rig-pose-sequence/1 (body-18 per frame) that rig-pose clean wrote; a sequence without
                         its "cleaned" record is refused (POSE_NOT_CLEANED), naming the clean command to run
   --out <motion.json>   where the motion spec goes: the rig's own animations plus the new one,
-                        ready for \`rigc build --rig <rig> --motion <motion.json>\`
+                        ready for \`rigc build --rig <rig> --motion <motion.json>\`; a directory it names that is
+                        not there yet is made once the run is green, and a "made directory" line says so
   --name <name>         the new animation's name (default: dance); refused if the rig has one by that name
   --coco                read --pose as coco17-sequence/1: refused (POSE_NOT_CLEANED) — clean it with
                         rig-pose clean --coco, then retarget the cleaned file
@@ -175,7 +177,9 @@ retarget
   --render <dir>        keep rigc's render of the animation (frames, contact.png, folds.json) here
   --report <file>       write the run's measurements (holds, short, endOn, flips, bends, landings, folds,
                         switches, uncovered, turns, range, artRange, raised, byHip,
-                        idleDropped, idleKeptOut, merged, reduce) as JSON
+                        idleDropped, idleKeptOut, merged, reduce) as JSON (default: <out>.report.json beside
+                        the motion, a trailing .json of --out replaced); its wrote line names the mtime of a
+                        report it replaced
   --verbose             print every line in full (rig-c/pose#238): the CLEAN line with the stillness hold's
                         per-joint record, one BEND line per frame under --bends clamp, and before a collapsed
                         POSE_BEND_ONE_WAY refusal the per-frame refusals it stands for. Without it, the CLEAN line
