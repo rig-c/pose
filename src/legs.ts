@@ -321,6 +321,16 @@ export interface LegScale {
   scale: number[];
   /** The scale the pose asked for on each frame before the clamp floor (`min(ratio, limits[1])`, rig-c/pose#107). */
   asked: number[];
+  /** The picture's scale on each frame, before either limit: picture length ÷ straight (rig-c/pose#237). */
+  picture: number[];
+  /**
+   * rig-c/pose#237: on the frames this segment was clamped (`scale ≠ picture`)
+   * while its side was free (the other foot supporting, or tracked), what the
+   * clamps on that leg did to the free ankle: its height keyed against its
+   * height with every segment of that side at the picture's scale, the other
+   * leg as keyed on both. Absent with no supports read, or no clamped frame.
+   */
+  free?: FreeAnkleShift;
   /**
    * rig-c/pose#133: under `--plant-feet`, runs of supporting frames on this
    * segment where the asked scale went under `limits[0]` and followed `asked`
@@ -357,7 +367,88 @@ export function legScaleOf(lengths: readonly number[], limits: [number, number],
     ...(clamped.length > 0 ? { clamped } : {}),
     scale,
     asked,
+    picture: ratio,
   };
+}
+
+/** rig-c/pose#237: one mapped leg segment's picture length ÷ its straight length (the one `--leg-scale` scales against), read with or without the flag. */
+export interface LegSegmentRatio {
+  chain: string;
+  bone: string;
+  joints: [string, string];
+  /** px; null where it was not measured (`why`). */
+  straight: number | null;
+  /** Before any clamp: lowest, median, highest; null where it was not measured. */
+  ratio: { min: number; median: number; max: number } | null;
+  why?: string;
+}
+
+/** A free ankle's height moved by the leg-scale clamps (rig-c/pose#237): world units, and in that side's rig leg at setup (thigh origin → ankle). */
+export interface AnkleShift {
+  units: number;
+  legLengths: number;
+}
+
+/** What the clamps on a free leg did to its ankle's height over a set of frames (rig-c/pose#237). */
+export interface FreeAnkleShift {
+  side: Side;
+  /** Runs of the frames counted. */
+  frames: Array<[number, number]>;
+  /** How many frames. */
+  count: number;
+  /** The largest height above the picture's, and the largest below it (both ≥ 0); null where no frame was that way. */
+  above: AnkleShift | null;
+  below: AnkleShift | null;
+}
+
+/**
+ * rig-c/pose#237: per side and frame, the free ankle's world y as keyed less
+ * its world y with that side's leg segments at the picture's scale — on a frame
+ * the side is free (`freeOf`) and at least one of its segments' keyed scale is
+ * not the picture's; null on every other frame. `tipY` poses the legs by a
+ * scale lookup and returns that side's ankle world y; both poses share every
+ * other bone's scale, so the supporting leg cancels.
+ */
+export function freeAnkleShiftOf(n: number, legScale: readonly LegScale[], freeOf: (i: number) => Side | null, tipY: (i: number, side: Side, scaleOf: (bone: string) => number | null) => number): Record<Side, Array<number | null>> {
+  const out: Record<Side, Array<number | null>> = { r: new Array<number | null>(n).fill(null), l: new Array<number | null>(n).fill(null) };
+  const sideOf = (ls: LegScale): Side => (ls.joints[0].startsWith('r_') ? 'r' : 'l');
+  const byBone = new Map(legScale.map((ls) => [ls.bone, ls]));
+  for (let i = 0; i < n; i++) {
+    const f = freeOf(i);
+    if (f === null) continue;
+    const own = legScale.filter((ls) => sideOf(ls) === f);
+    if (!own.some((ls) => ls.scale[i] !== ls.picture[i])) continue;
+    const keyed = (b: string): number | null => byBone.get(b)?.scale[i] ?? null;
+    const picture = (b: string): number | null => {
+      const ls = byBone.get(b);
+      if (ls === undefined) return null;
+      return sideOf(ls) === f ? ls.picture[i]! : ls.scale[i]!;
+    };
+    out[f][i] = tipY(i, f, keyed) - tipY(i, f, picture);
+  }
+  return out;
+}
+
+/** The frames of `frames` with a shift on `side`, as a `FreeAnkleShift` in that side's rig leg `leg` (world units); null when none has one. */
+export function shiftOver(side: Side, frames: readonly number[], shift: Record<Side, ReadonlyArray<number | null>>, leg: number): FreeAnkleShift | null {
+  const hit = frames.filter((i) => shift[side][i] !== null && shift[side][i] !== undefined);
+  if (hit.length === 0) return null;
+  const vs = hit.map((i) => shift[side][i]!);
+  const up = Math.max(0, ...vs);
+  const down = Math.max(0, ...vs.map((v) => -v));
+  const of = (u: number): AnkleShift => ({ units: u, legLengths: u / leg });
+  return { side, frames: runsOf(hit), count: hit.length, above: vs.some((v) => v > 0) ? of(up) : null, below: vs.some((v) => v < 0) ? of(down) : null };
+}
+
+/** Consecutive runs of a sorted list of frames. */
+function runsOf(xs: readonly number[]): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (const x of xs) {
+    const last = out[out.length - 1];
+    if (last !== undefined && last[1] === x - 1) last[1] = x;
+    else out.push([x, x]);
+  }
+  return out;
 }
 
 function runs(flags: readonly boolean[]): Array<[number, number]> {
@@ -1129,6 +1220,8 @@ export interface StanceRun {
   k: { min: number; max: number } | null;
   /** #87: a run read in `state`, shorter than `STANCE_MIN_SECONDS` between two runs of the other state, which took their state; its frames are in their run too, and `k` is null. */
   absorbed?: true;
+  /** rig-c/pose#237, on a `lifted` or `below` run under `--leg-scale`: the frames whose free ankle the clamps moved off the pose's height, and by how much. Absent when the pose's height was kept on every frame. */
+  moved?: FreeAnkleShift;
 }
 
 /** A run of planted-both frames whose stretch needed a factor past the bounds (or could not reach: `needed` null). */

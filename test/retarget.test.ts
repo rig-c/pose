@@ -378,6 +378,8 @@ function retarget(c: Case, extra: string[] = [], cliPath = CLI): Ran {
 }
 const fails = (r: Ran): string[] => r.stderr.split('\n').filter((l) => l.startsWith('FAIL  '));
 const linesOf = (r: Ran, tag: string): string[] => r.stdout.split('\n').map((l) => l.trim()).filter((l) => l.startsWith(`${tag} `));
+/** The STANCE lines past the #237 `unit` line, which every --stance run prints first. */
+const stanceRuns = (r: Ran): string[] => linesOf(r, 'STANCE').filter((l) => !l.startsWith('STANCE unit: '));
 
 /**
  * The report's documented top level (#83): the README's `--report` paragraph, its names outside its
@@ -3463,7 +3465,7 @@ describe('#47: --leg-scale and --plant-feet', () => {
         worst = Math.max(worst, Math.hypot(after.ankle.l[i]![0] - before.ankle.l[i]![0], after.ankle.l[i]![1] - before.ankle.l[i]![1]));
         above = Math.min(above, after.ankle.l[i]![1] - after.ankle.r[i]![1]);
       }
-      return { status: r.status, stance: linesOf(r, 'STANCE'), worst, above };
+      return { status: r.status, stance: stanceRuns(r), worst, above };
     }
 
     test('a lift of 0.15 leg lengths stays a lift: the foot keeps the pose\'s height, and STANCE lists it', () => {
@@ -3471,7 +3473,9 @@ describe('#47: --leg-scale and --plant-feet', () => {
       expect(k.status).toBe(0);
       expect(k.stance).toHaveLength(3);
       expect(k.stance[0]).toStartWith('STANCE planted both: free foot l frames 0–7 (t=0.000–0.292s)');
-      expect(k.stance[1]).toStartWith('STANCE lifted: free foot l frames 8–15 (t=0.333–0.625s) — its ankle up to 0.1500 leg lengths above the supporting one in the picture, over the tolerance 0.07 leg lengths (planted again under 0.8 of it, 0.0560); the pose\'s height kept');
+      // #237: the shin is clamped at 0.8 on every lifted frame, so the rig's free ankle hangs below the
+      // pose's there; before #237 this line said "the pose's height kept", which was not true of any frame.
+      expect(k.stance[1]).toBe('STANCE lifted: free foot l frames 8–15 (t=0.333–0.625s) — its ankle up to 0.1500 leg lengths above the supporting one in the picture, over the tolerance 0.07 leg lengths (r 10.5 / l 10.5 px) (planted again under 0.8 of it, 0.0560); the pose\'s height not kept on any of its 8 frame(s); on 8 (frames 8–15) --leg-scale\'s clamps moved the free ankle off it, up to 0.0541 leg lengths (8.1 px of FEET\'s) below the pose\'s (leg lengths: the rig\'s l leg at setup, thigh origin → ankle, 150.0 units)');
       expect(k.stance[2]).toStartWith('STANCE planted both: free foot l frames 16–23');
       expect(k.worst).toBeLessThan(1e-3);
       // The lift shows on the rig (the shin scaled 0.8 at its clamp: 0.2 of its 70 units, along a near-vertical shin).
@@ -3490,9 +3494,9 @@ describe('#47: --leg-scale and --plant-feet', () => {
       const r = retarget(c, [...FLAGS, '--stance', '0.07', '--report', report]);
       expect(r.stderr).toBe('');
       expect(r.status).toBe(0);
-      const st = linesOf(r, 'STANCE');
+      const st = stanceRuns(r);
       expect(st).toHaveLength(1);
-      expect(st[0]).toStartWith('STANCE planted both: free foot l frames 0–23 (t=0.000–0.958s) — its ankle up to 0.0300 leg lengths above the supporting one in the picture, within the tolerance 0.07 leg lengths; its leg stretched by k ');
+      expect(st[0]).toStartWith('STANCE planted both: free foot l frames 0–23 (t=0.000–0.958s) — its ankle up to 0.0300 leg lengths above the supporting one in the picture, within the tolerance 0.07 leg lengths (r 10.5 / l 10.5 px); its leg stretched by k ');
       const kmax = Number(/\(largest ([0-9.]+)\)/.exec(st[0]!)![1]);
       expect(kmax).toBeGreaterThan(1);
       expect(kmax).toBeLessThan(1.08);
@@ -3517,7 +3521,7 @@ describe('#47: --leg-scale and --plant-feet', () => {
       const r = retarget(c, [...FLAGS, '--stance', '0.2']);
       expect(r.stderr).toBe('');
       expect(r.status).toBe(0);
-      const st = linesOf(r, 'STANCE');
+      const st = stanceRuns(r);
       expect(st[0]).toContain('(largest 1.0800)');
       const over = st.filter((l) => l.startsWith('STANCE past the bounds: free foot l frames 8–15'));
       expect(over).toHaveLength(1);
@@ -3578,7 +3582,7 @@ describe('#47: --leg-scale and --plant-feet', () => {
       const c = setup({ pose: gait() });
       const plain = retarget(c, FLAGS);
       expect(plain.status).toBe(0);
-      expect(linesOf(plain, 'STANCE')[0]).toStartWith('STANCE planted both: free foot l frames 0–23');
+      expect(stanceRuns(plain)[0]).toStartWith('STANCE planted both: free foot l frames 0–23');
       const dense = posedLegs(c.build);
       const before = keysIn(c.out);
       expect(floorGap(dense)).toBeLessThan(PLANT_TOL);
@@ -5195,6 +5199,7 @@ describe('#133: a supporting leg that asks under --leg-scale\'s floor is scaled 
         high: [],
         scale: [0.8],
         asked: [0.6],
+        picture: [0.6],
       },
       {
         chain: 'leg_r',
@@ -5207,6 +5212,7 @@ describe('#133: a supporting leg that asks under --leg-scale\'s floor is scaled 
         high: [],
         scale: [0.8],
         asked: [0.6],
+        picture: [0.6],
       },
     ];
     const scales = new Map<string, number[]>([
@@ -8966,6 +8972,213 @@ describe('continuous figure scale across inter-span airborne gaps (#231)', () =>
       const camMut = JSON.parse(readFileSync(camMutPath, 'utf8')) as { frames: Array<{ s: number }> };
       const mutLandingStep = Math.abs(camMut.frames[land]!.s - camMut.frames[land - 1]!.s) / camMut.frames[land - 1]!.s;
       expect(mutLandingStep).toBeGreaterThan(0.04);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
+// --- #237: --stance and --leg-scale name their unit; a clamp's effect on a free ankle is printed ---
+
+describe('#237: --stance and --leg-scale name their unit, and LEG-SCALE and STANCE say what the clamp did to the free ankle', () => {
+  const THIGH = -95;
+  const SHIN = -97;
+  const N = 24;
+  const DT = 1 / 24;
+  /** The left leg's picture length, of straight: 1, folding to 0.69 on frame 12 (collinear), so its ankle rises 0.31 of the leg; no frame sits on the 0.85 floor (frame 8: 0.845). */
+  const fL = (i: number): number => (i < 6 || i > 18 ? 1 : 1 - 0.31 * Math.sin(((i - 6) / 12) * Math.PI));
+  const STILL: Motion = { ...BASE, n: N, dt: DT, trunk: () => 90, rt: () => THIGH, rs: () => SHIN, lt: () => THIGH, ls: () => SHIN, hip: () => [0, 0] };
+  /** The rig leg's vertical extent along the pose's angles, units (80 and 70 at −95° and −97°); the left rig leg at setup is straight, 150 units. */
+  const WY = Math.abs(80 * Math.sin(THIGH * RAD) + 70 * Math.sin(SHIN * RAD));
+  const RIG_LEG = 150;
+  function liftPose(): Record<string, unknown> {
+    return poseDoc(STILL, (i, j) => {
+      const hip = j.l_hip!.at as Pt;
+      const knee = add(hip, dir(THIGH, 80 * fL(i)));
+      j.l_knee = { state: 'observed', at: knee, score: 0.9 };
+      j.l_ankle = { state: 'observed', at: add(knee, dir(SHIN, 70 * fL(i))), score: 0.9 };
+    });
+  }
+  type Shift = { units: number; legLengths: number } | null;
+  type Free = { side: string; frames: Array<[number, number]>; count: number; above: Shift; below: Shift };
+  type Rep = {
+    legScale: Array<{ bone: string; straight: number; limits: [number, number]; ratio: { min: number; median: number; max: number }; free?: Free }>;
+    feet: { legLength: { r: number; l: number }; straight: { r: number; l: number }; rigLeg: { r: number; l: number }; segments: Array<{ bone: string; straight: number; ratio: { min: number; median: number; max: number } }> };
+    stance: { tolerance: number; runs: Array<{ state: string; side: string; frames: [number, number]; absorbed?: true; moved?: Free }> };
+  };
+  const run = (extra: string[], cliPath = CLI) => {
+    const c = setup({ pose: liftPose() });
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, [...extra, '--report', report], cliPath);
+    return { c, r, rep: r.status === 0 ? (JSON.parse(readFileSync(report, 'utf8')) as Rep) : null };
+  };
+  const FLAGS = ['--leg-scale', '0.85,1.05', '--plant-feet', '--stance', '0.07'];
+  /** numpy's linear percentile, independent of src/. */
+  const pct = (xs: number[], q: number): number => {
+    const s = [...xs].sort((a, b) => a - b);
+    const pos = q * (s.length - 1);
+    const lo = Math.floor(pos);
+    const hi = Math.min(s.length - 1, lo + 1);
+    return s[lo]! + (s[hi]! - s[lo]!) * (pos - lo);
+  };
+
+  test('LEG-SCALE names its unit in px and in FEET\'s leg length, and prints what the clamps did to the free ankle, derived from the report\'s own fields', () => {
+    const { r, rep } = run(FLAGS);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    const ls = linesOf(r, 'LEG-SCALE');
+    const l0 = rep!.legScale.find((x) => x.bone === 'leg_l0')!;
+    const line = ls.find((x) => x.includes('bone "leg_l0"'))!;
+    // The straight length against FEET's leg length, and the limits in px — each from the report's fields.
+    expect(line).toContain(`straight length ${l0.straight.toFixed(1)}px (larger 95th percentile of ${N} frames, both legs) = ${(l0.straight / rep!.feet.legLength.l).toFixed(3)} of FEET's leg length (median hip → ankle, l ${rep!.feet.legLength.l.toFixed(1)}px)`);
+    expect(line).toContain(`scalex keyed in [0.85, 1.05] of the straight length (${(0.85 * l0.straight).toFixed(1)}–${(1.05 * l0.straight).toFixed(1)}px): `);
+    // The free ankle: clamped at 0.85 where the picture folds it to fL < 0.85 (frames 8–16), it hangs (0.85 − fL) of the
+    // rig leg's vertical extent below the picture's. Recomputed here from the fixture, not from src/.
+    const free = l0.free!;
+    expect(free.side).toBe('l');
+    expect(free.frames).toEqual([[8, 16]]);
+    expect(free.count).toBe(9);
+    expect(free.above).toBeNull();
+    const want = ((0.85 - fL(12)) * WY) / RIG_LEG;
+    expect(Math.abs(free.below!.legLengths - want)).toBeLessThan(1e-4);
+    expect(rep!.feet.rigLeg.l).toBeCloseTo(RIG_LEG, 3);
+    expect(free.below!.legLengths).toBeCloseTo(free.below!.units / rep!.feet.rigLeg.l, 12);
+    expect(line).toContain(`; its leg free (the other foot supporting) on 9 of its 9 clamped frame(s) (frames 8–16): the clamps on that leg left the free ankle up to ${free.below!.legLengths.toFixed(4)} leg lengths (${(free.below!.legLengths * rep!.feet.legLength.l).toFixed(1)} px of FEET's) below the picture's (the leg at picture length ÷ straight) (leg lengths: the rig's l leg at setup, thigh origin → ankle, ${rep!.feet.rigLeg.l.toFixed(1)} units)`);
+    // The supporting leg is never clamped here: no free clause.
+    expect(ls.find((x) => x.includes('bone "leg_r0"'))).not.toContain('free');
+  }, SLOW);
+
+  test('STANCE prints its unit in px and as a share of the straight leg, from the report\'s fields; "height kept" is absent on the frames the clamp moved', () => {
+    const { r, rep } = run(FLAGS);
+    expect(r.status).toBe(0);
+    const st = linesOf(r, 'STANCE');
+    const { legLength, straight } = rep!.feet;
+    const tol = rep!.stance.tolerance;
+    expect(st[0]).toBe(`STANCE unit: --stance ${tol} is in FEET's leg length (each side's median picture length hip → ankle, r ${legLength.r.toFixed(1)} / l ${legLength.l.toFixed(1)} px), not a straight length (a 95th percentile, as LEG-SCALE reads a segment's: the straight leg hip → ankle r ${straight.r.toFixed(1)} / l ${straight.l.toFixed(1)} px): ${tol} leg lengths = r ${(tol * legLength.r).toFixed(1)} / l ${(tol * legLength.l).toFixed(1)} px = r ${((tol * legLength.r) / straight.r).toFixed(4)} / l ${((tol * legLength.l) / straight.l).toFixed(4)} of the straight leg`);
+    const lifted = rep!.stance.runs.find((x) => x.state === 'lifted' && x.absorbed !== true)!;
+    expect(lifted.frames).toEqual([7, 17]);
+    expect(lifted.moved!.frames).toEqual([[8, 16]]);
+    expect(lifted.moved!.count).toBe(9);
+    const line = st.find((x) => x.startsWith('STANCE lifted:'))!;
+    expect(line).toContain(`the tolerance ${tol} leg lengths (r ${(tol * legLength.r).toFixed(1)} / l ${(tol * legLength.l).toFixed(1)} px)`);
+    expect(line).not.toMatch(/; the pose's height kept$/);
+    expect(line).toContain(`the pose's height kept on 2 of its 11 frame(s); on 9 (frames 8–16) --leg-scale's clamps moved the free ankle off it, up to ${lifted.moved!.below!.legLengths.toFixed(4)} leg lengths`);
+  }, SLOW);
+
+  test('control: with the floor under the fold (0.5) nothing is clamped, so the lifted run keeps the pose\'s height and says so', () => {
+    const { r, rep } = run(['--leg-scale', '0.5,1.05', '--plant-feet', '--stance', '0.07']);
+    expect(r.status).toBe(0);
+    const lifted = rep!.stance.runs.find((x) => x.state === 'lifted' && x.absorbed !== true)!;
+    expect(lifted.moved).toBeUndefined();
+    expect(linesOf(r, 'STANCE').find((x) => x.startsWith('STANCE lifted:'))).toMatch(/; the pose's height kept$/);
+    for (const l of rep!.legScale) expect(l.free).toBeUndefined();
+  }, SLOW);
+
+  test('the FEET segment lines print without --leg-scale, and their min · median · max are recomputed from the sequence; with --leg-scale they are LEG-SCALE\'s', () => {
+    const { c, r, rep } = run([]);
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'LEG-SCALE')).toEqual([]);
+    const doc = JSON.parse(readFileSync(c.pose, 'utf8')) as { frames: Array<{ people: Array<{ joints: Record<string, { at: Pt }> }> }> };
+    const at = (i: number, j: string) => doc.frames[i]!.people[0]!.joints[j]!.at;
+    const len = (s: 'r' | 'l', a: string, b: string) => doc.frames.map((_, i) => Math.hypot(at(i, `${s}_${b}`)[0] - at(i, `${s}_${a}`)[0], at(i, `${s}_${b}`)[1] - at(i, `${s}_${a}`)[1]));
+    const feet = linesOf(r, 'FEET');
+    for (const [bone, a, b] of [['leg_r0', 'hip', 'knee'], ['leg_r1', 'knee', 'ankle'], ['leg_l0', 'hip', 'knee'], ['leg_l1', 'knee', 'ankle']] as const) {
+      const side = bone.includes('_r') ? 'r' : 'l';
+      const straight = Math.max(pct(len('r', a, b), 0.95), pct(len('l', a, b), 0.95));
+      const ratio = len(side, a, b).map((x) => x / straight).sort((p, q) => p - q);
+      const want = { min: ratio[0]!, median: (ratio[N / 2 - 1]! + ratio[N / 2]!) / 2, max: ratio[N - 1]! };
+      const seg = rep!.feet.segments.find((x) => x.bone === bone)!;
+      expect(Math.abs(seg.straight - straight)).toBeLessThan(1e-9);
+      for (const k of ['min', 'median', 'max'] as const) expect(Math.abs(seg.ratio[k] - want[k])).toBeLessThan(1e-9);
+      const line = feet.find((x) => x.includes(`bone "${bone}"`))!;
+      expect(line).toContain(`min ${want.min.toFixed(4)} · median ${want.median.toFixed(4)} · max ${want.max.toFixed(4)}`);
+    }
+    expect(rep!.feet.segments.find((x) => x.bone === 'leg_l0')!.ratio.min).toBeCloseTo(fL(12), 6);
+    // With --leg-scale the same reading is LEG-SCALE's straight and ratio.
+    const withFlag = run(FLAGS).rep!;
+    for (const l of withFlag.legScale) {
+      const seg = withFlag.feet.segments.find((x) => x.bone === l.bone)!;
+      expect(seg.straight).toBe(l.straight);
+      expect(seg.ratio).toEqual(l.ratio);
+    }
+  }, SLOW);
+
+  test('the readings move no key: motion.json is byte-identical with the reading removed (mutant), and on the public example to its bytes before #237', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm237-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const from = 'if (legScaleOn && feet !== null && legPath !== null && rigLeg !== null';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'if (false && legScaleOn && feet !== null && legPath !== null && rigLeg !== null'));
+      const a = run(FLAGS);
+      const b = run(FLAGS, join(d, 'cli.ts'));
+      expect(b.r.status).toBe(0);
+      expect(b.rep!.legScale.some((l) => l.free !== undefined)).toBe(false);
+      expect(a.rep!.legScale.some((l) => l.free !== undefined)).toBe(true);
+      expect(readFileSync(b.c.out)).toEqual(readFileSync(a.c.out));
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+    // The public example, measured at v0.31.1 (47d0575) before #237 with the same flags.
+    const BEFORE: Array<[string[], string]> = [
+      [[], 'bd1ca2506217c21769169b884a306ad2defabaadecb93abd0572969291aa2e59'],
+      [['--leg-scale', '0.8,1.05'], '8c265adfa4afc2608d4cc5c9da85ac2ddc4c3624775e931cb95d69dc693460df'],
+      [['--leg-scale', '0.8,1.05', '--plant-feet', '--stance', '0.07'], '2f39a35e90cb2e543125a8f2db349bb79babec8d322c3e3fd49417191457dabd'],
+    ];
+    const ex = join(ROOT, 'examples', 'wave');
+    for (const [flags, sha] of BEFORE) {
+      const out = join(tempDir(), 'wave.motion.json');
+      const r = cli(['retarget', '--rig', join(ex, 'rig'), '--map', join(ex, 'map.json'), '--pose', join(ex, 'pose.json'), '--out', out, ...flags]);
+      expect(r.status).toBe(0);
+      expect(createHash('sha256').update(readFileSync(out)).digest('hex')).toBe(sha);
+    }
+  }, SLOW);
+
+  test('mutant: a clamp floor moved by +0.05 moves the printed shortfall by 0.05 of the rig leg\'s vertical extent', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm237f-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'legs.ts');
+      const from = 'const scale = ratio.map((r) => Math.min(Math.max(r, limits[0]), limits[1]));';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'const scale = ratio.map((r) => Math.min(Math.max(r, limits[0] + 0.05), limits[1]));'));
+      const ok = run(FLAGS).rep!.legScale.find((x) => x.bone === 'leg_l0')!.free!.below!.legLengths;
+      const m = run(FLAGS, join(d, 'cli.ts'));
+      expect(m.r.status).toBe(0);
+      const moved = m.rep!.legScale.find((x) => x.bone === 'leg_l0')!.free!.below!.legLengths;
+      console.log(`  mutant "clamp floor +0.05": free ankle shortfall ${ok.toFixed(4)} → ${moved.toFixed(4)} leg lengths`);
+      expect(Math.abs(moved - ok - (0.05 * WY) / RIG_LEG)).toBeLessThan(1e-4);
+      expect(linesOf(m.r, 'LEG-SCALE').find((x) => x.includes('bone "leg_l0"'))).toContain(`up to ${moved.toFixed(4)} leg lengths`);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+
+  test('mutant: printing "height kept" without reading the clamp says it on the lifted run the clamp moved, and the STANCE test is red', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm237k-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'run.ts');
+      const from = `if (r.moved === undefined) return "the pose's height kept";`;
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, `return "the pose's height kept";`));
+      const m = run(FLAGS, join(d, 'cli.ts'));
+      expect(m.r.status).toBe(0);
+      expect(m.rep!.stance.runs.find((x) => x.state === 'lifted' && x.absorbed !== true)!.moved!.count).toBe(9);
+      expect(linesOf(m.r, 'STANCE').find((x) => x.startsWith('STANCE lifted:'))).toMatch(/; the pose's height kept$/);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }

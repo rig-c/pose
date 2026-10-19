@@ -92,9 +92,14 @@ retarget
   --leg-scale <min,max>|off
                         each leg segment (two of one side's hip, knee, ankle) is scaled along its own x axis
                         (a scalex key) by its picture length over its straight length — the 95th percentile of
-                        its picture length — clamped to [min, max], listed as LEG-SCALE with the frames clamped;
-                        a bone under a scaled one is keyed through its parent's scale (default: off; 0.8,1.05
-                        is the card's range, rig-c/pose#47)
+                        its picture length, in px — clamped to [min, max], listed as LEG-SCALE with the frames
+                        clamped, the limits in px, and on a free leg how far the clamps moved its ankle from the
+                        picture's; min and max are shares of that segment's own straight length, not of FEET's
+                        leg length (the median hip → ankle --stance is in). FEET prints every segment's picture
+                        length ÷ straight (min · median · max) with or without this flag: read the minimum
+                        before choosing min. A bone under a scaled one is keyed through its parent's scale
+                        (default: off; 0.8,1.05 is the card's range, rig-c/pose#47, read off a dance whose leg
+                        picture length ran 0.86–1.18 of its median — not a walk's)
   --plant-feet          the hip is placed so the supporting foot stays where it took support: the lower ankle
                         in the picture, changing after the other has been 0.02 leg lengths lower for 0.1 s,
                         blended over 3 frames; a jump (both ankles and mid_hip 0.05 leg lengths above their
@@ -111,12 +116,18 @@ retarget
                         drift from the first frame to the last is spread back over the frames, closing the loop
   --floor <y>           with --plant-feet: the floor's world y (rig units, y up) instead of the median
   --stance <leg lengths> with --plant-feet: on a frame outside the jumps, a free ankle within this many
-                        leg lengths (FEET's) of the supporting one in the picture, above or below, is planted
+                        leg lengths of the supporting one in the picture, above or below, is planted. The unit
+                        is FEET's leg length — each side's median picture length hip → ankle, in px on the FEET
+                        line — not LEG-SCALE's straight length (a 95th percentile); STANCE prints the tolerance
+                        in px and as a share of the straight leg. Keep it below the lifted-foot threshold the
+                        material is graded at: a lifted foot under it is planted
                         too — its leg's scalex keys stretched by k = (root y − floor y) / (root y − ankle y) until
                         the foot reaches the floor, raised or lowered, k within [min(0.92, the leg's own fold on
                         the frame), 1.08] (#95; past it, reported, not forced); above the tolerance the foot is
                         lifted and keeps the pose's height; below it, it is reported (past the tolerance below,
-                        #114) and not planted (STANCE lines; default: off; 0.07 is the card's, rig-c/pose#60)
+                        #114) and not planted; "the pose's height kept" is printed only on frames no
+                        --leg-scale clamp moved the free ankle (STANCE lines; default: off; 0.07 is the card's,
+                        rig-c/pose#60, measured on a dance's flat-footed span — not a walk's)
   --raised-by-head      while a set whose arm is drawn raised shows (its "drawn" upper arm within 30° of straight
                         up), that arm's wrist goes where the reference's is against the head, in eye distances:
                         rig head centre + (reference wrist − reference head centre) × rig eye distance ÷ the
