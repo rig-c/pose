@@ -80,25 +80,27 @@ describe('the default output on the public example (#238)', () => {
   // bands`, does not fire there) and no character: 44 and 260; 44 and 366, measured on #240's head.
   // #241 adds the NOD line (the wave's head chain carries the eye line and keys no nod; the line says why, 161
   // characters): 45 and 260; 45 and 366, measured on #241's head.
-  test('the wave as shipped: at most 45 lines, none longer than 260 characters', () => {
+  // #216 adds the SEAM line (the wave declares no neighbour pair; the line says so and why, 97 characters):
+  // 46 and 260; 46 and 366, measured on #216's head.
+  test('the wave as shipped: at most 46 lines, none longer than 260 characters', () => {
     const d = tempDir();
     try {
       const r = run(d);
       expect(r.status).toBe(0);
-      expect(linesOf(r.stdout).length).toBeLessThanOrEqual(45);
+      expect(linesOf(r.stdout).length).toBeLessThanOrEqual(46);
       expect(longest(r.stdout)).toBeLessThanOrEqual(260);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
   }, SLOW);
 
-  test('the wave re-cleaned with the hold on: at most 45 lines, the CLEAN line counts the holds and is at most 366 characters', () => {
+  test('the wave re-cleaned with the hold on: at most 46 lines, the CLEAN line counts the holds and is at most 366 characters', () => {
     const d = tempDir();
     try {
       const pose = heldPose(d);
       const r = run(d, { pose });
       expect(r.status).toBe(0);
-      expect(linesOf(r.stdout).length).toBeLessThanOrEqual(45);
+      expect(linesOf(r.stdout).length).toBeLessThanOrEqual(46);
       expect(longest(r.stdout)).toBeLessThanOrEqual(366);
       const record = readPoseSequence(readFileSync(pose, 'utf8'), pose).cleaned!;
       expect(record.holds!.length).toBeGreaterThan(0);

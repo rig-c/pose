@@ -5,7 +5,7 @@
     "": {
       "name": "@rig-c/pose",
       "dependencies": {
-        "rig-c": "^2.47.1",
+        "rig-c": "^2.60.0",
       },
       "devDependencies": {
         "@esotericsoftware/spine-core": "4.3.13",
@@ -185,7 +185,7 @@
 
     "qified": ["qified@0.10.1", "", { "dependencies": { "hookified": "^2.1.1" } }, "sha512-+Owyggi9IxT1ePKGafcI87ubSmxol6smwJ+RAHDQlx9+9cPwFWDiKFFCPuWhr9ignlGpZ9vDQLw67N4dcTVFEA=="],
 
-    "rig-c": ["rig-c@2.58.1", "", { "bin": { "rigc": "bin/rigc.cjs" } }, "sha512-qcISOC2Ht/clv5v3JAXseLvjnhSkCJArc4v9Qk0O0bYJ6xjP99wdgxrAlpk6m4ySYkBNyQDpsCLPtiZDUmyZPw=="],
+    "rig-c": ["rig-c@2.61.0", "", { "bin": { "rigc": "bin/rigc.cjs" } }, "sha512-+pG8Zy2acbA0Aaj+qaXSFeGx/VDDNOkURONxTtUVGrPlrPKkJHVmzNUadhWbesDy1hUE+AmB68A7SnG97ps8Bw=="],
 
     "semver": ["semver@7.8.5", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA=="],
 

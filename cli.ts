@@ -180,7 +180,12 @@ retarget
   --profile spine|spine-html  rigc's gate profile (default: spine, rigc's own default)
   --build <dir>         keep the gated build (skeleton.json, .atlas, .model.json) here
   --render <dir>        keep rigc's render of the animation (frames, contact.png, folds.json) here
-  --report <file>       write the run's measurements (holds, short, endOn, flips, bends, landings, folds,
+  --parts <path>        @rig-c/parts' parts.json, or the directory holding it (its build's --out, beside rig/):
+                        the neighbour pairs the seam reading reads — each limb's consecutive segments. Each
+                        pair is read by rigc render --seam over the new animation and every span of a gap or
+                        a ghost thicker than one cell prints a SEAM line and a report seams row; a reading,
+                        never a gate. Without it no pair is declared (a rig spec carries none): seams: []
+  --report <file>       write the run's measurements (holds, short, endOn, flips, bends, landings, folds, seams,
                         switches, uncovered, turns, range, artRange, raised, byHip,
                         idleDropped, idleKeptOut, merged, reduce) as JSON (default: <out>.report.json beside
                         the motion, a trailing .json of --out replaced); its wrote line names the mtime of a
@@ -315,7 +320,7 @@ function legScaleOf(f: Map<string, string>): [number, number] | 'off' {
 const RETARGET_ALIASES = { sequence: 'pose', animation: 'name' } as const;
 
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report', 'camera', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head', 'verbose', 'summary'], RETARGET_ALIASES);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'parts', 'report', 'camera', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head', 'verbose', 'summary'], RETARGET_ALIASES);
   if (f.has('verbose') && f.has('summary')) throw new Usage('--verbose and --summary are both given; --verbose prints every line in full and --summary one line per measure, so give one');
   const bends = f.get('bends') ?? 'refuse';
   if (bends !== 'refuse' && bends !== 'clamp') throw new Usage(`--bends is "${bends}"; it must be refuse or clamp`);
@@ -352,6 +357,7 @@ function retargetArgs(argv: string[]): RetargetArgs {
     profile,
     build: f.get('build'),
     render: f.get('render'),
+    parts: f.get('parts'),
     report: f.get('report'),
     camera: f.get('camera'),
     idle: f.get('idle'),

@@ -14,7 +14,8 @@ import { convertCoco17, personTrack, readPoseSequence, TRAVEL_IN_PLACE, type Cam
 import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './problems.ts';
 import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, readIdle, targetOf, trackLabel, type IdleReading, type RigcTrack, type Target } from './idle.ts';
 import { bendGroupLine, bendGroups, bendLine, endOnLine, flipLine, holdLine, nodLine, rangeLine, reachCostLine, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions, type ScaleBand, type ScaleFit } from './retarget.ts';
-import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, readBuild, resolveRig, restOf, slotsOf } from './rigc.ts';
+import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, readBuild, resolveRig, restOf, seamRender, slotsOf } from './rigc.ts';
+import { partsPath, projectSeams, readSeamDoc, readSeamPairs, seamLines, type SeamPair } from './seams.ts';
 import { artRangeLine, chainsMoving, raisedLine, RAISED_WITHIN, reachLine, switchLine, uncoveredFolds } from './switch.ts';
 import { jitterLine, landed, type FeetReading, type JitterRow, type Landing, measureFeet, measureJitter, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
 import { legsOf, PLANT_SWITCH, STANCE_BOUNDS } from './legs.ts';
@@ -41,6 +42,8 @@ export interface RetargetArgs extends RetargetOptions {
   build?: string;
   /** Keep rigc's render of the animation (frames, contact sheet, folds.json) here. */
   render?: string;
+  /** @rig-c/parts' `parts.json` (or the directory holding it): the neighbour pairs the seam reading reads (#216). */
+  parts?: string;
   /** Write the run's measurements as JSON here. */
   report?: string;
   /** Write the sequence's per-frame relative figure scale and pan as a sidecar JSON here (#161). */
@@ -112,6 +115,11 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
   if (!(idleName in animations) && (a.idle !== undefined || a.carryIdle === true)) {
     refuse([{ code: 'IDLE_NAME', text: `${a.idle !== undefined ? `--idle "${idleName}"` : '--carry-idle reads the animation "idle", and'} the rig's motion spec ${input.motion === null ? '— there is none, so it has no animations' : `${input.motion} has no animation "${idleName}" (it has ${Object.keys(animations).join(', ') || 'none'})`}; name the rig's idle with --idle` }]);
   }
+  // #216: the neighbour pairs, read before any work so a bad --parts is refused first.
+  const seamDecl = a.parts === undefined ? null : (() => {
+    const path = partsPath(a.parts);
+    return { path, pairs: readSeamPairs(readFileSync(path, 'utf8'), path) };
+  })();
   const fragment = a.merge === undefined ? [] : readFragment(parseJson(readFileSync(a.merge, 'utf8'), a.merge, 'MERGE_JSON'), a.merge);
   const mapSnapshot = readReportInput(a.map), poseSnapshot = readReportInput(a.pose);
   const map = readMap(mapSnapshot.bytes.toString('utf8'), a.map);
@@ -347,6 +355,10 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       for (const u of uncovered) say(`  UNCOVERED mesh "${u.attachment}" (slot "${u.slot}"; chains ${u.chains.length === 0 ? 'none' : u.chains.join(', ')}) folds with no switch covering it on ${u.times.length} frame(s): t=${spans(u.times, 1 / fps)}`);
     }
 
+    // #216: the seam reading over the declared neighbour pairs — a reading, never a gate.
+    const seamRead = readSeams(seamDecl, input.rig, doc.slots.map((s) => s.name), g1.build, a.name, join(scratch, 'seams'), fps);
+    for (const l of seamRead.lines) say(`  SEAM   ${l}`);
+
     // #240: what --reduce allowed each ankle, at the end of the run, from the same figure the LAND check applied.
     for (const d of drift) say(`  REDUCE ${ankleDriftLine(d)}`);
 
@@ -372,6 +384,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         jitter,
         posture,
         folds: f.meshes,
+        seams: seamRead.seams,
+        seamPairs: seamRead.seamPairs,
         switches: r.switches,
         uncovered,
         turns: r.turns,
@@ -411,7 +425,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         idleKeptOut: idle === null ? null : idle.keptOut,
         merged: fragment.map((tr) => ({ track: trackLabel(tr, groups), keys: tr.keys.length })),
         reduce: reduced === null ? null : { tolerance: a.reduce, hipTolerance: a.reduceHip ?? null, rows: reduced.rows, ankleDrift: drift },
-      }, map, { frameTimes: r.times }, f.meshes !== null && doc.slots.length > 0 ? reportRenderDomain(JSON.parse(readFileSync(join(f.frames, '..', 'frames.json'), 'utf8')), a.name) : null, {rig:rigSnapshot.identity,map:mapSnapshot.identity,pose:poseSnapshot.identity});
+      }, map, { frameTimes: r.times }, f.meshes !== null && doc.slots.length > 0 ? reportRenderDomain(JSON.parse(readFileSync(join(f.frames, '..', 'frames.json'), 'utf8')), a.name) : seamRead.frames === null ? null : reportRenderDomain(seamRead.frames, a.name), {rig:rigSnapshot.identity,map:mapSnapshot.identity,pose:poseSnapshot.identity});
     if (a.build !== undefined) {
       // Built again where it will live, not copied: rigc's page paths are relative to the build (#18).
       rmSync(a.build, { recursive: true, force: true });
@@ -1014,6 +1028,53 @@ export function readReportInput(file:string):ReportInputSnapshot {
 }
 export function assertReportInputs(inputs:readonly ReportInputSnapshot[]):void {
   for(const expected of inputs){const current=readReportInput(expected.file);if(current.identity.path!==expected.identity.path||current.identity.sha256!==expected.identity.sha256)throw new Refusal([{code:'REPORT_INPUTS_CHANGED',text:`${expected.identity.path}: consumed input changed before output writes; expected SHA-256 ${expected.identity.sha256}, found ${current.identity.sha256}`}]);}
+}
+
+/**
+ * #216: the seam reading end to end — the declared pairs, each pair whose part
+ * has no slot of its name left unread (rigc would refuse the whole render for
+ * it), one `rigc render --seam` over the rest, and its projection. Whatever it
+ * finds, or fails to read, it says so and refuses nothing.
+ */
+function readSeams(decl: { path: string; pairs: SeamPair[] } | null, rig: string, slotNames: string[], build: string, animation: string, dir: string, fps: number): ReturnType<typeof projectSeams> & { lines: string[]; frames: unknown } {
+  if (decl === null || decl.pairs.length === 0) {
+    let why: string;
+    if (decl !== null) why = `${decl.path} holds no limb segment below another (a part's "limb" record), so it declares no pair`;
+    else {
+      // @rig-c/parts writes rig/ and parts.json side by side under its --out; a rig spec itself carries no pair.
+      const home = dirname(dirname(rig));
+      why = `a rig spec carries none and no --parts was named${existsSync(join(home, 'parts.json')) ? ` (${home} holds parts.json: --parts ${home} reads its limbs)` : ''}`;
+    }
+    return { seams: [], seamPairs: [], frames: null, lines: [`no neighbour pair declared — ${why}; seams: []`] };
+  }
+  const have = new Set(slotNames);
+  const unread = new Map<string, string>();
+  for (const p of decl.pairs) {
+    const missing = [p.a, p.b].filter((n) => !have.has(n));
+    if (missing.length > 0) unread.set(p.pair, `${missing.map((n) => `part "${n}"`).join(' and ')} has no slot of its name in the rig (a part is drawn by the slot of its name)`);
+  }
+  const toRead = decl.pairs.filter((p) => !unread.has(p.pair));
+  let rows: ReturnType<typeof readSeamDoc> = [];
+  let frames: unknown = null;
+  if (toRead.length > 0) {
+    const s = seamRender(build, animation, dir, fps, toRead.map((p) => [p.a, p.b] as const));
+    let why: string | null = null;
+    if (s.seam === null) {
+      const said = s.run.out.split('\n').map((l) => l.trim()).find((l) => l.startsWith('rigc: ') && !l.startsWith('rigc: wrote'));
+      why = `rigc render --seam did not read (exit ${s.run.status})${said === undefined ? '' : `: ${said}`}`;
+    } else {
+      try {
+        rows = readSeamDoc(s.seam.text, s.seam.path);
+        frames = s.frames;
+      } catch (e) {
+        if (!(e instanceof Refusal)) throw e;
+        why = e.message;
+      }
+    }
+    if (why !== null) for (const p of toRead) unread.set(p.pair, why);
+  }
+  const projected = projectSeams(decl.pairs, rows, unread);
+  return { ...projected, frames, lines: seamLines(projected, fps) };
 }
 
 /** rig-c/pose#239: the report's path when --report is not given — `<out>.report.json`, beside the motion (a trailing `.json` of --out is replaced). */

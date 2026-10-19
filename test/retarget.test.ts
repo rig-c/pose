@@ -21,7 +21,9 @@ import { clean } from '../src/clean.ts';
 import { loopTrack, type RigcTrack } from '../src/idle.ts';
 import { readPoseSequence, writePoseSequence } from '../src/pose.ts';
 import { scaleSupport, type Feet, type LegScale } from '../src/legs.ts';
-import type { Chain } from '../src/map.ts';
+import { readMap, type Chain } from '../src/map.ts';
+import { overFloor, projectSeams, readSeamPairs } from '../src/seams.ts';
+import { writeReport, type RenderDomain, type ReportInputs } from '../src/report.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const CLI = join(ROOT, 'cli.ts');
@@ -1964,6 +1966,11 @@ describe('examples/wave runs as the README says', () => {
     expect(linesOf(r, 'LAND')).toHaveLength(11);
     expect(linesOf(r, 'FOLD')).toEqual(['FOLD   the rig has no slots, so it draws nothing to fold; not measured']);
     expect(existsSync(out)).toBe(true);
+    // #216 bar 1 on the public example: no pair declared, said, and the report's seams present and empty.
+    expect(linesOf(r, 'SEAM')).toEqual(['SEAM   no neighbour pair declared — a rig spec carries none and no --parts was named; seams: []']);
+    const waveReport = JSON.parse(readFileSync(out.replace(/\.json$/, '.report.json'), 'utf8')) as Record<string, unknown>;
+    expect(waveReport.seams).toEqual([]);
+    expect(waveReport.seamPairs).toEqual([]);
     // #236's readings: a JITTER line per keyed bone; the wave's trunk does not reach, so no REACH line.
     expect(linesOf(r, 'JITTER')).toHaveLength(10);
     expect(linesOf(r, 'REACH')).toEqual([]);
@@ -9742,5 +9749,189 @@ describe('#241: the head nod — a NOD line, a map switch, and a loop\'s nod rea
       expect(fails(r)).toEqual([`FAIL  ${nc.want}`]);
       expect(existsSync(c.out)).toBe(false);
     }, SLOW);
+  });
+});
+
+// --- the seam reading (#216) ----------------------------------------------------
+
+describe('#216: the seam reading over the declared neighbour pairs, a reading and never a gate', () => {
+  /**
+   * A cut arm: `upperarm_r` on the upper arm drawn 90 units long so it runs
+   * 20 units past the elbow over `forearm_r` — the overlap @rig-c/parts paints
+   * at a cut joint — and `parts.json` beside `rig/`, as @rig-c/parts writes it,
+   * declaring the two as one limb's consecutive segments. BASE bends the right
+   * elbow from 5° to 50°, so the overlap swings clear of its partner.
+   */
+  const CUT: RigOpts = {
+    extraSlots: [
+      { name: 'upperarm_r', bone: 'sleeve_r0', attachment: 'long' },
+      { name: 'forearm_r', bone: 'sleeve_r1', attachment: 'seg' },
+    ],
+    extra: { upperarm_r: { long: { image: 'long.png', x: 45, y: 0, rotation: 90 } }, forearm_r: { seg: { image: 'seg.png', x: 30, y: 0, rotation: 90 } } },
+  };
+  const limbParts = (parts: Array<Record<string, unknown>>) => ({ rig_size: [400, 600], parts });
+  const ARM = [
+    { name: 'upperarm_r', limb: { name: 'arm_r', segment: 0, of: 'handwear_r', bone: 'sleeve_r0' } },
+    { name: 'forearm_r', limb: { name: 'arm_r', segment: 1, of: 'handwear_r', bone: 'sleeve_r1', joint: 'elbow' } },
+    { name: 'torso' },
+  ];
+  const cutCase = (parts: unknown = limbParts(ARM)): Case => {
+    const c = setup({ rig: CUT });
+    const long = new Plate(20, 90);
+    long.rect(0, 0, 20, 90, [80, 80, 200, 255]);
+    long.writePng(join(c.rig, 'images', 'long.png'));
+    if (parts !== null) writeFileSync(join(c.dir, 'parts.json'), JSON.stringify(parts, null, 2));
+    return c;
+  };
+  type SeamRow = { pair: string; kind: string; frames: [number, number]; times: [number, number]; maxPx: number; domain: string };
+  type PairRow = { pair: string; declared: string[]; status: string; opens: number[]; maxPx: number; underFloor: number[]; reason?: string };
+  const reportOf = (c: Case): Record<string, unknown> => JSON.parse(readFileSync(c.out.replace(/\.json$/, '.report.json'), 'utf8')) as Record<string, unknown>;
+
+  test('bar 1: --parts on a cut rig — seams present, every entry a span with frames and times, counted; held to rigc\'s own seam.json by the floor written again here', () => {
+    const c = cutCase();
+    const r = retarget(c, ['--parts', c.dir]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    const rep = reportOf(c);
+    const seams = rep.seams as SeamRow[];
+    const pairs = rep.seamPairs as PairRow[];
+    expect(pairs.map((p) => [p.pair, p.status, p.declared])).toEqual([['upperarm_r|forearm_r', 'read', ['config.limbs.arm_r segment 1, joint "elbow"']]]);
+    expect(seams.length).toBeGreaterThan(0);
+    for (const s of seams) {
+      expect(Object.keys(s).sort()).toEqual(['domain', 'frames', 'kind', 'maxPx', 'pair', 'times']);
+      expect(s.domain).toBe('render');
+      expect(['gap', 'ghost']).toContain(s.kind);
+      expect(s.frames[1]).toBeGreaterThanOrEqual(s.frames[0]);
+      expect(s.times[1]).toBeGreaterThanOrEqual(s.times[0]);
+    }
+    // The independent reading: rigc's own render --seam over the kept build, at the run's rate, with the
+    // floor written out a second time here (more cells than the box's long side, in cells) and the spans
+    // grouped by hand — not the code under test.
+    const fps = (rep.render as { fps: number }).fps;
+    const out = join(c.dir, 'seam-check');
+    const g = spawnSync(process.execPath, [join(ROOT, 'node_modules', 'rig-c', 'bin', 'rigc'), 'render', '--candidate', c.build, '--animation', 'dance', '--seam', 'upperarm_r:forearm_r', '--fps', String(fps), '--out', out], { encoding: 'utf8' });
+    expect(g.status).toBe(0);
+    type Hit = { index: number; time: number; px: number; cell: number; box: number[] };
+    const setDir = (JSON.parse(readFileSync(join(out, 'frames.json'), 'utf8')) as { sets: Array<{ dir: string; animation: string }> }).sets.find((x) => x.animation === 'dance')!.dir;
+    const doc = JSON.parse(readFileSync(join(out, setDir, 'seam.json'), 'utf8')) as { pairs: Array<Record<'gap' | 'ghost', { frames: Hit[] }> & { opens: number[] }> };
+    const want: Array<Omit<SeamRow, 'domain'>> = [];
+    for (const kind of ['gap', 'ghost'] as const) {
+      const over = doc.pairs[0]![kind].frames.filter((h) => h.px > Math.round(Math.max(h.box[2]! - h.box[0]!, h.box[3]! - h.box[1]!) / h.cell));
+      for (const h of over) {
+        const last = want[want.length - 1];
+        if (last !== undefined && last.kind === kind && last.frames[1] === h.index - 1) {
+          last.frames[1] = h.index;
+          last.times[1] = h.time;
+          last.maxPx = Math.max(last.maxPx, h.px);
+        } else want.push({ pair: 'upperarm_r|forearm_r', kind, frames: [h.index, h.index], times: [h.time, h.time], maxPx: h.px });
+      }
+    }
+    expect(seams.map(({ domain: _d, ...s }) => s)).toEqual(want);
+    // The printed lines: one per span, then the count.
+    const lines = linesOf(r, 'SEAM');
+    expect(lines.filter((l) => l.startsWith('SEAM   pair "upperarm_r|forearm_r" ') && l.includes('over the one-cell floor'))).toHaveLength(seams.length);
+    expect(lines[lines.length - 1]).toBe(`SEAM   ${seams.length} span(s) over 1 pair(s) at ${fps} fps — 1 of 1 declared pair(s) read; a reading, not a gate`);
+    // Under the floor: the frames rigc names that no span reports, on the pair's row and its line.
+    const named = doc.pairs[0]!.opens;
+    expect(pairs[0]!.underFloor).toEqual(named.filter((f) => !pairs[0]!.opens.includes(f)));
+    expect([...pairs[0]!.opens, ...pairs[0]!.underFloor].sort((x, y) => x - y)).toEqual(named);
+  }, SLOW);
+
+  test('the reading moves no byte: the motion and the build are the same with --parts as without, and only the report\'s seam rows differ', () => {
+    const a = cutCase();
+    const b = cutCase();
+    expect(retarget(a, ['--parts', a.dir]).status).toBe(0);
+    const rb = retarget(b);
+    expect(rb.status).toBe(0);
+    expect(readFileSync(a.out).equals(readFileSync(b.out))).toBe(true);
+    expect(readFileSync(join(a.build, 'skeleton.json')).equals(readFileSync(join(b.build, 'skeleton.json')))).toBe(true);
+    // Without --parts, no pair is declared, and the line says where the pairs are.
+    expect(linesOf(rb, 'SEAM')).toEqual([`SEAM   no neighbour pair declared — a rig spec carries none and no --parts was named (${b.dir} holds parts.json: --parts ${b.dir} reads its limbs); seams: []`]);
+    const [ra, rbRep] = [reportOf(a), reportOf(b)];
+    expect(rbRep.seams).toEqual([]);
+    expect(rbRep.seamPairs).toEqual([]);
+    const strip = (x: Record<string, unknown>) => {
+      const { seams: _s, seamPairs: _p, inputs: _i, ...rest } = x;
+      return rest;
+    };
+    expect(strip(ra)).toEqual(strip(rbRep));
+  }, SLOW);
+
+  test('a pair whose part has no slot is not read and says so; parts.json without limbs declares none; neither changes the exit', () => {
+    const c = cutCase(limbParts([ARM[0]!, { name: 'cuff_r', limb: { name: 'arm_r', segment: 1, joint: 'elbow' } }]));
+    const r = retarget(c, ['--parts', join(c.dir, 'parts.json')]);
+    expect(r.status).toBe(0);
+    expect(linesOf(r, 'SEAM')).toEqual([
+      'SEAM   pair "upperarm_r|cuff_r": not read — part "cuff_r" has no slot of its name in the rig (a part is drawn by the slot of its name)',
+      'SEAM   0 span(s) over 0 pair(s) at 8 fps — 0 of 1 declared pair(s) read; a reading, not a gate',
+    ]);
+    expect((reportOf(c).seamPairs as PairRow[])[0]).toMatchObject({ pair: 'upperarm_r|cuff_r', status: 'unread' });
+    const none = cutCase(limbParts([{ name: 'torso' }]));
+    const rn = retarget(none, ['--parts', none.dir]);
+    expect(rn.status).toBe(0);
+    expect(linesOf(rn, 'SEAM')).toEqual([`SEAM   no neighbour pair declared — ${join(none.dir, 'parts.json')} holds no limb segment below another (a part's "limb" record), so it declares no pair; seams: []`]);
+  }, SLOW);
+
+  test('--parts is an input: a missing path or a record that is not a limb is refused by name before any work', () => {
+    const c = cutCase(limbParts([{ name: 'upperarm_r', limb: { name: 'arm_r', segment: -1 } }]));
+    const r = retarget(c, ['--parts', c.dir]);
+    expect(r.status).not.toBe(0);
+    expect(fails(r)).toEqual([`FAIL  PARTS_JSON: ${join(c.dir, 'parts.json')} parts[0] ("upperarm_r") limb: expected { name: string, segment: integer ≥ 0, joint?: string }, found {"name":"arm_r","segment":-1}`]);
+    const m = retarget(c, ['--parts', join(c.dir, 'nope')]);
+    expect(fails(m)).toEqual([`FAIL  ARG_PATH: --parts ${join(c.dir, 'nope')} does not exist`]);
+    expect(existsSync(c.out)).toBe(false);
+  }, SLOW);
+
+  test('bar 3, the mutant: the reading disabled — a report with no seams, or no seamPairs — is refused by the writer by name', () => {
+    const c = cutCase();
+    expect(retarget(c, ['--parts', c.dir]).status).toBe(0);
+    const rep = reportOf(c);
+    const map = readMap(readFileSync(c.map, 'utf8'), c.map);
+    const clock = { frameTimes: rep.frameTimes as number[] };
+    const inputs = rep.inputs as ReportInputs;
+    const { seams: _s, ...noSeams } = rep;
+    expect(() => writeReport(noSeams, map, clock, rep.render as RenderDomain, inputs)).toThrow('REPORT_SEAMS: seams: found no field');
+    const { seamPairs: _p, ...noPairs } = rep;
+    expect(() => writeReport(noPairs, map, clock, rep.render as RenderDomain, inputs)).toThrow('REPORT_SEAMS: seamPairs: found no field');
+    // A row without its times is refused too: every entry carries frame and t.
+    const rows = rep.seams as SeamRow[];
+    const { times: _t, ...noTimes } = rows[0]!;
+    expect(() => writeReport({ ...rep, seams: [noTimes] }, map, clock, rep.render as RenderDomain, inputs)).toThrow('REPORT_SEAMS: seams[0]');
+    // The control: the run's own report, written again, passes the same writer.
+    expect(() => writeReport(rep, map, clock, rep.render as RenderDomain, inputs)).not.toThrow();
+  }, SLOW);
+});
+
+describe('#216: the one-cell floor, @rig-c/parts\' rule (rig-c/parts#503), by hand', () => {
+  const hit = (px: number, w: number, h: number, cell = 1) => ({ px, cell, box: [0, 0, w * cell, h * cell] });
+  test('a cell, a line and a scattered line are under it; a block and a thick cluster are over it', () => {
+    expect(overFloor(hit(1, 1, 1))).toBe(false);
+    expect(overFloor(hit(5, 5, 1))).toBe(false);
+    expect(overFloor(hit(5, 15, 15))).toBe(false);
+    expect(overFloor(hit(4, 2, 2))).toBe(true);
+    expect(overFloor(hit(3, 2, 2, 0.5))).toBe(true);
+  });
+  test('the mutant: the floor removed reports every frame rigc names, so a one-cell crack becomes a span', () => {
+    const doc = [{ a: 'x', b: 'y', status: 'read' as const, opens: [0, 1], gap: { frames: [{ index: 0, time: 0, ...hit(1, 1, 1) }, { index: 1, time: 0.1, ...hit(4, 2, 2) }] }, ghost: { frames: [] } }];
+    const pairs = [{ pair: 'x|y', a: 'x', b: 'y', declared: ['d'] }];
+    const floored = projectSeams(pairs, doc, new Map());
+    expect(floored.seams).toEqual([{ pair: 'x|y', kind: 'gap', frames: [1, 1], times: [0.1, 0.1], maxPx: 4 }]);
+    expect(floored.seamPairs[0]).toMatchObject({ opens: [1], underFloor: [0] });
+    const floorless = projectSeams(pairs, doc.map((d) => ({ ...d, gap: { frames: d.gap.frames.map((h) => ({ ...h, px: 99 })) } })), new Map());
+    expect(floorless.seams).toEqual([{ pair: 'x|y', kind: 'gap', frames: [0, 1], times: [0, 0.1], maxPx: 99 }]);
+  });
+  test('pairs: each limb\'s consecutive segments by segment, in either order once, a part with no limb declaring none', () => {
+    const text = JSON.stringify({ parts: [
+      { name: 'shin', limb: { name: 'leg', segment: 1, joint: 'knee' } },
+      { name: 'foot', limb: { name: 'leg', segment: 2, joint: 'ankle' } },
+      { name: 'thigh', limb: { name: 'leg', segment: 0 } },
+      { name: 'hat' },
+    ] });
+    expect(readSeamPairs(text, 'p.json')).toEqual([
+      { pair: 'thigh|shin', a: 'thigh', b: 'shin', declared: ['config.limbs.leg segment 1, joint "knee"'] },
+      { pair: 'shin|foot', a: 'shin', b: 'foot', declared: ['config.limbs.leg segment 2, joint "ankle"'] },
+    ]);
+    expect(() => readSeamPairs(JSON.stringify({ parts: [{ name: 'a', limb: { name: 'l', segment: 0 } }, { name: 'b', limb: { name: 'l', segment: 0 } }] }), 'p.json')).toThrow('PARTS_JSON: p.json parts[1] ("b"): limb "l" segment 0 is already part "a"');
+    expect(() => readSeamPairs('{}', 'p.json')).toThrow('PARTS_JSON');
   });
 });
