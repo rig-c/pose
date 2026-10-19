@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.32.0](https://github.com/rig-c/pose/compare/v0.31.1...v0.32.0) (2026-10-19)
+
+
+### Features
+
+* **legs:** name --stance's and --leg-scale's units, and print what a clamp did to a free ankle ([#246](https://github.com/rig-c/pose/issues/246)) ([2349bf5](https://github.com/rig-c/pose/commit/2349bf5bacd65b11486b8eb02170277c16463ace))
+* **readings:** SCALE, SHEAR, --reduce and MAP_CHAIN_JOINTS name their remedy ([#252](https://github.com/rig-c/pose/issues/252)) ([b9d6411](https://github.com/rig-c/pose/commit/b9d6411555d17799ab3c0b5881d86cbe64566551))
+* **retarget:** a NOD line, a "nod" switch on the eye-line chain, the nod window wrapped on a loop ([#241](https://github.com/rig-c/pose/issues/241)) ([#254](https://github.com/rig-c/pose/issues/254)) ([ce62630](https://github.com/rig-c/pose/commit/ce6263091a58d0a208d953b708f98887ac49d501))
+* **retarget:** accept --sequence and --animation as aliases of --pose and --name ([#253](https://github.com/rig-c/pose/issues/253)) ([1ceddc4](https://github.com/rig-c/pose/commit/1ceddc48e28c6e764e011a99eea88cafc33bade5))
+* **retarget:** name what reach costs — JITTER per keyed bone, REACH departure ([#244](https://github.com/rig-c/pose/issues/244)) ([303e3fd](https://github.com/rig-c/pose/commit/303e3fd19705edb47ae7498c6993661241c997d7))
+* **retarget:** output a person can read: CLEAN counts the hold, a hinge's wrong-way frames are one line, --summary and --verbose ([#248](https://github.com/rig-c/pose/issues/248)) ([67f4066](https://github.com/rig-c/pose/commit/67f40664e12be6c8e15fe49c96f63af1d81dca65))
+* **retarget:** path refusals name the fix ([#239](https://github.com/rig-c/pose/issues/239)) ([#249](https://github.com/rig-c/pose/issues/249)) ([bdcfe8a](https://github.com/rig-c/pose/commit/bdcfe8adcc0be64129d96c6547f1778b4e44108a))
+
+
+### Bug Fixes
+
+* **retarget:** read travel "in-place" as the sequence's property, not --plant-feet's ([#242](https://github.com/rig-c/pose/issues/242)) ([#247](https://github.com/rig-c/pose/issues/247)) ([c403f53](https://github.com/rig-c/pose/commit/c403f531348f1622d986bd5e7d196916d36ffa42))
+
 ## [0.31.1](https://github.com/rig-c/pose/compare/v0.31.0...v0.31.1) (2026-10-18)
 
 
