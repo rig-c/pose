@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.34.0](https://github.com/rig-c/pose/compare/v0.33.0...v0.34.0) (2026-10-19)
+
+
+### Features
+
+* **reduce:** --reduce-keep-planted keeps each support span's supporting leg at dense keys ([#251](https://github.com/rig-c/pose/issues/251)) ([#257](https://github.com/rig-c/pose/issues/257)) ([e1305f8](https://github.com/rig-c/pose/commit/e1305f8b72ee34e6f80083285b31761b6c862620))
+
+
+### Bug Fixes
+
+* **readme:** "What it does not do" declares 1.0's scope, each line on an open issue or none ([#261](https://github.com/rig-c/pose/issues/261)) ([#264](https://github.com/rig-c/pose/issues/264)) ([88bc69e](https://github.com/rig-c/pose/commit/88bc69e412ed4d712e1430c88ee545e9e823605b))
+* **retarget:** a bare rig.json with an unread motion.json beside it says so when its gate is green ([#250](https://github.com/rig-c/pose/issues/250)) ([#258](https://github.com/rig-c/pose/issues/258)) ([d23f3bf](https://github.com/rig-c/pose/commit/d23f3bf9d279ed36adb485da5fadf910dd17cdb5))
+
 ## [0.33.0](https://github.com/rig-c/pose/compare/v0.32.0...v0.33.0) (2026-10-19)
 
 
