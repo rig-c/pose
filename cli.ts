@@ -433,7 +433,7 @@ function runClean(argv: string[], say: (l: string) => void): void {
   if (params.loop) {
     if (c.floor === null) say('  FLOOR  no ankle has a position on any frame; not re-pinned');
     else say(`  FLOOR  the lowest ankle over the cycle: y ${fmt(c.floor.before)} before smoothing, ${fmt(c.floor.after)} after; every joint moved ${c.floor.shift >= 0 ? '+' : ''}${fmt(c.floor.shift, 3)} px in y`);
-    say('  TRAVEL "in-place" written (rig-c/pose#92): a loop is one cycle repeated, so the figure does not travel; retarget --plant-feet holds the hip\'s x over the loop and lets the supporting foot follow its own track');
+    say('  TRAVEL "in-place" written (rig-c/pose#92): a loop is one cycle repeated, so the figure does not travel; retarget reads its supports and head nod in place with or without --plant-feet, and --plant-feet also lets the supporting foot follow its own track and holds the hip\'s x over the loop');
   }
   const jit = (v: number | null) => (v === null ? 'not measured' : `${fmt(v, 3)}`);
   say(`  JITTER mean |second difference| of y over ${c.triples} joint-frame triple(s): ${jit(c.record.jitter.before)} → ${jit(c.record.jitter.after)} px/f²${c.record.jitter.before !== null && c.record.jitter.after !== null && c.record.jitter.before > 0 ? ` (${fmt(100 * (1 - c.record.jitter.after / c.record.jitter.before), 1)}% lower)` : ''}`);
