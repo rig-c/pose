@@ -196,6 +196,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       }
       if (r.blendHold !== null) for (const l of blendLines(r.blendHold, r.times)) say(`  FEET   ${l}`);
     }
+    if (seq.travel === TRAVEL_IN_PLACE && !r.planted) say(`  TRAVEL ${openTravelLine(r.openDrift)}`);
     if (r.stance !== null) for (const l of stanceLines(r.stance, r.times, r.feet === null || r.legStraight === null ? undefined : { legLength: r.feet.legLength, straight: r.legStraight, rigLeg: r.rigLeg })) say(`  STANCE ${l}`);
     if (r.face !== null) say(`  FACE   ${faceLine(r.face)}`);
     if (r.body !== null) say(`  BODY   ${bodyLine(r.body)}`);
@@ -814,6 +815,16 @@ function loweredLine(lowered: readonly Lowered[]): string {
   if (lowered.length === 0) return `${head}: no frame reads differently from before`;
   const frames = lowered.reduce((k, x) => k + x.frames[1] - x.frames[0] + 1, 0);
   return `${head}: ${frames} frame(s) read differently from before — ${lowered.map((x) => `frames ${span(x.frames)} ${side(x.was)} → ${side(x.now)}${x.cause === undefined ? '' : ` (${CAUSE[x.cause]})`}`).join(', ')}`;
+}
+
+/**
+ * The in-place line without --plant-feet (rig-c/pose#242): what the declaration still changes, and the one thing it
+ * cannot without planted feet — the loop closure, which spreads back the planted hip's drift. `drift` is the
+ * translated bone's x on the last frame less the first (null: the map translates no bone).
+ */
+export function openTravelLine(drift: number | null): string {
+  const hip = drift === null ? 'and the map translates no bone' : `so the hip follows the pose's own travel: x ${drift >= 0 ? '+' : ''}${drift.toFixed(2)} units from the first frame to the last, not closed`;
+  return `sequence declares travel: ${TRAVEL_IN_PLACE} but --plant-feet is off — its supports and the head nod are read in place as with it; the loop closure is --plant-feet's (it closes the planted hip), ${hip}`;
 }
 
 /** The in-place line (rig-c/pose#92): what --plant-feet did instead of holding the foot, and the loop's closure. */

@@ -1956,6 +1956,8 @@ describe('examples/wave runs as the README says', () => {
     // #236's readings: a JITTER line per keyed bone; the wave's trunk does not reach, so no REACH line.
     expect(linesOf(r, 'JITTER')).toHaveLength(10);
     expect(linesOf(r, 'REACH')).toEqual([]);
+    // #242: the wave declares no travel, so the in-place readings it decoupled from --plant-feet do not apply — no TRAVEL line, and the hash below holds.
+    expect(linesOf(r, 'TRAVEL')).toEqual([]);
     // The readings moved no byte: the motion the wave wrote before #236 (v0.31.1), byte for byte.
     // A change that moves the wave's motion on purpose updates this hash in the same PR, and says why.
     expect(createHash('sha256').update(readFileSync(out)).digest('hex')).toBe('bd1ca2506217c21769169b884a306ad2defabaadecb93abd0572969291aa2e59');
@@ -9186,6 +9188,147 @@ describe('#237: --stance and --leg-scale name their unit, and LEG-SCALE and STAN
       expect(m.r.status).toBe(0);
       expect(m.rep!.stance.runs.find((x) => x.state === 'lifted' && x.absorbed !== true)!.moved!.count).toBe(9);
       expect(linesOf(m.r, 'STANCE').find((x) => x.startsWith('STANCE lifted:'))).toMatch(/; the pose's height kept$/);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
+describe('#242: "in-place" is the sequence\'s property — its supports and its nod are read in place with or without --plant-feet', () => {
+  /** One gait cycle, frames; the sequence repeats it CYCLES times, at 24 fps. */
+  const C = 24;
+  const CYCLES = 7;
+  const NN = C * CYCLES;
+  /** The loop bar the cycle-1 against cycle-N comparison is held to, degrees on the head's rotate key and world units on its nod. */
+  const LOOP_DEG = 0.05;
+  const LOOP_UNITS = 0.05;
+  const headRig: NonNullable<RigOpts['bones']> = (b) => [
+    ...b,
+    { name: 'head_ctl', parent: 'neck', x: 0, y: 20 },
+    { name: 'head', parent: 'head_ctl', x: 0, y: 0 },
+    { name: 'eye_r', parent: 'head', x: -6, y: 10 },
+    { name: 'eye_l', parent: 'head', x: 6, y: 10 },
+  ];
+  const mapWithHead = (): Record<string, unknown> => ({
+    ...baseMap(),
+    chains: [...baseChains(), { name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: ['eye_r>eye_l'] }],
+  });
+  const phase = (i: number): number => (2 * Math.PI * (i % C)) / C;
+  /**
+   * A walk in place, `clean --loop`ed (which writes `"travel": "in-place"`): the hips still, the thighs swinging ±20°
+   * a cycle in opposition, so a supporting ankle slides back up to 0.09 leg lengths a frame (past a step's 0.03); the
+   * swinging foot lifted up to 10 px; the eyes bobbing 3 px twice a cycle against a still neck (the nod), level.
+   */
+  function walkInPlace(): Record<string, unknown> {
+    const m: Motion = {
+      ...BASE,
+      n: NN,
+      dt: 1 / 24,
+      trunk: () => 90,
+      ru: () => -100,
+      rf: () => -95,
+      lu: () => -80,
+      lf: () => -85,
+      rt: (i) => -90 + 20 * Math.sin(phase(i)),
+      rs: (i) => -95 + 20 * Math.sin(phase(i)),
+      lt: (i) => -90 - 20 * Math.sin(phase(i)),
+      ls: (i) => -90 - 20 * Math.sin(phase(i)),
+      hip: () => [0, 0],
+    };
+    const doc = poseDoc(m, (i, j) => {
+      const lift = { r: 10 * Math.max(0, Math.cos(phase(i))), l: 10 * Math.max(0, -Math.cos(phase(i))) };
+      for (const s of ['r', 'l'] as const) {
+        const a = j[`${s}_ankle`]!.at as Pt;
+        j[`${s}_ankle`] = { ...j[`${s}_ankle`], at: [a[0], a[1] - lift[s]] };
+      }
+      const bob = 3 * Math.sin(2 * phase(i));
+      for (const e of ['r_eye', 'l_eye']) {
+        const a = j[e]!.at as Pt;
+        j[e] = { ...j[e], at: [a[0], a[1] + bob] };
+      }
+    });
+    const seq = readPoseSequence(JSON.stringify(doc), 'fixture');
+    const c = clean(seq, { loop: true, legs: 1, rest: 1 }, undefined, 'fixture');
+    expect(c.seq.travel).toBe('in-place');
+    return JSON.parse(writePoseSequence(c.seq)) as Record<string, unknown>;
+  }
+  interface Read {
+    ran: Ran;
+    supports: Array<{ side: string; frames: [number, number] }>;
+    steps: unknown[];
+    /** The largest |cycle 1 − cycle N| over a cycle's frames: the head's rotate key (degrees) and its nod translate (units). */
+    loop: { rotate: number; nod: number };
+  }
+  function read(c: Case, extra: string[], cliPath = CLI): Read {
+    const report = join(c.dir, `report${extra.length}.json`);
+    const ran = retarget(c, ['--report', report, ...extra], cliPath);
+    expect(ran.stderr).toBe('');
+    expect(ran.status).toBe(0);
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as { feet: { supports: Read['supports']; steps: unknown[] } };
+    const tracks = motionOf(c.out).animations.dance!.tracks;
+    const keysOf = (property: string, k: number) => tracks.find((t) => t.bone === 'head' && t.property === property)!.keys.map((x) => x.v[k]!);
+    const rot = keysOf('rotate', 0);
+    const nodX = keysOf('translate', 0);
+    const nodY = keysOf('translate', 1);
+    expect(rot).toHaveLength(NN);
+    let rotate = 0;
+    let nod = 0;
+    for (let k = 0; k < C; k++) {
+      const last = (CYCLES - 1) * C + k;
+      rotate = Math.max(rotate, Math.abs(wrap(rot[last]! - rot[k]!)));
+      nod = Math.max(nod, Math.hypot(nodX[last]! - nodX[k]!, nodY[last]! - nodY[k]!));
+    }
+    return { ran, supports: rep.feet.supports, steps: rep.feet.steps, loop: { rotate, nod } };
+  }
+  const covered = (s: Read['supports']): number => s.reduce((t, x) => t + x.frames[1] - x.frames[0] + 1, 0);
+  const show = (r: Read): string => `${r.supports.length} support span(s) covering ${covered(r.supports)} of ${NN} frames, ${r.steps.length} step(s); head cycle 1 vs ${CYCLES}: rotate ${r.loop.rotate.toFixed(3)}°, nod ${r.loop.nod.toFixed(3)} units`;
+
+  test('without --plant-feet: one support span per foot per cycle, every frame supported, no step; the head\'s cycle 1 is its cycle N; the line names what stays --plant-feet\'s; control: --plant-feet reads the same supports', () => {
+    const c = setup({ rig: { bones: headRig }, map: mapWithHead(), pose: walkInPlace() });
+    const free = read(c, []);
+    console.log(`  #242 in place, not planted: ${show(free)}`);
+    expect(free.steps).toEqual([]);
+    // Two spans a cycle, alternating, half a cycle each; frame 0 is mid-way through a support, so the seam splits that one
+    // span in two (the first and the last, half a cycle between them): 2 × CYCLES + 1 spans, every frame supported.
+    expect(free.supports).toHaveLength(2 * CYCLES + 1);
+    expect(covered(free.supports)).toBe(NN);
+    expect(free.supports.map((s) => s.side)).toEqual(Array.from({ length: 2 * CYCLES + 1 }, (_, k) => (k % 2 === 0 ? free.supports[0]!.side : free.supports[1]!.side)));
+    expect(free.supports.slice(1, -1).map((s) => s.frames[1] - s.frames[0] + 1)).toEqual(new Array<number>(2 * CYCLES - 1).fill(C / 2));
+    const [first, last] = [free.supports[0]!, free.supports[2 * CYCLES]!];
+    expect(first.frames[1] - first.frames[0] + 1 + (last.frames[1] - last.frames[0] + 1)).toBe(C / 2);
+    expect(free.loop.rotate).toBeLessThan(LOOP_DEG);
+    expect(free.loop.nod).toBeLessThan(LOOP_UNITS);
+    const travel = linesOf(free.ran, 'TRAVEL');
+    expect(travel).toHaveLength(1);
+    expect(travel[0]).toMatch(/^TRAVEL sequence declares travel: in-place but --plant-feet is off — its supports and the head nod are read in place as with it; the loop closure is --plant-feet's \(it closes the planted hip\), so the hip follows the pose's own travel: x [+-]\d+\.\d{2} units from the first frame to the last, not closed$/);
+    // Control: planted, the supports are the same reading (the closure prints in place of TRAVEL).
+    const planted = read(c, ['--plant-feet']);
+    expect(planted.supports).toEqual(free.supports);
+    expect(linesOf(planted.ran, 'TRAVEL')).toEqual([]);
+    // Control: a sequence without the declaration prints no TRAVEL line.
+    const open = setup({ rig: { bones: headRig }, map: mapWithHead(), pose: (({ travel: _t, ...rest }) => rest)(walkInPlace()) });
+    expect(linesOf(read(open, []).ran, 'TRAVEL')).toEqual([]);
+  }, SLOW);
+
+  test('mutant: the coupling restored (`plantOn &&`) fragments the supports and opens the head\'s loop, and the test above is red', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm242-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const src = readFileSync(path, 'utf8');
+      const from = 'const inPlace = opts.travel === TRAVEL_IN_PLACE;';
+      expect(src.split(from)).toHaveLength(2);
+      writeFileSync(path, src.replace(from, 'const inPlace = plantOn && opts.travel === TRAVEL_IN_PLACE;'));
+      const c = setup({ rig: { bones: headRig }, map: mapWithHead(), pose: walkInPlace() });
+      const m = read(c, [], join(d, 'cli.ts'));
+      console.log(`  #242 mutant "plantOn &&": ${show(m)}`);
+      const red = m.supports.length !== 2 * CYCLES + 1 || covered(m.supports) !== NN || m.loop.rotate >= LOOP_DEG || m.loop.nod >= LOOP_UNITS;
+      if (!red) throw new Error('mutant "plantOn &&" survived: the supports and the head loop read as in place');
+      expect(covered(m.supports)).toBeLessThan(NN);
+      expect(m.loop.rotate).toBeGreaterThan(LOOP_DEG);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
