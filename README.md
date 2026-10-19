@@ -506,6 +506,8 @@ Exit codes: `0` compared, whether it found anything or not, since a finding is n
 
 [Bun](https://bun.sh) ≥ 1.2 on `PATH` — rig-pose, like rig-c, runs its TypeScript sources directly. `rig-c` comes as a dependency. With `@esotericsoftware/spine-core` installed beside it, rig-c's gate runs the spine-core round trip; without it, rig-c's own gate, and the gate's report says which.
 
+**The supported surface is the `rig-pose` command.** RELEASING.md's *What 1.x promises* lists every flag, report key, problem code and line tag as promised or courtesy, and why. The package exports no importable API: `exports` exposes only `package.json` ([#262](https://github.com/rig-c/pose/issues/262)).
+
 ## Why alternate drawings (0.2)
 
 A flat painting turned by its bones matches each limb's direction, not its depth. On `dance-a` (a 13 s front-facing dance), retargeted onto a @rig-c/parts rig, five moments were found where it cannot follow. They were found by measuring the pose against the rig and checked against the video:

@@ -6,6 +6,9 @@
   "bin": {
     "rig-pose": "./bin/rig-pose.cjs"
   },
+  "exports": {
+    "./package.json": "./package.json"
+  },
   "engines": {
     "bun": ">=1.2.0"
   },
