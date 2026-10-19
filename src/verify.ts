@@ -10,10 +10,12 @@
  */
 import { poseRawAnimation, poseRawSetup, type CompiledDocument, type RawBone } from 'rig-c/core';
 import type { Body18 } from './joints.ts';
-import { aimAngle, aimEnds, pointAt, type JointMap } from './map.ts';
+import { aimAngle, aimEnds, pointAt, type Chain, type JointMap } from './map.ts';
 import type { HipsInferred, Joint, PelvisFit, Run } from './pose.ts';
 import type { Retarget } from './retarget.ts';
-import { pictureAngle, pointOn, wrap } from './retarget.ts';
+import { meanSecondDiff, pictureAngle, pointOn, wrap } from './retarget.ts';
+
+const DEG = 180 / Math.PI;
 
 export interface Landing {
   bone: string;
@@ -707,4 +709,111 @@ export function postureLines(q: Posture): string[] {
     }
   }
   return out;
+}
+
+/**
+ * One keyed bone's jitter against its map pair's (rig-c/pose#236): the mean
+ * |second difference| of its local rotation as rig-c's poser posed the gated
+ * build — its world matrix in its parent's axes, P⁻¹C, so a rotate key's value
+ * up to a constant — against the same figure of its pair's picture angle, less
+ * the pair of the nearest keyed bone above it (as the rig's local rotation is
+ * against its parent). Both are read on the same triples: three consecutive
+ * frames on which every pose point the two pairs need is good.
+ */
+export interface JitterRow {
+  bone: string;
+  chain: string;
+  joints: [string, string];
+  /** The nearest keyed bone above it, whose pair the pose's local angle is read against; null at the top. */
+  against: string | null;
+  /** °/frame², rounded to 1e-4; null when no triple was read. */
+  rig: number | null;
+  pair: number | null;
+  /** rig ÷ pair; null when either is unread or the pair is still (its figure rounds to 0). */
+  ratio: number | null;
+  triples: number;
+  /** Whether the bone is aimed by a `reach` chain. */
+  reach: boolean;
+}
+
+/** #236: a JITTER row for every bone a chain keys with a rotate track, in map order (a face or body dial bone excepted: its key drives a slider, not a pair). */
+export function measureJitter(posed: ReadonlyArray<ReadonlyMap<string, RawBone>>, map: JointMap, r: Retarget, frames: ReadonlyArray<Partial<Record<Body18, Joint>>>, minScore: number): JitterRow[] {
+  const dials = new Set([r.face?.yaw?.bone, r.face?.pitch?.bone, r.body?.yaw?.bone].filter((b): b is string => b !== undefined));
+  const rotated = new Set(r.animation.tracks.filter((tr) => 'bone' in tr && tr.property === 'rotate').map((tr) => ('bone' in tr ? tr.bone : '')));
+  const pairs = new Map<string, { chain: Chain; joints: [string, string] }>();
+  for (const c of map.chains) {
+    c.bones.forEach((b, k) => {
+      if (k + 1 >= c.joints.length || dials.has(b) || !rotated.has(b) || pairs.has(b)) return;
+      pairs.set(b, { chain: c, joints: [c.joints[k]!, c.joints[k + 1]!] });
+    });
+  }
+  const n = Math.min(posed.length, frames.length);
+  const at = (i: number, j: string): [number, number] | null => {
+    const v = pointOn(frames[i]!, j, minScore);
+    return typeof v === 'string' ? null : v;
+  };
+  const pairAngle = (b: string, i: number): number | null => {
+    const [j0, j1] = pairs.get(b)!.joints;
+    const p0 = at(i, j0);
+    const p1 = at(i, j1);
+    return p0 === null || p1 === null || (p0[0] === p1[0] && p0[1] === p1[1]) ? null : pictureAngle(p0, p1);
+  };
+  const out: JitterRow[] = [];
+  for (const [b, { chain, joints }] of pairs) {
+    let against: string | null = null;
+    const first = posed[0]?.get(b);
+    for (let a = first?.parent ?? null; a !== null; a = posed[0]!.get(a)?.parent ?? null) {
+      if (pairs.has(a)) {
+        against = a;
+        break;
+      }
+    }
+    const rig: number[] = [];
+    const pose: number[] = [];
+    const good: boolean[] = [];
+    for (let i = 0; i < n; i++) {
+      const bone = posed[i]!.get(b)!;
+      const parent = bone.parent === null ? undefined : posed[i]!.get(bone.parent);
+      rig.push(parent === undefined ? Math.atan2(bone.c, bone.a) * DEG : localAngle(parent, bone));
+      const own = pairAngle(b, i);
+      const up = against === null ? 0 : pairAngle(against, i);
+      good.push(own !== null && up !== null);
+      pose.push(own === null || up === null ? 0 : wrap(own - up));
+    }
+    const ok = (i: number) => good[i] === true;
+    const jr = meanSecondDiff([rig], ok);
+    const jp = meanSecondDiff([pose], ok);
+    const r4 = (v: number | null) => (v === null ? null : Math.round(v * 10000) / 10000);
+    out.push({
+      bone: b,
+      chain: chain.name,
+      joints,
+      against,
+      rig: r4(jr.value),
+      pair: r4(jp.value),
+      // A pair whose figure rounds to 0 is still: a ratio over its float noise would name nothing.
+      ratio: jr.value === null || jp.value === null || r4(jp.value) === 0 ? null : Number((jr.value / jp.value).toFixed(3)),
+      triples: jr.triples,
+      reach: chain.reach,
+    });
+  }
+  return out;
+}
+
+/** A bone's rotation in its parent's axes, degrees: the angle of P⁻¹C's x axis. */
+function localAngle(p: RawBone, c: RawBone): number {
+  const det = p.a * p.d - p.b * p.c;
+  if (det === 0) return Math.atan2(c.c, c.a) * DEG;
+  const la = (p.d * c.a - p.b * c.c) / det;
+  const lc = (-p.c * c.a + p.a * c.c) / det;
+  return Math.atan2(lc, la) * DEG;
+}
+
+/** The `JITTER` line of one keyed bone (#236). */
+export function jitterLine(j: JitterRow): string {
+  const f = (v: number | null) => (v === null ? 'not measured' : `${v.toFixed(4)}°/f²`);
+  const vs = j.against === null ? `the pair's angle` : `the pair's angle against "${j.against}"'s pair`;
+  if (j.triples === 0) return `bone "${j.bone}" (chain "${j.chain}", ${j.joints[0]} → ${j.joints[1]}${j.reach ? ', reach' : ''}): not measured — no three consecutive frames on which the pose points of ${vs} are good`;
+  const ratio = j.ratio === null ? (j.pair === 0 ? ' — the pair is still' : '') : ` (${j.ratio.toFixed(2)}×)`;
+  return `bone "${j.bone}" (chain "${j.chain}", ${j.joints[0]} → ${j.joints[1]}${j.reach ? ', reach' : ''}): mean |Δ²| of the keyed local rotation as posed ${f(j.rig)} against ${vs} ${f(j.pair)}${ratio}, over ${j.triples} frame triple(s); a reading`;
 }
