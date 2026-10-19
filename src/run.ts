@@ -161,6 +161,9 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     }
     tell(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)${a.legScale !== undefined && a.legScale !== 'off' ? `, leg-scale ${a.legScale[0]}–${a.legScale[1]}` : ''}${a.plantFeet === true ? ', plant-feet' : ''}${a.stance !== undefined && a.stance !== 'off' ? `, stance ${a.stance}` : ''}${a.raisedByHead === true ? ', raised-by-head' : ''}${a.carryIdle === true ? ', carry-idle' : ''}${a.merge !== undefined ? `, merge ${a.merge}` : ''}${a.reduce !== undefined ? `, reduce ${a.reduce}°${a.reduceHip !== undefined ? ` (hip ${a.reduceHip} units)` : ''}` : ''}`);
     say(`  RIGC   rig-c ${rigc.version} (${rigc.entry}) gates and poses this run`);
+    // #250: the gate was green without it, so nothing else would say the rig's own animations are not in --out.
+    const unread = unreadMotionLine(a.rig, input.motion);
+    if (unread !== null) tell(`  MOTION ${unread}`);
     say(`  CLEAN  ${output === 'verbose' ? cleanLine(seq.cleaned!) : cleanSummaryLine(seq.cleaned!)}`);
     if (a.smoothAlias !== undefined) say(`  SMOOTH --smooth is carried by clean; ignored (given ${a.smoothAlias}; this sequence was cleaned with legs ${seq.cleaned!.params.legs}, rest ${seq.cleaned!.params.rest})`);
     if (seq.camera !== undefined) say(`  CAMERA ${cameraLine(seq.camera, times, seq.cameraSource)}`);
@@ -1101,6 +1104,17 @@ export function unreadMotionHint(rigArg: string, motion: string | null): string 
   const beside = join(dirname(rigArg), 'motion.json');
   if (!existsSync(beside) || statSync(rigArg).isDirectory()) return '';
   return `; ${beside} is beside it and was not read — --rig naming the rig.json reads no motion spec: pass --rig ${dirname(rigArg)} (the directory, which reads the motion.json beside its rig.json) or --base-motion ${beside}`;
+}
+
+/**
+ * rig-c/pose#250: the same reading when the base gate is green — the run goes on, and --out would carry
+ * none of the rig's own animations without a word. One line, whatever the gate said; null when nothing was left unread.
+ */
+export function unreadMotionLine(rigArg: string, motion: string | null): string | null {
+  if (motion !== null) return null;
+  const beside = join(dirname(rigArg), 'motion.json');
+  if (!existsSync(beside) || statSync(rigArg).isDirectory()) return null;
+  return `${beside} is beside ${rigArg} and was not read — --rig naming the rig.json reads no motion spec, so --out carries none of the rig's own animations: pass --rig ${dirname(rigArg)} (the directory, which reads the motion.json beside its rig.json) or --base-motion ${beside}`;
 }
 
 /** The SCALE line's own clause (rig-c/pose#240): the median it divides by, against the segment at its longest. */

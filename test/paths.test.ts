@@ -91,6 +91,42 @@ const CASES: Array<{ name: string; file: string; from: string; to: string; run: 
     },
   },
   {
+    name: 'a bare rig.json whose gate is green, with a motion.json beside it, says the rig\'s own animations are not in --out (#250)',
+    file: 'src/run.ts',
+    from: '    if (unread !== null) tell(`  MOTION ${unread}`);\n',
+    to: '',
+    run: (cli) => {
+      const d = scratch();
+      try {
+        // The wave's rig, which gates green alone, beside a motion spec whose animation it would carry.
+        mkdirSync(join(d, 'bare'));
+        cpSync(join(WAVE, 'rig', 'rig.json'), join(d, 'bare', 'rig.json'));
+        writeFileSync(join(d, 'bare', 'motion.json'), JSON.stringify({ spec: 'rigc-motion/1', archetype: 'wave', cut: 'wave', easings: {}, animations: { turn: { duration: 1, tracks: [{ bone: 'head', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 1, v: [5] }] }] } } }, null, 2));
+        const line = "  MOTION bare/motion.json is beside bare/rig.json and was not read — --rig naming the rig.json reads no motion spec, so --out carries none of the rig's own animations: pass --rig bare (the directory, which reads the motion.json beside its rig.json) or --base-motion bare/motion.json";
+        for (const extra of [[], ['--summary']]) {
+          const r = retarget(cli, d, ['--rig', 'bare/rig.json', '--out', 'motion.json', ...extra]);
+          expect(r.status, r.stdout + r.stderr).toBe(0);
+          expect(lines(r)).toContain(line);
+          // No behaviour change: the motion is the wave's, byte for byte.
+          expect(sha(join(d, 'motion.json'))).toBe(WAVE_SHA256);
+        }
+        // The forms the line names read the animation and say nothing.
+        for (const args of [['--rig', 'bare'], ['--rig', 'bare/rig.json', '--base-motion', 'bare/motion.json']]) {
+          const r = retarget(cli, d, [...args, '--out', 'with.json']);
+          expect(r.status, r.stdout + r.stderr).toBe(0);
+          expect(lines(r)).toContain('  wrote with.json — animations: turn, dance');
+          expect(lines(r).some((l) => l.startsWith('  MOTION '))).toBe(false);
+        }
+        // A rig.json with no motion.json beside it says nothing either.
+        const plain = retarget(cli, d, ['--rig', join(WAVE, 'rig', 'rig.json'), '--out', 'plain.json']);
+        expect(plain.status, plain.stdout + plain.stderr).toBe(0);
+        expect(lines(plain).some((l) => l.startsWith('  MOTION '))).toBe(false);
+      } finally {
+        rmSync(d, { recursive: true, force: true });
+      }
+    },
+  },
+  {
     name: 'no --report: the report is written beside the motion as <out>.report.json, and the line says it was the default',
     file: 'src/run.ts',
     from: "', beside --out by default; name another path with --report'",
