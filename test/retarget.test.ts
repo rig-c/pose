@@ -3840,7 +3840,8 @@ describe('#47: --leg-scale and --plant-feet', () => {
       // At the end of the run: after every LAND, JITTER and FOLD line.
       const all = r.stdout.split('\n').map((l) => l.trim()).filter((l) => l !== '');
       const at = all.indexOf(lines[0]!);
-      expect(all.slice(at + 2).every((l) => l.startsWith('wrote '))).toBe(true);
+      // Only what was written follows: the build's record (#270) and the wrote lines.
+      expect(all.slice(at + 2).every((l) => l.startsWith('wrote ') || l.startsWith('RECORD '))).toBe(true);
       for (const [k, d] of rep.reduce.ankleDrift.entries()) {
         expect(lines[k]).toStartWith(`REDUCE ankle drift allowed: bone "${d.bone}" ${d.units.toPrecision(3)} units = ${d.legLengths.toPrecision(3)} leg lengths on any one frame (plant ${d.plant.toPrecision(3)} + reduce ${d.reduce.toPrecision(3)})`);
         expect(lines[k]).toContain(`between two frames up to ${(2 * d.units).toPrecision(3)} units`);

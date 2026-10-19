@@ -122,6 +122,7 @@ No other repository in the org (core, parts, play, adapters, parts-examples, tra
 | `rig-pose-report/1` (the report) | promised, as below | S, R |
 | `rig-pose-camera/1` (`--camera`) | promised | S |
 | `rig-pose-tracks/1` (`--merge`), `rig-pose-compare/1` (`compare --report`) | courtesy | — |
+| `rig-pose-retarget/1` (`--build`'s `retarget.json`, rig-c/pose#270) | courtesy | — |
 
 ### Flags
 
@@ -159,6 +160,7 @@ Every flag `parseFlags` reads in `cli.ts`, once. `test/promise.test.ts` holds th
 | `retarget` | `--switch-at` | courtesy | — | |
 | `retarget` | `--profile` | promised | D | |
 | `retarget` | `--build` | promised | X 8, D | |
+| `retarget` | `--reference` | courtesy | — | with `--build`: echoed into `retarget.json` (rig-c/pose#270); not `compare --reference` |
 | `retarget` | `--render` | promised | X 2 | |
 | `retarget` | `--parts` | courtesy | — | |
 | `retarget` | `--report` | promised | S, X 13 | |
