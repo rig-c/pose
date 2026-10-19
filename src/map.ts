@@ -160,6 +160,23 @@ export interface RestBone extends RawBone {
 }
 export type Rest = ReadonlyMap<string, RestBone>;
 
+/** The body-18 points past which nothing is read: no toe past an ankle, no hand point past a wrist. */
+const LIMB_ENDS: Readonly<Record<string, string>> = { r_ankle: 'toe', l_ankle: 'toe', r_wrist: 'hand point', l_wrist: 'hand point' };
+
+/**
+ * MAP_CHAIN_JOINTS's remedy (rig-c/pose#240): a chain one joint short whose last
+ * joint ends a limb — a three-bone leg on hip, knee, ankle — has a bone body-18
+ * gives no segment to, so the remedy is to leave it out, not to find a joint.
+ */
+function endOfLimb(bones: readonly string[], joints: readonly string[]): string {
+  const last = joints[joints.length - 1];
+  if (joints.length !== bones.length || last === undefined) return '';
+  const what = LIMB_ENDS[last];
+  if (what === undefined) return '';
+  const bone = bones[bones.length - 1]!;
+  return ` — body-18 has no ${what} past "${last}", so nothing aims bone "${bone}": list the chain's bones up to the one ending at "${last}" (${bones.slice(0, -1).map((b) => `"${b}"`).join(', ')}) and leave "${bone}" out of "bones"; it stays unkeyed and turns with its parent`;
+}
+
 export function readMap(text: string, where: string): JointMap {
   const doc = parseJson(text, where, 'MAP_JSON');
   const p = new Problems();
@@ -192,7 +209,7 @@ export function readMap(text: string, where: string): JointMap {
       if (bones === null || bones.length === 0) p.add('MAP_CHAIN_BONES', `${label} "bones" is ${typeName(c.bones)}; it must be a non-empty array of bone names`);
       if (joints === null || joints.length < 2) p.add('MAP_CHAIN_JOINTS', `${label} "joints" is ${typeName(c.joints)}; it must be an array of at least two joint names`);
       if (bones !== null && joints !== null && bones.length > 0 && joints.length !== bones.length + 1) {
-        p.add('MAP_CHAIN_JOINTS', `${label} has ${bones.length} bone(s) and ${joints.length} joint(s); bone k carries the segment from joint k to joint k+1, so it needs ${bones.length + 1}`);
+        p.add('MAP_CHAIN_JOINTS', `${label} has ${bones.length} bone(s) and ${joints.length} joint(s); bone k carries the segment from joint k to joint k+1, so it needs ${bones.length + 1}${endOfLimb(bones, joints)}`);
       }
       for (const j of joints ?? []) {
         if (!POINT_NAMES.includes(j)) p.add('MAP_JOINT_NAME', `${label} names joint "${j}", which is not a point this package reads; they are ${POINT_NAMES.join(', ')}`);

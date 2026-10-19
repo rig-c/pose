@@ -13,7 +13,7 @@ import { cleanLine, cleanSummaryLine, inferredSource } from './clean.ts';
 import { convertCoco17, personTrack, readPoseSequence, TRAVEL_IN_PLACE, type CameraFrame } from './pose.ts';
 import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './problems.ts';
 import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, readIdle, targetOf, trackLabel, type IdleReading, type RigcTrack, type Target } from './idle.ts';
-import { bendGroupLine, bendGroups, bendLine, endOnLine, flipLine, holdLine, rangeLine, reachCostLine, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions } from './retarget.ts';
+import { bendGroupLine, bendGroups, bendLine, endOnLine, flipLine, holdLine, rangeLine, reachCostLine, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions, type ScaleBand, type ScaleFit } from './retarget.ts';
 import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, readBuild, resolveRig, restOf, slotsOf } from './rigc.ts';
 import { artRangeLine, chainsMoving, raisedLine, RAISED_WITHIN, reachLine, switchLine, uncoveredFolds } from './switch.ts';
 import { jitterLine, landed, type FeetReading, type JitterRow, type Landing, measureFeet, measureJitter, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
@@ -151,7 +151,11 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     if (a.smoothAlias !== undefined) say(`  SMOOTH --smooth is carried by clean; ignored (given ${a.smoothAlias}; this sequence was cleaned with legs ${seq.cleaned!.params.legs}, rest ${seq.cleaned!.params.rest})`);
     if (seq.camera !== undefined) say(`  CAMERA ${cameraLine(seq.camera, times, seq.cameraSource)}`);
     else if (a.plantFeet === true) say('  CAMERA none in the sequence: --plant-feet reads the picture as a fixed camera, so a zoom or a pan in the video moves the floor with it and the floor may step with the picture (tools/scan.py reads the camera, rig-c/pose#63)');
-    if (r.scale !== null) say(`  SCALE  ${r.scale.factor.toFixed(5)} rig units per picture px (rig ${r.scale.rig.toFixed(2)} / pose median ${r.scale.pose.toFixed(2)})`);
+    if (r.scale !== null) {
+      const fit = r.scaleFit === null ? [] : scaleFitLines(r.scale.factor, r.scaleFit);
+      say(`  SCALE  ${r.scale.factor.toFixed(5)} rig units per picture px (rig ${r.scale.rig.toFixed(2)} / pose median ${r.scale.pose.toFixed(2)})${r.scaleFit === null ? '' : `; ${segmentClause(r.scaleFit)}`}`);
+      for (const l of fit) say(`  SCALE  ${l}`);
+    }
     for (const h of r.holds) say(`  HOLD   ${holdLine(h, r.times)}`);
     for (const s of r.short) say(`  ${s.across === true ? 'HOLD  ' : 'SHORT '} ${shortLine(s, r.times, a.short)}`);
     if (a.short !== 'off') {
@@ -272,11 +276,20 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     const posed = poseFrames(doc, a.name, r.times);
     // A reduced track is held to the dense target plus its tolerance (#32); an ankle, to what the
     // reduced bones above it may move it by (#94, `footReduce`). A scale keeps its own: it is reduced within half of it.
-    const landings = measureLanding(doc, a.name, map, r, posed).map((l) => (a.reduce === undefined ? l
-      : l.kind === 'angle' ? { ...l, tolerance: l.tolerance + a.reduce }
-      : l.kind === 'origin' && a.reduceHip !== undefined ? { ...l, tolerance: l.tolerance + a.reduceHip }
-      : l.kind === 'foot' ? { ...l, tolerance: l.tolerance + footReduce(rest, r, l.bone.replace(/:tip$/, ''), a.reduce, a.reduceHip) }
-      : l));
+    // #240: each ankle's allowance is computed once, here, and both the LAND tolerance and the drift line read it.
+    const drift: AnkleDrift[] = [];
+    const landings = measureLanding(doc, a.name, map, r, posed).map((l) => {
+      if (a.reduce === undefined) return l;
+      if (l.kind === 'angle') return { ...l, tolerance: l.tolerance + a.reduce };
+      if (l.kind === 'origin' && a.reduceHip !== undefined) return { ...l, tolerance: l.tolerance + a.reduceHip };
+      if (l.kind !== 'foot') return l;
+      const ankle = l.bone.replace(/:tip$/, '');
+      const by = footReduce(rest, r, ankle, a.reduce, a.reduceHip);
+      const lb = legBonesOf(map);
+      const side = lb?.r.ankle === ankle ? 'r' : lb?.l.ankle === ankle ? 'l' : null;
+      drift.push({ bone: l.bone, side, plant: l.tolerance, reduce: by, units: l.tolerance + by, legLengths: side === null || r.rigLeg === null ? null : (l.tolerance + by) / r.rigLeg[side] });
+      return { ...l, tolerance: l.tolerance + by };
+    });
     const p = new Problems();
     // A carried idle track on a bone above a mapped one moves it where the keys did not ask (the key formula holds unmapped bones at setup).
     const carriedAbove = (bone: string): string => {
@@ -311,7 +324,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       for (const l of posedFeetLines(feetReading)) say(`  FEET   ${l}`);
     }
     const shear = r.scales.size === 0 ? [] : measureShear(doc, posed, r.scales.keys());
-    for (const x of shear) say(`  SHEAR  bone "${x.bone}": art sheared up to ${x.shear.toFixed(2)}° (frame ${x.frame}); world x axis ${x.x[0].toFixed(3)} … ${x.x[1].toFixed(3)}, y axis ${x.y[0].toFixed(3)} … ${x.y[1].toFixed(3)} of setup — a scaled bone, or one under it; a reading`);
+    for (const x of shear) say(`  SHEAR  bone "${x.bone}": art sheared up to ${x.shear.toFixed(2)}° (frame ${x.frame}); world x axis ${x.x[0].toFixed(3)} … ${x.x[1].toFixed(3)}, y axis ${x.y[0].toFixed(3)} … ${x.y[1].toFixed(3)} of setup — a scaled bone, or one under it; a reading${shearRemedy(x, rest, shear)}`);
 
     const dts = r.times.slice(1).map((t, i) => t - r.times[i]!).sort((x, y) => x - y);
     const fps = dts.length === 0 ? 12 : Math.max(1, Math.min(60, Math.round(1 / dts[dts.length >> 1]!)));
@@ -326,6 +339,9 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       for (const u of uncovered) say(`  UNCOVERED mesh "${u.attachment}" (slot "${u.slot}"; chains ${u.chains.length === 0 ? 'none' : u.chains.join(', ')}) folds with no switch covering it on ${u.times.length} frame(s): t=${spans(u.times, 1 / fps)}`);
     }
 
+    // #240: what --reduce allowed each ankle, at the end of the run, from the same figure the LAND check applied.
+    for (const d of drift) say(`  REDUCE ${ankleDriftLine(d)}`);
+
     if (a.report !== undefined) assertReportInputs([rigSnapshot,mapSnapshot,poseSnapshot]);
     const reportText = a.report === undefined ? null : writeReport({
         spec: 'rig-pose-report/1',
@@ -337,6 +353,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         cleaned: seq.cleaned,
         options: { minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', floor: a.floor ?? null, raisedByHead: a.raisedByHead === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', reduceHip: a.reduceHip ?? 'off' },
         scale: r.scale,
+        scaleFit: r.scaleFit,
         holds: r.holds,
         short: r.short,
         endOn: r.endOn,
@@ -385,7 +402,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         idleDropped: idle === null ? null : idle.dropped,
         idleKeptOut: idle === null ? null : idle.keptOut,
         merged: fragment.map((tr) => ({ track: trackLabel(tr, groups), keys: tr.keys.length })),
-        reduce: reduced === null ? null : { tolerance: a.reduce, hipTolerance: a.reduceHip ?? null, rows: reduced.rows },
+        reduce: reduced === null ? null : { tolerance: a.reduce, hipTolerance: a.reduceHip ?? null, rows: reduced.rows, ankleDrift: drift },
       }, map, { frameTimes: r.times }, f.meshes !== null && doc.slots.length > 0 ? reportRenderDomain(JSON.parse(readFileSync(join(f.frames, '..', 'frames.json'), 'utf8')), a.name) : null, {rig:rigSnapshot.identity,map:mapSnapshot.identity,pose:poseSnapshot.identity});
     if (a.build !== undefined) {
       // Built again where it will live, not copied: rigc's page paths are relative to the build (#18).
@@ -983,4 +1000,72 @@ export function readReportInput(file:string):ReportInputSnapshot {
 }
 export function assertReportInputs(inputs:readonly ReportInputSnapshot[]):void {
   for(const expected of inputs){const current=readReportInput(expected.file);if(current.identity.path!==expected.identity.path||current.identity.sha256!==expected.identity.sha256)throw new Refusal([{code:'REPORT_INPUTS_CHANGED',text:`${expected.identity.path}: consumed input changed before output writes; expected SHA-256 ${expected.identity.sha256}, found ${current.identity.sha256}`}]);}
+}
+
+/** The SCALE line's own clause (rig-c/pose#240): the median it divides by, against the segment at its longest. */
+export function segmentClause(f: ScaleFit): string {
+  const sg = f.segment;
+  return `the median is ${sg.ratio.toFixed(3)} of its 95th percentile ${sg.straight.toFixed(2)} — under 1, the median frame foreshortens ${sg.joints[0]} → ${sg.joints[1]} and the factor is ${(1 / sg.ratio).toFixed(3)}× the one at its longest`;
+}
+
+/**
+ * The SCALE reading's remedy lines (rig-c/pose#240): the scale segment's median
+ * against its 95th percentile, the legs' and hips' bands beside the factor (and
+ * the line naming a factor outside both), and the hip's travel, pose beside rig.
+ */
+export function scaleFitLines(factor: number, f: ScaleFit): string[] {
+  const out: string[] = [];
+  const sg = f.segment;
+  const band = (b: ScaleBand) => `${b.lo.toFixed(5)}–${b.hi.toFixed(5)}`;
+  const within = (w: boolean) => (w ? 'within' : 'outside');
+  const leg = f.leg === null ? 'leg not read (needs both legs)' : `leg ${band(f.leg.band)} (${within(f.leg.within)})`;
+  const hip = f.hip === null ? 'hip not read (needs both legs and both hips)' : `hip ${band(f.hip.band)} (${within(f.hip.within)})`;
+  out.push(`bands, rig ÷ picture at its 95th percentile – median: ${leg}, ${hip}; scale.factor ${factor.toFixed(5)} (within: rig ÷ factor inside the picture's lengths ± 1 px)`);
+  if (f.outside === true) {
+    out.push(`outside both bands: scale.factor ${factor.toFixed(5)} sizes the figure as neither its legs nor its hips do — "translate" "scale" ${sg.joints[0]} → ${sg.joints[1]} is proportioned unlike the rig; a pair on the legs or hips reads inside a band`);
+  }
+  const t = f.travel;
+  const per = (v: { legs: [number, number] | null; hips: [number, number] | null }, k: 0 | 1) => `${v.legs === null ? '' : ` = ${v.legs[k].toFixed(3)} legs`}${v.hips === null ? '' : ` = ${v.hips[k].toFixed(3)} hips`}`;
+  out.push(`hip travel (${t.joint} → bone "${t.bone}"), range: pose x ${t.pose.x.toFixed(2)}px${per(t.pose, 0)}, y ${t.pose.y.toFixed(2)}px${per(t.pose, 1)}; rig x ${t.rig.x.toFixed(2)}${per(t.rig, 0)}, y ${t.rig.y.toFixed(2)}${per(t.rig, 1)}`);
+  return out;
+}
+
+/**
+ * The SHEAR line's remedy clause (rig-c/pose#240): where the shear comes from
+ * and the rig spec's `inherit` setting that removes it. Nothing on a shear that
+ * prints as 0.00°, the line's own precision.
+ */
+export function shearRemedy(x: { bone: string; shear: number }, rest: Rest, measured: ReadonlyArray<{ bone: string }>): string {
+  if (x.shear.toFixed(2) === '0.00') return '';
+  const b = rest.get(x.bone);
+  if (b === undefined) return '';
+  const inherit = b.inherit ?? 'normal';
+  const parent = b.parent;
+  const carried = parent !== null && measured.some((m) => m.bone === parent);
+  if (inherit === 'normal' && carried) {
+    return `; it inherits "normal" from scaled "${parent}" — "inherit": "noScale" on bone "${x.bone}" in the rig spec unshears its art and still turns it with "${parent}" ("onlyTranslation" also stops the turn)`;
+  }
+  if (inherit !== 'normal') return `; bone "${x.bone}" inherits "${inherit}", so the shear is not carried from "${parent ?? 'its parent'}"`;
+  return `; its parent ${parent === null ? 'is none' : `"${parent}" is not scaled`}, so the shear is not carried from above`;
+}
+
+/** rig-c/pose#240: how far --reduce may leave one ankle off the dense run's, as the landing check applies it. */
+export interface AnkleDrift {
+  /** The ankle point, as its LAND line names it (`<bone>:tip`). */
+  bone: string;
+  side: 'r' | 'l' | null;
+  /** The plant's own tolerance (without --reduce). */
+  plant: number;
+  /** `footReduce`: the most the reduced bones above it may move it. */
+  reduce: number;
+  /** plant + reduce, world units — the LAND line's tolerance. */
+  units: number;
+  /** `units` in that side's rig leg at setup (thigh origin → ankle); null without both legs. */
+  legLengths: number | null;
+}
+
+/** The drift line: the allowance on one frame, and what it lets a planted ankle slide between two. */
+export function ankleDriftLine(d: AnkleDrift): string {
+  const legs = (v: number) => (d.legLengths === null ? '' : ` = ${(d.legLengths * v / d.units).toPrecision(3)} leg lengths`);
+  return `ankle drift allowed: bone "${d.bone}" ${d.units.toPrecision(3)} units${legs(d.units)} on any one frame (plant ${d.plant.toPrecision(3)} + reduce ${d.reduce.toPrecision(3)}); between two frames up to ${(2 * d.units).toPrecision(3)} units${legs(2 * d.units)} — a tighter slide bar needs a smaller --reduce`;
 }

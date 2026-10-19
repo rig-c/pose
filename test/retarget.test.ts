@@ -1958,6 +1958,9 @@ describe('examples/wave runs as the README says', () => {
     expect(linesOf(r, 'REACH')).toEqual([]);
     // #242: the wave declares no travel, so the in-place readings it decoupled from --plant-feet do not apply — no TRAVEL line, and the hash below holds.
     expect(linesOf(r, 'TRAVEL')).toEqual([]);
+    // #240: the SCALE reading, and its factor (1.00000) inside the hip band, so no `outside both bands` line on the public example.
+    expect(linesOf(r, 'SCALE').map((l) => l.slice(0, 28))).toEqual(['SCALE  1.00000 rig units per', 'SCALE  bands, rig ÷ picture ', 'SCALE  hip travel (mid_hip →']);
+    expect(linesOf(r, 'SCALE')[1]).toContain('hip 1.00000–1.00000 (within)');
     // The readings moved no byte: the motion the wave wrote before #236 (v0.31.1), byte for byte.
     // A change that moves the wave's motion on purpose updates this hash in the same PR, and says why.
     expect(createHash('sha256').update(readFileSync(out)).digest('hex')).toBe('bd1ca2506217c21769169b884a306ad2defabaadecb93abd0572969291aa2e59');
@@ -3599,7 +3602,7 @@ describe('#47: --leg-scale and --plant-feet', () => {
       expect(r.stderr).toBe('');
       expect(r.status).toBe(0);
       expect(linesOf(r, 'GATE')[0]).toContain('green');
-      const red = linesOf(r, 'REDUCE');
+      const red = linesOf(r, 'REDUCE').filter((l) => !l.startsWith('REDUCE ankle drift allowed: '));
       // A rotate row per mapped bone, the hip, a scalex row per scaled bone, and the total.
       for (const b of ['leg_r0', 'leg_r1', 'leg_l0', 'leg_l1']) {
         expect(red.some((l) => l.startsWith(`REDUCE bone "${b}" rotate: 24 → `))).toBe(true);
@@ -3669,6 +3672,211 @@ describe('#47: --leg-scale and --plant-feet', () => {
         expect(floorGap(posedLegs(c.build))).toBeLessThan(PLANT_TOL + 2 * 150 * 1.08 * (0.1 * RAD + 5e-5));
       } finally {
         rmSync(d, { recursive: true, force: true });
+      }
+    }, SLOW);
+  });
+
+  describe('#240: each reading names its remedy', () => {
+    /** A copy of the package with one edit, the edit's anchor checked to occur once. */
+    function mutant(file: string, from: string, to: string): { cli: string; done: () => void } {
+      mkdirSync(MUTANTS, { recursive: true });
+      const d = mkdtempSync(join(MUTANTS, 'm-'));
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', file);
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, to));
+      return { cli: join(d, 'cli.ts'), done: () => rmSync(d, { recursive: true, force: true }) };
+    }
+
+    /**
+     * The stick standing, its picture proportioned as the rig (trunk 150 px against the rig's 150, legs 150 against 150,
+     * hips 30 against 30), with the trunk shown at `k(i)` of its length — leaning toward the camera.
+     */
+    function trunkPose(k: (i: number) => number): Record<string, unknown> {
+      const above = new Set(['neck', 'nose', 'r_shoulder', 'r_elbow', 'r_wrist', 'l_shoulder', 'l_elbow', 'l_wrist', 'r_eye', 'l_eye', 'r_ear', 'l_ear']);
+      return poseDoc(STILL, (i, j) => {
+        const r = j.r_hip!.at as Pt;
+        const l = j.l_hip!.at as Pt;
+        const mid: Pt = [(r[0] + l[0]) / 2, (r[1] + l[1]) / 2];
+        const neck = j.neck!.at as Pt;
+        const want = add(mid, [(neck[0] - mid[0]) * 1.5 * k(i), (neck[1] - mid[1]) * 1.5 * k(i)]);
+        const shift: Pt = [want[0] - neck[0], want[1] - neck[1]];
+        for (const name of above) {
+          const a = j[name]!.at as Pt;
+          j[name] = { ...j[name], at: add(a, shift) };
+        }
+      });
+    }
+    const outsideLine = (r: Ran) => linesOf(r, 'SCALE').find((l) => l.startsWith('SCALE  outside both bands: '));
+
+    test('SCALE: the segment\'s median against its 95th percentile, the leg and hip bands, the hip\'s travel; a factor outside both bands is named, one inside is not', () => {
+      // Control: proportioned as the rig, nothing foreshortened — the factor lies in both bands.
+      const even = setup({ pose: trunkPose(() => 1) });
+      const e = retarget(even);
+      expect(e.status).toBe(0);
+      const es = linesOf(e, 'SCALE');
+      expect(es[0]).toStartWith('SCALE  1.00000 rig units per picture px (rig 150.00 / pose median 150.00); the median is 1.000 of its 95th percentile 150.00');
+      expect(es[1]).toMatch(/^SCALE  bands, rig ÷ picture at its 95th percentile – median: leg [0-9.]+–[0-9.]+ \(within\), hip 1\.00000–1\.00000 \(within\); scale\.factor 1\.00000 \(within: /);
+      expect(es.some((l) => l.startsWith('SCALE  hip travel (mid_hip → bone "hip"), range: '))).toBe(true);
+      expect(outsideLine(e)).toBeUndefined();
+      // Planted: the trunk at 0.7 of its length on every frame from 4 — the median frame foreshortens it, and the factor follows.
+      const fore = setup({ pose: trunkPose((i) => (i < 4 ? 1 : 0.7)) });
+      const report = join(fore.dir, 'report.json');
+      const f = retarget(fore, ['--report', report]);
+      expect(f.status).toBe(0);
+      const fs = linesOf(f, 'SCALE');
+      expect(fs[0]).toBe('SCALE  1.42857 rig units per picture px (rig 150.00 / pose median 105.00); the median is 0.700 of its 95th percentile 150.00 — under 1, the median frame foreshortens mid_hip → neck and the factor is 1.429× the one at its longest');
+      expect(fs[1]).toMatch(/ \(outside\), hip 1\.00000–1\.00000 \(outside\); scale\.factor 1\.42857 \(within: /);
+      expect(outsideLine(f)).toStartWith('SCALE  outside both bands: scale.factor 1.42857 sizes the figure as neither its legs nor its hips do');
+      // The report carries the same figures the lines print.
+      const rep = JSON.parse(readFileSync(report, 'utf8')) as { scale: { factor: number }; scaleFit: { segment: { ratio: number }; hip: { band: { lo: number; hi: number } }; outside: boolean } };
+      expect(rep.scaleFit.segment.ratio).toBeCloseTo(0.7, 9);
+      expect(rep.scaleFit.hip.band.lo).toBeCloseTo(1, 9);
+      expect(rep.scaleFit.outside).toBe(true);
+    }, SLOW);
+
+    test('mutant: SCALE without its remedy lines is red on the foreshortened pair', () => {
+      const m = mutant('run.ts', 'export function scaleFitLines(factor: number, f: ScaleFit): string[] {\n  const out: string[] = [];', 'export function scaleFitLines(_factor: number, _f: ScaleFit): string[] {\n  const out: string[] = [];\n  if (out.length === 0) return out;');
+      try {
+        const r = retarget(setup({ pose: trunkPose((i) => (i < 4 ? 1 : 0.7)) }), [], m.cli);
+        expect(r.status).toBe(0);
+        console.log(`  mutant "SCALE without remedy": ${linesOf(r, 'SCALE').length} SCALE line(s)`);
+        expect(outsideLine(r)).toBeUndefined();
+        expect(linesOf(r, 'SCALE').some((l) => l.startsWith('SCALE  bands, '))).toBe(false);
+      } finally {
+        m.done();
+      }
+    }, SLOW);
+
+    /** Knees bent in the picture (the shin 20° off the thigh), so the thigh's scale shears the shin (the #47 mutant's pose). */
+    const bentPose = () => poseDoc({ ...STILL, rs: () => THIGH - 20 }, (i, j) => {
+      for (const s of ['r', 'l'] as const) {
+        const hip = j[`${s}_hip`]!.at as Pt;
+        const knee = add(hip, dir(THIGH, 80 * bendF(i)));
+        j[`${s}_knee`] = { state: 'observed', at: knee, score: 0.9 };
+        j[`${s}_ankle`] = { state: 'observed', at: add(knee, dir(s === 'r' ? THIGH - 20 : SHIN, 70 * bendF(i))), score: 0.9 };
+      }
+    });
+    const shearOf = (r: Ran, bone: string) => linesOf(r, 'SHEAR').find((l) => l.startsWith(`SHEAR  bone "${bone}":`))!;
+
+    test('SHEAR: a bone sheared by its scaled parent names "inherit": "noScale" as the fix; a noScale bone and an unsheared one do not', () => {
+      const r = retarget(setup({ pose: bentPose() }), ['--leg-scale', '0.8,1.05']);
+      expect(r.status).toBe(0);
+      const shin = shearOf(r, 'leg_r1');
+      expect(shin).toMatch(/art sheared up to [1-9]/);
+      expect(shin).toContain('; it inherits "normal" from scaled "leg_r0" — "inherit": "noScale" on bone "leg_r1" in the rig spec unshears its art and still turns it with "leg_r0"');
+      // The thigh is scaled along its own x axis under an unscaled hip: no shear, so no remedy.
+      expect(shearOf(r, 'leg_r0')).toMatch(/art sheared up to 0\.00° .* a reading$/);
+      // Control: the fix applied — the shin inherits noScale, and its line no longer asks for it.
+      const fixed = retarget(setup({ pose: bentPose(), rig: { bones: (bs) => bs.map((b) => (b.name === 'leg_r1' ? { ...b, inherit: 'noScale' } : b)) } }), ['--leg-scale', '0.8,1.05']);
+      expect(fixed.status).toBe(0);
+      expect(shearOf(fixed, 'leg_r1')).toMatch(/art sheared up to 0\.00° .* a reading$/);
+      // A mutant without the clause is red on the sheared shin.
+      const m = mutant('run.ts', "  if (x.shear.toFixed(2) === '0.00') return '';", "  if (x.shear >= 0) return '';");
+      try {
+        const red = retarget(setup({ pose: bentPose() }), ['--leg-scale', '0.8,1.05'], m.cli);
+        expect(red.status).toBe(0);
+        console.log(`  mutant "SHEAR without remedy": ${shearOf(red, 'leg_r1').slice(-60)}`);
+        expect(shearOf(red, 'leg_r1')).not.toContain('"inherit": "noScale"');
+      } finally {
+        m.done();
+      }
+    }, SLOW);
+
+    /** #94's gait: scaled legs, the hip planted over them, the free left ankle 0.03 leg lengths up on frames 8–15. */
+    const gait = () => legsPose(bendF, (i, s) => (s === 'l' && i >= 8 && i <= 15 ? 0.03 * Math.hypot(V[0], V[1]) : 0));
+    const GAIT_FLAGS = ['--leg-scale', '0.8,1.05', '--plant-feet', '--stance', '0.07'];
+    interface DriftReport {
+      landings: Array<{ bone: string; kind: string; tolerance: number }>;
+      feet: { rigLeg: { r: number; l: number } };
+      reduce: { ankleDrift: Array<{ bone: string; side: 'r' | 'l'; plant: number; reduce: number; units: number; legLengths: number }> };
+    }
+    const driftLines = (r: Ran) => linesOf(r, 'REDUCE').filter((l) => l.startsWith('REDUCE ankle drift allowed: '));
+
+    test('--reduce: the ankle drift line prints, at the end of the run, the very allowance the landing check applied', () => {
+      const c = setup({ pose: gait() });
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, [...GAIT_FLAGS, '--reduce', '0.4', '--reduce-hip', '0.5', '--report', report]);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      const rep = JSON.parse(readFileSync(report, 'utf8')) as DriftReport;
+      const ankles = rep.landings.filter((l) => l.kind === 'foot');
+      expect(ankles).toHaveLength(2);
+      expect(rep.reduce.ankleDrift.map((d) => d.bone)).toEqual(ankles.map((l) => l.bone));
+      for (const d of rep.reduce.ankleDrift) {
+        // The same figure, not a recomputation: the LAND tolerance is plant + reduce, and the drift row is that sum.
+        const land = ankles.find((l) => l.bone === d.bone)!;
+        expect(d.units).toBe(land.tolerance);
+        expect(d.plant + d.reduce).toBe(d.units);
+        expect(d.legLengths).toBe(d.units / rep.feet.rigLeg[d.side]);
+        // The reduction's share holds the hip's tolerance and a lever turned by the angle tolerance (#94's bound).
+        expect(d.reduce).toBeGreaterThan(0.5 + 150 * (0.4 * RAD + 5e-5));
+      }
+      const lines = driftLines(r);
+      expect(lines).toHaveLength(2);
+      // At the end of the run: after every LAND, JITTER and FOLD line.
+      const all = r.stdout.split('\n').map((l) => l.trim()).filter((l) => l !== '');
+      const at = all.indexOf(lines[0]!);
+      expect(all.slice(at + 2).every((l) => l.startsWith('wrote '))).toBe(true);
+      for (const [k, d] of rep.reduce.ankleDrift.entries()) {
+        expect(lines[k]).toStartWith(`REDUCE ankle drift allowed: bone "${d.bone}" ${d.units.toPrecision(3)} units = ${d.legLengths.toPrecision(3)} leg lengths on any one frame (plant ${d.plant.toPrecision(3)} + reduce ${d.reduce.toPrecision(3)})`);
+        expect(lines[k]).toContain(`between two frames up to ${(2 * d.units).toPrecision(3)} units`);
+      }
+      // Without --reduce there is nothing allowed beyond the plant, and no line.
+      const dense = retarget(c, GAIT_FLAGS);
+      expect(dense.status).toBe(0);
+      expect(driftLines(dense)).toEqual([]);
+    }, SLOW);
+
+    test('mutant: a drift line computed apart from the landing check (the hip\'s share left out) disagrees with it, and the control above is red', () => {
+      const m = mutant('run.ts', "drift.push({ bone: l.bone, side, plant: l.tolerance, reduce: by, units: l.tolerance + by,", "drift.push({ bone: l.bone, side, plant: l.tolerance, reduce: by - (a.reduceHip ?? 0), units: l.tolerance + by - (a.reduceHip ?? 0),");
+      try {
+        const c = setup({ pose: gait() });
+        const report = join(c.dir, 'report.json');
+        const r = retarget(c, [...GAIT_FLAGS, '--reduce', '0.4', '--reduce-hip', '0.5', '--report', report], m.cli);
+        expect(r.status).toBe(0);
+        const rep = JSON.parse(readFileSync(report, 'utf8')) as DriftReport;
+        const mismatched = rep.reduce.ankleDrift.filter((d) => d.units !== rep.landings.find((l) => l.bone === d.bone)!.tolerance);
+        console.log(`  mutant "drift apart from the check": ${mismatched.length} of ${rep.reduce.ankleDrift.length} drift row(s) disagree with LAND`);
+        expect(mismatched).toHaveLength(2);
+      } finally {
+        m.done();
+      }
+      const gone = mutant('run.ts', "    for (const d of drift) say(`  REDUCE ${ankleDriftLine(d)}`);", '');
+      try {
+        const r = retarget(setup({ pose: gait() }), [...GAIT_FLAGS, '--reduce', '0.4'], gone.cli);
+        expect(r.status).toBe(0);
+        expect(driftLines(r)).toEqual([]);
+      } finally {
+        gone.done();
+      }
+    }, SLOW);
+
+    test('MAP_CHAIN_JOINTS: a three-bone leg on hip, knee and ankle is told body-18 has no toe, and which bone to leave out', () => {
+      const rig = { bones: (bs: BoneSpec[]) => [...bs, { name: 'foot_r', parent: 'leg_r1', x: 70, y: 0, rotation: 80, length: 25 }] };
+      const map = baseMap();
+      map.chains = baseChains().map((ch) => (ch.name === 'leg_r' ? { ...ch, bones: ['leg_r0', 'leg_r1', 'foot_r'] } : ch));
+      const want = 'FAIL  MAP_CHAIN_JOINTS: chain "leg_r" has 3 bone(s) and 3 joint(s); bone k carries the segment from joint k to joint k+1, so it needs 4 — body-18 has no toe past "r_ankle", so nothing aims bone "foot_r": list the chain\'s bones up to the one ending at "r_ankle" ("leg_r0", "leg_r1") and leave "foot_r" out of "bones"; it stays unkeyed and turns with its parent';
+      const r = retarget(setup({ rig, map }));
+      expect(r.status).toBe(1);
+      expect(fails(r)).toContain(want);
+      // Control: the remedy taken — the same rig and the leg's two bones — is green, and the foot is unkeyed.
+      const fixedMap = baseMap();
+      const c = setup({ rig, map: fixedMap });
+      const ok = retarget(c);
+      expect(ok.status).toBe(0);
+      expect(motionOf(c.out).animations.dance!.tracks.some((t) => t.bone === 'foot_r')).toBe(false);
+      // A count short of a joint that ends no limb (the arm's two bones on shoulder and elbow) is the readers' case, without the clause.
+      const m = mutant('map.ts', "  if (what === undefined) return '';\n  const bone", "  if (what !== null) return '';\n  const bone");
+      try {
+        const red = retarget(setup({ rig, map }), [], m.cli);
+        console.log(`  mutant "MAP_CHAIN_JOINTS without the toe": ${fails(red).find((l) => l.startsWith('FAIL  MAP_CHAIN_JOINTS'))?.slice(-50)}`);
+        expect(fails(red)).not.toContain(want);
+      } finally {
+        m.done();
       }
     }, SLOW);
   });

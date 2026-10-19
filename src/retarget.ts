@@ -369,6 +369,8 @@ export interface Retarget {
   flips: Flip[];
   /** The figure scale, rig units per picture pixel, and the lengths it came from. */
   scale: { factor: number; pose: number; rig: number } | null;
+  /** rig-c/pose#240: what the figure scale is read against — its segment's foreshortening, the legs' and hips' ratios, the hip's travel; null without a scale. */
+  scaleFit: ScaleFit | null;
   /** The spans each alternate set shows, with their art turn. */
   switches: Switch[];
   /** Per switched or hidden slot, what it shows on each frame (null: nothing). */
@@ -458,6 +460,46 @@ export interface Pivot {
 
 type Pt = [number, number];
 
+/** A ratio band, rig units per picture px: the rig's length over the picture's straight (95th percentile) length, to over its median. */
+export interface ScaleBand {
+  /** rig / picture 95th percentile — the factor that matches the length where the picture shows it longest. */
+  lo: number;
+  /** rig / picture median — the factor that matches it on the median frame. */
+  hi: number;
+}
+
+/** rig-c/pose#240: the figure scale beside what it could have been read off instead. */
+export interface ScaleFit {
+  /** The `translate.scale.pose` segment: its median picture length (what the factor divides by) against its 95th percentile. */
+  segment: { joints: [string, string]; median: number; straight: number; ratio: number };
+  /** Each side's leg, hip → ankle: the rig's at setup (thigh origin → ankle, units), the picture's median and 95th percentile (px), and the band rig ÷ those; null without both legs. */
+  leg: { rig: Record<Side, number>; median: Record<Side, number>; straight: Record<Side, number>; band: ScaleBand; within: boolean } | null;
+  /** The hips' width: the rig's thigh roots apart at setup (units), the picture's r_hip → l_hip median and 95th percentile (px), and the band; null without both legs and both hips read. */
+  hip: { rig: number; median: number; straight: number; band: ScaleBand; within: boolean } | null;
+  /** Whether `scale.factor` lies outside the leg band and outside the hip band (`withinPx`); null unless both are read. */
+  outside: boolean | null;
+  /** The translated joint's range over the frames, x and y: the pose's in px, the keyed bone's world origin in units — each also in leg lengths (the pose's straight leg, the rig's at setup, the two sides' mean) and hip widths (the pose's 95th percentile, the rig's at setup); null where the unit is not read. */
+  travel: {
+    joint: string;
+    bone: string;
+    pose: { x: number; y: number; legs: [number, number] | null; hips: [number, number] | null };
+    rig: { x: number; y: number; legs: [number, number] | null; hips: [number, number] | null };
+  };
+}
+
+/**
+ * Whether `scale.factor` sizes a length as the picture shows it: the rig's
+ * length carried into the picture by the factor (rig ÷ factor, px) lies between
+ * the picture's median and 95th percentile, give or take one picture px — the
+ * picture's own unit, so a band the picture never widened (a length it shows the
+ * same on every frame) is not missed by a rounding the picture cannot show.
+ */
+export function withinPx(factor: number, rig: number, median: number, straight: number): boolean {
+  const px = rig / factor;
+  return px >= Math.min(median, straight) - 1 && px <= Math.max(median, straight) + 1;
+}
+
+
 /** The value of a point on one frame, or why it is not good. */
 export function pointOn(joints: Partial<Record<Body18, Joint>>, name: string, minScore: number): Pt | string {
   if (isBody18(name)) {
@@ -520,6 +562,57 @@ function pivotOf(rest: Rest, bone: string | null, legs: ReturnType<typeof legsOf
   const width = Math.hypot(b.worldX - a.worldX, b.worldY - a.worldY);
   const distance = Math.hypot(offset[0], offset[1]);
   return { bone, roots, offset, distance, hipWidths: width > 1e-9 ? distance / width : NaN };
+}
+
+/** Two bones' setup origins apart, world units: the rig's hip width when they are the thigh roots. */
+function rootsApart(rest: Rest, a: string, b: string): number {
+  const x = rest.get(a)!;
+  const y = rest.get(b)!;
+  return Math.hypot(y.worldX - x.worldX, y.worldY - x.worldY);
+}
+
+const rangeOf = (xs: readonly number[]): number => (xs.length === 0 ? 0 : Math.max(...xs) - Math.min(...xs));
+
+/** rig-c/pose#240: the SCALE reading, from fields the retarget already read — nothing here changes a key. */
+function scaleFitOf(o: {
+  joints: [string, string]; joint: string; bone: string; lengths: number[]; factor: number;
+  series: ReadonlyMap<string, Pt[]>; good: ReadonlyMap<string, boolean[]>;
+  legLength: Record<Side, number> | null; legStraight: Record<Side, number> | null; rigLeg: Record<Side, number> | null;
+  rigHip: number | null; origin: readonly Pt[];
+}): ScaleFit {
+  const segMedian = median(o.lengths);
+  const segStraight = percentile(o.lengths, STRAIGHT_PERCENTILE);
+  const leg = o.legLength === null || o.legStraight === null || o.rigLeg === null ? null : (() => {
+    const rig = o.rigLeg!, med = o.legLength!, str = o.legStraight!;
+    const at = (q: Record<Side, number>) => SIDES.map((s) => rig[s] / q[s]);
+    return { rig, median: med, straight: str, band: { lo: Math.min(...at(str)), hi: Math.max(...at(med)) }, within: SIDES.some((s) => withinPx(o.factor, rig[s], med[s], str[s])) };
+  })();
+  const hipWidths: number[] = [];
+  const R = o.series.get('r_hip'), L = o.series.get('l_hip'), gr = o.good.get('r_hip'), gl = o.good.get('l_hip');
+  if (R !== undefined && L !== undefined && gr !== undefined && gl !== undefined) {
+    for (let i = 0; i < R.length; i++) if (gr[i] && gl[i]) hipWidths.push(Math.hypot(L[i]![0] - R[i]![0], L[i]![1] - R[i]![1]));
+  }
+  const hipMedian = hipWidths.length === 0 ? NaN : median(hipWidths);
+  const hipStraight = percentile(hipWidths, STRAIGHT_PERCENTILE);
+  const hip = o.rigHip === null || !(hipMedian > 1e-6) || !(hipStraight > 1e-6) || !(o.rigHip > 1e-6) ? null
+    : { rig: o.rigHip, median: hipMedian, straight: hipStraight, band: { lo: o.rigHip / hipStraight, hi: o.rigHip / hipMedian }, within: withinPx(o.factor, o.rigHip, hipMedian, hipStraight) };
+  const P = o.series.get(o.joint)!;
+  const px = rangeOf(P.map((p) => p[0])), py = rangeOf(P.map((p) => p[1]));
+  const ux = rangeOf(o.origin.map((p) => p[0])), uy = rangeOf(o.origin.map((p) => p[1]));
+  const mean = (q: Record<Side, number>) => (q.r + q.l) / 2;
+  const per = (x: number, y: number, unit: number | null): [number, number] | null => (unit === null || !(unit > 1e-6) ? null : [x / unit, y / unit]);
+  return {
+    segment: { joints: o.joints, median: segMedian, straight: segStraight, ratio: segMedian / segStraight },
+    leg,
+    hip,
+    outside: leg === null || hip === null ? null : !leg.within && !hip.within,
+    travel: {
+      joint: o.joint,
+      bone: o.bone,
+      pose: { x: px, y: py, legs: per(px, py, o.legStraight === null ? null : mean(o.legStraight)), hips: per(px, py, hip === null ? null : hip.straight) },
+      rig: { x: ux, y: uy, legs: per(ux, uy, o.rigLeg === null ? null : mean(o.rigLeg)), hips: per(ux, uy, hip === null ? null : hip.rig) },
+    },
+  };
 }
 
 /**
@@ -655,6 +748,8 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   // first, because a reach is aimed from where the hip has put its bone.
   let origin: Retarget['origin'] = null;
   let scale: Retarget['scale'] = null;
+  /** The scale segment's picture length on every frame both its points are good (#240's SCALE reading). */
+  let scaleLengths: number[] = [];
   let translateTrack: MotionTrack | null = null;
   /** The translated bone's world travel from its setup origin, per frame. */
   const travel: Pt[] = [];
@@ -676,6 +771,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       else {
         const s = rigLen / poseLen;
         scale = { factor: s, pose: poseLen, rig: rigLen };
+        scaleLengths = lengths;
         const P = series.get(t.joint)!;
         for (let i = 0; i < n; i++) {
           const wx = (P[i]![0] - P[0]![0]) * s;
@@ -2888,11 +2984,18 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   tracks.push(...sw.offsetTracks, ...sw.slotTracks);
   const reach = reachReadings(rest, map, tracks, reachAims, t?.bone ?? null);
 
+  const pivot = pivotOf(rest, t?.bone ?? null, legs);
+  const scaleFit = t === null || scale === null || origin === null ? null : scaleFitOf({
+    joints: t.scale.pose, joint: t.joint, bone: t.bone, lengths: scaleLengths, factor: scale.factor,
+    series, good, legLength: feet?.legLength ?? null, legStraight, rigLeg,
+    rigHip: legs !== null && 'legs' in legs ? rootsApart(rest, legs.legs.r.chain.bones[0]!, legs.legs.l.chain.bones[0]!) : null,
+    origin: origin.at,
+  });
   return {
     animation: { duration: keyTimes[n - 1]!, tracks },
-    times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale,
+    times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale, scaleFit,
     switches: sw.switches, shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
-    legScale, segments, legStraight, rigLeg, scales, feet, planted: plantOn, stance, floor, blendHold, closure, openDrift, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs), raised, byHip, face, body, figureScale, headNod: headNodReading, reach,
+    legScale, segments, legStraight, rigLeg, scales, feet, planted: plantOn, stance, floor, blendHold, closure, openDrift, ankles, pivot, raised, byHip, face, body, figureScale, headNod: headNodReading, reach,
   };
 }
 
