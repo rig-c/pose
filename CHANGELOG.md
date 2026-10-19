@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.35.0](https://github.com/rig-c/pose/compare/v0.34.0...v0.35.0) (2026-10-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **package:** `@rig-c/pose/src/*` can no longer be imported. The supported surface is the rig-pose command.
+
+### Features
+
+* **package:** RELEASING states what 1.x promises, derived from use; exports closes the deep imports ([#262](https://github.com/rig-c/pose/issues/262)) ([#265](https://github.com/rig-c/pose/issues/265)) ([c6dad1b](https://github.com/rig-c/pose/commit/c6dad1b9b9f97d6f8280e3d52decf0b9a9681627))
+
 ## [0.34.0](https://github.com/rig-c/pose/compare/v0.33.0...v0.34.0) (2026-10-19)
 
 
