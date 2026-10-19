@@ -231,6 +231,24 @@ export function folds(build: string, animation: string, dir: string, fps: number
   };
 }
 
+/**
+ * `rigc render --seam <a>:<b>,…` over one animation (rig-c/pose#216): its own
+ * render, apart from the folds' so a seam refusal cannot cost the fold reading
+ * and the fold render's arguments stay what they were. `seam` is the set's
+ * `seam.json` text, null when the render did not run green; `frames` is its
+ * `frames.json`, for the render domain.
+ */
+export function seamRender(build: string, animation: string, dir: string, fps: number, pairs: ReadonlyArray<readonly [string, string]>): { run: RigcRun; seam: { text: string; path: string } | null; frames: unknown } {
+  const out = join(dir, 'render');
+  const run = runRigc(['render', '--candidate', build, '--animation', animation, '--seam', pairs.map(([a, b]) => `${a}:${b}`).join(','), '--fps', String(fps), '--out', out]);
+  if (run.status !== 0 || !existsSync(join(out, 'frames.json'))) return { run, seam: null, frames: null };
+  const framesDoc = JSON.parse(readFileSync(join(out, 'frames.json'), 'utf8')) as { sets: Array<{ dir: string; animation: string }> };
+  const set = framesDoc.sets.find((s) => s.animation === animation);
+  const path = set === undefined ? null : join(resolve(out), set.dir, 'seam.json');
+  if (path === null || !existsSync(path)) return { run, seam: null, frames: framesDoc };
+  return { run, seam: { text: readFileSync(path, 'utf8'), path }, frames: framesDoc };
+}
+
 /** rig-c's version and the entry its launcher picked (`rigc --version`), so a run names the compiler that gated it. */
 export function rigcVersion(): { version: string; entry: string } {
   const r = runRigc(['--version']);
