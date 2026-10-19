@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.0](https://github.com/rig-c/pose/compare/v0.35.0...v0.36.0) (2026-10-19)
+
+
+### Features
+
+* **retarget:** --build writes retarget.json beside the build, with an author-given --reference echoed verbatim ([#270](https://github.com/rig-c/pose/issues/270)) ([#271](https://github.com/rig-c/pose/issues/271)) ([a61680b](https://github.com/rig-c/pose/commit/a61680b6ccefdb20177d9c09d3c010ab3b1168f9))
+
 ## [0.35.0](https://github.com/rig-c/pose/compare/v0.34.0...v0.35.0) (2026-10-19)
 
 
