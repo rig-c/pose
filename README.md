@@ -524,10 +524,15 @@ The answer, since 0.2, is a second drawing of the arm for each of those poses, s
 
 ## What it does not do
 
+What 1.0 leaves out ([#217](https://github.com/rig-c/pose/issues/217)). Where an open issue carries the work, it is named; where none does, the line says what to do instead.
+
 - **Extract poses from video.** The input is joint positions. How you get them is up to you: a pose model, a dataset, or by hand.
-- **Turn the body.** It works in 2D only. A segment pointing at the camera foreshortens, and the rig cannot: the direction is matched, the length is not. With `--leg-scale`, leg segments are the exception.
-- **Read a moving camera.** A reference whose camera zooms or pans moves the planted floor with it under `--plant-feet` ([#52](https://github.com/rig-c/pose/issues/52)).
-- **Front and behind, blinks, mouth shapes.** The detector's scores and face points do not carry them ([#33](https://github.com/rig-c/pose/issues/33), [#46](https://github.com/rig-c/pose/issues/46)).
+- **Turn the body.** It works in 2D only. A segment pointing at the camera foreshortens, and the rig cannot: the direction is matched, the length is not. With `--leg-scale`, the leg segments and the trunk ([#172](https://github.com/rig-c/pose/issues/172)) are the exception. A body turned past what a stretch can show is drawn by switching to a set the map declares (`body.sets`, [#173](https://github.com/rig-c/pose/issues/173)), not by turning.
+- **Front and behind, per segment.** Which limb passes in front of which is not read. The keys carry no front/back slot order ([#33](https://github.com/rig-c/pose/issues/33)).
+- **Blinks and mouth shapes.** No eyelid or mouth key is written. The face points read the head's yaw and pitch (`face` in [the map](#the-map-rig-pose-map1)) and nothing more. No issue carries this.
+- **Fit cloth physics to the reference.** A skirt's physics is the rig's own. It is not fitted to how the cloth moved in the video ([#34](https://github.com/rig-c/pose/issues/34)).
+- **Clean detector errors by limb length.** `clean` reads spikes, occlusion and jitter. It does not find a joint the detector placed wrong from the limb lengths around it ([#75](https://github.com/rig-c/pose/issues/75)).
+- **Track the camera from the video.** A zoom or a pan is read from the sequence's `camera` ([above](#the-pose-rig-pose-sequence1)). Fitting it from pixels is the repository's `tools/` scripts, which are not shipped. Without a `camera`, the picture is read as a fixed camera.
 - **Hands and fingers.** There are no bones for them yet (rig-c/parts#171).
 
 ## Licence
