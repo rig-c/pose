@@ -9935,3 +9935,273 @@ describe('#216: the one-cell floor, @rig-c/parts\' rule (rig-c/parts#503), by ha
     expect(() => readSeamPairs('{}', 'p.json')).toThrow('PARTS_JSON');
   });
 });
+
+// --- #251: --reduce-keep-planted ---------------------------------------------
+
+describe('#251: --reduce-keep-planted keeps the supporting leg chain dense on its support frames', () => {
+  /** One gait cycle, frames; the walk repeats it CYCLES times, at 24 fps. */
+  const C = 24;
+  const CYCLES = 3;
+  const NN = C * CYCLES;
+  const phase = (i: number): number => (2 * Math.PI * (i % C)) / C;
+  /**
+   * A walk that travels: the thighs swinging ±20° a cycle in opposition, the swinging foot lifted up to 10 px, and the
+   * hips carried forward in the picture by exactly what keeps the supporting ankle's x still (the lower foot supports;
+   * a change of support takes the new one's x). Under --plant-feet each supporting ankle is held where it planted: one
+   * support span per foot per half cycle, the body travelling over it.
+   */
+  function walk(): Record<string, unknown> {
+    const m: Motion = {
+      ...BASE,
+      n: NN,
+      dt: 1 / 24,
+      trunk: (i) => 90 + 4 * Math.sin(2 * phase(i)),
+      ru: (i) => -100 - 15 * Math.sin(phase(i)),
+      rf: (i) => -80 - 15 * Math.sin(phase(i)) + 5 * Math.sin(2 * phase(i)),
+      lu: (i) => -80 + 15 * Math.sin(phase(i)),
+      lf: (i) => -100 + 15 * Math.sin(phase(i)) - 5 * Math.sin(2 * phase(i)),
+      rt: (i) => -90 + 20 * Math.sin(phase(i)),
+      rs: (i) => -95 + 20 * Math.sin(phase(i)),
+      lt: (i) => -90 - 20 * Math.sin(phase(i)),
+      ls: (i) => -90 - 20 * Math.sin(phase(i)),
+      hip: () => [0, 0],
+    };
+    const lift = (i: number) => ({ r: 10 * Math.max(0, Math.cos(phase(i))), l: 10 * Math.max(0, -Math.cos(phase(i))) });
+    const support = (i: number): 'r' | 'l' => (lift(i).r <= lift(i).l ? 'r' : 'l');
+    const ankleX = (i: number, s: 'r' | 'l') => positions(m, i)[`${s}_ankle`]![0];
+    const dx: number[] = [0];
+    for (let i = 1; i < NN; i++) dx.push(dx[i - 1]! + ankleX(i - 1, support(i)) - ankleX(i, support(i)));
+    return poseDoc(m, (i, j) => {
+      for (const [name, at] of Object.entries(j)) {
+        const a = at.at as Pt;
+        j[name] = { ...at, at: [a[0] + dx[i]!, a[1] - (name === 'r_ankle' ? lift(i).r : name === 'l_ankle' ? lift(i).l : 0)] };
+      }
+    });
+  }
+  const WALK_FLAGS = ['--plant-feet'];
+
+  /** #94's gait (the #47 fixture): knees bending toward the camera, scaled legs, the hip planted over them, the free left ankle 0.03 leg lengths up on frames 8–15 and planted by --stance. */
+  const THIGH = -95;
+  const SHIN = -97;
+  const GN = 24;
+  const bendF = (i: number): number => (i < 6 || i > 18 ? 1 : 1 - 0.15 * Math.sin(((i - 6) / 12) * Math.PI));
+  const V = add(dir(THIGH, 80), dir(SHIN, 70));
+  function gait(): Record<string, unknown> {
+    const still: Motion = { ...BASE, n: GN, dt: 1 / 24, rt: () => THIGH, rs: () => SHIN, lt: () => THIGH, ls: () => SHIN, hip: () => [0, 0] };
+    const pic = Math.hypot(V[0], V[1]);
+    return poseDoc(still, (i, j) => {
+      const f = bendF(i);
+      const drop: Pt = [(1 - f) * V[0], (1 - f) * V[1]];
+      for (const [name, at] of Object.entries(j)) {
+        const a = at.at as Pt;
+        if (name.endsWith('_ankle') || name.endsWith('_knee')) continue;
+        j[name] = { ...at, at: [a[0] + drop[0], a[1] + drop[1]] };
+      }
+      for (const s of ['r', 'l'] as const) {
+        const hip = j[`${s}_hip`]!.at as Pt;
+        const knee = add(hip, dir(THIGH, 80 * f));
+        const ankle = add(knee, dir(SHIN, 70 * f));
+        const lift = s === 'l' && i >= 8 && i <= 15 ? 0.03 * pic : 0;
+        j[`${s}_knee`] = { state: 'observed', at: knee, score: 0.9 };
+        j[`${s}_ankle`] = { state: 'observed', at: [ankle[0], ankle[1] - lift], score: 0.9 };
+      }
+    });
+  }
+  const GAIT_FLAGS = ['--leg-scale', '0.8,1.05', '--plant-feet', '--stance', '0.07'];
+
+  interface Rep {
+    frameTimes: number[];
+    landings: Array<{ bone: string; kind: string; worst: number; frame: number; tolerance: number; on?: 'support' | 'off-support' }>;
+    feet: { rigLeg: { r: number; l: number }; supports: Array<{ side: 'r' | 'l'; frames: [number, number] }>; reading: { plants: Array<{ horizontalLegs: number; verticalLegs: number }> } };
+    reduce: null | { ankleDrift: Array<{ bone: string; side: 'r' | 'l'; plant: number; reduce: number; units: number; legLengths: number; support?: { reduce: number; units: number; legLengths: number } | null }> };
+  }
+  interface Read {
+    ran: Ran;
+    rep: Rep;
+    ankle: { r: Pt[]; l: Pt[] };
+    /** Rotate (and scalex) key times on each leg bone, by frame index. */
+    keyed: Map<string, Set<number>>;
+  }
+  /** One run: its report, and its gated build posed by rig-c, read independently — each shin's tip on every frame. */
+  function run(c: Case, extra: string[], cliPath = CLI): Read {
+    const report = join(c.dir, 'report.json');
+    const ran = retarget(c, [...extra, '--report', report], cliPath);
+    if (ran.status !== 0) return { ran, rep: null as unknown as Rep, ankle: { r: [], l: [] }, keyed: new Map() };
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as Rep;
+    const doc = loadBuild(c.build);
+    const steps = rep.frameTimes.slice(1).map((t, i) => t - rep.frameTimes[i]!);
+    const ankle: Read['ankle'] = { r: [], l: [] };
+    for (const p of poseRawAnimation(doc, 'dance', steps, {}, 'animation')) {
+      const b = byName(p.bones);
+      for (const s of ['r', 'l'] as const) {
+        const shin = b.get(`leg_${s}1`)!;
+        ankle[s].push([shin.worldX + shin.a * 70, shin.worldY + shin.c * 70]);
+      }
+    }
+    const keyed = new Map<string, Set<number>>();
+    const frameOf = new Map(rep.frameTimes.map((t, i) => [Number(t.toFixed(6)), i]));
+    for (const tr of motionOf(c.out).animations.dance!.tracks) {
+      if (!['leg_r0', 'leg_r1', 'leg_l0', 'leg_l1'].includes(tr.bone) || (tr.property !== 'rotate' && tr.property !== 'scalex')) continue;
+      keyed.set(`${tr.bone} ${tr.property}`, new Set(tr.keys.map((k) => frameOf.get(Number(k.t.toFixed(6))) ?? -1)));
+    }
+    return { ran, rep, ankle, keyed };
+  }
+  interface Figures {
+    /** The supporting ankle against the dense run's, over every support frame: units. */
+    max: number;
+    p95: number;
+    /** The same, in that side's rig leg at setup. */
+    maxLegs: number;
+    /** The posed build's own slide figure: the worst horizontal drift of a supporting ankle over a support span (the FEET line), leg lengths. */
+    slide: number;
+    /** The supporting ankle's largest move between two consecutive frames of one support span, leg lengths. */
+    step: number;
+  }
+  function figures(dense: Read, x: Read): Figures {
+    const errs: number[] = [];
+    let maxLegs = 0;
+    let step = 0;
+    for (const s of dense.rep.feet.supports) {
+      const leg = dense.rep.feet.rigLeg[s.side];
+      for (let i = s.frames[0]; i <= s.frames[1]; i++) {
+        const a = x.ankle[s.side][i]!;
+        const d = dense.ankle[s.side][i]!;
+        const e = Math.hypot(a[0] - d[0], a[1] - d[1]);
+        errs.push(e);
+        maxLegs = Math.max(maxLegs, e / leg);
+        if (i > s.frames[0]) {
+          const p = x.ankle[s.side][i - 1]!;
+          step = Math.max(step, Math.hypot(a[0] - p[0], a[1] - p[1]) / leg);
+        }
+      }
+    }
+    errs.sort((p, q) => p - q);
+    return { max: errs.at(-1)!, p95: errs[Math.min(errs.length - 1, Math.ceil(0.95 * errs.length) - 1)]!, maxLegs, slide: Math.max(...x.rep.feet.reading.plants.map((p) => p.horizontalLegs)), step };
+  }
+  const row = (name: string, f: Figures) => `  #251 ${name}: support-frame ankle vs dense max ${f.max.toExponential(3)} units (${f.maxLegs.toExponential(3)} leg lengths), p95 ${f.p95.toExponential(3)}; slide (FEET worst horizontal drift) ${f.slide.toFixed(5)} leg lengths; largest one-frame step ${f.step.toFixed(5)} leg lengths`;
+
+  /** The public example, as the README's #240 figure runs it. */
+  const WAVE_FLAGS = ['--leg-scale', '0.8,1.05', '--plant-feet'];
+  function wave(): Case {
+    const ex = join(ROOT, 'examples', 'wave');
+    const dir = tempDir();
+    return { dir, rig: join(ex, 'rig'), map: join(ex, 'map.json'), pose: join(ex, 'pose.json'), out: join(dir, 'motion.out.json'), build: join(dir, 'build') };
+  }
+
+  test('measured: the supporting ankle against the dense run on support frames, with and without --reduce', () => {
+    for (const [name, mk, flags] of [['wave', wave, WAVE_FLAGS], ['walk', () => setup({ pose: walk() }), WALK_FLAGS], ['#94 gait', () => setup({ pose: gait() }), GAIT_FLAGS]] as const) {
+      const c = mk();
+      const dense = run(c, [...flags]);
+      if (dense.ran.status !== 0) console.log(dense.ran.stderr.slice(0, 2000));
+      expect(dense.ran.status).toBe(0);
+      console.log(linesOf(dense.ran, "FEET").join("\n"));
+      console.log(`  #251 ${name}: supports ${dense.rep.feet.supports.map((s) => `${s.side} ${s.frames[0]}–${s.frames[1]}`).join(', ')}; rig leg r ${dense.rep.feet.rigLeg.r.toFixed(2)}`);
+      console.log(row(`${name} dense`, figures(dense, dense)));
+      for (const extra of [['--reduce', '1'], ['--reduce', '1', '--reduce-hip', '0.5'], ['--reduce', '1', '--reduce-keep-planted'], ['--reduce', '1', '--reduce-hip', '0.5', '--reduce-keep-planted']]) {
+        const red = run(c, [...flags, ...extra]);
+        expect(red.ran.status).toBe(0);
+        const keys = [...red.keyed].map(([k, v]) => `${k} ${v.size}`).join(', ');
+        console.log(row(`${name} ${extra.join(' ')}`, figures(dense, red)) + `; leg keys ${keys}`);
+        for (const l of linesOf(red.ran, 'REDUCE').filter((x) => x.includes('ankle drift'))) console.log(`    ${l}`);
+      }
+    }
+  }, SLOW);
+
+  const KEEP = ['--reduce', '1', '--reduce-keep-planted'];
+  /** The supporting side's ankle on its support frames: the report's support row, and the independent worst against the dense run. */
+  function held(dense: Read, x: Read): { rows: Rep['landings']; worst: number } {
+    const rows = x.rep.landings.filter((l) => l.kind === 'foot' && l.on === 'support');
+    return { rows, worst: figures(dense, x).max };
+  }
+
+  test('control: every support-span frame is keyed on each supporting leg bone, and the planted ankle lands as dense within the support tolerance', () => {
+    for (const [name, pose, flags] of [['walk', walk(), WALK_FLAGS], ['#94 gait', gait(), GAIT_FLAGS]] as const) {
+      const c = setup({ pose });
+      const dense = run(c, [...flags]);
+      expect(dense.ran.status).toBe(0);
+      const x = run(c, [...flags, ...KEEP]);
+      expect(x.ran.status).toBe(0);
+      for (const s of x.rep.feet.supports) {
+        for (const bone of [`leg_${s.side}0`, `leg_${s.side}1`]) {
+          for (const prop of ['rotate', 'scalex']) {
+            const keyed = x.keyed.get(`${bone} ${prop}`)!;
+            for (let i = s.frames[0]; i <= s.frames[1]; i++) expect(keyed.has(i)).toBe(true);
+          }
+        }
+      }
+      const { rows, worst } = held(dense, x);
+      // One support row per side that supports, held to the plant's own tolerance (no --reduce-hip).
+      expect(new Set(rows.map((l) => l.bone))).toEqual(new Set(x.rep.feet.supports.map((s) => `leg_${s.side}1:tip`)));
+      for (const l of rows) {
+        expect(l.tolerance).toBeLessThan(0.03);
+        expect(l.worst).toBeLessThanOrEqual(l.tolerance);
+      }
+      expect(worst).toBeLessThanOrEqual(Math.min(...rows.map((l) => l.tolerance)));
+      // The drift line prints both figures, and the report carries the support one.
+      expect(linesOf(x.ran, 'REDUCE').filter((l) => l.includes('on them, kept dense (--reduce-keep-planted)')).length).toBeGreaterThan(0);
+      for (const d of x.rep.reduce!.ankleDrift) {
+        if (d.support === undefined) throw new Error(`${name}: ${d.bone} has no support figure`);
+        if (d.support !== null) expect(d.support.units).toBeLessThan(d.units);
+      }
+    }
+  }, SLOW);
+
+  test('without the flag the reduced bytes are origin/main\'s (the wave, pinned at 6ddcdb8), and the report has no support rows', () => {
+    const PINNED: Array<[string[], string]> = [
+      [['--leg-scale', '0.8,1.05', '--plant-feet', '--reduce', '0.5', '--reduce-hip', '0.5'], 'aafb26e64fb0ae4b4035a9e0eab880e3428bd58e7415f5c8dae9d53db35cd674'],
+      [['--leg-scale', '0.8,1.05', '--plant-feet', '--stance', '0.07', '--reduce', '1'], 'dd0d48176b0d2d81d07162fe24ed903be64cc2212a541722be5bd3133d2ddbe8'],
+    ];
+    for (const [flags, sha] of PINNED) {
+      const c = wave();
+      const report = join(c.dir, 'report.json');
+      const ran = retarget(c, [...flags, '--report', report]);
+      expect(ran.status).toBe(0);
+      expect(createHash('sha256').update(readFileSync(c.out)).digest('hex')).toBe(sha);
+      const rep = JSON.parse(readFileSync(report, 'utf8')) as Rep & { options: Record<string, unknown> };
+      expect(rep.landings.some((l) => 'on' in l)).toBe(false);
+      expect(rep.reduce!.ankleDrift.some((d) => 'support' in d)).toBe(false);
+      expect('reduceKeepPlanted' in rep.options).toBe(false);
+    }
+  }, SLOW);
+
+  test('refused by name without --reduce or without --plant-feet', () => {
+    const c = setup({ pose: gait() });
+    for (const [flags, missing] of [[['--plant-feet', '--reduce-keep-planted'], '--reduce;'], [['--reduce', '1', '--reduce-keep-planted'], '--plant-feet;'], [['--reduce-keep-planted'], '--reduce and --plant-feet;']] as const) {
+      const r = retarget(c, [...flags]);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain(`--reduce-keep-planted is given without ${missing}`);
+      expect(existsSync(c.out)).toBe(false);
+    }
+  });
+
+  // The option dropped silently — parsed, but no frame kept — must make the support landing red, by name.
+  const DROPS: Array<{ name: string; from: string; to: string }> = [
+    { name: 'the support frames not added to keep', from: 'if (mapped.has(b)) add(b, ...frames);', to: 'if (mapped.has(b)) add(b);' },
+    { name: 'the flag not passed to the reduction', from: 'reduceTracks(r, map, rest, a.reduce, a.reduceHip, a.reduceKeepPlanted === true)', to: 'reduceTracks(r, map, rest, a.reduce, a.reduceHip, false)' },
+  ];
+  for (const mu of DROPS) {
+    test(`mutant: ${mu.name} — POSE_LANDS names the supporting ankle on its support frames`, () => {
+      mkdirSync(MUTANTS, { recursive: true });
+      const d = mkdtempSync(join(MUTANTS, 'm-'));
+      try {
+        cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+        cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+        cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+        const path = join(d, 'src', 'run.ts');
+        const before = readFileSync(path, 'utf8');
+        expect(before.split(mu.from)).toHaveLength(2);
+        writeFileSync(path, before.replace(mu.from, mu.to));
+        const c = setup({ pose: walk() });
+        const ctl = run(c, [...WALK_FLAGS, ...KEEP]);
+        expect(ctl.ran.status).toBe(0);
+        const m = run(c, [...WALK_FLAGS, ...KEEP], join(d, 'cli.ts'));
+        expect(m.ran.status).toBe(1);
+        const miss = fails(m.ran).filter((l) => l.includes('POSE_LANDS') && /bone "leg_[rl]1:tip" ankle on its support frames \(kept dense\)/.test(l));
+        expect(miss.length).toBeGreaterThan(0);
+        console.log(`  mutant "${mu.name}": ${miss[0]!.slice(0, 220)}`);
+      } finally {
+        rmSync(d, { recursive: true, force: true });
+      }
+    }, SLOW);
+  }
+});

@@ -26,6 +26,11 @@ export interface Landing {
   kind: 'angle' | 'origin' | 'scale' | 'foot';
   /** The tolerance it is held to. */
   tolerance: number;
+  /**
+   * A `foot` split by `--reduce-keep-planted` (#251): `support`, the frames its side supports
+   * (each support span kept dense); `off-support`, the rest. Absent: every frame, one row.
+   */
+  on?: 'support' | 'off-support';
 }
 
 /**
@@ -60,7 +65,7 @@ export function poseFrames(doc: CompiledDocument, animation: string, times: read
   return poses.map((p) => new Map(p.bones.map((b) => [b.name, b])));
 }
 
-export function measureLanding(doc: CompiledDocument, animation: string, map: JointMap, r: Retarget, posed = poseFrames(doc, animation, r.times)): Landing[] {
+export function measureLanding(doc: CompiledDocument, animation: string, map: JointMap, r: Retarget, posed = poseFrames(doc, animation, r.times), support?: Record<'r' | 'l', ReadonlySet<number>>): Landing[] {
   const out: Landing[] = [];
   const lengths = new Map(doc.bones.map((b) => [b.name, b.length ?? 0]));
   const faceBones = new Set([r.face?.yaw?.bone, r.face?.pitch?.bone].filter((b): b is string => b !== undefined));
@@ -163,18 +168,23 @@ export function measureLanding(doc: CompiledDocument, animation: string, map: Jo
       const tip0: [number, number] = [s0.worldX + s0.a * (lengths.get(bone) ?? 0), s0.worldY + s0.c * (lengths.get(bone) ?? 0)];
       const h0 = top === undefined ? null : setup.get(top)!;
       const lever = h0 === null ? Math.hypot(tip0[0], tip0[1]) : Math.hypot(tip0[0] - h0.worldX, tip0[1] - h0.worldY);
-      let worst = -1;
-      let frame = 0;
+      const tolerance = ORIGIN_TOLERANCE + FOOT_TOLERANCE_PER_UNIT * lever;
+      const rows = support === undefined ? [{ on: undefined, worst: -1, frame: 0, n: 0 }] : (['support', 'off-support'] as const).map((on) => ({ on, worst: -1, frame: 0, n: 0 }));
       posed.forEach((bones, i) => {
         const got = pointAt(bones, lengths, `${bone}:tip`)!;
         const want = r.ankles!.at[side][i]!;
         const e = Math.hypot(got[0] - want[0], got[1] - want[1]);
-        if (e > worst) {
-          worst = e;
-          frame = i;
+        const row = support === undefined ? rows[0]! : rows[support[side].has(i) ? 0 : 1]!;
+        row.n++;
+        if (e > row.worst) {
+          row.worst = e;
+          row.frame = i;
         }
       });
-      out.push({ bone: `${bone}:tip`, worst, frame, kind: 'foot', tolerance: ORIGIN_TOLERANCE + FOOT_TOLERANCE_PER_UNIT * lever });
+      for (const x of rows) {
+        if (x.n === 0) continue;
+        out.push({ bone: `${bone}:tip`, worst: x.worst, frame: x.frame, kind: 'foot', tolerance, ...(x.on === undefined ? {} : { on: x.on }) });
+      }
     }
   }
   return out;

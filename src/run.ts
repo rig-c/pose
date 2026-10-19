@@ -58,6 +58,8 @@ export interface RetargetArgs extends RetargetOptions {
   reduce?: number;
   /** With reduce: thin the hip's translate keys within this many rig units. */
   reduceHip?: number;
+  /** With reduce and plantFeet: keep each support span's frames on the supporting leg at its dense keys (#251). */
+  reduceKeepPlanted?: boolean;
   /**
    * What stdout carries (rig-c/pose#238). `default`: the CLEAN line's hold record
    * as a count and each hinge's wrong-way frames as one line; `verbose`: every
@@ -159,7 +161,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         }
       }
     }
-    tell(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)${a.legScale !== undefined && a.legScale !== 'off' ? `, leg-scale ${a.legScale[0]}–${a.legScale[1]}` : ''}${a.plantFeet === true ? ', plant-feet' : ''}${a.stance !== undefined && a.stance !== 'off' ? `, stance ${a.stance}` : ''}${a.raisedByHead === true ? ', raised-by-head' : ''}${a.carryIdle === true ? ', carry-idle' : ''}${a.merge !== undefined ? `, merge ${a.merge}` : ''}${a.reduce !== undefined ? `, reduce ${a.reduce}°${a.reduceHip !== undefined ? ` (hip ${a.reduceHip} units)` : ''}` : ''}`);
+    tell(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)${a.legScale !== undefined && a.legScale !== 'off' ? `, leg-scale ${a.legScale[0]}–${a.legScale[1]}` : ''}${a.plantFeet === true ? ', plant-feet' : ''}${a.stance !== undefined && a.stance !== 'off' ? `, stance ${a.stance}` : ''}${a.raisedByHead === true ? ', raised-by-head' : ''}${a.carryIdle === true ? ', carry-idle' : ''}${a.merge !== undefined ? `, merge ${a.merge}` : ''}${a.reduce !== undefined ? `, reduce ${a.reduce}°${a.reduceHip !== undefined ? ` (hip ${a.reduceHip} units)` : ''}${a.reduceKeepPlanted === true ? ', planted legs kept dense' : ''}` : ''}`);
     say(`  RIGC   rig-c ${rigc.version} (${rigc.entry}) gates and poses this run`);
     say(`  CLEAN  ${output === 'verbose' ? cleanLine(seq.cleaned!) : cleanSummaryLine(seq.cleaned!)}`);
     if (a.smoothAlias !== undefined) say(`  SMOOTH --smooth is carried by clean; ignored (given ${a.smoothAlias}; this sequence was cleaned with legs ${seq.cleaned!.params.legs}, rest ${seq.cleaned!.params.rest})`);
@@ -222,7 +224,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     if (r.body !== null) say(`  BODY   ${bodyLine(r.body)}`);
 
     // --reduce (#32): the dense keys thinned top-down, before anything reads the tracks.
-    const reduced = a.reduce === undefined ? null : reduceTracks(r, map, rest, a.reduce, a.reduceHip);
+    const reduced = a.reduce === undefined ? null : reduceTracks(r, map, rest, a.reduce, a.reduceHip, a.reduceKeepPlanted === true);
     if (reduced !== null) {
       for (const row of reduced.rows) {
         const [who, track, what, unit] = row.kind === 'angle' ? ['bone', 'rotate', 'aim', '°'] : row.kind === 'origin' ? ['hip', 'translate', 'origin', ' units'] : ['bone', 'scalex', 'scale', ' of its setup length'];
@@ -294,17 +296,25 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     // reduced bones above it may move it by (#94, `footReduce`). A scale keeps its own: it is reduced within half of it.
     // #240: each ankle's allowance is computed once, here, and both the LAND tolerance and the drift line read it.
     const drift: AnkleDrift[] = [];
-    const landings = measureLanding(doc, a.name, map, r, posed).map((l) => {
+    // #251: with --reduce-keep-planted, each ankle is held apart on its support frames, which were kept dense.
+    const support = a.reduce !== undefined && a.reduceKeepPlanted === true && r.feet !== null ? supportFrames(r.feet.supports) : undefined;
+    const landings = measureLanding(doc, a.name, map, r, posed, support).map((l) => {
       if (a.reduce === undefined) return l;
       if (l.kind === 'angle') return { ...l, tolerance: l.tolerance + a.reduce };
       if (l.kind === 'origin' && a.reduceHip !== undefined) return { ...l, tolerance: l.tolerance + a.reduceHip };
       if (l.kind !== 'foot') return l;
       const ankle = l.bone.replace(/:tip$/, '');
       const by = footReduce(rest, r, ankle, a.reduce, a.reduceHip);
-      const lb = legBonesOf(map);
-      const side = lb?.r.ankle === ankle ? 'r' : lb?.l.ankle === ankle ? 'l' : null;
-      drift.push({ bone: l.bone, side, plant: l.tolerance, reduce: by, units: l.tolerance + by, legLengths: side === null || r.rigLeg === null ? null : (l.tolerance + by) / r.rigLeg[side] });
-      return { ...l, tolerance: l.tolerance + by };
+      // #251: on its support frames every mapped bone from the hip down was kept at its target, so only the hip's tolerance moves it.
+      const hip = a.reduceHip ?? 0;
+      if (!drift.some((d) => d.bone === l.bone)) {
+        const lb = legBonesOf(map);
+        const side = lb?.r.ankle === ankle ? 'r' : lb?.l.ankle === ankle ? 'l' : null;
+        const legs = (u: number) => (side === null || r.rigLeg === null ? null : u / r.rigLeg[side]);
+        const held = support === undefined ? {} : { support: side === null || support[side].size === 0 ? null : { reduce: hip, units: l.tolerance + hip, legLengths: legs(l.tolerance + hip) } };
+        drift.push({ bone: l.bone, side, plant: l.tolerance, reduce: by, units: l.tolerance + by, legLengths: legs(l.tolerance + by), ...held });
+      }
+      return { ...l, tolerance: l.tolerance + (l.on === 'support' ? hip : by) };
     });
     const p = new Problems();
     // A carried idle track on a bone above a mapped one moves it where the keys did not ask (the key formula holds unmapped bones at setup).
@@ -319,10 +329,11 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     };
     for (const l of landings) {
       const unit = l.kind === 'angle' ? '°' : l.kind === 'scale' ? ' of its setup length' : ' units';
-      const what = l.kind === 'angle' ? 'aim' : l.kind === 'scale' ? 'scale' : l.kind === 'foot' ? 'ankle' : 'origin';
+      const what = l.kind === 'angle' ? 'aim' : l.kind === 'scale' ? 'scale' : l.kind === 'foot' ? (l.on === 'support' ? 'ankle on its support frames (kept dense)' : l.on === 'off-support' ? 'ankle off its support frames' : 'ankle') : 'origin';
       const tol = l.kind === 'foot' ? Number(l.tolerance.toPrecision(3)) : l.tolerance;
       const line = `bone "${l.bone}" ${what} — worst |reached − asked| ${l.worst.toPrecision(3)}${unit} at frame ${l.frame} (t=${r.times[l.frame]!.toFixed(3)}s); the tolerance is ${tol}${unit}`;
       if (landed(l)) say(`  LAND   ${line}`);
+      else if (l.on === 'support') p.add('POSE_LANDS', `${line} — --reduce-keep-planted holds every mapped bone from the hip down at its dense key on its side's support frames, so only the hip's --reduce-hip may move it; a frame missed here was not kept${carriedAbove(l.bone)}`);
       else p.add('POSE_LANDS', `${line} — the rig does not turn the way the key formula assumes (a constraint, a scaled or sheared parent, a non-normal inherit mode)${carriedAbove(l.bone)}`);
     }
     p.throwIfAny();
@@ -371,7 +382,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         frames: seq.frames.length,
         duration: r.animation.duration,
         cleaned: seq.cleaned,
-        options: { minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', floor: a.floor ?? null, raisedByHead: a.raisedByHead === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', reduceHip: a.reduceHip ?? 'off' },
+        options: { minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', floor: a.floor ?? null, raisedByHead: a.raisedByHead === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', reduceHip: a.reduceHip ?? 'off', ...(a.reduceKeepPlanted === true ? { reduceKeepPlanted: true } : {}) },
         scale: r.scale,
         scaleFit: r.scaleFit,
         holds: r.holds,
@@ -570,6 +581,11 @@ const spanText = (x: [number, number]) => (x[0] === x[1] ? `${x[0]}` : `${x[0]}�
  * chains it changes, and the edges of every FLIP spread, SHORT span and RANGE
  * run on it (the first and last frame the reducer keeps).
  *
+ * With `keepPlanted` (#251): every frame of each support span, on every mapped
+ * bone from the hip down to that side's ankle — kept frames are keyed at their
+ * target, so the planted ankle lands as dense there, but for the hip's own
+ * tolerance.
+ *
  * With scaled bones (`--leg-scale`, the stretches; #94): a scaled bone's
  * `scalex` is thinned within `SCALE_REDUCE`, and a mapped bone under a scaled
  * bone — keyed through its parent's posed matrix (legs.ts) — is re-solved
@@ -577,7 +593,7 @@ const spanText = (x: [number, number]) => (x[0] === x[1] ? `${x[0]}` : `${x[0]}�
  * aim and length it lands on (`reduceUnderScale`). With none, this is #32's
  * reduction, unchanged.
  */
-function reduceTracks(r: ReturnType<typeof retarget>, map: JointMap, rest: Rest, tolerance: number, hipTolerance: number | undefined): Reduced {
+function reduceTracks(r: ReturnType<typeof retarget>, map: JointMap, rest: Rest, tolerance: number, hipTolerance: number | undefined, keepPlanted: boolean): Reduced {
   const n = r.times.length;
   const keep = new Map<string, Set<number>>();
   const add = (bone: string, ...frames: number[]) => {
@@ -590,6 +606,15 @@ function reduceTracks(r: ReturnType<typeof retarget>, map: JointMap, rest: Rest,
   }
   for (const x of [...r.flips, ...r.short, ...r.range]) add(x.bone, x.frames[0], x.frames[1]);
   const mapped = new Set(r.targets.keys());
+  if (keepPlanted && r.feet !== null && r.ankles !== null) {
+    for (const s of r.feet.supports) {
+      const frames = Array.from({ length: s.frames[1] - s.frames[0] + 1 }, (_, k) => s.frames[0] + k);
+      for (let b: string | null = r.ankles.bones[s.side]; b !== null; b = rest.get(b)!.parent) {
+        if (mapped.has(b)) add(b, ...frames);
+        if (b === r.origin?.bone) break;
+      }
+    }
+  }
   const above = (b: string): string | null => {
     for (let p = rest.get(b)!.parent; p !== null; p = rest.get(p)!.parent) if (mapped.has(p)) return p;
     return null;
@@ -1163,10 +1188,28 @@ export interface AnkleDrift {
   units: number;
   /** `units` in that side's rig leg at setup (thigh origin → ankle); null without both legs. */
   legLengths: number | null;
+  /**
+   * With --reduce-keep-planted (#251): the allowance on the frames its side supports, kept dense —
+   * the plant's plus the hip's --reduce-hip (`reduce`, 0 without it); null when its side never supports.
+   * Absent without the flag.
+   */
+  support?: { reduce: number; units: number; legLengths: number | null } | null;
+}
+
+/** #251: each side's support frames, from the spans --plant-feet read. */
+function supportFrames(supports: ReadonlyArray<{ side: 'r' | 'l'; frames: [number, number] }>): Record<'r' | 'l', Set<number>> {
+  const out = { r: new Set<number>(), l: new Set<number>() };
+  for (const s of supports) for (let i = s.frames[0]; i <= s.frames[1]; i++) out[s.side].add(i);
+  return out;
 }
 
 /** The drift line: the allowance on one frame, and what it lets a planted ankle slide between two. */
 export function ankleDriftLine(d: AnkleDrift): string {
   const legs = (v: number) => (d.legLengths === null ? '' : ` = ${(d.legLengths * v / d.units).toPrecision(3)} leg lengths`);
-  return `ankle drift allowed: bone "${d.bone}" ${d.units.toPrecision(3)} units${legs(d.units)} on any one frame (plant ${d.plant.toPrecision(3)} + reduce ${d.reduce.toPrecision(3)}); between two frames up to ${(2 * d.units).toPrecision(3)} units${legs(2 * d.units)} — a tighter slide bar needs a smaller --reduce`;
+  const line = `ankle drift allowed: bone "${d.bone}" ${d.units.toPrecision(3)} units${legs(d.units)} on any one frame (plant ${d.plant.toPrecision(3)} + reduce ${d.reduce.toPrecision(3)}); between two frames up to ${(2 * d.units).toPrecision(3)} units${legs(2 * d.units)}`;
+  if (d.support === undefined) return `${line} — a tighter slide bar needs a smaller --reduce`;
+  if (d.support === null) return `${line}; its side never supports, so --reduce-keep-planted keeps no frame of it`;
+  const s = d.support;
+  const sLegs = (v: number) => (s.legLengths === null ? '' : ` = ${(s.legLengths * v / s.units).toPrecision(3)} leg lengths`);
+  return `${line} off its support frames; on them, kept dense (--reduce-keep-planted), ${s.units.toPrecision(3)} units${sLegs(s.units)} (plant ${d.plant.toPrecision(3)} + hip ${s.reduce.toPrecision(3)}), between two frames of a support span up to ${(2 * s.units).toPrecision(3)} units${sLegs(2 * s.units)}`;
 }
