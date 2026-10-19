@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Confirm that the registry serves @rig-c/pose@<version> and that it installs
-# into an empty directory and runs from there.
-#   exit 0  served, installed, `rig-pose --version` printed the version
-#   exit 1  served, and the install or the run failed (the output says which)
+# into an empty directory and runs from there: `rig-pose --version`, then a
+# retarget of the public wave to its pinned bytes (smoke_install.sh, #260).
+#   exit 0  served, installed, --version printed the version, the wave retargeted
+#   exit 1  served, and the install or a run failed (the last line says which)
 #   exit 2  bad invocation
 #   exit 3  the registry did not serve the version inside the wait — the
 #           confirmation was NOT taken; re-run it
@@ -17,14 +18,5 @@ until npm view "@rig-c/pose@$version" version > /dev/null 2>&1; do
   fi
   sleep 20
 done
-work=$(mktemp -d)
-cd "$work" || exit 1
-npm init -y > /dev/null
-if ! npm install "@rig-c/pose@$version" > install.log 2>&1; then
-  cat install.log; echo "npm install @rig-c/pose@$version failed"; exit 1
-fi
-got=$(./node_modules/.bin/rig-pose --version) || { echo "rig-pose --version exited non-zero from the install"; exit 1; }
-if [ "$got" != "$version" ]; then
-  echo "the installed rig-pose --version printed \"$got\"; the published version is $version"; exit 1
-fi
-echo "@rig-c/pose@$version is served, installs into an empty directory and runs: rig-pose --version = $got"
+echo "@rig-c/pose@$version is served"
+exec bash "$(dirname "$0")/smoke_install.sh" "@rig-c/pose@$version" "$version"

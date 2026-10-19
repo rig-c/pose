@@ -39,6 +39,27 @@ jobs:
           GATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GATE_PR_BODY: ${{ github.event.pull_request.body }}
 
+  # rig-c/pose#260: the package as npm would pack it, installed into an empty
+  # directory and used there — --version, then a retarget of the public wave to
+  # its pinned bytes — beside two planted failures that must each go red at the
+  # step named (scripts/smoke_mutants.sh). The registry confirmation after a
+  # publish runs the same smoke (scripts/confirm_registry.sh).
+  install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: The install retargets the wave, and its planted failures are red
+        run: |
+          set -euo pipefail
+          d=$(mktemp -d)
+          npm pack --pack-destination "$d" > /dev/null
+          bash scripts/smoke_mutants.sh "$d"/*.tgz "$(node -p 'require("./package.json").version')"
+
   # The job below is @rig-c/parts' `ships` job, copied whole: a landing that
   # changes a packed file under a type release-please hides is refused, with a
   # control for each side of the judgement. Read the comments there for the
