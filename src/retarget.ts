@@ -81,8 +81,8 @@ import { TRAVEL_IN_PLACE } from './pose.ts';
 import { Problems, Refusal } from './problems.ts';
 import type { ArtRange, AttachmentKey, ByHip, Raised, ReachShort, SlotTrack, Switch, SwitchOptions } from './switch.ts';
 import { clampArt, coveredChains, isRaised, measureArt, overflow, RAISED_WRIST_EYES, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
-import type { BlendHold, Closure, Feet, Floor, LegScale, PathPose, Posing, Side, Stance } from './legs.ts';
-import { figureScaleOf, holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, percentile, plantHip, posePath, rootOf, scaleSupport, SIDES, stanceOf, stanceRangeOf, STRAIGHT_PERCENTILE, supportsOf, tipOf, unshortenStanceShin } from './legs.ts';
+import type { BlendHold, Closure, Feet, Floor, LegScale, LegSegmentRatio, PathPose, Posing, Side, Stance } from './legs.ts';
+import { figureScaleOf, freeAnkleShiftOf, holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, percentile, plantHip, posePath, rootOf, scaleSupport, shiftOver, SIDES, stanceOf, stanceRangeOf, STRAIGHT_PERCENTILE, supportsOf, tipOf, unshortenStanceShin } from './legs.ts';
 import type { BodyReading, FaceReading, YawSetSwitch } from './face.ts';
 import { readBody, readFace, readFaceAngles, selectYawSets } from './face.ts';
 
@@ -340,6 +340,12 @@ export interface Retarget {
   artRange: ArtRange[];
   /** With --leg-scale: each leg segment's scale, straight length and clamped runs. */
   legScale: LegScale[];
+  /** rig-c/pose#237: every mapped leg segment's picture length ÷ straight (min, median, max), with or without --leg-scale. */
+  segments: LegSegmentRatio[];
+  /** rig-c/pose#237: each side's straight leg, the 95th percentile of its picture length hip → ankle, px (LEG-SCALE's percentile, against FEET's median); null without both legs read. */
+  legStraight: Record<Side, number> | null;
+  /** rig-c/pose#237: each side's rig leg at setup, thigh origin → ankle, world units — the leg length a clamp's shift of the ankle is read in; null without both legs. */
+  rigLeg: Record<Side, number> | null;
   /** Per scaled bone, the scale its x axis must reach on each frame (relative to setup); the scalex key of a bone under a scaled bone differs from it. */
   scales: Map<string, number[]>;
   /** The supports and jumps read off the reference ankles, when the map has both legs (whether or not --plant-feet used them). */
@@ -903,8 +909,10 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   const poseScale: number[] | null = t !== null && scale !== null && n > 25 && !inPlace ? continuousScale : null;
   let trunkScaleBone: string | null = null;
   let trunkScale: number[] | null = null;
-  if (legScaleOn) {
-    const limits = opts.legScale as [number, number];
+  // #237: every mapped leg segment's picture length ÷ straight, with or without --leg-scale: the
+  // straight lengths --leg-scale scales against, so the minimum read here is the one it would clamp.
+  const segments: LegSegmentRatio[] = [];
+  {
     const rawSegments: Array<{ chain: string; bone: string; joints: [string, string]; kind: string; lengths: number[]; ownStraight: number }> = [];
     for (const c of map.chains) {
       if (c.reach) continue;
@@ -912,7 +920,8 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         const joints: [string, string] = [c.joints[k]!, c.joints[k + 1]!];
         if (!isLegSegment(joints[0], joints[1])) return;
         if (c.aim[k] !== 'x') {
-          p.add('LEGS_MAP', `--leg-scale scales chain "${c.name}" bone "${b}" (${joints[0]} → ${joints[1]}) along its own x axis, and the map aims it ${JSON.stringify(c.aim[k])}; a leg segment it scales must be aimed "x"`);
+          if (legScaleOn) p.add('LEGS_MAP', `--leg-scale scales chain "${c.name}" bone "${b}" (${joints[0]} → ${joints[1]}) along its own x axis, and the map aims it ${JSON.stringify(c.aim[k])}; a leg segment it scales must be aimed "x"`);
+          segments.push({ chain: c.name, bone: b, joints, straight: null, ratio: null, why: `aimed ${JSON.stringify(c.aim[k])}, and --leg-scale scales a segment aimed "x"` });
           return;
         }
         const from = series.get(joints[0])!;
@@ -920,10 +929,12 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         const lengths = from.map((f, i) => Math.hypot(to[i]![0] - f[0], to[i]![1] - f[1]));
         const ownStraight = percentile(lengths, STRAIGHT_PERCENTILE);
         if (!(ownStraight > 1e-6)) {
-          p.add('LEGS_MAP', `--leg-scale: chain "${c.name}" bone "${b}"'s segment ${joints[0]} → ${joints[1]} has a straight length (95th percentile) of ${ownStraight}px; there is nothing to scale against`);
+          if (legScaleOn) p.add('LEGS_MAP', `--leg-scale: chain "${c.name}" bone "${b}"'s segment ${joints[0]} → ${joints[1]} has a straight length (95th percentile) of ${ownStraight}px; there is nothing to scale against`);
+          segments.push({ chain: c.name, bone: b, joints, straight: null, ratio: null, why: `its straight length (95th percentile) is ${ownStraight}px` });
           return;
         }
         rawSegments.push({ chain: c.name, bone: b, joints, kind: `${joints[0].slice(2)}:${joints[1].slice(2)}`, lengths, ownStraight });
+        segments.push({ chain: c.name, bone: b, joints, straight: null, ratio: null });
       });
     }
     const straightByKind = new Map<string, number>();
@@ -970,10 +981,19 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       return Math.abs(rigLen - meanRigLen) > 1e-3 * meanRigLen ? rigLen / meanRigLen : 1;
     };
     for (const seg of rawSegments) {
-      const ls = legScaleOf(seg.lengths, limits, straightByKind.get(seg.kind)! * rigShareOf(seg));
-      legScale.push({ chain: seg.chain, bone: seg.bone, joints: seg.joints, ...ls });
-      scales.set(seg.bone, ls.scale);
+      const straight = straightByKind.get(seg.kind)! * rigShareOf(seg);
+      const ls = legScaleOf(seg.lengths, legScaleOn ? (opts.legScale as [number, number]) : [1, 1], straight);
+      const row = segments.find((x) => x.bone === seg.bone)!;
+      row.straight = ls.straight;
+      row.ratio = ls.ratio;
+      if (legScaleOn) {
+        legScale.push({ chain: seg.chain, bone: seg.bone, joints: seg.joints, ...ls });
+        scales.set(seg.bone, ls.scale);
+      }
     }
+  }
+  if (legScaleOn) {
+    const limits = opts.legScale as [number, number];
     if (legScale.length === 0 && !p.any) p.add('LEGS_MAP', '--leg-scale scales the leg segments (two of one side\'s hip, knee and ankle), and the map aims none');
     const isTrunkPair = (a: string, b: string): boolean => (a === 'mid_hip' && (b === 'neck' || b === 'mid_shoulder')) || (b === 'mid_hip' && (a === 'neck' || a === 'mid_shoulder'));
     const trunkChain = map.chains.find((c) => c.bones.length === 1 && isTrunkPair(c.joints[0]!, c.joints[1]!));
@@ -1107,6 +1127,57 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       stretchChain(stance.stretch);
     }
   }
+  // #237: what the clamps did to a free ankle's height — read, nothing keyed changes. Each side's rig
+  // leg at setup is the unit; the clamped frames of a free leg go on LEG-SCALE, and a lifted or below
+  // STANCE run says the pose's height was kept only where no clamp moved it.
+  let rigLeg: Record<Side, number> | null = null;
+  if (legs !== null && 'legs' in legs) {
+    const L = legs.legs;
+    const of = (s: Side): number => {
+      const o = rest.get(L[s].chain.bones[0]!)!;
+      const e = rest.get(L[s].ankleBone)!;
+      return Math.hypot(e.worldX + e.a * e.length - o.worldX, e.worldY + e.c * e.length - o.worldY);
+    };
+    rigLeg = { r: of('r'), l: of('l') };
+  }
+  if (legScaleOn && feet !== null && legPath !== null && rigLeg !== null && legs !== null && 'legs' in legs) {
+    const L = legs.legs;
+    const F = feet;
+    const legUnit = rigLeg;
+    const trackedSide = new Array<Side | null>(n).fill(null);
+    for (const tr of F.tracked ?? []) for (let i = tr.frames[0]; i <= tr.frames[1]; i++) trackedSide[i] = tr.side;
+    const freeOf = (i: number): Side | null => {
+      const s = F.support[i] ?? trackedSide[i] ?? null;
+      return s === null ? null : s === 'r' ? 'l' : 'r';
+    };
+    const tipY = (i: number, side: Side, scaleOf: (b: string) => number | null): number => {
+      const r = posePath(rest, legPath!, (b): Posing | null => (targets.has(b) ? { turn: restTurn(b, i), target: targets.get(b)![i]!, aimX: aimX.get(b)! } : null), scaleOf);
+      if (typeof r === 'string') throw new Refusal([{ code: 'LEGS_MAP', text: r }]);
+      return tipOf(rest, r, L[side].ankleBone)[1];
+    };
+    const shift = freeAnkleShiftOf(n, legScale, freeOf, tipY);
+    for (const ls of legScale) {
+      const side: Side = ls.joints[0].startsWith('r_') ? 'r' : 'l';
+      const frames: number[] = [];
+      for (let i = 0; i < n; i++) if (ls.scale[i] !== ls.picture[i] && freeOf(i) === side) frames.push(i);
+      const free = shiftOver(side, frames, shift, legUnit[side]);
+      if (free !== null) ls.free = free;
+    }
+    for (const run of stance?.runs ?? []) {
+      if (run.state === 'both' || run.absorbed === true) continue;
+      const frames = Array.from({ length: run.frames[1] - run.frames[0] + 1 }, (_, k) => run.frames[0] + k);
+      const moved = shiftOver(run.side, frames, shift, legUnit[run.side]);
+      if (moved !== null) run.moved = moved;
+    }
+  }
+  const legStraight: Record<Side, number> | null = feet === null ? null : (() => {
+    const out = {} as Record<Side, number>;
+    for (const s of SIDES) {
+      const h = series.get(`${s}_hip`)!;
+      out[s] = percentile(series.get(`${s}_ankle`)!.map((a, i) => Math.hypot(a[0] - h[i]![0], a[1] - h[i]![1])), STRAIGHT_PERCENTILE);
+    }
+    return out;
+  })();
   if (t !== null && scale !== null) {
     const bone = rest.get(t.bone)!;
     const parent = bone.parent === null ? null : rest.get(bone.parent)!;
@@ -2758,7 +2829,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     animation: { duration: keyTimes[n - 1]!, tracks },
     times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale,
     switches: sw.switches, shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
-    legScale, scales, feet, planted: plantOn, stance, floor, blendHold, closure, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs), raised, byHip, face, body, figureScale, headNod: headNodReading,
+    legScale, segments, legStraight, rigLeg, scales, feet, planted: plantOn, stance, floor, blendHold, closure, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs), raised, byHip, face, body, figureScale, headNod: headNodReading,
   };
 }
 
