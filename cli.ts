@@ -170,6 +170,10 @@ retarget
                         at the end as "ankle drift allowed" in units and leg lengths (rig-c/pose#240)
   --reduce-hip <units>  with --reduce, thin the hip's translate keys too, its world origin within units
                         of the dense keys (default: the hip stays dense)
+  --reduce-keep-planted with --reduce and --plant-feet, keep every frame of each support span on the
+                        supporting leg (each mapped bone from the hip down to its ankle) at its dense key, so the
+                        planted ankle lands as dense on its support frames: its landing tolerance there is the
+                        plant's plus the hip's --reduce-hip, off them --reduce's allowance (rig-c/pose#251)
   --switch-tolerance <d>  a set of alternate drawings (the map's "alternates") may show on a frame where
                         every segment of its chains is within d degrees of its key skeleton (default: 25)
   --switch-min <s>      a run of one set shorter than s seconds is dropped (default: 0.25)
@@ -320,7 +324,7 @@ function legScaleOf(f: Map<string, string>): [number, number] | 'off' {
 const RETARGET_ALIASES = { sequence: 'pose', animation: 'name' } as const;
 
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'parts', 'report', 'camera', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head', 'verbose', 'summary'], RETARGET_ALIASES);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'parts', 'report', 'camera', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head', 'reduce-keep-planted', 'verbose', 'summary'], RETARGET_ALIASES);
   if (f.has('verbose') && f.has('summary')) throw new Usage('--verbose and --summary are both given; --verbose prints every line in full and --summary one line per measure, so give one');
   const bends = f.get('bends') ?? 'refuse';
   if (bends !== 'refuse' && bends !== 'clamp') throw new Usage(`--bends is "${bends}"; it must be refuse or clamp`);
@@ -384,14 +388,19 @@ function floorOf(f: Map<string, string>): { floor?: number } {
   return { floor: v };
 }
 
-/** --reduce and --reduce-hip (rig-c/pose#32): off unless given; the hip only with the bones. */
-function reduceOf(f: Map<string, string>): { reduce?: number; reduceHip?: number } {
+/** --reduce and --reduce-hip (rig-c/pose#32): off unless given; the hip only with the bones. --reduce-keep-planted (rig-c/pose#251): only with both --reduce and --plant-feet. */
+function reduceOf(f: Map<string, string>): { reduce?: number; reduceHip?: number; reduceKeepPlanted?: true } {
+  if (f.has('reduce-keep-planted')) {
+    const missing = ['reduce', 'plant-feet'].filter((x) => !f.has(x));
+    if (missing.length > 0) throw new Usage(`--reduce-keep-planted is given without ${missing.map((x) => `--${x}`).join(' and ')}; it keeps the support spans --plant-feet reads at dense keys inside the reduction --reduce makes`);
+  }
   if (!f.has('reduce')) {
     if (f.has('reduce-hip')) throw new Usage('--reduce-hip is given without --reduce; the hip is thinned with the bones, not alone');
     return {};
   }
   const reduce = num(f, 'reduce', 0, (n) => n > 0 && n < 180, 'degrees in (0, 180)');
-  return f.has('reduce-hip') ? { reduce, reduceHip: num(f, 'reduce-hip', 0, (n) => n > 0, 'rig units > 0') } : { reduce };
+  const keep = f.has('reduce-keep-planted') ? { reduceKeepPlanted: true as const } : {};
+  return f.has('reduce-hip') ? { reduce, reduceHip: num(f, 'reduce-hip', 0, (n) => n > 0, 'rig units > 0'), ...keep } : { reduce, ...keep };
 }
 
 function compareArgs(argv: string[]): CompareArgs {
