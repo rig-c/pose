@@ -43,6 +43,11 @@
  * well. Outside a set's span the retarget clamps the key there, and lists the
  * overflow as demand (`RANGE`).
  *
+ * The chain whose joints carry the eye line (`r_eye → l_eye`) keys the head's
+ * nod; `"nod": false` on it keys none and couples none (rig-c/pose#241). "nod"
+ * on any other chain is refused (`MAP_NOD`): a switch with nothing to turn off
+ * would be read as having turned something off.
+ *
  * `alternates` lists the rig's alternate drawings as sets: `{ name, slots,
  * hides, chains, pose, drawn?, offsets? }`. While a set shows, every slot in
  * `slots` shows its attachment and every slot in `hides` is empty; `pose` is the
@@ -73,6 +78,8 @@ export interface Chain {
   reach: boolean;
   /** Per bone of the chain: the rotate key's range, degrees relative to setup, [min, max]. */
   range: Record<string, [number, number]>;
+  /** On the chain carrying the eye line (`r_eye → l_eye`): false keys no head nod and couples none (rig-c/pose#241); absent or true, the nod is read. */
+  nod?: boolean;
 }
 export interface Translate {
   bone: string;
@@ -195,10 +202,10 @@ export function readMap(text: string, where: string): JointMap {
     doc.chains.forEach((c: unknown, i: number) => {
       const cw = `${where} chains[${i}]`;
       if (!isObject(c)) {
-        p.add('MAP_CHAIN_SHAPE', `${cw} is ${typeName(c)}; a chain is { name, bones, joints, aim?, bend?, reach?, range? }`);
+        p.add('MAP_CHAIN_SHAPE', `${cw} is ${typeName(c)}; a chain is { name, bones, joints, aim?, bend?, reach?, range?, nod? }`);
         return;
       }
-      refuseUnknownKeys(p, 'MAP_KEYS', cw, c, ['name', 'bones', 'joints', 'aim', 'bend', 'reach', 'range']);
+      refuseUnknownKeys(p, 'MAP_KEYS', cw, c, ['name', 'bones', 'joints', 'aim', 'bend', 'reach', 'range', 'nod']);
       const name = typeof c.name === 'string' && c.name !== '' ? c.name : null;
       if (name === null) p.add('MAP_CHAIN_NAME', `${cw} "name" is ${typeName(c.name)}; it must be a non-empty string`);
       else if (names.has(name)) p.add('MAP_CHAIN_NAME', `${cw} "name" "${name}" names two chains`);
@@ -245,7 +252,14 @@ export function readMap(text: string, where: string): JointMap {
           }
         }
       }
-      chains.push({ name: name ?? cw, bones: bones ?? [], joints: joints ?? [], aim, bend, reach, range });
+      let nod: boolean | undefined;
+      if ('nod' in c) {
+        const eyeLine = (joints ?? []).some((j, k, js) => (j === 'r_eye' && js[k + 1] === 'l_eye') || (j === 'l_eye' && js[k + 1] === 'r_eye'));
+        if (typeof c.nod !== 'boolean') p.add('MAP_NOD', `${label} "nod" is ${typeName(c.nod)}; it must be true or false (false keys no head nod and couples none into the head's rotate or the face pitch)`);
+        else if (!eyeLine) p.add('MAP_NOD', `${label} has "nod" but its joints (${(joints ?? []).join(' → ')}) carry no eye line; the nod is read on the chain whose joints run r_eye → l_eye (or l_eye → r_eye), so "nod" belongs there or nowhere`);
+        else nod = c.nod;
+      }
+      chains.push({ name: name ?? cw, bones: bones ?? [], joints: joints ?? [], aim, bend, reach, range, ...(nod !== undefined ? { nod } : {}) });
     });
   }
   let translate: Translate | null = null;

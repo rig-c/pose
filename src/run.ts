@@ -13,7 +13,7 @@ import { cleanLine, cleanSummaryLine, inferredSource } from './clean.ts';
 import { convertCoco17, personTrack, readPoseSequence, TRAVEL_IN_PLACE, type CameraFrame } from './pose.ts';
 import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './problems.ts';
 import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, readIdle, targetOf, trackLabel, type IdleReading, type RigcTrack, type Target } from './idle.ts';
-import { bendGroupLine, bendGroups, bendLine, endOnLine, flipLine, holdLine, rangeLine, reachCostLine, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions, type ScaleBand, type ScaleFit } from './retarget.ts';
+import { bendGroupLine, bendGroups, bendLine, endOnLine, flipLine, holdLine, nodLine, rangeLine, reachCostLine, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions, type ScaleBand, type ScaleFit } from './retarget.ts';
 import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, readBuild, resolveRig, restOf, slotsOf } from './rigc.ts';
 import { artRangeLine, chainsMoving, raisedLine, RAISED_WITHIN, reachLine, switchLine, uncoveredFolds } from './switch.ts';
 import { jitterLine, landed, type FeetReading, type JitterRow, type Landing, measureFeet, measureJitter, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
@@ -134,7 +134,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     const slots = slotsOf(doc0);
     resolveMap(map, rest, a.map, slots, input.sets);
 
-    const r = retarget(rest, map, frames, times, { ...a, ...(seq.travel !== undefined ? { travel: seq.travel } : {}) }, slots, input.sets);
+    const r = retarget(rest, map, frames, times, { ...a, ...(seq.travel !== undefined ? { travel: seq.travel } : {}), ...(seq.cleaned!.params.loop ? { loop: true } : {}) }, slots, input.sets);
     if (fragment.length > 0 && ((r.face?.sets?.length ?? 0) > 0 || (r.body?.sets?.length ?? 0) > 0)) {
       const known = knownSetsOf(map, input.sets);
       for (const s of [...(r.face?.sets ?? []), ...(r.body?.sets ?? [])]) {
@@ -208,6 +208,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     }
     if (seq.travel === TRAVEL_IN_PLACE && !r.planted) say(`  TRAVEL ${openTravelLine(r.openDrift)}`);
     if (r.stance !== null) for (const l of stanceLines(r.stance, r.times, r.feet === null || r.legStraight === null ? undefined : { legLength: r.feet.legLength, straight: r.legStraight, rigLeg: r.rigLeg })) say(`  STANCE ${l}`);
+    const nod = nodLine(r.headNod, r.nodSkipped, map.face?.pitch !== undefined);
+    if (nod !== null) say(`  NOD    ${nod}`);
     if (r.face !== null) say(`  FACE   ${faceLine(r.face)}`);
     if (r.body !== null) say(`  BODY   ${bodyLine(r.body)}`);
 
