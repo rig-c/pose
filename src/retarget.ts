@@ -124,12 +124,29 @@ export const NOD_RESIDUAL_HEAD_GAIN = 1.6;
  */
 export const HEAD_ANCHOR_FRAME: 'head-local' | 'world-fixed' | 'off' = 'head-local';
 
+/** How the nod's baseline was read (rig-c/pose#241): none on an in-place sequence (frame 0, no clamp), else the ±0.5 s detrend window, wrapped on a `clean --loop` sequence or cut at the clip's ends. */
+export type NodWindow = 'in-place' | 'wrapped' | 'cut';
+
 export interface HeadNodReading {
   bone: string;
+  /** The chain that carries the eye line (rig-c/pose#241). */
+  chain: string;
   maxNod: number;
   rawY: number[];
   clampedY: number[];
   residual: number[];
+  /** The baseline's window (#241), and its half width in frames (0 in place). */
+  window: NodWindow;
+  halfWin: number;
+  /** Whether a translate track was keyed (false: the eyes did not move against the neck past the writer's rounding). */
+  keyed: boolean;
+}
+
+/** Why the eye-line chain keys no nod (rig-c/pose#241): switched off in the map, or a reading it cannot take. */
+export interface NodSkipped {
+  bone: string;
+  chain: string;
+  why: string;
 }
 
 export interface RetargetOptions extends SwitchOptions {
@@ -155,6 +172,8 @@ export interface RetargetOptions extends SwitchOptions {
   raisedByHead?: boolean;
   /** The sequence's `travel` (rig-c/pose#92, #242): "in-place" reads the supports, the camera-zoom normalisations and the head nod as a loop, with or without --plant-feet, and makes --plant-feet let the supporting foot follow its own track and close the loop; absent, nothing changes. */
   travel?: Travel;
+  /** The sequence was cleaned with `--loop` (its `cleaned.params.loop`, rig-c/pose#241): the head nod's detrend window wraps, the last frame running into the first. */
+  loop?: boolean;
 }
 
 export interface Hold {
@@ -425,6 +444,8 @@ export interface Retarget {
   figureScale: FigureScaleReading;
   /** Per-frame vertical head nod reading (`rawY`, `clampedY`, and clamped `residual`, `#111`, `#181`, `#190`). */
   headNod: HeadNodReading | null;
+  /** The eye-line chain keys no nod, and why (rig-c/pose#241); null when it does or when no chain carries the eye line. */
+  nodSkipped: NodSkipped | null;
   /** Each `reach` chain hanging below a bone the animation turns or translates (#236): its aim's departure from the pose pair's angle. */
   reach: ReachReading[];
 }
@@ -1379,6 +1400,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   let headNod: Pt[] | null = null;
   let headNodTrack: MotionTrack | null = null;
   let headNodReading: HeadNodReading | null = null;
+  let nodSkipped: NodSkipped | null = null;
   const posedOrigin = (b: string, i: number): Pt => {
     const own = rest.get(b)!;
     if (t !== null && b === t.bone) return [own.worldX + (travel[i]?.[0] ?? 0), own.worldY + (travel[i]?.[1] ?? 0)];
@@ -1515,10 +1537,27 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       if (!((ja === 'r_eye' && jb === 'l_eye') || (ja === 'l_eye' && jb === 'r_eye'))) continue;
       const hb = c.bones[k]!;
       const ha = c.aim[k]!;
-      if (t?.bone === hb || sw.offsetTracks.some((tr) => tr.bone === hb)) break;
-      let underScaled = false;
-      for (let a = rest.get(hb)!.parent; a !== null; a = rest.get(a)!.parent) if (scales.has(a)) underScaled = true;
-      if (underScaled) break;
+      const skip = (why: string): void => {
+        nodSkipped = { bone: hb, chain: c.name, why };
+      };
+      if (c.nod === false) {
+        skip(`the chain declares "nod": false`);
+        break;
+      }
+      if (t?.bone === hb) {
+        skip(`the map's translate moves bone "${hb}"`);
+        break;
+      }
+      if (sw.offsetTracks.some((tr) => tr.bone === hb)) {
+        skip(`a set's offsets translate bone "${hb}"`);
+        break;
+      }
+      let underScaled: string | null = null;
+      for (let a = rest.get(hb)!.parent; a !== null; a = rest.get(a)!.parent) if (scales.has(a) && underScaled === null) underScaled = a;
+      if (underScaled !== null) {
+        skip(`bone "${hb}" hangs below the scaled bone "${underScaled}"`);
+        break;
+      }
       const rEye = series.get('r_eye')!;
       const lEye = series.get('l_eye')!;
       const neckSeries = series.get('neck') ?? (() => {
@@ -1534,6 +1573,8 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         const refEye = median(rEye.map((re, i) => Math.hypot(lEye[i]![0] - re[0], lEye[i]![1] - re[1])));
         if (refEye > 1e-6 && rigEye > 1e-6) nodScale = rigEye / refEye;
       }
+      if (neckSeries === undefined) skip('neck is good on no frame');
+      else if (nodScale === null) skip(`no scale: the map translates no bone and aim ${JSON.stringify(ha)} names no two points to measure the eye distance on`);
       if (neckSeries !== undefined && nodScale !== null) {
         const bone = rest.get(hb)!;
         const parent = bone.parent === null ? null : rest.get(bone.parent)!;
@@ -1554,12 +1595,20 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         const maxNod = !inPlace && neckRestLen > 1e-6 ? 0.02 * neckRestLen : Infinity;
         const refEN = rEye.map((re, i) => -((re[1] + lEye[i]![1]) / 2 - neckSeries[i]![1]));
         const halfWin = Math.max(1, Math.round(0.5 / Math.max(1e-6, (keyTimes[n - 1]! - keyTimes[0]!) / Math.max(1, n - 1))));
-        const nodMed = maxNod < Infinity && n > 2 * halfWin
-          ? refEN.map((_, i) => median(refEN.slice(Math.max(0, i - halfWin), Math.min(n, i + halfWin + 1))))
-          : refEN.map(() => refEN[0]!);
-        const nodBase = maxNod < Infinity && n > 2 * halfWin
+        const windowed = maxNod < Infinity && n > 2 * halfWin;
+        // #241: on a `clean --loop` sequence the window wraps (the last frame runs into the first), as clean's own
+        // windows do; cut at the ends instead, the two ends of the loop are read against different baselines.
+        const nodWindow: NodWindow = !windowed ? 'in-place' : opts.loop === true ? 'wrapped' : 'cut';
+        const around = (xs: readonly number[], i: number): number[] => {
+          if (nodWindow !== 'wrapped') return xs.slice(Math.max(0, i - halfWin), Math.min(n, i + halfWin + 1));
+          const out: number[] = [];
+          for (let j = i - halfWin; j <= i + halfWin; j++) out.push(xs[((j % n) + n) % n]!);
+          return out;
+        };
+        const nodMed = windowed ? refEN.map((_, i) => median(around(refEN, i))) : refEN.map(() => refEN[0]!);
+        const nodBase = windowed
           ? nodMed.map((_, i) => {
-              const sl = nodMed.slice(Math.max(0, i - halfWin), Math.min(n, i + halfWin + 1));
+              const sl = around(nodMed, i);
               return sl.reduce((a, b) => a + b, 0) / sl.length;
             })
           : nodMed;
@@ -1574,8 +1623,9 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
           return Math.max(-maxNod, Math.min(maxNod, v));
         });
         const residual = rawNod.map((v, i) => v - dy[i]!);
-        headNodReading = { bone: hb, maxNod, rawY: rawNod, clampedY: dy, residual };
-        if (dy.some((v) => Math.abs(r3(v)) > 0)) {
+        const keyed = dy.some((v) => Math.abs(r3(v)) > 0);
+        headNodReading = { bone: hb, chain: c.name, maxNod, rawY: rawNod, clampedY: dy, residual, window: nodWindow, halfWin: windowed ? halfWin : 0, keyed };
+        if (keyed) {
           const keys: MotionKey[] = [];
           const nod: Pt[] = [];
           const ref0 = refEN[0]! / (poseScale?.[0] ?? 1);
@@ -2995,7 +3045,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     animation: { duration: keyTimes[n - 1]!, tracks },
     times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale, scaleFit,
     switches: sw.switches, shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
-    legScale, segments, legStraight, rigLeg, scales, feet, planted: plantOn, stance, floor, blendHold, closure, openDrift, ankles, pivot, raised, byHip, face, body, figureScale, headNod: headNodReading, reach,
+    legScale, segments, legStraight, rigLeg, scales, feet, planted: plantOn, stance, floor, blendHold, closure, openDrift, ankles, pivot, raised, byHip, face, body, figureScale, headNod: headNodReading, nodSkipped, reach,
   };
 }
 
@@ -3577,4 +3627,28 @@ export function bendGroupLine(g: BendGroup, mode: 'refuse' | 'clamp'): string {
 export function holdLine(h: Hold, times: readonly number[]): string {
   const span = h.from === h.to ? `frame ${h.from} (t=${times[h.from]!.toFixed(3)}s)` : `frames ${h.from}–${h.to} (t=${times[h.from]!.toFixed(3)}–${times[h.to]!.toFixed(3)}s)`;
   return `point "${h.point}" ${span}: ${h.why}; held frame ${h.source}'s value`;
+}
+
+/**
+ * The `NOD` line (rig-c/pose#241): what the eye-line chain did to the head — the keyed range, the window its baseline
+ * was read over, whether the neck clamp acted and so coupled the nod into the head's rotate (and the face pitch). Or,
+ * when no nod is keyed, why. `pitch`: the map keys a face pitch dial.
+ */
+export function nodLine(h: HeadNodReading | null, skipped: NodSkipped | null, pitch: boolean): string | null {
+  if (h === null) return skipped === null ? null : `none on bone "${skipped.bone}" (chain "${skipped.chain}", r_eye → l_eye): ${skipped.why} — no translate keyed, nothing coupled into its rotate${pitch ? ' or the face pitch' : ''}`;
+  const head = `bone "${h.bone}" (chain "${h.chain}", r_eye → l_eye)`;
+  if (!h.keyed) return `${head}: the eyes do not move against the neck past the writer's 0.001 units — no translate keyed, nothing coupled`;
+  const lo = Math.min(...h.clampedY);
+  const hi = Math.max(...h.clampedY);
+  const sign = (v: number): string => `${v >= 0 ? '+' : ''}${v.toFixed(3)}`;
+  const window = h.window === 'in-place'
+    ? 'window none (in-place): the baseline is frame 0, no clamp, nothing coupled'
+    : `window ±${h.halfWin} frame(s) (0.5 s) running median, detrended, ${h.window === 'wrapped' ? 'wrapped on the loop' : 'cut at the clip\'s ends'}`;
+  const clamped = h.residual.filter((r) => r !== 0).length;
+  const clamp = h.window === 'in-place'
+    ? ''
+    : clamped === 0
+      ? `; clamp ±${h.maxNod.toFixed(3)} units (2% of the neck's setup length) never acted, so nothing is coupled`
+      : `; clamp ±${h.maxNod.toFixed(3)} units (2% of the neck's setup length) acted on ${clamped} frame(s), so the clamped nod is coupled in phase into bone "${h.bone}"'s rotate (+${NOD_RESIDUAL_HEAD_GAIN}°/unit)${pitch ? ` and the face pitch (+${NOD_RESIDUAL_PITCH_GAIN}°/unit)` : ''} on every frame`;
+  return `${head}: translate y ${sign(lo)} … ${sign(hi)} units over ${h.clampedY.length} frame(s); ${window}${clamp}`;
 }

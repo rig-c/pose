@@ -1969,6 +1969,8 @@ describe('examples/wave runs as the README says', () => {
     expect(linesOf(r, 'REACH')).toEqual([]);
     // #242: the wave declares no travel, so the in-place readings it decoupled from --plant-feet do not apply — no TRAVEL line, and the hash below holds.
     expect(linesOf(r, 'TRAVEL')).toEqual([]);
+    // #241: the wave's head chain carries the eye line, but its eyes do not move against the neck, so it keys no nod.
+    expect(linesOf(r, 'NOD')).toEqual(['NOD    bone "head" (chain "head", r_eye → l_eye): the eyes do not move against the neck past the writer\'s 0.001 units — no translate keyed, nothing coupled']);
     // #240: the SCALE reading, and its factor (1.00000) inside the hip band, so no `outside both bands` line on the public example.
     expect(linesOf(r, 'SCALE').map((l) => l.slice(0, 28))).toEqual(['SCALE  1.00000 rig units per', 'SCALE  bands, rig ÷ picture ', 'SCALE  hip travel (mid_hip →']);
     expect(linesOf(r, 'SCALE')[1]).toContain('hip 1.00000–1.00000 (within)');
@@ -9530,7 +9532,7 @@ describe('#242: "in-place" is the sequence\'s property — its supports and its 
     expect(linesOf(read(open, []).ran, 'TRAVEL')).toEqual([]);
   }, SLOW);
 
-  test('mutant: the coupling restored (`plantOn &&`) fragments the supports and opens the head\'s loop, and the test above is red', () => {
+  test('mutant: the coupling restored (`plantOn &&`) fragments the supports, and the test above is red', () => {
     mkdirSync(MUTANTS, { recursive: true });
     const d = mkdtempSync(join(MUTANTS, 'm242-'));
     try {
@@ -9548,9 +9550,197 @@ describe('#242: "in-place" is the sequence\'s property — its supports and its 
       const red = m.supports.length !== 2 * CYCLES + 1 || covered(m.supports) !== NN || m.loop.rotate >= LOOP_DEG || m.loop.nod >= LOOP_UNITS;
       if (!red) throw new Error('mutant "plantOn &&" survived: the supports and the head loop read as in place');
       expect(covered(m.supports)).toBeLessThan(NN);
+      // #241: this mutant reads the walk as a travelling clip, and the head's loop it used to open (1.057°, 0.661 units)
+      // came from the nod's detrend window cut at the clip's ends. That window now wraps on a `clean --loop` sequence, so
+      // the head stays closed under this mutant too; #241's own mutant (the window cut again) is the one that opens it.
+      expect(m.loop.rotate).toBeLessThan(LOOP_DEG);
+      expect(m.loop.nod).toBeLessThan(LOOP_UNITS);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
+describe('#241: the head nod — a NOD line, a map switch, and a loop\'s nod read wrapped', () => {
+  /** One gait cycle, frames; the sequence repeats it CYCLES times, at 24 fps (#242's walk in place). */
+  const C = 24;
+  const CYCLES = 7;
+  const NN = C * CYCLES;
+  /** #242's loop bars: cycle 1 against cycle N, degrees on the head's rotate key and world units on its nod. */
+  const LOOP_DEG = 0.05;
+  const LOOP_UNITS = 0.05;
+  const headRig: NonNullable<RigOpts['bones']> = (b) => [
+    ...b,
+    { name: 'head_ctl', parent: 'neck', x: 0, y: 20 },
+    { name: 'head', parent: 'head_ctl', x: 0, y: 0 },
+    { name: 'eye_r', parent: 'head', x: -6, y: 10 },
+    { name: 'eye_l', parent: 'head', x: 6, y: 10 },
+  ];
+  const headChain = (extra: Record<string, unknown> = {}) => ({ name: 'head', bones: ['head'], joints: ['r_eye', 'l_eye'], aim: ['eye_r>eye_l'], ...extra });
+  const mapWith = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({ ...baseMap(), chains: [...baseChains(), headChain(extra)] });
+  const phase = (i: number): number => (2 * Math.PI * (i % C)) / C;
+  /**
+   * #242's walk in place, `clean --loop`ed: the hips still, the thighs swinging in opposition, the eyes bobbing 3 px
+   * twice a cycle against a still neck (past the ±2% neck clamp once scaled, so the clamp acts and couples).
+   * `inPlace: false` deletes the `travel` the loop wrote: a loop that is not declared in place — the one sequence that
+   * reads the nod through its detrend window and the neck clamp while being a loop.
+   */
+  function walk(inPlace: boolean): Record<string, unknown> {
+    const m: Motion = {
+      ...BASE,
+      n: NN,
+      dt: 1 / 24,
+      trunk: () => 90,
+      ru: () => -100,
+      rf: () => -95,
+      lu: () => -80,
+      lf: () => -85,
+      rt: (i) => -90 + 20 * Math.sin(phase(i)),
+      rs: (i) => -95 + 20 * Math.sin(phase(i)),
+      lt: (i) => -90 - 20 * Math.sin(phase(i)),
+      ls: (i) => -90 - 20 * Math.sin(phase(i)),
+      hip: () => [0, 0],
+    };
+    const doc = poseDoc(m, (i, j) => {
+      const bob = 3 * Math.sin(2 * phase(i));
+      for (const e of ['r_eye', 'l_eye']) {
+        const a = j[e]!.at as Pt;
+        j[e] = { ...j[e], at: [a[0], a[1] + bob] };
+      }
+    });
+    const seq = readPoseSequence(JSON.stringify(doc), 'fixture');
+    const c = clean(seq, { loop: true, legs: 1, rest: 1 }, undefined, 'fixture');
+    expect(c.seq.travel).toBe('in-place');
+    const out = JSON.parse(writePoseSequence(c.seq)) as Record<string, unknown>;
+    if (!inPlace) delete out.travel;
+    return out;
+  }
+  interface Read {
+    ran: Ran;
+    nod: string[];
+    rot: number[];
+    /** The head's translate keys, y (empty: no translate track). */
+    ty: number[];
+    /** The largest |cycle 1 − cycle N| over a cycle's frames: rotate (degrees) and nod (units). */
+    loop: { rotate: number; nod: number };
+  }
+  function read(c: Case, cliPath = CLI): Read {
+    const ran = retarget(c, [], cliPath);
+    expect(ran.stderr).toBe('');
+    expect(ran.status).toBe(0);
+    const tracks = motionOf(c.out).animations.dance!.tracks;
+    const rot = tracks.find((t) => t.bone === 'head' && t.property === 'rotate')!.keys.map((x) => x.v[0]!);
+    const tr = tracks.find((t) => t.bone === 'head' && t.property === 'translate');
+    const ty = tr === undefined ? [] : tr.keys.map((x) => x.v[1]!);
+    if (tr !== undefined) expect(tr.keys.every((x) => x.v[0] === 0)).toBe(true);
+    let rotate = 0;
+    let nod = 0;
+    for (let k = 0; k < C; k++) {
+      const last = (CYCLES - 1) * C + k;
+      rotate = Math.max(rotate, Math.abs(wrap(rot[last]! - rot[k]!)));
+      if (ty.length > 0) nod = Math.max(nod, Math.abs(ty[last]! - ty[k]!));
+    }
+    return { ran, nod: linesOf(ran, 'NOD'), rot, ty, loop: { rotate, nod } };
+  }
+  /** The figures a NOD line prints, read back out of it. */
+  function figures(line: string): { lo: number; hi: number; frames: number; clamp: number | null; acted: number | null } {
+    const num = (re: RegExp): number | null => {
+      const m = re.exec(line);
+      return m === null ? null : Number(m[1]);
+    };
+    const range = /translate y ([+-]\d+\.\d{3}) … ([+-]\d+\.\d{3}) units over (\d+) frame\(s\)/.exec(line);
+    if (range === null) throw new Error(`NOD line has no range: ${line}`);
+    return { lo: Number(range[1]), hi: Number(range[2]), frames: Number(range[3]), clamp: num(/clamp ±(\d+\.\d{3}) units/), acted: num(/acted on (\d+) frame\(s\)/) };
+  }
+  const show = (r: Read): string => `cycle 1 vs ${CYCLES}: rotate ${r.loop.rotate.toFixed(3)}°, nod ${r.loop.nod.toFixed(3)} units; ${r.nod[0]}`;
+
+  test('a loop not declared in place: the window wraps, the clamp acts and couples, and cycle 1 is cycle N; the NOD line\'s figures are the written keys\'', () => {
+    const c = setup({ rig: { bones: headRig }, map: mapWith(), pose: walk(false) });
+    const r = read(c);
+    console.log(`  #241 loop, not in place: ${show(r)}`);
+    expect(r.nod).toHaveLength(1);
+    expect(r.nod[0]).toContain('window ±12 frame(s) (0.5 s) running median, detrended, wrapped on the loop');
+    expect(r.nod[0]).toContain('so the clamped nod is coupled in phase into bone "head"\'s rotate (+1.6°/unit) on every frame');
+    const f = figures(r.nod[0]!);
+    // The written keys say the same as the line: the range, the frame count, the clamp (the keys reach it).
+    expect(r.ty).toHaveLength(NN);
+    expect(f.frames).toBe(NN);
+    expect(f.lo).toBeCloseTo(Math.min(...r.ty), 3);
+    expect(f.hi).toBeCloseTo(Math.max(...r.ty), 3);
+    expect(f.clamp).toBeCloseTo(0.02 * 20, 3);
+    expect(Math.max(...r.ty.map(Math.abs))).toBeCloseTo(f.clamp!, 3);
+    expect(f.acted!).toBeGreaterThan(0);
+    // The bar: cycle 1 is cycle N, on the nod and on the rotate it is coupled into.
+    expect(r.loop.rotate).toBeLessThan(LOOP_DEG);
+    expect(r.loop.nod).toBeLessThan(LOOP_UNITS);
+  }, SLOW);
+
+  test('mutant: the window read cut at the ends on the loop (as before #241) opens the loop, and the test above is red', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm241-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const src = readFileSync(path, 'utf8');
+      const from = "opts.loop === true ? 'wrapped' : 'cut'";
+      expect(src.split(from)).toHaveLength(2);
+      writeFileSync(path, src.replace(from, "'cut'"));
+      const c = setup({ rig: { bones: headRig }, map: mapWith(), pose: walk(false) });
+      const m = read(c, join(d, 'cli.ts'));
+      console.log(`  #241 mutant "cut": ${show(m)}`);
+      expect(m.nod[0]).toContain('cut at the clip\'s ends');
+      const red = m.loop.rotate >= LOOP_DEG || m.loop.nod >= LOOP_UNITS;
+      if (!red) throw new Error('mutant "cut" survived: cycle 1 and cycle N agree with the window cut at the ends');
+      expect(m.loop.nod).toBeGreaterThan(LOOP_UNITS);
       expect(m.loop.rotate).toBeGreaterThan(LOOP_DEG);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
   }, SLOW);
+
+  test('"nod": false keys no translate and takes the coupling out of the head\'s rotate; the NOD line says so', () => {
+    const on = read(setup({ rig: { bones: headRig }, map: mapWith(), pose: walk(false) }));
+    const off = read(setup({ rig: { bones: headRig }, map: mapWith({ nod: false }), pose: walk(false) }));
+    expect(off.ty).toEqual([]);
+    expect(off.nod).toEqual(['NOD    none on bone "head" (chain "head", r_eye → l_eye): the chain declares "nod": false — no translate keyed, nothing coupled into its rotate']);
+    // The coupling is exactly what was removed: on every frame, rotate(on) − rotate(off) = +1.6°/unit × the keyed nod.
+    let worst = 0;
+    for (let i = 0; i < NN; i++) worst = Math.max(worst, Math.abs(wrap(on.rot[i]! - off.rot[i]!) - 1.6 * on.ty[i]!));
+    console.log(`  #241 switch: |rotate(on) − rotate(off) − 1.6 × nod| ≤ ${worst.toFixed(4)}°, coupling up to ${Math.max(...on.ty.map((y) => Math.abs(1.6 * y))).toFixed(3)}°`);
+    expect(worst).toBeLessThan(0.003);
+    expect(Math.max(...on.ty.map((y) => Math.abs(1.6 * y)))).toBeGreaterThan(0.5);
+    // Control: "nod": true is the default.
+    const yes = read(setup({ rig: { bones: headRig }, map: mapWith({ nod: true }), pose: walk(false) }));
+    expect(yes.ty).toEqual(on.ty);
+    expect(yes.rot).toEqual(on.rot);
+  }, SLOW);
+
+  test('in place: the NOD line names no window and no clamp, and cycle 1 is cycle N (#242 already reads it as a loop)', () => {
+    const r = read(setup({ rig: { bones: headRig }, map: mapWith(), pose: walk(true) }));
+    console.log(`  #241 in place: ${show(r)}`);
+    expect(r.nod).toHaveLength(1);
+    expect(r.nod[0]).toContain('window none (in-place): the baseline is frame 0, no clamp, nothing coupled');
+    expect(r.nod[0]).not.toContain('clamp ±');
+    const f = figures(r.nod[0]!);
+    expect(f.lo).toBeCloseTo(Math.min(...r.ty), 3);
+    expect(f.hi).toBeCloseTo(Math.max(...r.ty), 3);
+    expect(r.loop.nod).toBeLessThan(LOOP_UNITS);
+    expect(r.loop.rotate).toBeLessThan(LOOP_DEG);
+  }, SLOW);
+
+  const nodCases: Array<{ map: () => Record<string, unknown>; want: string }> = [
+    { map: () => mapWith({ nod: 'off' }), want: 'MAP_NOD: chain "head" "nod" is the string \"off\"; it must be true or false (false keys no head nod and couples none into the head\'s rotate or the face pitch)' },
+    { map: () => ({ ...baseMap(), chains: [...baseChains().map((ch) => (ch.name === 'arm_r' ? { ...ch, nod: false } : ch)), headChain()] }), want: 'MAP_NOD: chain "arm_r" has "nod" but its joints (r_shoulder → r_elbow → r_wrist) carry no eye line; the nod is read on the chain whose joints run r_eye → l_eye (or l_eye → r_eye), so "nod" belongs there or nowhere' },
+  ];
+  nodCases.forEach((nc, k) => {
+    test(`map: MAP_NOD (${k + 1} of ${nodCases.length})`, () => {
+      const c = setup({ rig: { bones: headRig }, map: nc.map(), pose: walk(false) });
+      const r = retarget(c);
+      expect(r.status).toBe(1);
+      expect(fails(r)).toEqual([`FAIL  ${nc.want}`]);
+      expect(existsSync(c.out)).toBe(false);
+    }, SLOW);
+  });
 });
