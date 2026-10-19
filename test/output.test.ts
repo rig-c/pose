@@ -76,25 +76,27 @@ describe('the default output on the public example (#238)', () => {
   // Measured on this commit's parent: the wave printed 41 lines, the longest 260 characters (a LAND/JITTER line);
   // re-cleaned with the hold on, 41 lines and a CLEAN line of 3021 characters. After: 41 and 260; 41 and 366.
   // #239 writes the report by default, and its wrote line is one more: re-measured, 42 and 260; 42 and 366.
-  test('the wave as shipped: at most 42 lines, none longer than 260 characters', () => {
+  // #240 adds two SCALE lines on the wave (the bands beside the factor, the hip's travel; the third, `outside both
+  // bands`, does not fire there) and no character: 44 and 260; 44 and 366, measured on #240's head.
+  test('the wave as shipped: at most 44 lines, none longer than 260 characters', () => {
     const d = tempDir();
     try {
       const r = run(d);
       expect(r.status).toBe(0);
-      expect(linesOf(r.stdout).length).toBeLessThanOrEqual(42);
+      expect(linesOf(r.stdout).length).toBeLessThanOrEqual(44);
       expect(longest(r.stdout)).toBeLessThanOrEqual(260);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
   }, SLOW);
 
-  test('the wave re-cleaned with the hold on: at most 42 lines, the CLEAN line counts the holds and is at most 366 characters', () => {
+  test('the wave re-cleaned with the hold on: at most 44 lines, the CLEAN line counts the holds and is at most 366 characters', () => {
     const d = tempDir();
     try {
       const pose = heldPose(d);
       const r = run(d, { pose });
       expect(r.status).toBe(0);
-      expect(linesOf(r.stdout).length).toBeLessThanOrEqual(42);
+      expect(linesOf(r.stdout).length).toBeLessThanOrEqual(44);
       expect(longest(r.stdout)).toBeLessThanOrEqual(366);
       const record = readPoseSequence(readFileSync(pose, 'utf8'), pose).cleaned!;
       expect(record.holds!.length).toBeGreaterThan(0);

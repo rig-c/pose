@@ -162,7 +162,8 @@ retarget
                         (REDUCE lines; default: off). It runs last, on the final keys: with --leg-scale,
                         --plant-feet and --stance, a scaled bone's scalex is thinned within 5e-5 of its setup
                         length, a bone under one is re-solved through its parent as reduced, and each ankle
-                        is held to what the reduced bones above it may move it by (rig-c/pose#94)
+                        is held to what the reduced bones above it may move it by (rig-c/pose#94), printed
+                        at the end as "ankle drift allowed" in units and leg lengths (rig-c/pose#240)
   --reduce-hip <units>  with --reduce, thin the hip's translate keys too, its world origin within units
                         of the dense keys (default: the hip stays dense)
   --switch-tolerance <d>  a set of alternate drawings (the map's "alternates") may show on a frame where
