@@ -38,8 +38,16 @@ a commit message on the branch.
 4. Merge it. That is the cut.
 5. Watch the second `release` run: tag, release, publish, then
    `scripts/confirm_registry.sh`, which installs the published version into an
-   empty directory and runs `rig-pose --version` (exit 3 = the registry did not
+   empty directory, runs `rig-pose --version`, then retargets the public wave
+   from the install and holds its motion to the pinned bytes
+   (`scripts/smoke_install.sh`, rig-c/pose#260; exit 3 = the registry did not
    serve it in time; re-run with Actions → release → Run workflow).
+
+Before any of that, every pull request's `install` job packs the branch, runs
+the same smoke on the tarball, and plants two failures beside it
+(`scripts/smoke_mutants.sh`): a `src` module left out of the tarball must go
+red at `--version`, and the gate's launcher resolved by a name the install does
+not have must go red at the retarget — a failure `--version` alone passes.
 
 ## The first publish, and trusted publishing (owner)
 
