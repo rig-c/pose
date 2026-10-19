@@ -13,6 +13,7 @@ import { convertCoco17, readPoseSequence, writePoseSequence } from './src/pose.t
 import { parseWindows } from './src/compare.ts';
 import { lineOf, Refusal } from './src/problems.ts';
 import { runCompare, type CompareArgs } from './src/runcompare.ts';
+import { PROVENANCE_FILE } from './src/provenance.ts';
 import { runRetarget, type RetargetArgs } from './src/run.ts';
 
 const HELP = `rig-pose ${pkg.version} — motion from a pose sequence onto a rig-c rig
@@ -182,7 +183,13 @@ retarget
                         changes turn fastest, among those that newly show a set only on frames within
                         2 × the switch tolerance of its key skeleton (it stays when none qualifies)
   --profile spine|spine-html  rigc's gate profile (default: spine, rigc's own default)
-  --build <dir>         keep the gated build (skeleton.json, .atlas, .model.json) here
+  --build <dir>         keep the gated build (skeleton.json, .atlas, .model.json) here, with the record of
+                        what made it beside it: retarget.json (rig-pose-retarget/1 — both versions, each input
+                        as given with its sha256, the sequence's source, every option as resolved; rig-c/pose#270)
+  --reference <path>    with --build: written into retarget.json as "reference", exactly as given — the
+                        video or file the motion was made to match. Echoed, never read: the path is not
+                        checked to exist. Without it the record has no "reference" (compare's --reference
+                        is another flag)
   --render <dir>        keep rigc's render of the animation (frames, contact.png, folds.json) here
   --parts <path>        @rig-c/parts' parts.json, or the directory holding it (its build's --out, beside rig/):
                         the neighbour pairs the seam reading reads — each limb's consecutive segments. Each
@@ -324,8 +331,9 @@ function legScaleOf(f: Map<string, string>): [number, number] | 'off' {
 const RETARGET_ALIASES = { sequence: 'pose', animation: 'name' } as const;
 
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'parts', 'report', 'camera', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head', 'reduce-keep-planted', 'verbose', 'summary'], RETARGET_ALIASES);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'reference', 'render', 'parts', 'report', 'camera', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head', 'reduce-keep-planted', 'verbose', 'summary'], RETARGET_ALIASES);
   if (f.has('verbose') && f.has('summary')) throw new Usage('--verbose and --summary are both given; --verbose prints every line in full and --summary one line per measure, so give one');
+  if (f.has('reference') && !f.has('build')) throw new Usage(`--reference needs --build: the record it goes in is written beside the build (${PROVENANCE_FILE})`);
   const bends = f.get('bends') ?? 'refuse';
   if (bends !== 'refuse' && bends !== 'clamp') throw new Usage(`--bends is "${bends}"; it must be refuse or clamp`);
   const switchAt = f.get('switch-at') ?? 'first';
@@ -360,6 +368,7 @@ function retargetArgs(argv: string[]): RetargetArgs {
     switchAt,
     profile,
     build: f.get('build'),
+    reference: f.get('reference'),
     render: f.get('render'),
     parts: f.get('parts'),
     report: f.get('report'),

@@ -16,7 +16,7 @@ Part of the rig-c toolchain: [core](https://github.com/rig-c/core) compiles and 
 rig-pose retarget --rig examples/wave/rig --map examples/wave/map.json --sequence examples/wave/pose.json --out wave.motion.json --build wave-build
 ```
 
-`pose.json` is already cleaned (`make-pose.ts` passes it through `clean`). It prints the gate's verdict and where every mapped bone landed, then writes `wave.motion.json`, its report `wave.motion.report.json` and the gated build. `rigc preview --candidate wave-build` plays it in the Spine Web Player. A rig with no art shows only its bones.
+`pose.json` is already cleaned (`make-pose.ts` passes it through `clean`). It prints the gate's verdict and where every mapped bone landed, then writes `wave.motion.json`, its report `wave.motion.report.json` and the gated build, with its record `retarget.json` beside it ([below](#the-builds-record-retargetjson)). `rigc preview --candidate wave-build` plays it in the Spine Web Player. A rig with no art shows only its bones.
 
 ## What the rig needs
 
@@ -219,6 +219,31 @@ The cutoff was fixed by measuring first ([#22](https://github.com/rig-c/pose/iss
 Both have a meaningless direction; only the first is a pose the rig cannot draw. **0.35** is the smallest round value that takes in every end-on frame (the highest is 0.35, on `dance-a`) without reaching normal motion (the 5th percentiles are 0.75 and 0.82). A run under the cutoff — spans merged across a gap of one frame — lasting **≥ 0.15 s** (3.6 frames at 24 fps, 4.5 at 30) is the end-on kind: it excludes every blur collapse above (at most 3 frames, 0.10 s at 30 fps) and keeps every end-on span (6–8 frames). The run prints it as `END-ON` and the report lists it under `endOn` (chain, bone, segment, frames, seconds, the lowest fraction): it is the list of moments that need an alternate drawing ([#6](https://github.com/rig-c/pose/issues/6)).
 
 Re-checked on a @rig-c/parts fixture rig with the short hold, the flip guard and clamped bends. On `dance-b` the three spreads the flip guard made out of end-on segments are SHORT holds now, not FLIPs: right upper arm 399–400, right thigh 368–369, right shin 368–371. Of the flip guard's other spreads only one is left, the left forearm at 322–323; every other one fell on frames under the cutoff and is a SHORT hold instead. No guarded bone of the gated build turns more than 81.4° in one frame (85.1° with the flip guard alone), and every bone lands. `endOn` there lists the right upper arm (395–401) and the right shin (365–370). It does not list the right thigh, which is under 0.35 on one frame only (369, 0.16). The plan before the run expected the thigh too, and that expectation was wrong. On `dance-a` `endOn` lists exactly S2's left upper arm (30–37); the three FLIPs are #15's, the largest one-frame turn is 78.2°, and every bone lands. When `dance-b`'s pelvis is mapped (`r_hip → l_hip`), its side-on turn (frames 463–491, body yaw +79.5°) foreshortens the hip line to 0.17 of standing and crosses `r_hip.x` past `l_hip.x` on frames 482–484 (+177.4° / −179.4°); `holdAcross` ([#184](https://github.com/rig-c/pose/issues/184)) holds `hip.rotate` across the unconfident span (`[−2.2°, +2.6°]` over 463–491, `0` `FLIP`s) without listing horizontal lines as limb `END-ON`. The default stays off: a default needs its own criterion and a third sequence.
+
+### The build's record: `retarget.json`
+
+`--build <dir>` keeps the gated build — rigc's own files, byte for byte as rigc wrote them — and beside them one more file, `retarget.json` (`rig-pose-retarget/1`, [#270](https://github.com/rig-c/pose/issues/270)): what made the build. It is written once the kept build is green and the inputs are re-read unchanged, and a `RECORD` line says so (`RECORD retarget.json written beside the build (reference: <path> | none given)`). Its keys, in this order:
+
+```json
+{
+  "spec": "rig-pose-retarget/1",
+  "pose": { "version": "<this package's version>" },
+  "rigc": { "version": "<the rig-c that gated the run, as the RIGC line names it>" },
+  "inputs": {
+    "rig": { "path": "<--rig as given>", "sha256": "<the rig spec's bytes>" },
+    "map": { "path": "<--map as given>", "sha256": "<the map's bytes>" },
+    "sequence": { "path": "<--sequence as given>", "sha256": "<the sequence's bytes>", "source": "<its \"source\", verbatim>" }
+  },
+  "flags": { "name": "<the animation>", "minScore": 0.3, "...": "every retarget option as resolved — the report's options, in their order" },
+  "reference": "<--reference as given>"
+}
+```
+
+- **Paths are as typed.** Each `path` is the argument as given on the command line — not resolved, not made relative, not normalised. Each `sha256` is the hex digest of the file's bytes the run read (the same bytes the report's `inputs` hash). `--rig` given as a directory or as a `rig.json` hashes the same file: the rig spec, `rig.json`, that rigc builds from. A `motion.json` read beside it (or `--base-motion`), a `sets.json` and the images are not in the hash, as they are not in the report's.
+- **`reference` is the author's, and only when given.** `--reference <path>` (with `--build`; without it the run is refused: `--reference needs --build: the record it goes in is written beside the build`) names what the motion was made to match — the video, say — and the record carries it exactly as typed. It is echoed, never read: the path is not checked to exist. Without `--reference` the record has no `reference` key — not `null`, and nothing is derived from the sequence's `source` or its path. (`compare --reference` is another flag.)
+- **Deterministic.** No clock, no host name, no absolute path the user did not type: the same inputs and flags write the same bytes into any build directory. 2-space JSON, a trailing newline.
+
+`rigc review` is the intended reader (rig-c's later card): it reads the build and, through this file, what made it.
 
 ### The legs: foreshortening and planted feet
 

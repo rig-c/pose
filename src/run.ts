@@ -22,6 +22,7 @@ import { legsOf, PLANT_SWITCH, STANCE_BOUNDS } from './legs.ts';
 import { M2_IDENTITY, mulM2, reduceKeys, reduceScale, reduceUnderScale, SCALE_REDUCE, setupLocal, smoothTrunk, type M2, type ReduceBone, type Reduced, type ReduceRow, type UnderBone } from './reduce.ts';
 import type { BlendHold, Closure, Floor, FreeAnkleShift, LegScale, LegSegmentRatio, Lowered, Side, Stance, SupportScaleRun } from './legs.ts';
 import { reportRenderDomain, writeReport, type ReportInput } from './report.ts';
+import { PROVENANCE_FILE, provenanceText } from './provenance.ts';
 import { bodyLine, faceLine } from './face.ts';
 
 export interface RetargetArgs extends RetargetOptions {
@@ -40,6 +41,11 @@ export interface RetargetArgs extends RetargetOptions {
   profile: 'spine' | 'spine-html';
   /** Keep the gated build here. */
   build?: string;
+  /**
+   * With `build`: echoed verbatim into the build's record (`retarget.json`, #270) as `reference`;
+   * never read, never checked to exist. Absent, the record has no `reference` key.
+   */
+  reference?: string;
   /** Keep rigc's render of the animation (frames, contact sheet, folds.json) here. */
   render?: string;
   /** @rig-c/parts' `parts.json` (or the directory holding it): the neighbour pairs the seam reading reads (#216). */
@@ -107,6 +113,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     if (!statSync(up).isDirectory()) args.add('ARG_PATH', up === dir ? `${flag} ${path} — ${dir} is not a directory` : `${flag} ${path} — ${up} is a file, so directory ${dir} cannot be made under it`);
     else if (up !== dir) makeDirs.set(dir, [...(makeDirs.get(dir) ?? []), `${flag} ${path}`]);
   }
+  if (a.reference !== undefined && a.build === undefined) args.add('ARG_REFERENCE', `--reference ${a.reference} needs --build: the record it goes in is written beside the build (${PROVENANCE_FILE})`);
   args.throwIfAny();
   const input = resolveRig(a.rig, a.baseMotion);
   const rigSnapshot = readReportInput(input.rig);
@@ -377,6 +384,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     for (const d of drift) say(`  REDUCE ${ankleDriftLine(d)}`);
 
     assertReportInputs([rigSnapshot,mapSnapshot,poseSnapshot]);
+    // Every retarget option as resolved: the report's `options`, and with the name the build record's `flags` (#270).
+    const options = { minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', floor: a.floor ?? null, raisedByHead: a.raisedByHead === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', reduceHip: a.reduceHip ?? 'off', ...(a.reduceKeepPlanted === true ? { reduceKeepPlanted: true } : {}) };
     const reportText = writeReport({
         spec: 'rig-pose-report/1',
         rigc,
@@ -385,7 +394,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         frames: seq.frames.length,
         duration: r.animation.duration,
         cleaned: seq.cleaned,
-        options: { minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', floor: a.floor ?? null, raisedByHead: a.raisedByHead === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', reduceHip: a.reduceHip ?? 'off', ...(a.reduceKeepPlanted === true ? { reduceKeepPlanted: true } : {}) },
+        options,
         scale: r.scale,
         scaleFit: r.scaleFit,
         holds: r.holds,
@@ -448,6 +457,20 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     }
     // The kept build reads the rig again; its bytes must still match the report.
     assertReportInputs([rigSnapshot,mapSnapshot,poseSnapshot]);
+    if (a.build !== undefined) {
+      // #270: what made the build, beside it — the inputs as given with the bytes' hashes (the ones just
+      // re-checked), the versions, the options; `reference` only when the author gave one.
+      writeFileSync(join(a.build, PROVENANCE_FILE), provenanceText({
+        rigc: rigc.version,
+        rig: { path: a.rig, sha256: rigSnapshot.identity.sha256 },
+        map: { path: a.map, sha256: mapSnapshot.identity.sha256 },
+        sequence: { path: a.pose, sha256: poseSnapshot.identity.sha256, source: seq.source },
+        name: a.name,
+        options,
+        ...(a.reference === undefined ? {} : { reference: a.reference }),
+      }));
+      say(`  RECORD ${PROVENANCE_FILE} written beside the build (reference: ${a.reference ?? 'none given'})`);
+    }
     for (const [dir, flags] of makeDirs) {
       mkdirSync(dir, { recursive: true });
       tell(madeLine(dir, flags));
