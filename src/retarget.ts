@@ -153,7 +153,7 @@ export interface RetargetOptions extends SwitchOptions {
   floor?: number;
   /** While a set whose arm is drawn raised shows, its wrist is placed against the rig's head in eye distances (rig-c/pose#62); false (the default) keeps the pose's angles. */
   raisedByHead?: boolean;
-  /** The sequence's `travel` (rig-c/pose#92): "in-place" makes --plant-feet let the supporting foot follow its own track and close the loop; absent, nothing changes. */
+  /** The sequence's `travel` (rig-c/pose#92, #242): "in-place" reads the supports, the camera-zoom normalisations and the head nod as a loop, with or without --plant-feet, and makes --plant-feet let the supporting foot follow its own track and close the loop; absent, nothing changes. */
   travel?: Travel;
 }
 
@@ -405,6 +405,8 @@ export interface Retarget {
   blendHold: BlendHold | null;
   /** With --plant-feet on an in-place sequence: the hip's x drift closed over the loop (#92). */
   closure: Closure | null;
+  /** On an in-place sequence without --plant-feet (#242): the translated bone's world x on the last frame less its x on the first, which nothing closes; null otherwise, and when no bone is translated. */
+  openDrift: number | null;
   /** Each ankle's world position on every frame, as the keys put it, when legs are scaled or feet planted. */
   ankles: { bones: Record<Side, string>; at: Record<Side, Pt[]> } | null;
   /** The translated bone's origin against its thigh roots' midpoint, at setup. */
@@ -782,9 +784,16 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   // which are aimed from where the hip is.
   const legScaleOn = opts.legScale !== undefined && opts.legScale !== 'off';
   const plantOn = opts.plantFeet === true;
-  /** #92: an in-place sequence under --plant-feet — the supporting foot follows its own track, no step releases, the loop closed. */
-  const inPlace = plantOn && opts.travel === TRAVEL_IN_PLACE;
+  /**
+   * #92, #242: the sequence declares itself in place. A property of the sequence, not of --plant-feet: every reading
+   * below takes it with or without the flag — the supports (no step releases a foot), the camera-zoom normalisations
+   * (#159, #163, #173: a loop has no zoom, and their rolling windows do not wrap), the trunk scale (#172) and the head
+   * nod (no detrend window, no clamp). What only planting can do — the supporting foot following its own track and the
+   * loop closed on the planted hip — stays under `plantOn`, and without it `openDrift` says what was not closed.
+   */
+  const inPlace = opts.travel === TRAVEL_IN_PLACE;
   let closure: Closure | null = null;
+  let openDrift: number | null = null;
   const legScale: LegScale[] = [];
   const scales = new Map<string, number[]>();
   let stance: Stance | null = null;
@@ -1245,6 +1254,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     }
     translateTrack = { bone: t.bone, property: 'translate', keys };
     origin = { bone: t.bone, at };
+    if (inPlace && !plantOn && n > 0) openDrift = r6(travel[n - 1]![0] - travel[0]![0]);
   }
 
   // Reaches: from the bone's posed origin at the pose's end point, anchored at
@@ -2881,7 +2891,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     animation: { duration: keyTimes[n - 1]!, tracks },
     times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale,
     switches: sw.switches, shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
-    legScale, segments, legStraight, rigLeg, scales, feet, planted: plantOn, stance, floor, blendHold, closure, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs), raised, byHip, face, body, figureScale, headNod: headNodReading, reach,
+    legScale, segments, legStraight, rigLeg, scales, feet, planted: plantOn, stance, floor, blendHold, closure, openDrift, ankles, pivot: pivotOf(rest, t?.bone ?? null, legs), raised, byHip, face, body, figureScale, headNod: headNodReading, reach,
   };
 }
 
