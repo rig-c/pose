@@ -1615,6 +1615,8 @@ describe('the pelvis tilts and the trunk reaches from the posed hip for the shou
       const poseBytes = writePoseSequence(seq);
       writeFileSync(c.pose, poseBytes);
       const report = join(c.dir, 'report.json');
+      // Removed first, so the second run's wrote line names no replaced report (#239) and every other line compares.
+      rmSync(report, { force: true });
       const r = retarget(c, ['--report', report]);
       return { r, motion: readFileSync(c.out, 'utf8'), report: JSON.parse(readFileSync(report, 'utf8')) as Record<string, unknown>, poseSHA: createHash('sha256').update(poseBytes).digest('hex') };
     };
@@ -6083,8 +6085,9 @@ describe('continuous figure scale (#163) and --camera sidecar track (#161)', () 
     expect((Math.max(...frozenH) - Math.min(...frozenH)) / frozenH[0]!).toBeLessThanOrEqual(0.005);
     expect(Math.abs(standingHeight(N - 1) / standingHeight(0) - 1)).toBeLessThanOrEqual(0.02);
 
-    // ARG_PATH refusal when --camera points to a missing directory.
-    const bad = retarget(withCam, [...flags, '--camera', join(withCam.dir, 'no-such-dir', 'camera.json')]);
+    // ARG_PATH refusal when --camera points under a file (a missing directory is made since #239).
+    writeFileSync(join(withCam.dir, 'not-a-dir'), '');
+    const bad = retarget(withCam, [...flags, '--camera', join(withCam.dir, 'not-a-dir', 'camera.json')]);
     expect(bad.status).toBe(1);
     expect(bad.stderr).toContain('ARG_PATH: --camera');
   }, SLOW);
