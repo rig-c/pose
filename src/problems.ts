@@ -10,6 +10,13 @@ export interface Problem {
   code: string;
   /** The object, the value found, the value required. */
   text: string;
+  /**
+   * The per-frame problems this one collapses (rig-c/pose#238): a refusal of one
+   * kind that fires on every frame prints one line with its count, worst value
+   * and frame range; these are the lines it stands for, printed under --verbose.
+   * `detail.length` is the count the collapsed line states.
+   */
+  detail?: readonly Problem[];
 }
 
 export class Refusal extends Error {
@@ -28,8 +35,8 @@ export function lineOf(p: Problem): string {
 /** A collector: `add` while reading, `throwIfAny` once at the end. */
 export class Problems {
   readonly list: Problem[] = [];
-  add(code: string, text: string): void {
-    this.list.push({ code, text });
+  add(code: string, text: string, detail?: readonly Problem[]): void {
+    this.list.push(detail === undefined ? { code, text } : { code, text, detail });
   }
   get any(): boolean {
     return this.list.length > 0;

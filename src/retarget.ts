@@ -773,7 +773,8 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     for (let k = 1; k < c.bones.length; k++) checkHinge(c, k, targets, restOf, keyTimes, opts, bends, p);
   }
   if (opts.bends === 'refuse' && bends.length > 0) {
-    for (const e of bends) p.add('POSE_BEND_ONE_WAY', bendLine(e));
+    // #238: one line per hinge — its count, worst angle, frame range and the remedy; the per-frame lines are its detail (--verbose).
+    for (const g of bendGroups(bends)) p.add('POSE_BEND_ONE_WAY', bendGroupLine(g, 'refuse'), g.events.map((e) => ({ code: 'POSE_BEND_ONE_WAY', text: bendLine(e) })));
   }
   p.throwIfAny();
 
@@ -3387,7 +3388,7 @@ function checkHinge(c: Chain, k: number, targets: Map<string, number[]>, restOf:
   else if (c.bend === 'cw') side = -1;
   else {
     if (Math.abs(restInner) < 0.5) {
-      p.add('MAP_BEND_SIDE', `chain "${c.name}" — the hinge at ${joint} is straight at rest (inner angle ${restInner.toFixed(3)}°), so the rest pose does not say which way it bends; state "bend": "ccw", "cw" or "free"`);
+      p.add('MAP_BEND_SIDE', `chain "${c.name}" — the hinge at ${joint} is straight at rest (inner angle ${restInner.toFixed(3)}°), so the rest pose does not say which way it bends; state "bend": "ccw", "cw" or "free" — ${bendFreeRemedy(c.name)}`);
       return;
     }
     side = restInner > 0 ? 1 : -1;
@@ -3406,6 +3407,57 @@ function checkHinge(c: Chain, k: number, targets: Map<string, number[]>, restOf:
 export function bendLine(e: BendEvent): string {
   const sense = e.side > 0 ? 'counter-clockwise (+)' : 'clockwise (−)';
   return `chain "${e.chain}" hinge ${e.joint}, frame ${e.frame} (t=${e.t.toFixed(3)}s) — inner angle ${e.angle.toFixed(1)}°; it bends ${sense} at rest (${e.rest.toFixed(1)}°), so the angle must stay ${e.side > 0 ? '≥' : '≤'} 0`;
+}
+
+/**
+ * The remedy both bend refusals name (rig-c/pose#238), as the README's map
+ * section ("bend") gives it: front-facing material goes "free", a side view
+ * keeps a side.
+ */
+export function bendFreeRemedy(chain: string): string {
+  return `seen from the front, the side a hinge's picture falls on is not its limit, so for front-facing material state "bend": "free" on chain "${chain}"; keep a side ("rest", "ccw", "cw") only for a side view, where the picture's side is the joint's own`;
+}
+
+/** One hinge's wrong-way frames (#238): what its collapsed line says. */
+export interface BendGroup {
+  chain: string;
+  joint: string;
+  side: 1 | -1;
+  rest: number;
+  /** Every frame it bent the wrong way, in frame order — the per-frame lines. */
+  events: BendEvent[];
+  /** The event furthest on the wrong side. */
+  worst: BendEvent;
+  /** Runs of consecutive frames. */
+  runs: number;
+}
+
+/** The bend events grouped per hinge, in the order the hinges were first met (#238). */
+export function bendGroups(events: readonly BendEvent[]): BendGroup[] {
+  const out = new Map<string, BendGroup>();
+  for (const e of events) {
+    const k = `${e.chain}\u0000${e.joint}`;
+    const g = out.get(k);
+    if (g === undefined) {
+      out.set(k, { chain: e.chain, joint: e.joint, side: e.side, rest: e.rest, events: [e], worst: e, runs: 1 });
+      continue;
+    }
+    if (e.frame !== g.events[g.events.length - 1]!.frame + 1) g.runs++;
+    g.events.push(e);
+    if (-e.side * e.angle > -g.worst.side * g.worst.angle) g.worst = e;
+  }
+  return [...out.values()];
+}
+
+/** One hinge's collapsed line (#238): a refusal names the remedy; a clamp, that every frame was straightened. */
+export function bendGroupLine(g: BendGroup, mode: 'refuse' | 'clamp'): string {
+  const sense = g.side > 0 ? 'counter-clockwise (+)' : 'clockwise (−)';
+  const first = g.events[0]!, last = g.events[g.events.length - 1]!;
+  const range = first.frame === last.frame ? `frame ${first.frame} (t=${first.t.toFixed(3)}s)` : `frames ${first.frame}–${last.frame} (t=${first.t.toFixed(3)}–${last.t.toFixed(3)}s)`;
+  const head = `chain "${g.chain}" hinge ${g.joint}, ${g.events.length} frame(s) in ${g.runs} run(s), ${range} — worst inner angle ${g.worst.angle.toFixed(1)}° at frame ${g.worst.frame} (t=${g.worst.t.toFixed(3)}s); it bends ${sense} at rest (${g.rest.toFixed(1)}°), so the angle must stay ${g.side > 0 ? '≥' : '≤'} 0`;
+  return mode === 'refuse'
+    ? `${head}; ${bendFreeRemedy(g.chain)}; a near-straight knee's noise takes --bends clamp or --bend-tolerance <deg> (each frame: --verbose)`
+    : `${head} — clamped straight on each (each frame: --verbose; --report's "bends")`;
 }
 
 /** Holds grouped per point, one line each span. */
