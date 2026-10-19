@@ -13,7 +13,7 @@ Part of the rig-c toolchain: [core](https://github.com/rig-c/core) compiles and 
 [`examples/wave`](https://github.com/rig-c/pose/tree/main/examples/wave) is in the repository, not the npm package: clone the repository, or copy its four files. It runs with nothing else: a bones-only stick rig (no art), a 3-second wave made from joint angles (`make-pose.ts` writes it), and the map that joins them.
 
 ```sh
-rig-pose retarget --rig examples/wave/rig --map examples/wave/map.json --pose examples/wave/pose.json --out wave.motion.json --build wave-build
+rig-pose retarget --rig examples/wave/rig --map examples/wave/map.json --sequence examples/wave/pose.json --out wave.motion.json --build wave-build
 ```
 
 `pose.json` is already cleaned (`make-pose.ts` passes it through `clean`). It prints the gate's verdict and where every mapped bone landed, then writes `wave.motion.json`, its report `wave.motion.report.json` and the gated build. `rigc preview --candidate wave-build` plays it in the Spine Web Player. A rig with no art shows only its bones.
@@ -104,8 +104,10 @@ A retarget of the cleaned `dance-a` fixture finds the same jumps (`FEET`) as the
 ## What it does
 
 ```sh
-rig-pose retarget --rig out/rig --map map.json --pose dance.pose.json --out motion.json --name dance
+rig-pose retarget --rig out/rig --map map.json --sequence dance.pose.json --out motion.json --animation dance
 ```
+
+**Names** ([#243](https://github.com/rig-c/pose/issues/243)). `--sequence` and `--animation` are the names the rest of the toolchain gives these inputs (rig-c/exam's grader, `rigc render --animation`); `--pose` and `--name`, this command's first names, are the same flags. Both of a pair given with the same value is accepted; with different values the run is refused before anything is read, naming both (`--pose "a.json" and --sequence "b.json" are both given and differ; --sequence is another name for --pose, so give one`). Either spelling writes the same bytes.
 
 **Paths** ([#239](https://github.com/rig-c/pose/issues/239)). `--rig` is the directory @rig-c/parts writes, `<out>/rig/`: it reads `rig.json` and the `motion.json` beside it. Naming the `rig.json` itself reads no motion spec, so a rig that needs its own animations — a slider applies one — is red before anything is added, and the `RIG_GATE_BASE` line says the `motion.json` beside it was not read and names the directory form (or `--base-motion`). A directory `--out`, `--report` or `--camera` names that is not there yet is made once the run is green, and a `made directory <dir>` line says so and which paths it holds; a red run makes none, and a file where a directory has to be made is refused (`ARG_PATH`). The report is always written: without `--report` it goes beside the motion as `<out>.report.json` (`motion.json` → `motion.report.json`), and its `wrote` line says it was the default. A report that is already at that path is replaced, and the `wrote` line names when the replaced one was last written (its mtime, ISO 8601), so a second run to the same path is never silent. None of this changes the motion's bytes.
 

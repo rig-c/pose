@@ -19,7 +19,7 @@ const HELP = `rig-pose ${pkg.version} — motion from a pose sequence onto a rig
 
 Usage:
   rig-pose clean --pose <pose.json> --out <pose.clean.json> [--loop] [--legs 5] [--rest 7] [--hold off] [--coco] [--person <id>]
-  rig-pose retarget --rig <rig> --map <map.json> --pose <pose.json> --out <motion.json> [--name dance] [flags]
+  rig-pose retarget --rig <rig> --map <map.json> --sequence <pose.json> --out <motion.json> [--animation dance] [flags]
   rig-pose convert --coco <coco17.json> --out <pose.json>
   rig-pose compare --reference <pose.json> --render <pose.json> --map <map.json> [flags]
   rig-pose --version | --help
@@ -64,13 +64,17 @@ retarget
                         (with its motion.json beside it — @rig-c/parts writes the pair to <out>/rig/); naming
                         the rig.json reads no motion spec, so a rig that needs its motion is given as the directory
   --map <map.json>      rig-pose-map/1: which bones carry which joints
-  --pose <pose.json>    rig-pose-sequence/1 (body-18 per frame) that rig-pose clean wrote; a sequence without
+  --sequence <file>     rig-pose-sequence/1 (body-18 per frame) that rig-pose clean wrote; a sequence without
                         its "cleaned" record is refused (POSE_NOT_CLEANED), naming the clean command to run
+  --pose <file>         the same flag under this command's first name (rig-c/pose#243); --sequence is the name
+                        rig-c/exam's grader uses. Both given, they must name the same file
   --out <motion.json>   where the motion spec goes: the rig's own animations plus the new one,
                         ready for \`rigc build --rig <rig> --motion <motion.json>\`; a directory it names that is
                         not there yet is made once the run is green, and a "made directory" line says so
-  --name <name>         the new animation's name (default: dance); refused if the rig has one by that name
-  --coco                read --pose as coco17-sequence/1: refused (POSE_NOT_CLEANED) — clean it with
+  --animation <name>    the new animation's name (default: dance); refused if the rig has one by that name
+  --name <name>         the same flag under this command's first name (rig-c/pose#243); --animation is the name
+                        rigc render uses. Both given, they must be the same name
+  --coco                read --sequence as coco17-sequence/1: refused (POSE_NOT_CLEANED) — clean it with
                         rig-pose clean --coco, then retarget the cleaned file
   --person <id>         the person to follow when the sequence holds more than one
   --base-motion <path>  the rig's motion spec, when it is not motion.json beside rig.json
@@ -235,8 +239,14 @@ Exit codes: 0 written (compare: compared), 1 refused (every reason printed), 2 b
 
 class Usage extends Error {}
 
-function parseFlags(argv: string[], flags: readonly string[], switches: readonly string[]): Map<string, string> {
+/**
+ * Reads `--flag value` pairs and `--switch`es. `aliases` maps a second name to the flag it stands for
+ * (rig-c/pose#243): the value is stored under the flag's own name. A flag given twice is refused; a flag
+ * and its alias given together are accepted when they agree and refused, naming both, when they differ.
+ */
+function parseFlags(argv: string[], flags: readonly string[], switches: readonly string[], aliases: Readonly<Record<string, string>> = {}): Map<string, string> {
   const out = new Map<string, string>();
+  const spelled = new Map<string, string>();
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (!a.startsWith('--')) throw new Usage(`unexpected argument "${a}"`);
@@ -245,18 +255,28 @@ function parseFlags(argv: string[], flags: readonly string[], switches: readonly
       out.set(name, 'true');
       continue;
     }
-    if (!flags.includes(name)) throw new Usage(`unknown flag ${a}; the flags are ${[...flags, ...switches].map((f) => `--${f}`).join(', ')}`);
+    const flag = aliases[name] ?? name;
+    if (!flags.includes(flag)) throw new Usage(`unknown flag ${a}; the flags are ${[...flags, ...Object.keys(aliases), ...switches].map((f) => `--${f}`).join(', ')}`);
     const v = argv[++i];
     if (v === undefined || v.startsWith('--')) throw new Usage(`${a} needs a value`);
-    if (out.has(name)) throw new Usage(`${a} is given twice`);
-    out.set(name, v);
+    const before = spelled.get(flag);
+    if (before === a) throw new Usage(`${a} is given twice`);
+    if (before !== undefined) {
+      const prior = out.get(flag)!;
+      if (prior === v) continue;
+      // One of the two is the flag's own name and the other its alias: the line names the flag first.
+      const [own, ownV, alias, aliasV] = before === `--${flag}` ? [before, prior, a, v] : [a, v, before, prior];
+      throw new Usage(`${own} "${ownV}" and ${alias} "${aliasV}" are both given and differ; ${alias} is another name for ${own}, so give one`);
+    }
+    spelled.set(flag, a);
+    out.set(flag, v);
   }
   return out;
 }
 
-function need(f: Map<string, string>, name: string): string {
+function need(f: Map<string, string>, name: string, alias?: string): string {
   const v = f.get(name);
-  if (v === undefined) throw new Usage(`--${name} is required`);
+  if (v === undefined) throw new Usage(alias === undefined ? `--${name} is required` : `--${alias} (or --${name}) is required`);
   return v;
 }
 
@@ -288,8 +308,14 @@ function legScaleOf(f: Map<string, string>): [number, number] | 'off' {
   return [parts[0]!, parts[1]!];
 }
 
+/**
+ * rig-c/pose#243: the names the rest of the toolchain uses for the same inputs — `rigc render --animation`,
+ * and the exam grader's `--sequence` — accepted beside this command's own.
+ */
+const RETARGET_ALIASES = { sequence: 'pose', animation: 'name' } as const;
+
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report', 'camera', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head', 'verbose', 'summary']);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'render', 'report', 'camera', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head', 'verbose', 'summary'], RETARGET_ALIASES);
   if (f.has('verbose') && f.has('summary')) throw new Usage('--verbose and --summary are both given; --verbose prints every line in full and --summary one line per measure, so give one');
   const bends = f.get('bends') ?? 'refuse';
   if (bends !== 'refuse' && bends !== 'clamp') throw new Usage(`--bends is "${bends}"; it must be refuse or clamp`);
@@ -298,11 +324,11 @@ function retargetArgs(argv: string[]): RetargetArgs {
   const profile = f.get('profile') ?? 'spine';
   if (profile !== 'spine' && profile !== 'spine-html') throw new Usage(`--profile is "${profile}"; it must be spine or spine-html`);
   const name = f.get('name') ?? 'dance';
-  if (!/^[A-Za-z0-9_.-]+$/.test(name)) throw new Usage(`--name is "${name}"; an animation name here is letters, digits, _ . -`);
+  if (!/^[A-Za-z0-9_.-]+$/.test(name)) throw new Usage(`${argv.includes('--name') || !argv.includes('--animation') ? '--name' : '--animation'} is "${name}"; an animation name here is letters, digits, _ . -`);
   return {
     rig: need(f, 'rig'),
     map: need(f, 'map'),
-    pose: need(f, 'pose'),
+    pose: need(f, 'pose', 'sequence'),
     out: need(f, 'out'),
     name,
     coco: f.has('coco'),
