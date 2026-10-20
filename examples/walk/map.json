@@ -1,0 +1,12 @@
+{
+  "spec": "rig-pose-map/1",
+  "chains": [
+    { "name": "trunk", "bones": ["chest"], "joints": ["mid_hip", "neck"], "aim": ["neck"] },
+    { "name": "head", "bones": ["head"], "joints": ["r_eye", "l_eye"], "aim": ["eye_r>eye_l"] },
+    { "name": "arm_r", "bones": ["sleeve_r0", "sleeve_r1"], "joints": ["r_shoulder", "r_elbow", "r_wrist"], "bend": "free" },
+    { "name": "arm_l", "bones": ["sleeve_l0", "sleeve_l1"], "joints": ["l_shoulder", "l_elbow", "l_wrist"], "bend": "free" },
+    { "name": "leg_r", "bones": ["leg_r0", "leg_r1"], "joints": ["r_hip", "r_knee", "r_ankle"], "bend": "free" },
+    { "name": "leg_l", "bones": ["leg_l0", "leg_l1"], "joints": ["l_hip", "l_knee", "l_ankle"], "bend": "free" }
+  ],
+  "translate": { "bone": "hip", "joint": "mid_hip", "scale": { "pose": ["mid_hip", "neck"], "rig": ["hip", "neck"] } }
+}
