@@ -1214,9 +1214,9 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   p.throwIfAny();
   const askedScales = new Map<string, number[]>();
   for (const ls of legScale) askedScales.set(ls.bone, ls.asked);
-  /** Every bone on the legs' path posed on frame i, by the targets and the given scale series. */
-  const poseLegsWith = (i: number, sc: ReadonlyMap<string, number[]>): PathPose => {
-    const r = posePath(rest, legPath!, (b): Posing | null => (targets.has(b) ? { turn: restTurn(b, i), target: targets.get(b)![i]!, aimX: aimX.get(b)! } : null), (b) => sc.get(b)?.[i] ?? null);
+  /** Every bone on the legs' path posed on frame i by the targets, with the given scale series read on frame `at` (#285; i by default). */
+  const poseLegsWith = (i: number, sc: ReadonlyMap<string, number[]>, at = i): PathPose => {
+    const r = posePath(rest, legPath!, (b): Posing | null => (targets.has(b) ? { turn: restTurn(b, i), target: targets.get(b)![i]!, aimX: aimX.get(b)! } : null), (b) => sc.get(b)?.[at] ?? null);
     if (typeof r === 'string') throw new Refusal([{ code: 'LEGS_MAP', text: r }]);
     return r;
   };
@@ -1241,7 +1241,10 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     // #119: a tracked support follows the lower ankle's own picture x, scaled, on the floor until it is still.
     const track = (i: number, s: Side) => series.get(`${s}_ankle`)![i]![0] * scale!.factor;
     const follow = inPlace ? track : undefined;
-    const planted = plantHip(feet!, (i, s) => offsets[i]![s], (i) => poseTravel[i]!, [tb.worldX, tb.worldY], opts.floor, follow, track);
+    // #285: past its span, an outgoing plant holds its ankle with the leg as the pose asked it on its last supporting frame.
+    const ankleBone = (s: Side) => (legs !== null && 'legs' in legs ? legs.legs[s].ankleBone : '');
+    const held = legScaleOn ? (i: number, s: Side, at: number) => tipOf(rest, poseLegsWith(i, askedScales, at), ankleBone(s)) : undefined;
+    const planted = plantHip(feet!, (i, s) => offsets[i]![s], (i) => poseTravel[i]!, [tb.worldX, tb.worldY], opts.floor, follow, track, held);
     const hip = planted.hip;
     floor = planted.floor;
     closure = planted.closure;

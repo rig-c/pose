@@ -10206,3 +10206,194 @@ describe('#251: --reduce-keep-planted keeps the supporting leg chain dense on it
     }, SLOW);
   }
 });
+
+describe('#285: an in-place run under --plant-feet --leg-scale — the planted heights repeat with the cycle, and a hand-over stays within the blend', () => {
+  /** One stride, frames, at 24 fps; the sequence repeats it CYCLES times. Odd, so the two halves differ by a frame. */
+  const C = 19;
+  const CYCLES = 10;
+  const NN = C * CYCLES;
+  const DT = 1 / 24;
+  /** The issue's bars: cycle 1 against cycle CYCLES within the landing check's origin tolerance; every printed shift under 0.05 leg lengths. */
+  const LOOP_UNITS = ORIGIN_TOL;
+  const SHIFT_LEGS = 0.05;
+  /** The blend's bounds (`STANCE_BOUNDS`): a shift between neighbouring spans the incoming leg can take as a stretch of at most 0.08. */
+  const BOUNDS: [number, number] = [0.92, 1.08];
+  const phase = (i: number): number => (2 * Math.PI * (i % C)) / C;
+  /** A side's swing weight on frame i: 0 on its supporting half, rising at once off the floor (√sin) on its swinging half. */
+  const swing = (i: number, s: 'r' | 'l'): number => {
+    const u = ((i % C) / C + (s === 'l' ? 0.5 : 0)) % 1;
+    return u < 0.5 ? 0 : Math.sqrt(Math.sin((Math.PI * (u - 0.5)) / 0.5));
+  };
+  /**
+   * A run in place, `clean --loop`ed: the thighs swinging ±20° a stride in opposition, the pelvis bobbing 2 px twice a
+   * stride, and the swinging thigh drawn foreshortened to 1 − 0.45·w of its length (w = `swing`, the shin carried with
+   * the knee), so the foot leaving the floor rises 0.08–0.12 leg lengths in the picture on its first frame off it — the
+   * frame the other foot first reads 0.02 leg lengths lower, so support passes on it. No flight.
+   */
+  function runInPlace(): Record<string, unknown> {
+    const m: Motion = {
+      ...BASE,
+      n: NN,
+      dt: DT,
+      trunk: () => 90,
+      ru: () => -100,
+      rf: () => -95,
+      lu: () => -80,
+      lf: () => -85,
+      rt: (i) => -90 + 20 * Math.sin(phase(i)),
+      rs: (i) => -95 + 20 * Math.sin(phase(i)),
+      lt: (i) => -90 - 20 * Math.sin(phase(i)),
+      ls: (i) => -90 - 20 * Math.sin(phase(i)),
+      hip: (i) => [0, 2 * Math.cos(2 * phase(i))],
+    };
+    const doc = poseDoc(m, (i, j) => {
+      for (const s of ['r', 'l'] as const) {
+        const h = j[`${s}_hip`]!.at as Pt;
+        const k = j[`${s}_knee`]!.at as Pt;
+        const a = j[`${s}_ankle`]!.at as Pt;
+        const f = 1 - 0.45 * swing(i, s);
+        const k2: Pt = [h[0] + (k[0] - h[0]) * f, h[1] + (k[1] - h[1]) * f];
+        j[`${s}_knee`] = { ...j[`${s}_knee`], at: k2 };
+        j[`${s}_ankle`] = { ...j[`${s}_ankle`], at: [a[0] + k2[0] - k[0], a[1] + k2[1] - k[1]] };
+      }
+    });
+    const seq = readPoseSequence(JSON.stringify(doc), 'fixture');
+    const c = clean(seq, { loop: true, legs: 1, rest: 1 }, undefined, 'fixture');
+    expect(c.seq.travel).toBe('in-place');
+    return JSON.parse(writePoseSequence(c.seq)) as Record<string, unknown>;
+  }
+  interface Span {
+    side: 'r' | 'l';
+    frames: [number, number];
+  }
+  interface Rep {
+    feet: {
+      supports: Span[];
+      jumps: unknown[];
+      floor: number;
+      shifts: Array<Span & { shift: number }>;
+      blend: { runs: Array<Span & { k: { min: number; max: number } }>; over: unknown[] };
+    };
+  }
+  interface Figures {
+    /** The largest |planted height, cycle 1 − cycle CYCLES| over the spans starting on frames 1…C, and how many were matched. */
+    loop: number;
+    pairs: number;
+    /** The largest |shift| between neighbouring spans, in the mean rig leg at setup. */
+    step: number;
+    /** Every printed per-span shift and the printed range, in leg lengths, as the FEET floor line says them. */
+    printed: number[];
+    range: number;
+    /** The blend's stretch over every run, and the runs past its bounds. */
+    k: { min: number; max: number };
+    over: number;
+    /** The hip's world y range, as rig-c poses the build. */
+    hip: number;
+  }
+  function read(c: Case, extra: string[], cliPath = CLI): { ran: Ran; rep: Rep; floor: string; f: Figures } {
+    const report = join(c.dir, `report${extra.join('')}.json`);
+    const ran = retarget(c, ['--plant-feet', '--report', report, ...extra], cliPath);
+    expect(ran.stderr).toBe('');
+    expect(ran.status).toBe(0);
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as Rep;
+    const floor = linesOf(ran, 'FEET').find((l) => l.startsWith('FEET   floor: '))!;
+    const legs = /thigh origin → ankle, r (\d+\.\d), l (\d+\.\d) units/.exec(floor)!;
+    const leg = (Number(legs[1]) + Number(legs[2])) / 2;
+    const hs = rep.feet.shifts.map((s) => ({ ...s, h: rep.feet.floor - s.shift }));
+    let loop = 0;
+    let pairs = 0;
+    for (const a of hs) {
+      if (a.frames[0] < 1 || a.frames[0] > C) continue;
+      const b = hs.find((x) => x.side === a.side && x.frames[0] === a.frames[0] + (CYCLES - 1) * C);
+      if (b === undefined) continue;
+      pairs++;
+      loop = Math.max(loop, Math.abs(b.h - a.h));
+    }
+    let step = 0;
+    for (let k = 0; k + 1 < hs.length; k++) step = Math.max(step, Math.abs(hs[k + 1]!.shift - hs[k]!.shift) / leg);
+    const printed = [...floor.matchAll(/ \(([−+]\d+\.\d{4})\)/g)].map((m) => Math.abs(Number(m[1]!.replace('−', '-'))));
+    const range = Number(/ = (\d+\.\d{4}) leg lengths$/.exec(floor)![1]);
+    const ks = rep.feet.blend.runs.flatMap((x) => [x.k.min, x.k.max]);
+    const poses = poseRawAnimation(loadBuild(c.build), 'dance', Array.from({ length: NN - 1 }, () => DT), {}, 'animation');
+    const hip = poses.map((p) => byName(p.bones).get('hip')!.worldY);
+    return {
+      ran,
+      rep,
+      floor,
+      f: { loop, pairs, step, printed, range, k: { min: Math.min(...ks), max: Math.max(...ks) }, over: rep.feet.blend.over.length, hip: Math.max(...hip) - Math.min(...hip) },
+    };
+  }
+  const show = (f: Figures): string =>
+    `cycle 1 vs ${CYCLES} planted heights |Δ| ≤ ${f.loop.toFixed(4)} units (${f.pairs} spans); neighbouring shifts differ ≤ ${f.step.toFixed(4)} L; printed shifts ≤ ${Math.max(...f.printed).toFixed(4)} L, range ${f.range.toFixed(4)} L; blend k ${f.k.min.toFixed(4)}–${f.k.max.toFixed(4)}, ${f.over} past the bounds; hip y range ${f.hip.toFixed(2)} units`;
+  /** Bars (1) and (2), against one run's figures. */
+  function holds(f: Figures): boolean {
+    return f.pairs === 2 && f.loop < LOOP_UNITS && f.step < BOUNDS[1] - 1 && f.over === 0 && f.k.min >= BOUNDS[0] && f.k.max <= BOUNDS[1] && f.printed.every((x) => x < SHIFT_LEGS) && f.range < SHIFT_LEGS;
+  }
+
+  test('the planted heights of cycle 1 are cycle 10\'s, every hand-over within the blend, every printed shift under 0.05 leg lengths — at the clamp 0.4 and 0.8 alike; control: without --leg-scale the same, and the hip\'s range is the control\'s', () => {
+    const c = setup({ pose: runInPlace() });
+    const plain = read(c, []);
+    console.log(`  #285 run in place, no --leg-scale: ${show(plain.f)}`);
+    expect(plain.rep.feet.jumps).toEqual([]);
+    // One support span per foot per stride, alternating, plus the seam's: 2 × CYCLES + 1.
+    expect(plain.rep.feet.supports).toHaveLength(2 * CYCLES + 1);
+    expect(holds(plain.f)).toBe(true);
+    for (const clamp of ['0.4,1.05', '0.8,1.05']) {
+      const r = read(c, ['--leg-scale', clamp]);
+      console.log(`  #285 run in place, --leg-scale ${clamp}: ${show(r.f)}`);
+      expect(r.rep.feet.supports).toEqual(plain.rep.feet.supports);
+      // Bar (1): periodic, and each hand-over's one-floor shift a stretch the blend can take.
+      expect(r.f.pairs).toBe(2);
+      expect(r.f.loop).toBeLessThan(LOOP_UNITS);
+      expect(r.f.step).toBeLessThan(BOUNDS[1] - 1);
+      expect(r.rep.feet.blend.over).toEqual([]);
+      expect(r.f.k.min).toBeGreaterThanOrEqual(BOUNDS[0]);
+      expect(r.f.k.max).toBeLessThanOrEqual(BOUNDS[1]);
+      expect(linesOf(r.ran, 'FEET').filter((l) => l.startsWith('FEET   past the bounds'))).toEqual([]);
+      // Bar (2): the FEET floor line prints every span's shift, and their range, under 0.05 leg lengths.
+      expect(r.f.printed).toHaveLength(2 * CYCLES + 1);
+      expect(Math.max(...r.f.printed)).toBeLessThan(SHIFT_LEGS);
+      expect(r.f.range).toBeLessThan(SHIFT_LEGS);
+      // The hip moves as the control's: the hand-over no longer bounces it.
+      expect(Math.abs(r.f.hip - plain.f.hip)).toBeLessThan(0.01 * plain.f.hip);
+    }
+  }, SLOW);
+
+  test('mutants: the outgoing plant posed at its hand-over frame\'s scale steps the floor every hand-over past the blend; the heights left unclosed drift by the cycle; each makes the test above red', () => {
+    const muts: Array<{ name: string; file: string; from: string; to: string; extra: string[] }> = [
+      {
+        name: 'the outgoing leg at the hand-over frame\'s scale',
+        file: 'retarget.ts',
+        from: 'const held = legScaleOn ? (i: number, s: Side, at: number) => tipOf(rest, poseLegsWith(i, askedScales, at), ankleBone(s)) : undefined;',
+        to: 'const held = legScaleOn ? (i: number, s: Side) => tipOf(rest, poseLegsWith(i, askedScales), ankleBone(s)) : undefined;',
+        extra: ['--leg-scale', '0.4,1.05'],
+      },
+      {
+        name: 'the heights not closed',
+        file: 'legs.ts',
+        from: 'const heights = follow === undefined ? (read as number[]) : closeHeights(read as number[], feet.supports);',
+        to: 'const heights = read as number[];',
+        extra: [],
+      },
+    ];
+    mkdirSync(MUTANTS, { recursive: true });
+    for (const mu of muts) {
+      const d = mkdtempSync(join(MUTANTS, 'm285-'));
+      try {
+        cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+        cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+        cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+        const path = join(d, 'src', mu.file);
+        const src = readFileSync(path, 'utf8');
+        expect(src.split(mu.from)).toHaveLength(2);
+        writeFileSync(path, src.replace(mu.from, mu.to));
+        const c = setup({ pose: runInPlace() });
+        const m = read(c, mu.extra, join(d, 'cli.ts'));
+        console.log(`  #285 mutant "${mu.name}": ${show(m.f)}`);
+        if (holds(m.f)) throw new Error(`mutant "${mu.name}" survived: ${show(m.f)}`);
+      } finally {
+        rmSync(d, { recursive: true, force: true });
+      }
+    }
+  }, SLOW);
+});
