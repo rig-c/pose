@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.0](https://github.com/rig-c/pose/compare/v0.36.0...v0.37.0) (2026-10-20)
+
+
+### Features
+
+* **examples:** a synthesized walk cycle in place, cleaned with --loop, beside the wave ([#274](https://github.com/rig-c/pose/issues/274)) ([#276](https://github.com/rig-c/pose/issues/276)) ([22f663a](https://github.com/rig-c/pose/commit/22f663a65ee8f9327770c3c9cd65e4b9077cbf24))
+
 ## [0.36.0](https://github.com/rig-c/pose/compare/v0.35.0...v0.36.0) (2026-10-19)
 
 
