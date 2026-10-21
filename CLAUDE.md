@@ -154,9 +154,17 @@ a session rotated, so it is here.
   bars, what is out of scope. A message that changes an order is copied to the
   issue.
 - **A feature PR is opened and reported, and merged only after HQ's sign.** A
-  `release: vX.Y.Z` PR from release-please merges on the sub-commander's own
-  call, and so does the cut it makes (RELEASING.md *Cutting a release*). AI
-  review is HQ's: it runs at HQ's request, at most once per PR.
+  `release: vX.Y.Z` PR from release-please merges and cuts only after HQ's
+  explicit "LGTM #NNN" naming the PR and its exact head commit, quoted in the
+  cut report; the sub-commander approves the release PR's awaiting CI run on
+  its current head only. A release PR is never armed: release-please rewrites
+  its head on every push to main, so it is merged manually with
+  `--match-head-commit` matching the exact head approved by HQ. AI review is
+  HQ's: it runs at HQ's request, at most once per PR.
+- 🔒 **Never push to an armed PR** — one with auto-merge armed. Disable
+  auto-merge first, push, and report the new head; only HQ re-arms a feature
+  PR. A merge of main into the branch counts as a push. An armed PR merges
+  whatever head turns green, so a push to it lands a commit the sign never saw.
 - **A cut is confirmed, not assumed.** After the `release` run: `npm view
   @rig-c/pose version` names the new version, an install into an empty
   directory runs, one `rig-pose retarget --build` on the exam rig from that
