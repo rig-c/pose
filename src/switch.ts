@@ -480,8 +480,9 @@ function moveBoundaries(vals: ReadonlyArray<AlternateSet | null>, pos: readonly 
  * The key time for a stepped change that shows on frame i: half a frame before it, 0 on the first frame. A key
  * exactly on a frame time is a tie the render breaks either way (its track time is a running sum of 1/fps, key
  * times are held as float32, and a key applies when its time ≤ the track time), so about half such keys land a
- * frame late (rig-c/pose#325); the midpoint sits half a frame from both ties. Used for the attachment and offset
- * keys here and the draw-order keys in `draworder.ts`.
+ * frame late (rig-c/pose#325); the midpoint sits half a frame from both ties. Every discrete key pose writes goes
+ * through it: the attachment and offset keys here, the draw-order keys in `draworder.ts`, and the face and body yaw
+ * sets' attachment keys in `retarget.ts` (rig-c/pose#334).
  */
 export const keyAtFrame = (times: readonly number[], i: number): number => (i === 0 ? 0 : r6((times[i - 1]! + times[i]!) / 2));
 

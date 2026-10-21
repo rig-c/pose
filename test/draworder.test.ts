@@ -32,6 +32,7 @@ import { drawOrderFromDepth, drawOrderLines, type DrawOrderKey } from '../src/dr
 import { readMap, type JointMap, type Rest } from '../src/map.ts';
 import { personTrack, readPoseSequence, type PoseSequence } from '../src/pose.ts';
 import { rigcCli } from '../src/rigc.ts';
+import { keysOnFrameTimes, type MotionDoc } from './discrete.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const CLI = join(ROOT, 'cli.ts');
@@ -250,6 +251,8 @@ describe('bar (1): the run — the lifted leg in front, by the knee (#336)', () 
     const behind = behindPerFrame(SETUP, keys, r.report.frameTimes);
     // #325: every key first shows on the frame it was decided on, read as the render reads it.
     expect(keysOffFrame(keys, r.report.drawOrder!.keys.map((x) => x.frame), r.report.frameTimes.length)).toEqual([]);
+    // #334: no discrete key of the motion sits on a frame time.
+    expect(keysOnFrameTimes(r.motion as MotionDoc, r.report.frameTimes)).toEqual([]);
     const k = liftedOrder(r.seq, behind, truth, 'front');
     // The knee protrudes when the lifted leg's thigh leans forward past the band (the generator's own sign).
     const protrudes = (i: number) => truth[i]!.lifted.length === 1 && truth[i]!.truth[`${truth[i]!.lifted[0]!}_thigh`].sign === 1;
@@ -288,6 +291,7 @@ describe('bar (2): the walk — the lifted foot behind, by the ankle (#336)', ()
     const keys = r.motion.animations.walk!.drawOrder!;
     const behind = behindPerFrame(SETUP, keys, r.report.frameTimes);
     expect(keysOffFrame(keys, r.report.drawOrder!.keys.map((x) => x.frame), r.report.frameTimes.length)).toEqual([]);
+    expect(keysOnFrameTimes(r.motion as MotionDoc, r.report.frameTimes)).toEqual([]);
     const k = liftedOrder(r.seq, behind, truth, 'behind');
     console.log(`  #336 bar 1 — walk, per frame:\n${k.table.join('\n')}`);
     console.log(`  #336 bar 1 — walk: ${k.lifted} frames with one leg lifted, ${k.lifted - k.misses.length} draw it behind (misses: ${k.misses.join(', ') || 'none'}); keys at frames ${r.report.drawOrder!.keys.map((x) => x.frame).join(', ')}`);
