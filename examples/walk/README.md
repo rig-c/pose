@@ -1,6 +1,10 @@
 # The walk
 
-A runnable loop with no art and no video, on the wave's stick figure:
+A runnable loop with no art and no video, on the wave's stick figure.
+
+Every motion here, the run in `make-depth.ts` included, assumes that figure's proportions: a synthetic, mannequin-like stick or limb rig with no drawings, which a full retarget carries end to end. A designed character's run is part animation instead ([Choosing the approach](../../README.md#choosing-the-approach), [#361](https://github.com/rig-c/pose/issues/361)).
+
+In this folder:
 
 - `pose.json`: one walk cycle in place at 24 fps, written by `make-walk.ts` from joint angles and passed through `rig-pose clean` with `--loop` (legs 5, rest 7, the stillness hold off), so it carries the `cleaned` record `retarget` requires and is declared `"travel": "in-place"` (`bun examples/walk/make-walk.ts` writes it again);
 - `map.json`: the wave's map. The hinges are `"bend": "free"`, the legs have no `range`;
