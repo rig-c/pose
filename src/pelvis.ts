@@ -83,6 +83,8 @@ export const ARM_RADIUS = 0.15;
 export const MIN_SPAN = 6;
 /** The band's top is taken above the scan's tops only when their climbs to it differ by more than this many rows (rig-c/pose#318): each end of a clean edge's climb is found to a row. */
 export const CLIMB_SPREAD = 2;
+/** The band's top is climbed against at most this many garment colours (rig-c/pose#318): a paletted garment's own, or a painted one's fullest cells. */
+export const MAX_CLOTH = 16;
 
 /**
  * One frame's reading: the tilt (Spine degrees, r_hip → l_hip), or why it was declined. A waistband
@@ -367,27 +369,41 @@ function toBandTop(f: Frame, tops: Pt[], g: RGB, top: number, colourAt: (x: numb
   const lift = DITHER_RADIUS + 1;
   const ya = Math.min(...tops.map((p) => p[1])) - 3 * lift;
   if (ya < top) return 0;
-  const set = (pts: Pt[]) => {
-    const m = new Map<string, RGB>();
-    for (const [x, y] of pts) {
+  // The garment's colours, at most `MAX_CLOTH`: a paletted garment's few, as they are; a painted one's many, as the mean
+  // colours of the `MAX_CLOTH` fullest cells of a `GARMENT_DIFF / 2` grid (first filled first among equals). The climb
+  // compares each pixel against them all, so their number is bounded whatever the span.
+  const exact = new Map<string, RGB>();
+  const cells = new Map<string, { s: RGB; n: number }>();
+  const step = GARMENT_DIFF / 2;
+  for (const [x, y0] of tops) {
+    for (let k = 0; k < 3; k++) {
+      const y = y0 + lift + k;
       if (y < 0 || y >= f.h || f.masked(x, y)) continue;
       const p = f.rgb(x, y);
-      m.set(p.join(','), p);
+      if (exact.size <= MAX_CLOTH) exact.set(p.join(','), p);
+      const key = p.map((v) => Math.floor(v / step)).join(',');
+      const c = cells.get(key);
+      if (c === undefined) cells.set(key, { s: [p[0], p[1], p[2]], n: 1 });
+      else {
+        c.s[0] += p[0];
+        c.s[1] += p[1];
+        c.s[2] += p[2];
+        c.n++;
+      }
     }
-    return [...m.values()];
-  };
-  const cloth = set(tops.flatMap(([x, y]) => [0, 1, 2].map((k): Pt => [x, y + lift + k])));
+  }
+  const cloth: RGB[] = exact.size <= MAX_CLOTH ? [...exact.values()] : [...cells.values()].sort((u, v) => v.n - u.n).slice(0, MAX_CLOTH).map((c) => [c.s[0] / c.n, c.s[1] / c.n, c.s[2] / c.n]);
   if (cloth.length === 0) return 0;
-  const seen = tops.flatMap(([x]) => {
-    const out: RGB[] = [];
-    for (let y = top; y <= ya; y++) {
-      const p = f.masked(x, y) ? null : colourAt(x, y);
-      if (p !== null) out.push(p);
+  // The colour above: the median of the region, channel by channel, read twice over it rather than held.
+  const a = regionMedian((visit) => {
+    for (const [x] of tops) {
+      for (let y = top; y <= ya; y++) {
+        const p = f.masked(x, y) ? null : colourAt(x, y);
+        if (p !== null) visit(p);
+      }
     }
-    return out;
   });
-  if (seen.length === 0) return 0;
-  const a: RGB = [0, 1, 2].map((k) => median(seen.map((p) => p[k]!))) as RGB;
+  if (a === null) return 0;
   if (diff(a, g) <= GARMENT_DIFF) return 0;
   const nearest = (p: RGB, cs: RGB[]) => Math.min(...cs.map((q) => diff(p, q)));
   const climbs = tops.map(([x, y0]) => {
@@ -415,6 +431,55 @@ function toBandTop(f: Frame, tops: Pt[], g: RGB, top: number, colourAt: (x: numb
   });
   tops.splice(0, tops.length, ...read);
   return moved;
+}
+
+/**
+ * The median, channel by channel, of the colours a region yields (`median`'s value: the middle one, or the mean of the
+ * two middle ones), without holding them: a first pass counts each channel's values by whole step (0–255), which names
+ * the step the middle rank falls in; a second keeps only the values in that step, as distinct values and counts. Memory
+ * is the 256 counts and the distinct values of one step. Null for an empty region.
+ */
+function regionMedian(each: (visit: (p: RGB) => void) => void): RGB | null {
+  const bin = (v: number) => Math.max(0, Math.min(255, Math.floor(v)));
+  const hist = [new Float64Array(256), new Float64Array(256), new Float64Array(256)];
+  let n = 0;
+  each((p) => {
+    n++;
+    for (let k = 0; k < 3; k++) hist[k]![bin(p[k]!)]!++;
+  });
+  if (n === 0) return null;
+  const m = n >> 1;
+  const ranks = n % 2 === 1 ? [m] : [m - 1, m];
+  // For each channel and rank: the step it falls in and its rank within the step.
+  const want = [0, 1, 2].map((k) => ranks.map((r) => {
+    let below = 0;
+    for (let b = 0; b < 256; b++) {
+      const c = hist[k]![b]!;
+      if (r < below + c) return { b, r: r - below };
+      below += c;
+    }
+    throw new Error('unreachable: a rank beyond the count');
+  }));
+  const kept = [0, 1, 2].map(() => new Map<number, Map<number, number>>());
+  for (let k = 0; k < 3; k++) for (const w of want[k]!) kept[k]!.set(w.b, new Map());
+  each((p) => {
+    for (let k = 0; k < 3; k++) {
+      const vs = kept[k]!.get(bin(p[k]!));
+      if (vs !== undefined) vs.set(p[k]!, (vs.get(p[k]!) ?? 0) + 1);
+    }
+  });
+  const at = (k: number, w: { b: number; r: number }) => {
+    let below = 0;
+    for (const [v, c] of [...kept[k]!.get(w.b)!.entries()].sort((u, z) => u[0] - z[0])) {
+      if (w.r < below + c) return v;
+      below += c;
+    }
+    throw new Error('unreachable: a rank beyond the step');
+  };
+  return [0, 1, 2].map((k) => {
+    const vs = want[k]!.map((w) => at(k, w));
+    return vs.length === 1 ? vs[0]! : (vs[0]! + vs[1]!) / 2;
+  }) as RGB;
 }
 
 /**
