@@ -203,7 +203,9 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     for (const e of r.byHip) if (e.short.length > 0) say(`  REACH  ${reachLine(e, r.times)}`);
     for (const e of r.reach) say(`  REACH  ${reachCostLine(e, r.times)}`);
     for (const e of r.artRange) say(`  ART-RANGE ${artRangeLine(e, r.times)}`);
-    for (const l of r.legScale) say(`  LEG-SCALE ${legScaleLine(l, r.times, r.feet?.legLength ?? null, r.rigLeg)}`);
+    // #287: a range that clamps no frame says so once, on the last segment's line (the line count stays one per segment).
+    const noClamp = legScaleNoClamp(r.legScale);
+    r.legScale.forEach((l, k) => say(`  LEG-SCALE ${legScaleLine(l, r.times, r.feet?.legLength ?? null, r.rigLeg)}${k === r.legScale.length - 1 && noClamp !== null ? `; ${noClamp}` : ''}`));
     for (const l of r.legScale) for (const s of l.support ?? []) say(`  LEG-SCALE ${supportScaleLine(l, s, r.times)}`);
     if (r.pelvis !== null) say(`  ${pelvisLine(r.pelvis, seq.frames.length)}`);
     // rig-c/pose#281: the limbs' front-to-back order from the sequence's depth, only when it carries depth.
@@ -1094,6 +1096,21 @@ export function legScaleLine(l: LegScale, times: readonly number[], legLength: R
     ? `; its leg free (the other foot supporting) on ${l.free.count} of its ${clampedFrames} clamped frame(s) (frames ${l.free.frames.map(span).join(', ')}): the clamps on that leg left the free ankle ${shiftText(l.free, { legLength, rigLeg }, "the picture's (the leg at picture length ÷ straight)")}`
     : clampedFrames > 0 && legLength !== null ? `; its leg free on none of its ${clampedFrames} clamped frame(s)` : '';
   return `chain "${l.chain}" bone "${l.bone}" (${l.joints[0]} → ${l.joints[1]}): straight length ${l.straight.toFixed(1)}px (larger 95th percentile of ${times.length} frames, both legs)${share}; picture length ÷ straight ${l.ratio.min.toFixed(3)} … ${l.ratio.max.toFixed(3)} (median ${l.ratio.median.toFixed(3)}); scalex keyed in [${l.limits[0]}, ${l.limits[1]}] of the straight length (${limitsPx}): ${clamp(l.low, l.limits[0], 'under', 'low')}; ${clamp(l.high, l.limits[1], 'over', 'high')}${free}`;
+}
+
+/**
+ * rig-c/pose#287: when `--leg-scale`'s range clamps no frame on any leg segment
+ * (no run under the floor, none over the ceiling, no supporting frame scaled past
+ * the floor), the clause naming the range and the picture's own spread across
+ * every segment, so a reader learns the range never bound and what floor would.
+ * Null when any frame was clamped, or with no segment scaled.
+ */
+export function legScaleNoClamp(ls: readonly LegScale[]): string | null {
+  if (ls.length === 0 || ls.some((l) => l.low.length > 0 || l.high.length > 0 || (l.support ?? []).length > 0)) return null;
+  const [floor, ceiling] = ls[0]!.limits;
+  const min = Math.min(...ls.map((l) => l.ratio.min));
+  const max = Math.max(...ls.map((l) => l.ratio.max));
+  return `no frame clamped on any leg segment: the range [${floor}, ${ceiling}] holds the picture's whole spread, picture length ÷ straight ${min.toFixed(3)} … ${max.toFixed(3)} over the ${ls.length} segment(s), so each segment is scaled to the picture on every frame; a floor above ${min.toFixed(3)} would clamp`;
 }
 
 /** A LEG-SCALE past the floor (support) line (rig-c/pose#133): the supporting leg segment scaled below `--leg-scale`'s floor down to #95's bound. */
