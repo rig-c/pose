@@ -67,6 +67,7 @@
  */
 import type { RawBone } from 'rig-c/core';
 import { POINT_NAMES } from './joints.ts';
+import { readLayoutBindings, type LayoutBinding } from './layoutmap.ts';
 import { isObject, parseJson, Problems, refuseUnknownKeys, typeName } from './problems.ts';
 
 export const MAP_SPEC = 'rig-pose-map/1';
@@ -158,6 +159,8 @@ export interface JointMap {
   alternates: AlternateSet[];
   face?: FaceMap;
   body?: BodyMap;
+  /** rig-c/pose#346: each layout group's depth source, bound explicitly (`src/layout.ts`); read only with `--draw-order depth`. */
+  layout?: LayoutBinding[];
 }
 
 /** An alternate attachment set from `sets.json` (`rig-parts-sets/1`, `rig-c/pose#173`). */
@@ -212,7 +215,7 @@ export function readMap(text: string, where: string): JointMap {
     p.throwIfAny();
     throw new Error('unreachable');
   }
-  refuseUnknownKeys(p, 'MAP_KEYS', where, doc, ['spec', 'note', 'chains', 'translate', 'alternates', 'face', 'body']);
+  refuseUnknownKeys(p, 'MAP_KEYS', where, doc, ['spec', 'note', 'chains', 'translate', 'alternates', 'face', 'body', 'layout']);
   if (doc.spec !== MAP_SPEC) p.add('MAP_SPEC', `${where} "spec" is ${typeName(doc.spec)}; this reader reads "${MAP_SPEC}"`);
   const chains: Chain[] = [];
   if (!Array.isArray(doc.chains) || doc.chains.length === 0) {
@@ -321,8 +324,9 @@ export function readMap(text: string, where: string): JointMap {
   const alternates = 'alternates' in doc ? readAlternates(p, where, doc.alternates, chains, translate) : [];
   const face = 'face' in doc ? readFaceMap(p, where, doc.face) : undefined;
   const body = 'body' in doc ? readBodyMap(p, where, doc.body) : undefined;
+  const layout = 'layout' in doc ? readLayoutBindings(p, where, doc.layout) : undefined;
   p.throwIfAny();
-  return { chains, translate, alternates, ...(face === undefined ? {} : { face }), ...(body === undefined ? {} : { body }) };
+  return { chains, translate, alternates, ...(face === undefined ? {} : { face }), ...(body === undefined ? {} : { body }), ...(layout === undefined ? {} : { layout }) };
 }
 
 function readYawSets(p: Problems, where: string, raw: unknown, shapeCode: string): YawSet[] | undefined {

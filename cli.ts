@@ -203,7 +203,12 @@ retarget
                         slots must fill one unbroken run of the setup draw order (else the pair is not keyed and
                         the line names the slot between); a set's slot goes with the leg it depicts. Refused on
                         a sequence without depth (DRAWORDER_NO_DEPTH), and on a walk cleaned before rig-c/pose#336
-                        (a shin leaning forward: DEPTH_RECLEAN; clean it again). DRAWORDER lines (default: off)
+                        (a shin leaning forward: DEPTH_RECLEAN; clean it again). With a layout.json
+                        (rig-parts-layout/1) beside the rig and the map's "layout" binding each group to
+                        r_forearm | l_forearm against "trunk" (rig-c/pose#346), each forearm is also drawn in
+                        front of its target where its depth leans toward the camera by the tie, behind it
+                        otherwise; a placement with no binding is refused by name (LAYOUT_UNBOUND), and so is a
+                        layout bound to other rig bytes (LAYOUT_RIG_SHA). DRAWORDER lines (default: off)
   --contact-keys <file> which foot supports, by hand (rig-c/pose#303): rig-pose-contact-keys/1, { "spec":
                         "rig-pose-contact-keys/1", "keys": [{ "frame", "side" }], "note"? }, side l | r | both |
                         none; frames the sequence's, fractional allowed, strictly increasing in [0, N − 1]. A key

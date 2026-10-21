@@ -9,9 +9,10 @@
  *   `{ slot, offset }` = how many places later than its SETUP index the slot is
  *   drawn, every key a complete statement against the setup order, and a key
  *   with no `offsets` the setup order again. Keys are stepped.
- * - **The pairs.** The legs (`r_leg`, `l_leg`); the arms crossing the trunk are
- *   a later card. A limb is the map's chains naming its middle or end joint
- *   (knee, ankle), their bones and every bone under them no other chain maps;
+ * - **The pairs.** The legs (`r_leg`, `l_leg`); each forearm against the trunk
+ *   is keyed from the rig's limb layout (`layout.ts`, rig-c/pose#346). A limb
+ *   is the map's chains naming its middle or end joint (knee, ankle), their
+ *   bones and every bone under them no other chain maps;
  *   its slots are the slots on those bones, and an alternate set's slot on none
  *   of them goes with the limb whose chain the set depicts, when it depicts one
  *   of the two (a set keeps its own switch and takes the order of the limb it

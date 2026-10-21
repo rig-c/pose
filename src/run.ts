@@ -12,6 +12,7 @@ import { knownSetsOf, readMap, resolveMap, type JointMap, type Rest } from './ma
 import { cleanLine, cleanSummaryLine, inferredSource } from './clean.ts';
 import { depthLine, depthRecleanText, forwardShinFrames, layersOf, type FrameLayers } from './depth.ts';
 import { drawGapLines, drawOrderFromDepth, drawOrderKeys, drawOrderLines, type DrawOrderReading } from './draworder.ts';
+import { bindingProblems, groupLines, groupsReport, keyGroups, readLayout, resolveGroups, type GroupOrder } from './layout.ts';
 import { convertCoco17, personTrack, readPoseSequence, TRAVEL_IN_PLACE, type CameraFrame } from './pose.ts';
 import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './problems.ts';
 import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, readIdle, targetOf, trackLabel, type IdleReading, type RigcTrack, type Target } from './idle.ts';
@@ -150,6 +151,9 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     const old = forwardShinFrames(frames, seq.frames);
     if (old.length > 0) refuse([{ code: 'DEPTH_RECLEAN', text: depthRecleanText(a.pose, seq.cleaned!.params.depth?.gait ?? null, old) }]);
   }
+  // rig-c/pose#346: the limb layout beside the rig, read and bound only with --draw-order depth (without it, nothing is read).
+  const layout = a.drawOrder === 'depth' ? readLayout(input.rig) : null;
+  if (a.drawOrder === 'depth') bindingProblems(layout, map.layout, input.rig, a.map).throwIfAny();
   // rig-c/pose#303: the contact keys, read against the sequence's frames before any gate runs.
   const contactKeysSnapshot = a.contactKeysFile === undefined ? null : readFileSync(a.contactKeysFile);
   const contactKeys = contactKeysSnapshot === null ? null : readContactKeys(contactKeysSnapshot.toString('utf8'), a.contactKeysFile!, seq.frames.length);
@@ -244,8 +248,24 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     const layers: FrameLayers[] | null = seq.frames.some((x) => x.depth !== undefined) ? frames.map((j, i) => layersOf(j, seq.frames[i]!.depth ?? {})) : null;
     if (layers !== null) say(`  ${depthLine(layers, seq.frames, seq.cleaned!.params.depth?.gait ?? null)}`);
     // rig-c/pose#304: with --draw-order depth, the legs' draw order keyed from the depth (#336: at the joint the recorded gait names).
-    const drawOrder: DrawOrderReading | null = a.drawOrder === 'depth' && layers !== null ? drawOrderFromDepth(layers, frames, seq.frames.map((x) => x.depth), r.times, map, rest, doc0.slots, input.sets, seq.cleaned!.params.loop, seq.cleaned!.params.depth?.gait ?? null) : null;
-    if (drawOrder !== null) for (const l of [...drawOrderLines(drawOrder), ...drawGapLines(drawOrder)]) say(`  ${l}`);
+    const legOrder: DrawOrderReading | null = a.drawOrder === 'depth' && layers !== null ? drawOrderFromDepth(layers, frames, seq.frames.map((x) => x.depth), r.times, map, rest, doc0.slots, input.sets, seq.cleaned!.params.loop, seq.cleaned!.params.depth?.gait ?? null) : null;
+    // rig-c/pose#346: each bound layout group (a forearm) against its target, merged into the legs' timeline.
+    let drawOrder = legOrder;
+    let layoutGroups: GroupOrder[] | null = null;
+    if (legOrder !== null && layout !== null) {
+      const names = doc0.slots.map((x) => x.name);
+      const legRuns = legOrder.pairs.filter((x) => x.keyed).map((x): [number, number] => {
+        const ix = [...x.slots.a, ...x.slots.b].map((n) => names.indexOf(n));
+        return [Math.min(...ix), Math.max(...ix)];
+      });
+      const resolved = resolveGroups(layout, map.layout ?? [], map, rest, doc0.slots, legRuns);
+      resolved.problems.throwIfAny();
+      const keyed = keyGroups(legOrder, resolved.groups, frames, seq.frames.map((x) => x.depth), r.times, doc0.slots);
+      drawOrder = keyed.reading;
+      layoutGroups = keyed.groups;
+    }
+    if (legOrder !== null) for (const l of [...drawOrderLines(legOrder), ...drawGapLines(legOrder)]) say(`  ${l}`);
+    if (layoutGroups !== null && drawOrder !== null) for (const l of groupLines(layoutGroups, drawOrder.keys)) say(`  ${l}`);
     if (r.pivot !== null) say(`  PIVOT  bone "${r.pivot.bone}"'s origin is ${r.pivot.distance.toFixed(2)} units (${r.pivot.hipWidths.toFixed(3)} hip widths) from its thigh roots' midpoint (${r.pivot.roots.join(' + ')}): dx ${r.pivot.offset[0].toFixed(2)}, dy ${r.pivot.offset[1].toFixed(2)}, at setup — the pivot every hip turn swings the legs about`);
     if (r.feet !== null) {
       const f = r.feet;
@@ -507,7 +527,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         ...(layers !== null ? { layers: layers.map((l, frame) => ({ frame, order: l.order, depth: l.depth })) } : {}),
         // Only with --draw-order depth (#304). A key's `t` here is its frame's time, the report's clock (#214); the
         // motion's key is written half a frame before it (#325).
-        ...(drawOrder !== null ? { drawOrder: { source: 'depth', pairs: drawOrder.pairs, keys: drawOrder.keys.map((k) => ({ ...k, t: r.times[k.frame]! })), spans: drawOrder.spans, gaps: drawOrder.gaps ?? [] } } : {}),
+        ...(drawOrder !== null ? { drawOrder: { source: 'depth', pairs: drawOrder.pairs, keys: drawOrder.keys.map((k) => ({ ...k, t: r.times[k.frame]! })), spans: drawOrder.spans, gaps: drawOrder.gaps ?? [], ...(layoutGroups !== null && layout !== null ? groupsReport(layout, layoutGroups) : {}) } } : {}),
         // Only with --contact-keys (#303).
         ...(r.feet?.contactKeys !== undefined && contactKeysSnapshot !== null ? { contactKeys: { path: a.contactKeysFile, sha256: createHash('sha256').update(contactKeysSnapshot).digest('hex'), keys: r.feet.contactKeys.keys.length, from: r.feet.contactKeys.from, changed: r.feet.contactKeys.changed, kept: r.feet.contactKeys.kept, unreached: r.feet.contactKeys.unreached } } : {}),
         stance: r.stance === null ? null : { tolerance: r.stance.tolerance, release: r.stance.release, minSeconds: r.stance.minSeconds, bounds: r.stance.bounds, ...(r.stance.range === undefined ? {} : { range: r.stance.range }), runs: r.stance.runs, over: r.stance.over },
