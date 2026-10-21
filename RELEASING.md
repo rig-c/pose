@@ -296,7 +296,7 @@ Every key `rig-pose-report/1` can carry, once: the keys `src/run.ts` writes, and
 | `short` | promised | R | event rows |
 | `endOn` | promised | R | event rows |
 | `flips` | promised | R | event rows |
-| `switches` | promised | R | event rows (`from`, `to`, `slots`) |
+| `switches` | promised | R | event rows (`from`, `to`, `slots`); the `endOnHeld` field is courtesy (rig-c/pose#355) |
 | `uncovered` | promised | R | event rows (`times`, render domain) |
 | `turns` | promised | R | event rows |
 | `range` | promised | R | event rows |
@@ -313,7 +313,7 @@ Every key `rig-pose-report/1` can carry, once: the keys `src/run.ts` writes, and
 | `folds` | courtesy | — | |
 | `seams` | courtesy | — | |
 | `seamPairs` | courtesy | — | |
-| `switchRuns` | courtesy | — | (rig-c/pose#279) |
+| `switchRuns` | courtesy | — | (rig-c/pose#279; `turned`, rig-c/pose#355) |
 | `drawOrder` | courtesy | — | (rig-c/pose#304) |
 | `contactKeys` | courtesy | — | only with `--contact-keys` (rig-c/pose#303) |
 | `reach` | courtesy | — | |
@@ -340,7 +340,7 @@ Promised codes, with their use:
 - D: `RIG_GATE_BASE`, `POSE_NOT_CLEANED`, `POSE_BEND_ONE_WAY`, `POSE_POINT_NEVER_GOOD`, `STANCE`.
 - X: `ARG_PATH`, `MAP_BEND_SIDE`, `MAP_CHAIN_JOINTS`, `MAP_TRANSLATE_SCALE`, `RIGC`.
 
-Every other code is courtesy. That a refusal always carries some code is promised; which code it carries is promised only for the codes above.
+Every other code is courtesy (`SET_KEY_DRAWN`, rig-c/pose#355, among them). That a refusal always carries some code is promised; which code it carries is promised only for the codes above.
 
 Promised line tags, with their use:
 
@@ -348,7 +348,7 @@ Promised line tags, with their use:
 - D: `GATE`.
 - X: `BODY`, `CLEAN`, `FEET`, `FOLD`, `HOLD`, `IDLE-DROPPED`, `IDLE-KEPT-OUT`, `LAND`, `LEG-SCALE`, `POSTURE`, `RIGC`, `SHEAR`, `STANCE`.
 
-Every other tag is courtesy.
+Every other tag is courtesy (`SWITCH-TURN`, rig-c/pose#355, among them).
 
 ### Imports
 

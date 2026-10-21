@@ -244,7 +244,10 @@ retarget
                         planted ankle lands as dense on its support frames: its landing tolerance there is the
                         plant's plus the hip's --reduce-hip, off them --reduce's allowance (rig-c/pose#251)
   --switch-tolerance <d>  a set of alternate drawings (the map's "alternates") may show on a frame where
-                        every segment of its chains is within d degrees of its key skeleton (default: 25)
+                        every segment of its chains is within d degrees of its key skeleton (default: 25), and
+                        only where every bone it shows by its "drawn" angle unaided (no "turn", the set not
+                        re-solved) is within d degrees of it; a set whose key and drawn angle disagree by more
+                        than d on such a bone is refused (SET_KEY_DRAWN, rig-c/pose#355)
   --switch-min <s>      a run of one set shorter than s seconds is dropped (default: 0.25)
   --switch-at first|peak  where a switch is keyed: first (default) keeps the frame the selection gave it;
                         peak moves each boundary to the frame within ±switch-min/2 where the chains it
