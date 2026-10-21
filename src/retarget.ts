@@ -174,6 +174,33 @@ export interface RetargetOptions extends SwitchOptions {
   travel?: Travel;
   /** The sequence was cleaned with `--loop` (its `cleaned.params.loop`, rig-c/pose#241): the head nod's detrend window wraps, the last frame running into the first. */
   loop?: boolean;
+  /**
+   * rig-c/pose#288: the sequence's pelvis track (`pelvisTilt` per frame, null where
+   * declined, and its `pelvisSource`). The pelvis chain's bone (a chain whose
+   * joints are r_hip → l_hip) is keyed from it on every frame it reads, and from
+   * the hip line on the frames it does not; absent, from the hip line.
+   */
+  pelvis?: { source: string; tilt: ReadonlyArray<number | null> };
+}
+
+/**
+ * rig-c/pose#288: where the pelvis bone's rotation came from. `source` is the
+ * track's (`silhouette`, `waistband`, `keys`) or "hip line"; `bone`/`chain` the
+ * map's pelvis chain (null without one, when nothing is keyed); `swing` the
+ * peak-to-peak of its rotate keys, degrees (null when not keyed); `track` and
+ * `hipLine` how many frames each keyed; `trackSource` the track's source when the
+ * sequence carries one (also when it read no frame and the hip line was keyed).
+ */
+export interface PelvisReading {
+  source: string;
+  trackSource: string | null;
+  bone: string | null;
+  chain: string | null;
+  swing: number | null;
+  track: number;
+  hipLine: number;
+  /** The frames keyed from the hip line on a sequence that carries a track: the frames its reading declined. */
+  declined: Array<[number, number]>;
 }
 
 export interface Hold {
@@ -448,6 +475,8 @@ export interface Retarget {
   nodSkipped: NodSkipped | null;
   /** Each `reach` chain hanging below a bone the animation turns or translates (#236): its aim's departure from the pose pair's angle. */
   reach: ReachReading[];
+  /** rig-c/pose#288: the pelvis bone's source; null when the map has no pelvis chain and the sequence no track. */
+  pelvis: PelvisReading | null;
 }
 
 export interface FigureScaleFrame {
@@ -809,6 +838,10 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   // Each mapped bone's target world angle per frame, reaches last.
   const targets = new Map<string, number[]>();
   const restOf = new Map<string, number>();
+  // rig-c/pose#288: the pelvis chain (one bone, joints r_hip → l_hip either way) keyed from the track where it reads.
+  const pelvisChain = map.chains.find((c) => !c.reach && c.bones.length === 1 && ((c.joints[0] === 'r_hip' && c.joints[1] === 'l_hip') || (c.joints[0] === 'l_hip' && c.joints[1] === 'r_hip'))) ?? null;
+  const track = opts.pelvis !== undefined && opts.pelvis.tilt.length === n ? opts.pelvis.tilt : null;
+  const fromTrack = pelvisChain !== null && track !== null && track.some((v) => v !== null) ? pelvisChain.bones[0]! : null;
   for (const c of map.chains) {
     c.bones.forEach((b, k) => {
       restOf.set(b, restAngle(rest, b, c.aim[k]!));
@@ -817,6 +850,12 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       const to = series.get(c.joints[k + 1]!)!;
       const angles: number[] = [];
       for (let i = 0; i < n; i++) {
+        const v = b === fromTrack ? track![i] : null;
+        if (v !== null && v !== undefined) {
+          // The track is the r_hip → l_hip direction; a chain written l_hip → r_hip aims the other way.
+          angles.push(c.joints[0] === 'r_hip' ? v : wrap(v + 180));
+          continue;
+        }
         const d = Math.hypot(to[i]![0] - from[i]![0], to[i]![1] - from[i]![1]);
         angles.push(d > 1e-9 ? pictureAngle(from[i]!, to[i]!) : (angles[i - 1] ?? NaN));
       }
@@ -842,6 +881,8 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         const joints: [string, string] = [c.joints[k]!, c.joints[k + 1]!];
         const across = isAcross(joints[0], joints[1]);
         if (!across && opts.short === 'off') return;
+        // rig-c/pose#288: a pelvis keyed from its track is not read off the hip pair's length, so it is not held across it.
+        if (b === fromTrack) return;
         const from = series.get(joints[0])!;
         const to = series.get(joints[1])!;
         const lengths = from.map((f, i) => Math.hypot(to[i]![0] - f[0], to[i]![1] - f[1]));
@@ -3048,6 +3089,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   const reach = reachReadings(rest, map, tracks, reachAims, t?.bone ?? null);
 
   const pivot = pivotOf(rest, t?.bone ?? null, legs);
+  const pelvis = pelvisReadingOf(pelvisChain, opts.pelvis, track, fromTrack, tracks);
   const scaleFit = t === null || scale === null || origin === null ? null : scaleFitOf({
     joints: t.scale.pose, joint: t.joint, bone: t.bone, lengths: scaleLengths, factor: scale.factor,
     series, good, legLength: feet?.legLength ?? null, legStraight, rigLeg,
@@ -3058,8 +3100,51 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     animation: { duration: keyTimes[n - 1]!, tracks },
     times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale, scaleFit,
     switches: sw.switches, shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
-    legScale, segments, legStraight, rigLeg, scales, feet, planted: plantOn, stance, floor, blendHold, closure, openDrift, ankles, pivot, raised, byHip, face, body, figureScale, headNod: headNodReading, nodSkipped, reach,
+    legScale, segments, legStraight, rigLeg, scales, feet, planted: plantOn, stance, floor, blendHold, closure, openDrift, ankles, pivot, raised, byHip, face, body, figureScale, headNod: headNodReading, nodSkipped, reach, pelvis,
   };
+}
+
+/** rig-c/pose#288: the pelvis bone's source, from the chain, the track and the keys written. */
+function pelvisReadingOf(chain: Chain | null, given: RetargetOptions['pelvis'], track: ReadonlyArray<number | null> | null, fromTrack: string | null, tracks: ReadonlyArray<MotionTrack | SlotTrack>): PelvisReading | null {
+  if (chain === null && given === undefined) return null;
+  const bone = chain?.bones[0] ?? null;
+  const keys = bone === null ? null : tracks.find((tr): tr is MotionTrack => 'bone' in tr && tr.bone === bone && tr.property === 'rotate');
+  const vs = keys === null || keys === undefined ? [] : keys.keys.map((k) => k.v[0]!);
+  const swing = vs.length === 0 ? null : r3(Math.max(...vs) - Math.min(...vs));
+  const n = vs.length;
+  const declined: Array<[number, number]> = [];
+  (track ?? []).forEach((v, i) => {
+    if (v !== null) return;
+    const last = declined[declined.length - 1];
+    if (last !== undefined && last[1] === i - 1) last[1] = i;
+    else declined.push([i, i]);
+  });
+  const onTrack = fromTrack === null ? 0 : (track ?? []).filter((v) => v !== null).length;
+  return {
+    source: fromTrack !== null ? given!.source : 'hip line',
+    trackSource: given?.source ?? null,
+    bone,
+    chain: chain?.name ?? null,
+    swing,
+    track: onTrack,
+    hipLine: bone === null ? 0 : n - onTrack,
+    declined: given === undefined ? [] : declined,
+  };
+}
+
+/**
+ * The PELVIS line (rig-c/pose#288): where the pelvis bone's rotation came from and
+ * its swing — "from <source>, swing N°", or "from hip line (no track)".
+ */
+export function pelvisLine(r: PelvisReading, frames: number): string {
+  const spans = (rs: Array<[number, number]>) => rs.map(([a, b]) => (a === b ? `${a}` : `${a}–${b}`)).join(', ');
+  const where = r.bone === null ? '' : `bone "${r.bone}", chain "${r.chain}"`;
+  if (r.bone === null) return `PELVIS: not keyed — the sequence carries a ${r.trackSource} track (${frames - r.declined.reduce((s, [a, b]) => s + b - a + 1, 0)} of ${frames} frames read) and the map has no pelvis chain (one bone, joints r_hip → l_hip); no bone turns with the pelvis`;
+  const swing = r.swing === null ? '' : `, swing ${r.swing.toFixed(2)}°`;
+  if (r.trackSource === null) return `PELVIS: from hip line (no track)${swing} (${where}; every frame from r_hip → l_hip)`;
+  if (r.track === 0) return `PELVIS: from hip line (the ${r.trackSource} track read none of the ${frames} frames)${swing} (${where}; every frame from r_hip → l_hip)`;
+  const rest = r.hipLine === 0 ? `all ${frames} frames from the track` : `${r.track} of ${frames} frames from the track, the hip line on the ${r.hipLine} it declined (frames ${spans(r.declined)})`;
+  return `PELVIS: from ${r.source}${swing} (${where}; ${rest})`;
 }
 
 /** A reach bone's origin within this many world units of the anchor's, with nothing above it moved, is aimed along the pair: no REACH line. */

@@ -17,11 +17,30 @@
  * is: the unit is `picture-px` (a video frame is not a painting), and `at` may
  * lie outside the picture (a dancer's hand leaves the frame; a pose model
  * places it anyway, and its score says how much to believe it).
+ *
+ * The minor (rig-c/pose#288): `rig-pose-sequence/1.1` adds the pelvis track —
+ * a per-frame `pelvisTilt` and the sequence's `pelvisSource` (`rig-pose
+ * pelvis`). The writer writes the minor the content needs: a sequence with the
+ * track is "rig-pose-sequence/1.1", every other one "rig-pose-sequence/1", so
+ * a sequence without it stays readable by a reader of /1. The spec string is
+ * the version the file records of what wrote it: a file of a minor newer than
+ * this reader's is read, and each key it does not know is refused naming the
+ * minor the file says it was written as.
  */
 import { BODY18, COCO17, COCO17_TO_BODY18, isBody18, type Body18 } from './joints.ts';
-import { isObject, parseJson, Problems, refuseUnknownKeys, typeName } from './problems.ts';
+import { isObject, parseJson, Problems, refuseUnknownKeys, refuseUnknownKeys as refuseKeys, typeName } from './problems.ts';
 
 export const POSE_SPEC = 'rig-pose-sequence/1';
+/** The minor with the pelvis track (rig-c/pose#288), and the newest minor this reader reads. */
+export const POSE_SPEC_PELVIS = 'rig-pose-sequence/1.1';
+const POSE_MINOR = 1;
+/**
+ * Where a sequence's `pelvisTilt` came from (rig-c/pose#288): `silhouette` — the
+ * straight edge of the drawn figure across the hips; `waistband` — the top edge
+ * of a garment covering them; `keys` — a hand file (`--pelvis-keys`).
+ */
+export const PELVIS_SOURCES = ['silhouette', 'waistband', 'keys'] as const;
+export type PelvisSource = (typeof PELVIS_SOURCES)[number];
 export const POSE_SPACE = { units: 'picture-px', origin: 'top-left', y: 'down' } as const;
 /**
  * `inferred` (rig-c/pose#63): a position the detector supplied but did not see
@@ -44,6 +63,15 @@ export interface Person {
 export interface PoseFrame {
   t: number;
   people: Person[];
+  /**
+   * rig-c/pose#288, minor 1.1: the pelvis line on this frame, read off the picture —
+   * Spine degrees (counter-clockwise, y up) of the direction from the figure's
+   * right hip to its left hip, the angle `pictureAngle(r_hip, l_hip)` gives the
+   * hip keypoints (about 0 for a figure facing the camera, about ±180 facing
+   * away); null where the reading declined the frame. Present on every frame of
+   * a sequence with a `pelvisSource`, on none of one without.
+   */
+  pelvisTilt?: number | null;
 }
 /**
  * The picture's camera on one frame against frame 0's (rig-c/pose#63), as
@@ -175,6 +203,10 @@ export interface CleanUnheld {
   test: 'speed' | 'reach' | 'short' | 'span';
   value: number | null;
 }
+/** rig-c/pose#288: clean smoothed the sequence's `pelvisTilt` as its own track, over the legs' window (`loop` as the record's). */
+export interface PelvisParams {
+  window: number;
+}
 export interface CleanRecord {
   spec: typeof CLEAN_SPEC;
   /**
@@ -182,7 +214,7 @@ export interface CleanRecord {
    * `hold` (#91): the stillness hold's figures, or "off"; absent in a record
    * written before #91.
    */
-  params: { loop: boolean; legs: number; rest: number; hipsInferred?: HipsInferred; hold?: HoldParams | 'off' };
+  params: { loop: boolean; legs: number; rest: number; hipsInferred?: HipsInferred; hold?: HoldParams | 'off'; pelvis?: PelvisParams };
   /**
    * `found`: every joint the spike step replaced, by frame (index into `frames`)
    * and joint. `untested`: the frames the spike step did not test, because a
@@ -215,6 +247,8 @@ export interface PoseSequence {
    * by hand. Absent: the figure's travel in the picture is its travel.
    */
   travel?: Travel;
+  /** rig-c/pose#288, minor 1.1: where every frame's `pelvisTilt` came from; present exactly when the frames carry it. */
+  pelvisSource?: PelvisSource;
   frames: PoseFrame[];
 }
 
@@ -246,9 +280,17 @@ export function readPoseSequence(text: string, where: string): PoseSequence {
     throw new Error('unreachable');
   }
   const frames0 = doc.spec === POSE_SPEC_FRAMES0;
-  refuseUnknownKeys(p, 'POSE_KEYS', where, doc, frames0 ? [...TOP_KEYS, ...OPTIONAL_KEYS, 'fps'] : [...TOP_KEYS, ...OPTIONAL_KEYS]);
+  // rig-c/pose#288: the minor the file says it was written as; a newer one is read, and what it adds is refused naming it.
+  const minor = frames0 ? 0 : minorOf(doc.spec);
+  const note = minor !== null && minor > POSE_MINOR ? `; the file says it was written as ${JSON.stringify(doc.spec)}, a newer minor than this reader's "${POSE_SPEC_PELVIS}" — read it with a rig-pose that reads that minor` : '';
+  const pelvisKnown = minor !== null && minor >= 1;
+  /** A 1.1 key in a file that says /1 (or the older name): one line naming the minor, not an unknown key. */
+  const minorKey = (key: string, on: string) => p.add('POSE_SPEC', `${on} carries ${JSON.stringify(key)}, a key of "${POSE_SPEC_PELVIS}", and the file says ${JSON.stringify(doc.spec)}; a sequence carrying the pelvis track is written as "${POSE_SPEC_PELVIS}" (rig-pose pelvis)`);
+  const without = (o: Record<string, unknown>, key: string) => (pelvisKnown || !(key in o) ? o : Object.fromEntries(Object.entries(o).filter(([k]) => k !== key)));
+  if (!pelvisKnown && 'pelvisSource' in doc) minorKey('pelvisSource', where);
+  refuseUnknownKeys(p, 'POSE_KEYS', where, without(doc, 'pelvisSource'), frames0 ? [...TOP_KEYS, ...OPTIONAL_KEYS, 'fps'] : [...TOP_KEYS, ...OPTIONAL_KEYS, ...(pelvisKnown ? ['pelvisSource'] : [])], note);
   for (const k of TOP_KEYS) if (!(k in doc)) p.add('POSE_KEYS', `${where} has no "${k}"; a ${POSE_SPEC} document carries ${TOP_KEYS.join(', ')}`);
-  if ('spec' in doc && doc.spec !== POSE_SPEC && !frames0) p.add('POSE_SPEC', `${where} "spec" is ${typeName(doc.spec)}; this reader reads "${POSE_SPEC}" (and the older name "${POSE_SPEC_FRAMES0}")`);
+  if ('spec' in doc && minor === null) p.add('POSE_SPEC', `${where} "spec" is ${typeName(doc.spec)}; this reader reads "${POSE_SPEC}" and its minors ("${POSE_SPEC_PELVIS}"; a newer minor is read, and a key it adds is refused naming it), and the older name "${POSE_SPEC_FRAMES0}"`);
   const space = frames0 ? FRAMES0_SPACE : POSE_SPACE;
   if ('space' in doc && JSON.stringify(doc.space) !== JSON.stringify(space)) {
     p.add('POSE_SPACE', `${where} "space" is ${JSON.stringify(doc.space)}; for "${frames0 ? POSE_SPEC_FRAMES0 : POSE_SPEC}" it must be exactly ${JSON.stringify(space)}`);
@@ -264,13 +306,21 @@ export function readPoseSequence(text: string, where: string): PoseSequence {
       p.add('POSE_FRAMES', `${where} "frames" is ${typeName(doc.frames)}; it must be a non-empty array`);
     } else {
       let lastT = -Infinity;
+      const minorFrames: number[] = [];
       doc.frames.forEach((f: unknown, i: number) => {
         const fw = `${where} frames[${i}]`;
         if (!isObject(f)) {
           p.add('POSE_FRAME_SHAPE', `${fw} is ${typeName(f)}; a frame is { t, people }`);
           return;
         }
-        refuseUnknownKeys(p, 'POSE_KEYS', fw, f, ['t', 'people']);
+        if (!pelvisKnown && 'pelvisTilt' in f) minorFrames.push(i);
+        refuseUnknownKeys(p, 'POSE_KEYS', fw, without(f, 'pelvisTilt'), pelvisKnown ? ['t', 'people', 'pelvisTilt'] : ['t', 'people'], note);
+        let pelvisTilt: number | null | undefined;
+        if (pelvisKnown && 'pelvisTilt' in f) {
+          const v = f.pelvisTilt;
+          if (v === null || (typeof v === 'number' && Number.isFinite(v) && v > -180 && v <= 180)) pelvisTilt = v;
+          else p.add('POSE_PELVIS', `${fw} "pelvisTilt" is ${typeName(v)}; it must be Spine degrees in (-180, 180] (the direction r_hip → l_hip, counter-clockwise, y up), or null where the reading declined the frame`);
+        }
         const t = f.t;
         if (typeof t !== 'number' || !Number.isFinite(t) || t < 0) {
           p.add('POSE_TIME', `${fw} "t" is ${typeName(t)}; it must be a finite number of seconds ≥ 0`);
@@ -289,34 +339,73 @@ export function readPoseSequence(text: string, where: string): PoseSequence {
               p.add('POSE_PERSON_SHAPE', `${pw} is ${typeName(person)}; a person is { id, joints }`);
               return;
             }
-            refuseUnknownKeys(p, 'POSE_KEYS', pw, person, ['id', 'joints']);
+            refuseUnknownKeys(p, 'POSE_KEYS', pw, person, ['id', 'joints'], note);
             if (typeof person.id !== 'string' || person.id === '') {
               p.add('POSE_PERSON_ID', `${pw} "id" is ${typeName(person.id)}; it must be a non-empty string`);
               return;
             }
             if (ids.has(person.id)) p.add('POSE_PERSON_ID', `${pw} "id" "${person.id}" appears twice in frame ${i}`);
             ids.add(person.id);
-            people.push({ id: person.id, joints: readJoints(p, pw, person.joints) });
+            people.push({ id: person.id, joints: readJoints(p, pw, person.joints, note) });
           });
         }
-        frames.push({ t: typeof t === 'number' ? t : NaN, people });
+        frames.push({ t: typeof t === 'number' ? t : NaN, people, ...(pelvisTilt !== undefined ? { pelvisTilt } : {}) });
       });
+      if (minorFrames.length > 0) minorKey('pelvisTilt', `${where} ${minorFrames.length === 1 ? `frames[${minorFrames[0]}]` : `${minorFrames.length} frames (${minorFrames[0]}–${minorFrames[minorFrames.length - 1]})`}`);
     }
   }
-  const camera = 'camera' in doc ? readCamera(p, where, doc.camera, Array.isArray(doc.frames) ? doc.frames.length : null) : undefined;
+  let pelvisSource: PelvisSource | undefined;
+  if (pelvisKnown && 'pelvisSource' in doc) {
+    if (typeof doc.pelvisSource === 'string' && (PELVIS_SOURCES as readonly string[]).includes(doc.pelvisSource)) pelvisSource = doc.pelvisSource as PelvisSource;
+    else p.add('POSE_PELVIS', `${where} "pelvisSource" is ${typeName(doc.pelvisSource)}; it must be one of ${PELVIS_SOURCES.map((x) => `"${x}"`).join(', ')} (where every frame's "pelvisTilt" came from)`);
+  }
+  if (pelvisKnown && Array.isArray(doc.frames)) {
+    const carry = doc.frames.map((f: unknown) => isObject(f) && 'pelvisTilt' in f);
+    const lacking = carry.flatMap((c: boolean, i: number) => (c ? [] : [i]));
+    if ('pelvisSource' in doc && lacking.length > 0) p.add('POSE_PELVIS', `${where} has "pelvisSource" and frame(s) ${spansText(lacking)} carry no "pelvisTilt"; with a pelvis track every frame carries one (null where the reading declined it)`);
+    if (!('pelvisSource' in doc) && lacking.length < carry.length) p.add('POSE_PELVIS', `${where} has "pelvisTilt" on ${carry.length - lacking.length} frame(s) and no "pelvisSource"; a pelvis track says where it came from (${PELVIS_SOURCES.join(', ')})`);
+    if ('pelvisSource' in doc) {
+      const ids = [...new Set(frames.flatMap((f) => f.people.map((q) => q.id)))].sort();
+      if (ids.length > 1) p.add('POSE_PELVIS', `${where} carries a pelvis track and ${ids.length} people (${ids.join(', ')}); the track is one figure's, so the sequence holds one person (rig-pose pelvis --person writes only that one)`);
+    }
+  }
+  const camera = 'camera' in doc ? readCamera(p, where, doc.camera, Array.isArray(doc.frames) ? doc.frames.length : null, note) : undefined;
   if ('cameraSource' in doc) {
     if (typeof doc.cameraSource !== 'string' || doc.cameraSource.trim() === '') p.add('POSE_CAMERA_SOURCE', `${where} "cameraSource" is ${typeName(doc.cameraSource)}; it must be a non-empty string saying where the camera came from ("tracked", "hand-labelled, N keys")`);
     else if (!('camera' in doc)) p.add('POSE_CAMERA_SOURCE', `${where} has "cameraSource" ${JSON.stringify(doc.cameraSource)} and no "camera"; it states where a camera came from, so it needs one`);
   }
   if ('travel' in doc && doc.travel !== TRAVEL_IN_PLACE) p.add('POSE_TRAVEL', `${where} "travel" is ${typeName(doc.travel)}; the one value is "${TRAVEL_IN_PLACE}" (a gait filmed without the figure travelling), and without the key the picture's travel is the figure's`);
-  const cleaned = 'cleaned' in doc ? readCleaned(p, where, doc.cleaned, Array.isArray(doc.frames) ? doc.frames.length : null) : undefined;
+  const cleaned = 'cleaned' in doc ? readCleaned(p, where, doc.cleaned, Array.isArray(doc.frames) ? doc.frames.length : null, pelvisKnown, note) : undefined;
+  if (cleaned !== undefined && pelvisKnown) {
+    const hasPelvis = isObject(doc.cleaned) && isObject(doc.cleaned.params) && 'pelvis' in doc.cleaned.params;
+    if ('pelvisSource' in doc && !hasPelvis) p.add('POSE_PELVIS', `${where} carries a pelvis track and its "cleaned" record has no "params" "pelvis"; clean smooths the track and records it, so the track was added after clean — run rig-pose pelvis before rig-pose clean`);
+    if (!('pelvisSource' in doc) && hasPelvis) p.add('POSE_PELVIS', `${where} "cleaned" "params" has "pelvis" and the sequence no "pelvisSource"; the record says clean smoothed a pelvis track the frames do not carry`);
+  }
   p.throwIfAny();
   const cameraSource = typeof doc.cameraSource === 'string' ? doc.cameraSource : undefined;
-  return { spec: POSE_SPEC, space: POSE_SPACE, width: doc.width as number, height: doc.height as number, source: doc.source as string, ...(cameraSource !== undefined ? { cameraSource } : {}), ...(camera !== undefined ? { camera } : {}), ...(cleaned !== undefined ? { cleaned } : {}), ...(doc.travel === TRAVEL_IN_PLACE ? { travel: TRAVEL_IN_PLACE } : {}), frames };
+  return { spec: POSE_SPEC, space: POSE_SPACE, width: doc.width as number, height: doc.height as number, source: doc.source as string, ...(cameraSource !== undefined ? { cameraSource } : {}), ...(camera !== undefined ? { camera } : {}), ...(cleaned !== undefined ? { cleaned } : {}), ...(doc.travel === TRAVEL_IN_PLACE ? { travel: TRAVEL_IN_PLACE } : {}), ...(pelvisSource !== undefined ? { pelvisSource } : {}), frames };
+}
+
+/** The minor a sequence's spec names: 0 for "rig-pose-sequence/1", N for "rig-pose-sequence/1.N"; null for anything else. */
+function minorOf(spec: unknown): number | null {
+  if (spec === POSE_SPEC) return 0;
+  const m = typeof spec === 'string' ? /^rig-pose-sequence\/1\.([1-9]\d{0,5})$/.exec(spec) : null;
+  return m === null ? null : Number(m[1]);
+}
+
+/** Frame indices as runs: "3, 5–9". */
+function spansText(fs: readonly number[]): string {
+  const out: Array<[number, number]> = [];
+  for (const f of fs) {
+    const last = out[out.length - 1];
+    if (last !== undefined && f === last[1] + 1) last[1] = f;
+    else out.push([f, f]);
+  }
+  return out.map(([a, b]) => (a === b ? `${a}` : `${a}–${b}`)).join(', ');
 }
 
 /** `camera`: one `{ s > 0, tx, ty, inliers ≥ 0 }` per frame, as many as `frames`. */
-function readCamera(p: Problems, where: string, camera: unknown, frames: number | null): CameraFrame[] {
+function readCamera(p: Problems, where: string, camera: unknown, frames: number | null, note: string): CameraFrame[] {
   const out: CameraFrame[] = [];
   if (!Array.isArray(camera)) {
     p.add('POSE_CAMERA', `${where} "camera" is ${typeName(camera)}; it must be an array with one { s, tx, ty, inliers } per frame`);
@@ -329,7 +418,7 @@ function readCamera(p: Problems, where: string, camera: unknown, frames: number 
       p.add('POSE_CAMERA', `${cw} is ${typeName(c)}; a camera entry is { s, tx, ty, inliers }`);
       return;
     }
-    refuseUnknownKeys(p, 'POSE_CAMERA', cw, c, CAMERA_KEYS);
+    refuseUnknownKeys(p, 'POSE_CAMERA', cw, c, CAMERA_KEYS, note);
     let ok = true;
     for (const k of CAMERA_KEYS) if (!(k in c)) {
       p.add('POSE_CAMERA', `${cw} has no "${k}"; a camera entry carries ${CAMERA_KEYS.join(', ')}`);
@@ -354,7 +443,8 @@ function readCamera(p: Problems, where: string, camera: unknown, frames: number 
 }
 
 /** `cleaned`: { spec, params: { loop, legs, rest, hipsInferred?, hold? }, spikes: { found: [{ frame, joint }], untested: [frame] }, jitter: { before, after }, holds?, unheld?, seams? }. */
-function readCleaned(p: Problems, where: string, c: unknown, frames: number | null): CleanRecord | undefined {
+function readCleaned(p: Problems, where: string, c: unknown, frames: number | null, pelvisKnown: boolean, note: string): CleanRecord | undefined {
+  const refuseUnknownKeys = (q: Problems, code: string, w: string, o: Record<string, unknown>, known: readonly string[]) => refuseKeys(q, code, w, o, known, note);
   const cw = `${where} "cleaned"`;
   const shape = '{ spec, params: { loop, legs, rest, hipsInferred?, hold? }, spikes: { found: [{ frame, joint }], untested: [frame] }, jitter: { before, after }, holds?, unheld?, seams? }';
   if (!isObject(c)) {
@@ -370,7 +460,16 @@ function readCleaned(p: Problems, where: string, c: unknown, frames: number | nu
     const q = c.params;
     if (!isObject(q)) p.add('POSE_CLEANED', `${cw} "params" is ${typeName(q)}; it must be { loop, legs, rest, hipsInferred?, hold? }`);
     else {
-      refuseUnknownKeys(p, 'POSE_CLEANED', `${cw} "params"`, q, ['loop', 'legs', 'rest', 'hipsInferred', 'hold']);
+      refuseUnknownKeys(p, 'POSE_CLEANED', `${cw} "params"`, q, ['loop', 'legs', 'rest', 'hipsInferred', 'hold', ...(pelvisKnown ? ['pelvis'] : [])]);
+      if (pelvisKnown && 'pelvis' in q) {
+        const v = q.pelvis;
+        const vw = `${cw} "params" "pelvis"`;
+        if (!isObject(v)) p.add('POSE_CLEANED', `${vw} is ${typeName(v)}; it must be { window } (rig-c/pose#288: the window clean smoothed the pelvis track over)`);
+        else {
+          refuseUnknownKeys(p, 'POSE_CLEANED', vw, v, ['window']);
+          if (!window(v.window)) p.add('POSE_CLEANED', `${vw} "window" is ${typeName(v.window)}; it must be 1 (none) or an odd whole number ≥ 5`);
+        }
+      }
       if ('hold' in q) {
         const h = q.hold;
         const hw = `${cw} "params" "hold"`;
@@ -384,7 +483,7 @@ function readCleaned(p: Problems, where: string, c: unknown, frames: number | nu
           for (const k of ['holds', 'unheld', 'seams']) if (!(k in c)) p.add('POSE_CLEANED', `${cw} has "params" "hold" and no "${k}"; a record whose hold ran lists its holds, the joints it did not hold and its seams (an empty array when none)`);
         }
       } else for (const k of ['holds', 'unheld', 'seams']) if (k in c) p.add('POSE_CLEANED', `${cw} has "${k}" and no "params" "hold"; the holds' figures are recorded in "params" "hold"`);
-      if ('hipsInferred' in q) readHipsInferred(p, `${cw} "params" "hipsInferred"`, q.hipsInferred, frames);
+      if ('hipsInferred' in q) readHipsInferred(p, `${cw} "params" "hipsInferred"`, q.hipsInferred, frames, note);
       if (typeof q.loop !== 'boolean') p.add('POSE_CLEANED', `${cw} "params" "loop" is ${typeName(q.loop)}; it must be true or false`);
       for (const k of ['legs', 'rest'] as const) if (!window(q[k])) p.add('POSE_CLEANED', `${cw} "params" "${k}" is ${typeName(q[k])}; it must be 1 (none) or an odd whole number ≥ 5`);
     }
@@ -490,11 +589,11 @@ function readCleaned(p: Problems, where: string, c: unknown, frames: number | nu
     });
   }
   if (p.list.length > before) return undefined;
-  const q = c.params as { loop: boolean; legs: number; rest: number; hipsInferred?: HipsInferred; hold?: HoldParams | 'off' };
+  const q = c.params as { loop: boolean; legs: number; rest: number; hipsInferred?: HipsInferred; hold?: HoldParams | 'off'; pelvis?: PelvisParams };
   const j = c.jitter as { before: number | null; after: number | null };
   return {
     spec: CLEAN_SPEC,
-    params: { loop: q.loop, legs: q.legs, rest: q.rest, ...(q.hipsInferred !== undefined ? { hipsInferred: copyHipsInferred(q.hipsInferred) } : {}), ...(q.hold !== undefined ? { hold: holdParamsOf(q.hold) } : {}) },
+    params: { loop: q.loop, legs: q.legs, rest: q.rest, ...(q.hipsInferred !== undefined ? { hipsInferred: copyHipsInferred(q.hipsInferred) } : {}), ...(q.hold !== undefined ? { hold: holdParamsOf(q.hold) } : {}), ...(pelvisKnown && q.pelvis !== undefined ? { pelvis: { window: q.pelvis.window } } : {}) },
     spikes: {
       found: ((c.spikes as { found: Array<{ frame: number; joint: Body18 }> }).found).map((s) => ({ frame: s.frame, joint: s.joint })),
       untested: [...(c.spikes as { untested: number[] }).untested],
@@ -507,7 +606,8 @@ function readCleaned(p: Problems, where: string, c: unknown, frames: number | nu
 }
 
 /** `hipsInferred`: { by: "declared" } or the measured record (the shape at `HipsInferred`), refused by name otherwise. */
-function readHipsInferred(p: Problems, hw: string, h: unknown, frames: number | null): void {
+function readHipsInferred(p: Problems, hw: string, h: unknown, frames: number | null, note: string): void {
+  const refuseUnknownKeys = (q: Problems, code: string, w: string, o: Record<string, unknown>, known: readonly string[]) => refuseKeys(q, code, w, o, known, note);
   const measuredShape = '{ by: "measured", method, read, interpolated, held: [[first, last]], declined: [{ frames: [first, last], why }] }';
   if (!isObject(h)) {
     p.add('POSE_CLEANED', `${hw} is ${typeName(h)}; it must be { by: "declared" } or ${measuredShape}`);
@@ -652,7 +752,7 @@ const holdParamsOf = (h: HoldParams | 'off'): HoldParams | 'off' => (h === 'off'
 const copyHold = (h: CleanHold): CleanHold => ({ joint: h.joint, frames: [h.frames[0], h.frames[1]], ...(h.excursion !== undefined ? { excursion: [h.excursion[0], h.excursion[1]] as [number, number] } : {}), jitter: { before: h.jitter.before, after: h.jitter.after } });
 const copyUnheld = (u: CleanUnheld): CleanUnheld => ({ joint: u.joint, frames: [u.frames[0], u.frames[1]], test: u.test, value: u.value });
 
-function readJoints(p: Problems, pw: string, joints: unknown): Partial<Record<Body18, Joint>> {
+function readJoints(p: Problems, pw: string, joints: unknown, note: string): Partial<Record<Body18, Joint>> {
   const out: Partial<Record<Body18, Joint>> = {};
   if (!isObject(joints)) {
     p.add('POSE_JOINTS', `${pw} "joints" is ${typeName(joints)}; it must be an object keyed by body-18 joint names`);
@@ -668,7 +768,7 @@ function readJoints(p: Problems, pw: string, joints: unknown): Partial<Record<Bo
       p.add('POSE_JOINT_SHAPE', `${jw} is ${typeName(j)}; a joint is { state, at?, score? }`);
       continue;
     }
-    refuseUnknownKeys(p, 'POSE_KEYS', jw, j, ['state', 'at', 'score']);
+    refuseUnknownKeys(p, 'POSE_KEYS', jw, j, ['state', 'at', 'score'], note);
     const state = j.state;
     if (typeof state !== 'string' || !(STATES as readonly string[]).includes(state)) {
       p.add('POSE_JOINT_STATE', `${jw} "state" is ${typeName(state)}; it must be one of ${STATES.join(', ')}`);
@@ -821,6 +921,7 @@ export function writePoseSequence(seq: PoseSequence): string {
   const round = (v: number, d: number) => Number(v.toFixed(d));
   const frames = seq.frames.map((f) => ({
     t: f.t,
+    ...(f.pelvisTilt !== undefined ? { pelvisTilt: f.pelvisTilt === null ? null : round(f.pelvisTilt, 3) } : {}),
     people: f.people.map((q) => ({
       id: q.id,
       joints: Object.fromEntries(
@@ -840,12 +941,14 @@ export function writePoseSequence(seq: PoseSequence): string {
   const jit = (v: number | null) => (v === null ? null : round(v, 4));
   const cleaned = c === undefined ? undefined : {
     spec: c.spec,
-    params: { loop: c.params.loop, legs: c.params.legs, rest: c.params.rest, ...(c.params.hipsInferred !== undefined ? { hipsInferred: copyHipsInferred(c.params.hipsInferred) } : {}), ...(c.params.hold !== undefined ? { hold: holdParamsOf(c.params.hold) } : {}) },
+    params: { loop: c.params.loop, legs: c.params.legs, rest: c.params.rest, ...(c.params.hipsInferred !== undefined ? { hipsInferred: copyHipsInferred(c.params.hipsInferred) } : {}), ...(c.params.hold !== undefined ? { hold: holdParamsOf(c.params.hold) } : {}), ...(c.params.pelvis !== undefined ? { pelvis: { window: c.params.pelvis.window } } : {}) },
     spikes: { found: c.spikes.found.map((s) => ({ frame: s.frame, joint: s.joint })), untested: [...c.spikes.untested] },
     jitter: { before: jit(c.jitter.before), after: jit(c.jitter.after) },
     ...(c.holds !== undefined ? { holds: c.holds.map((h) => ({ joint: h.joint, frames: [h.frames[0], h.frames[1]], ...(h.excursion !== undefined ? { excursion: [h.excursion[0], h.excursion[1]] } : {}), jitter: { before: jit(h.jitter.before), after: jit(h.jitter.after) } })) } : {}),
     ...(c.seams !== undefined ? { seams: c.seams.map((x) => ({ joint: x.joint, frame: x.frame, step: round(x.step, 4), gap: x.gap })) } : {}),
     ...(c.unheld !== undefined ? { unheld: c.unheld.map((u) => ({ joint: u.joint, frames: [u.frames[0], u.frames[1]], test: u.test, value: u.value === null ? null : round(u.value, 4) })) } : {}),
   };
-  return `${JSON.stringify({ spec: seq.spec, space: seq.space, width: seq.width, height: seq.height, source: seq.source, ...(seq.cameraSource !== undefined ? { cameraSource: seq.cameraSource } : {}), ...(camera !== undefined ? { camera } : {}), ...(cleaned !== undefined ? { cleaned } : {}), ...(seq.travel !== undefined ? { travel: seq.travel } : {}), frames }, null, 2)}\n`;
+  // rig-c/pose#288: the minor the content needs — /1.1 with a pelvis track, /1 otherwise.
+  const spec = seq.pelvisSource !== undefined ? POSE_SPEC_PELVIS : seq.spec;
+  return `${JSON.stringify({ spec, space: seq.space, width: seq.width, height: seq.height, source: seq.source, ...(seq.cameraSource !== undefined ? { cameraSource: seq.cameraSource } : {}), ...(camera !== undefined ? { camera } : {}), ...(cleaned !== undefined ? { cleaned } : {}), ...(seq.travel !== undefined ? { travel: seq.travel } : {}), ...(seq.pelvisSource !== undefined ? { pelvisSource: seq.pelvisSource } : {}), frames }, null, 2)}\n`;
 }
