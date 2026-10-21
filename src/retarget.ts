@@ -81,7 +81,7 @@ import { TRAVEL_IN_PLACE } from './pose.ts';
 import { Problems, Refusal } from './problems.ts';
 import type { ArtRange, AttachmentKey, ByHip, Raised, ReachShort, SlotTrack, Switch, SwitchOptions } from './switch.ts';
 import { clampArt, coveredChains, isRaised, measureArt, overflow, phaseGroupProblems, RAISED_WRIST_EYES, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
-import type { BlendHold, Closure, Feet, Floor, LegScale, LegSegmentRatio, PathPose, Posing, Side, Stance } from './legs.ts';
+import type { BlendHold, Closure, Feet, SupportDepth, Floor, LegScale, LegSegmentRatio, PathPose, Posing, Side, Stance } from './legs.ts';
 import { figureScaleOf, freeAnkleShiftOf, holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, percentile, plantHip, posePath, rootOf, scaleSupport, shiftOver, SIDES, stanceOf, stanceRangeOf, STRAIGHT_PERCENTILE, supportsOf, tipOf, unshortenStanceShin } from './legs.ts';
 import type { BodyReading, FaceReading, YawSetSwitch } from './face.ts';
 import { readBody, readFace, readFaceAngles, selectYawSets } from './face.ts';
@@ -181,6 +181,8 @@ export interface RetargetOptions extends SwitchOptions {
    * the hip line on the frames it does not; absent, from the hip line.
    */
   pelvis?: { source: string; tilt: ReadonlyArray<number | null> };
+  /** rig-c/pose#313: the sequence's derived depth per frame and the gait `clean --depth` read it for; the supports read it first (`supportsOf`). Absent, nothing changes. */
+  depth?: SupportDepth;
 }
 
 /**
@@ -1014,7 +1016,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       const hipOf = (s: Side) => series.get(`${s}_hip`);
       const ankleOf = (s: Side) => series.get(`${s}_ankle`);
       const hr = hipOf('r'), hl = hipOf('l'), ar = ankleOf('r'), al = ankleOf('l');
-      if (hr !== undefined && hl !== undefined && ar !== undefined && al !== undefined) feet = supportsOf({ r: ar, l: al }, { r: hr, l: hl }, keyTimes, secondsOf, inPlace, plantOn); // #113: planted, the support is read from the lower ankle
+      if (hr !== undefined && hl !== undefined && ar !== undefined && al !== undefined) feet = supportsOf({ r: ar, l: al }, { r: hr, l: hl }, keyTimes, secondsOf, inPlace, plantOn, opts.depth); // #113: planted, the support is read from the lower ankle; #313: the depth first
       else if (plantOn) p.add('LEGS_MAP', `--plant-feet reads both hips and both ankles from the pose; the map's chains use ${['r_hip', 'l_hip', 'r_ankle', 'l_ankle'].filter((j) => !series.has(j)).join(', ')} nowhere`);
     }
   }

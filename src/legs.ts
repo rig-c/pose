@@ -58,6 +58,7 @@
  * frames (`closeLoop`), so the loop carries no net travel.
  */
 import type { Chain, JointMap, Rest } from './map.ts';
+import type { DepthGait, FrameDepth } from './pose.ts';
 
 type Pt = [number, number];
 /** A world 2×2: columns (a, c) — the x axis — and (b, d) — the y axis. */
@@ -569,9 +570,15 @@ export function rollingFloor(ys: readonly number[], times: readonly number[]): n
  * rig-c/pose#280: the ankle's vertical speed is read beside ankle height on
  * every clip (`speedSignalOf`), and on a frontal view it decides the support
  * (`frontalOf`); `signal` says which signal decided each frame.
+ *
+ * rig-c/pose#313: `depth`, the sequence's depth and gait (only a sequence
+ * `clean --depth` wrote), decides first on every frame where it names one
+ * swinging leg (`depthOf`); the reading above is its fallback. Absent, the
+ * result is the reading above, unchanged.
  */
-export function supportsOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, times: readonly number[], secondsOf: (run: [number, number]) => number, inPlace = false, lowerAnkle = false): Feet {
-  return frontalOf(ankle, hip, heightSupportsOf(ankle, hip, times, secondsOf, inPlace, lowerAnkle));
+export function supportsOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, times: readonly number[], secondsOf: (run: [number, number]) => number, inPlace = false, lowerAnkle = false, depth?: SupportDepth): Feet {
+  const feet = frontalOf(ankle, hip, heightSupportsOf(ankle, hip, times, secondsOf, inPlace, lowerAnkle));
+  return depth === undefined ? feet : depthOf(feet, depth);
 }
 
 /** The support read from ankle height alone: the rules above, #113's included (the whole reading before rig-c/pose#280). */
@@ -836,8 +843,10 @@ export interface SupportSignal {
   contact: Contact[];
   /** Per frame, ankle height's reading (the support before #280). */
   height: Array<Side | null>;
-  /** Per frame, the signal that decided the support: `speed`, `height`, or null where no foot supports. */
-  by: Array<'speed' | 'height' | null>;
+  /** Per frame, the signal that decided the support: `speed`, `height`, `depth` (rig-c/pose#313), or null where no foot supports. */
+  by: Array<'speed' | 'height' | 'depth' | null>;
+  /** rig-c/pose#313: the depth's reading, present only where the sequence's depth decided at least one frame. */
+  depth?: DepthSignal;
 }
 
 /** Each side's ankle range relative to its hip, px, x and y (5th to 95th percentile). */
@@ -875,7 +884,7 @@ function frontalOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonl
   const n = height.length;
   const other = (s: Side): Side => (s === 'r' ? 'l' : 'r');
   const support: Array<Side | null> = new Array<Side | null>(n).fill(null);
-  const by: SupportSignal['by'] = new Array<'speed' | 'height' | null>(n).fill(null);
+  const by: SupportSignal['by'] = new Array<'speed' | 'height' | 'depth' | null>(n).fill(null);
   const fromHeight = (i: number) => {
     support[i] = height[i]!;
     by[i] = height[i] === null ? null : 'height';
@@ -913,6 +922,67 @@ function frontalOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonl
     else supports.push({ side: s, frames: [i, i] });
   }
   return { legLength: feet.legLength, support, supports, jumps: feet.jumps, steps: [], changes, signal: signal(by) };
+}
+
+// --- the third signal: the sequence's depth (rig-c/pose#313) -----------------------------------
+
+/** rig-c/pose#313: a sequence's depth as `supportsOf` reads it — each frame's segments (#281) and the gait `clean --depth` read them for. */
+export interface SupportDepth {
+  gait: DepthGait;
+  frames: ReadonlyArray<FrameDepth | undefined>;
+}
+
+/** rig-c/pose#313: the depth's reading of a clip, set on `SupportSignal` when it decided at least one frame. */
+export interface DepthSignal {
+  gait: DepthGait;
+  /** The sign a swinging leg's segment reads: toward the camera (+1) in a walk, away (−1) in a run. */
+  sense: 1 | -1;
+  /** Per frame, the leg whose thigh or shin reads `sense`: one side, both, or null (neither, a frame with no depth, or a jump). */
+  swing: Array<Side | 'both' | null>;
+}
+
+/**
+ * rig-c/pose#313: the support from the sequence's depth (#281). A slow, drawn
+ * frontal walk can step under the vertical speed's still tolerance and stride
+ * as far in x as in y, so #280's reading never takes over; its depth still says
+ * which leg is swinging. A walk's lifted foot comes forward, toward the camera,
+ * and a run's is kicked back, away: on a frame where exactly one leg's thigh or
+ * shin reads that sign (`clean --depth`'s gait), the other leg supports. On a
+ * frame where neither leg reads it, or both do, and on a jump frame, the support
+ * is the reading before (#280's, or ankle height's), unchanged. A clip whose
+ * depth decides no frame keeps that reading whole; one it decides is rebuilt as
+ * #280's is — a plant ends where the other foot takes support, so no step
+ * releases one and none is tracked.
+ */
+function depthOf(feet: Feet, depth: SupportDepth): Feet {
+  const n = feet.support.length;
+  const sense: 1 | -1 = depth.gait === 'walk' ? 1 : -1;
+  const jump = new Array<boolean>(n).fill(false);
+  for (const [a, b] of feet.jumps) for (let i = a; i <= b; i++) jump[i] = true;
+  const swing = Array.from({ length: n }, (_, i): Side | 'both' | null => {
+    const d = depth.frames[i];
+    if (jump[i] || d === undefined) return null;
+    const reads = (s: Side) => d[`${s}_thigh`]?.sign === sense || d[`${s}_shin`]?.sign === sense;
+    const r = reads('r');
+    const l = reads('l');
+    return r && l ? 'both' : r ? 'r' : l ? 'l' : null;
+  });
+  if (!swing.some((s) => s === 'r' || s === 'l')) return feet;
+  const sig = feet.signal!;
+  const support: Array<Side | null> = feet.support.map((s, i) => (swing[i] === 'r' ? 'l' : swing[i] === 'l' ? 'r' : (s ?? null)));
+  const by: SupportSignal['by'] = sig.by.map((b, i) => (swing[i] === 'r' || swing[i] === 'l' ? 'depth' : b));
+  const supports: Feet['supports'] = [];
+  const changes: Feet['changes'] = [];
+  for (let i = 0; i < n; i++) {
+    const s = support[i];
+    if (s === null || s === undefined) continue;
+    const prev = i > 0 ? (support[i - 1] ?? null) : null;
+    if (prev !== s) changes.push({ frame: i, from: prev, to: s });
+    const last = supports[supports.length - 1];
+    if (last !== undefined && last.side === s && last.frames[1] === i - 1) last.frames[1] = i;
+    else supports.push({ side: s, frames: [i, i] });
+  }
+  return { legLength: feet.legLength, support, supports, jumps: feet.jumps, steps: [], changes, signal: { ...sig, by, depth: { gait: depth.gait, sense, swing } } };
 }
 
 /** One support span's shift onto the floor (rig-c/pose#85): its side, its frames, and floor − its planted height, world units. */

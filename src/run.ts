@@ -11,7 +11,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { knownSetsOf, readMap, resolveMap, type JointMap, type Rest } from './map.ts';
 import { cleanLine, cleanSummaryLine, inferredSource } from './clean.ts';
 import { depthLine, layersOf, type FrameLayers } from './depth.ts';
-import { convertCoco17, personTrack, readPoseSequence, TRAVEL_IN_PLACE, type CameraFrame } from './pose.ts';
+import { convertCoco17, personTrack, readPoseSequence, TRAVEL_IN_PLACE, type CameraFrame, type PoseSequence } from './pose.ts';
 import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './problems.ts';
 import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, readIdle, targetOf, trackLabel, type IdleReading, type RigcTrack, type Target } from './idle.ts';
 import { bendGroupLine, bendGroups, bendLine, endOnLine, flipLine, holdLine, nodLine, pelvisLine, rangeLine, reachCostLine, reachOriginLine, reachOriginWarn, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions, type ScaleBand, type ScaleFit } from './retarget.ts';
@@ -21,7 +21,7 @@ import { artRangeLine, chainsMoving, phaseLines, raisedLine, RAISED_WITHIN, reac
 import { jitterLine, landed, type FeetReading, type JitterRow, type Landing, measureFeet, measureJitter, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
 import { FRONTAL_DISAGREE, legsOf, PLANT_SWITCH, STANCE_BOUNDS } from './legs.ts';
 import { M2_IDENTITY, mulM2, reduceKeys, reduceScale, reduceUnderScale, SCALE_REDUCE, setupLocal, smoothTrunk, type M2, type ReduceBone, type Reduced, type ReduceRow, type UnderBone } from './reduce.ts';
-import type { BlendHold, Closure, Feet, Floor, FreeAnkleShift, LegScale, LegSegmentRatio, Lowered, Side, Stance, SupportScaleRun, SupportSignal } from './legs.ts';
+import type { BlendHold, Closure, Feet, Floor, FreeAnkleShift, LegScale, LegSegmentRatio, Lowered, Side, Stance, SupportDepth, SupportScaleRun, SupportSignal } from './legs.ts';
 import { reportRenderDomain, writeReport, type ReportInput } from './report.ts';
 import { PROVENANCE_FILE, provenanceText } from './provenance.ts';
 import { madeLine, planOutDirs } from './outdir.ts';
@@ -147,7 +147,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     const slots = slotsOf(doc0);
     resolveMap(map, rest, a.map, slots, input.sets);
 
-    const r = retarget(rest, map, frames, times, { ...a, ...(seq.travel !== undefined ? { travel: seq.travel } : {}), ...(seq.cleaned!.params.loop ? { loop: true } : {}), ...(seq.pelvisSource !== undefined ? { pelvis: { source: seq.pelvisSource, tilt: seq.frames.map((f) => f.pelvisTilt ?? null) } } : {}) }, slots, input.sets);
+    const r = retarget(rest, map, frames, times, { ...a, ...(seq.travel !== undefined ? { travel: seq.travel } : {}), ...(seq.cleaned!.params.loop ? { loop: true } : {}), ...(seq.pelvisSource !== undefined ? { pelvis: { source: seq.pelvisSource, tilt: seq.frames.map((f) => f.pelvisTilt ?? null) } } : {}), ...depthInput(seq) }, slots, input.sets);
     if (fragment.length > 0 && ((r.face?.sets?.length ?? 0) > 0 || (r.body?.sets?.length ?? 0) > 0)) {
       const known = knownSetsOf(map, input.sets);
       for (const s of [...(r.face?.sets ?? []), ...(r.body?.sets ?? [])]) {
@@ -927,44 +927,74 @@ function loweredLine(lowered: readonly Lowered[]): string {
   return `${head}: ${frames} frame(s) read differently from before — ${lowered.map((x) => `frames ${span(x.frames)} ${side(x.was)} → ${side(x.now)}${x.cause === undefined ? '' : ` (${CAUSE[x.cause]})`}`).join(', ')}`;
 }
 
+/** rig-c/pose#313: the depth the supports read — only a sequence whose frames carry depth and whose clean record names the gait (`clean --depth`); otherwise none, and the supports are read as before. */
+function depthInput(seq: PoseSequence): { depth?: SupportDepth } {
+  const gait = seq.cleaned?.params.depth?.gait;
+  return gait === undefined || !seq.frames.some((f) => f.depth !== undefined) ? {} : { depth: { gait, frames: seq.frames.map((f) => f.depth) } };
+}
+
 /**
- * The support-signal lines (rig-c/pose#280). On a clip read as frontal: two
- * lines — how often the ankle's vertical speed contradicts ankle height against
- * `FRONTAL_DISAGREE`, and where the stride shows (in depth) — then one line per
- * support span (a stride) naming the signal that decided its frames and what
- * ankle height alone would have read. On any other clip ankle height decided as
- * before and nothing is printed: the output of a clip the second signal does not
- * decide stays as it was, in every mode (`Feet.signal` still carries the figures).
+ * The support-signal lines (rig-c/pose#280, #313). On a clip read as frontal:
+ * two lines — how often the ankle's vertical speed contradicts ankle height
+ * against `FRONTAL_DISAGREE`, and where the stride shows (in depth). On a clip
+ * whose depth decided a frame (#313): one line — the gait's sign, on how many
+ * frames exactly one leg read it, and what decided the rest. Then, on either,
+ * one line per support span (a stride) naming the signal that decided its
+ * frames and what ankle height alone would have read. On any other clip ankle
+ * height decided as before and nothing is printed: the output of a clip neither
+ * signal decides stays as it was, in every mode (`Feet.signal` still carries the
+ * figures).
  */
 export function signalLines(sig: SupportSignal, supports: Feet['supports']): string[] {
   const span = (x: [number, number]) => (x[0] === x[1] ? `${x[0]}` : `${x[0]}–${x[1]}`);
   const n = Math.round(FRONTAL_DISAGREE * 100);
   const pct = sig.read === 0 ? 0 : (100 * sig.contradict.length) / sig.read;
-  if (!sig.frontal) return [];
-  const ranges = `x · y against the hips: r ${sig.range.r.x.toFixed(1)} · ${sig.range.r.y.toFixed(1)} px, l ${sig.range.l.x.toFixed(1)} · ${sig.range.l.y.toFixed(1)} px`;
-  const contra = `${sig.contradict.length} of ${sig.read} frame(s) (${pct.toFixed(1)} %`;
-  const out = [
-    `support: ankle vertical speed (rig-c/pose#280) — it contradicts ankle height on ${contra}, past ${n} %): the lower ankle moving while the higher moves with the ground`,
-    `support: read as a frontal view — ankles move more in y than x (${ranges}); ankle height only where neither foot moves with the ground`,
-  ];
+  const depth = sig.depth;
+  if (!sig.frontal && depth === undefined) return [];
+  const out: string[] = [];
+  if (sig.frontal) {
+    const ranges = `x · y against the hips: r ${sig.range.r.x.toFixed(1)} · ${sig.range.r.y.toFixed(1)} px, l ${sig.range.l.x.toFixed(1)} · ${sig.range.l.y.toFixed(1)} px`;
+    const contra = `${sig.contradict.length} of ${sig.read} frame(s) (${pct.toFixed(1)} %`;
+    out.push(
+      `support: ankle vertical speed (rig-c/pose#280) — it contradicts ankle height on ${contra}, past ${n} %): the lower ankle moving while the higher moves with the ground`,
+      `support: read as a frontal view — ankles move more in y than x (${ranges}); ankle height only where neither foot moves with the ground`,
+    );
+  }
+  const way = depth === undefined ? '' : depth.sense === 1 ? 'toward' : 'away';
+  if (depth !== undefined) {
+    const decided = sig.by.filter((b) => b === 'depth').length;
+    const rest = sig.frontal ? 'the vertical speed\'s reading above' : 'ankle height\'s';
+    out.push(`support: depth (rig-c/pose#313, clean --depth ${depth.gait}) — on ${decided} of ${sig.by.length} frame(s) one leg's thigh or shin reads ${way} (the swinging leg) and the other supports; elsewhere (both legs or neither, a jump) ${rest}`);
+  }
   for (const sp of supports) {
     let speed = 0;
     let height = 0;
+    let deep = 0;
     let both = 0;
     let differ = 0;
     const was = new Set<string>();
     for (let i = sp.frames[0]; i <= sp.frames[1]; i++) {
       if (sig.by[i] === 'speed') speed++;
       else if (sig.by[i] === 'height') height++;
+      else if (sig.by[i] === 'depth') deep++;
       if (sig.contact[i] === 'both') both++;
       if (sig.height[i] !== sp.side) {
         differ++;
         was.add(sig.height[i] ?? 'none');
       }
     }
-    const by = speed > 0 ? `ankle vertical speed on ${speed} frame(s)${height > 0 ? `, ankle height on ${height} (neither foot moved with the ground)` : ''}` : `ankle height on ${height} frame(s) (neither foot moved with the ground)`;
     const alone = differ === 0 ? 'ankle height alone reads the same' : `ankle height alone would read ${[...was].join(' or ')} on ${differ} of them`;
-    out.push(`stride ${sp.side} ${span(sp.frames)}: ${by} (both feet down on ${both}); ${alone}`);
+    if (depth === undefined) {
+      const by = speed > 0 ? `ankle vertical speed on ${speed} frame(s)${height > 0 ? `, ankle height on ${height} (neither foot moved with the ground)` : ''}` : `ankle height on ${height} frame(s) (neither foot moved with the ground)`;
+      out.push(`stride ${sp.side} ${span(sp.frames)}: ${by} (both feet down on ${both}); ${alone}`);
+      continue;
+    }
+    const parts = [
+      ...(deep > 0 ? [`depth ${deep} (the other leg read ${way})`] : []),
+      ...(speed > 0 ? [`ankle vertical speed ${speed}`] : []),
+      ...(height > 0 ? [`ankle height ${height}${sig.frontal ? ' (neither foot moved with the ground)' : ''}`] : []),
+    ];
+    out.push(`stride ${sp.side} ${span(sp.frames)}: of ${sp.frames[1] - sp.frames[0] + 1} frame(s), decided by ${parts.join(', ')}${sig.frontal ? ` (both feet down on ${both})` : ''}; ${alone}`);
   }
   return out;
 }
