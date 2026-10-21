@@ -249,6 +249,7 @@ Every key `rig-pose-report/1` can carry, once: the keys `src/run.ts` writes, and
 | `seams` | courtesy | — | |
 | `seamPairs` | courtesy | — | |
 | `reach` | courtesy | — | |
+| `reachOrigin` | courtesy | — | only when the map has a `reach` chain (rig-c/pose#282) |
 | `byHip` | courtesy | — | |
 | `body` | courtesy | — | |
 | `legScale` | courtesy | — | |

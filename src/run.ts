@@ -14,7 +14,7 @@ import { depthLine, layersOf, type FrameLayers } from './depth.ts';
 import { convertCoco17, personTrack, readPoseSequence, TRAVEL_IN_PLACE, type CameraFrame } from './pose.ts';
 import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './problems.ts';
 import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, readIdle, targetOf, trackLabel, type IdleReading, type RigcTrack, type Target } from './idle.ts';
-import { bendGroupLine, bendGroups, bendLine, endOnLine, flipLine, holdLine, nodLine, pelvisLine, rangeLine, reachCostLine, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions, type ScaleBand, type ScaleFit } from './retarget.ts';
+import { bendGroupLine, bendGroups, bendLine, endOnLine, flipLine, holdLine, nodLine, pelvisLine, rangeLine, reachCostLine, reachOriginLine, reachOriginWarn, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions, type ScaleBand, type ScaleFit } from './retarget.ts';
 import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, readBuild, resolveRig, restOf, seamRender, slotsOf } from './rigc.ts';
 import { partsPath, projectSeams, readSeamDoc, readSeamPairs, seamLines, type SeamPair } from './seams.ts';
 import { artRangeLine, chainsMoving, phaseLines, raisedLine, RAISED_WITHIN, reachLine, switchLine, uncoveredFolds } from './switch.ts';
@@ -207,6 +207,11 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     for (const e of r.byHip) say(`  BY-HIP ${raisedLine(e, r.times)}`);
     for (const e of r.byHip) if (e.short.length > 0) say(`  REACH  ${reachLine(e, r.times)}`);
     for (const e of r.reach) say(`  REACH  ${reachCostLine(e, r.times)}`);
+    // rig-c/pose#282: each reach chain's origin against its source joint; a map without one prints none.
+    for (const e of r.reachOrigin) {
+      say(`  REACH-ORIGIN ${reachOriginLine(e, r.times)}`);
+      if (e.warn) say(`  WARN   ${reachOriginWarn(e)}`);
+    }
     for (const e of r.artRange) say(`  ART-RANGE ${artRangeLine(e, r.times)}`);
     for (const l of r.legScale) say(`  LEG-SCALE ${legScaleLine(l, r.times, r.feet?.legLength ?? null, r.rigLeg)}`);
     for (const l of r.legScale) for (const s of l.support ?? []) say(`  LEG-SCALE ${supportScaleLine(l, s, r.times)}`);
@@ -420,6 +425,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         uncovered,
         turns: r.turns,
         reach: r.reach,
+        // Only when the map has a reach chain (#282): a map without one writes the report it always has.
+        ...(r.reachOrigin.length > 0 ? { reachOrigin: r.reachOrigin } : {}),
         range: r.range,
         artRange: r.artRange,
         raised: r.raised,
