@@ -35,6 +35,10 @@
  *   one leg lifted the lifted knee is in front of the supporting one
  *   (rig-c/pose#343). The owner's run statement (rig-c/pose#336, #343): the
  *   lifted leg is in front, its knee protruding, from toe-off;
+ * - run on a floor (`ground`, rig-c/pose#369): the run with each foot down for
+ *   `GROUND_SWING` of the stride (4 of 20 frames), its ankle on `RUN_FLOOR`,
+ *   and the figure in flight between stances, so each stride has two flights of
+ *   6 frames that lift both feet and mid_hip; not written by the CLI;
  * - arms: each upper arm swings against its own side's thigh (with the opposite
  *   leg), −0.6× (walk) or −0.9× (run) its angle from the thigh's mid-swing, the
  *   elbow bent 20° (walk) or 70° (run) forward;
@@ -125,8 +129,7 @@ const seg = (L: number, a: number, b: number, s: number): V3 => [s * L * Math.si
 const ease = (v: number) => (1 - Math.cos(Math.PI * v)) / 2;
 
 /** One leg at phase u: thigh angle and knee bend, degrees. */
-function leg(gait: Gait, u: number): { thigh: number; knee: number } {
-  const s = SWING[gait];
+function leg(gait: Gait, u: number, s = SWING[gait]): { thigh: number; knee: number } {
   if (gait === 'walk') {
     if (u < s) return { thigh: 10 - 20 * (u / s), knee: 0 };
     const v = (u - s) / (1 - s);
@@ -140,8 +143,47 @@ function leg(gait: Gait, u: number): { thigh: number; knee: number } {
   return { thigh: -15 + 30 * ease(v) + RUN_LIFT * Math.sin(Math.PI * v ** 0.6), knee: RUN_KNEE * Math.sin(Math.PI * v) };
 }
 
-/** The cycle, `cycles` strides of the gait, drawn by `view`'s camera. */
-export function depthCycle(gait: Gait, view: View, cycles = 1): DepthFrame[] {
+/** The floor's world Y under a run carried on it (`depthCycle`'s `ground`), and its flight's rise above the straight line from toe-off to landing, px. */
+export const RUN_FLOOR = -150;
+export const RUN_FLIGHT = 16;
+/** Where the swing starts in the stride of a run carried on the floor: each foot down on 4 of the stride's 20 frames, a flight of 6 after each. */
+export const GROUND_SWING = 0.16;
+
+/** The ankle's world Y against the hip on leg phase u and frame phase phi: the leg's two segments, leaning by the abduction. */
+function ankleY(gait: Gait, u: number, phi: number): number {
+  const { thigh, knee } = leg(gait, u, GROUND_SWING);
+  const b = 6 * Math.sin(phi) * RAD;
+  return -(LEN.thigh * Math.cos(thigh * RAD) + LEN.shin * Math.cos((thigh - knee) * RAD)) * Math.cos(b);
+}
+
+/**
+ * rig-c/pose#369: the figure's height on the floor at the right leg's phase x, for a run carried on a floor. On a
+ * frame with one foot in its stance the figure stands on it: that ankle at `RUN_FLOOR`. In each of the stride's two
+ * flights (both feet in their swing) it travels from its toe-off height to its landing height on a parabola that
+ * rises `RUN_FLIGHT` above the straight line between them, so both feet leave the floor and mid_hip rises.
+ */
+function heightOf(gait: Gait, x: number): number {
+  const s = GROUND_SWING;
+  const stance = (side: 'r' | 'l', xr: number) => RUN_FLOOR - ankleY(gait, side === 'r' ? xr : (xr + 0.5) % 1, 2 * Math.PI * xr);
+  const flight = (from: number, to: number, side0: 'r' | 'l', side1: 'r' | 'l') => {
+    const w = (x - from) / (to - from);
+    const h0 = stance(side0, from);
+    const h1 = stance(side1, to % 1);
+    return h0 + (h1 - h0) * w + 4 * RUN_FLIGHT * w * (1 - w);
+  };
+  if (x < s) return stance('r', x);
+  if (x < 0.5) return flight(s, 0.5, 'r', 'l');
+  if (x < 0.5 + s) return stance('l', x);
+  return flight(0.5 + s, 1, 'l', 'r');
+}
+
+/**
+ * The cycle, `cycles` strides of the gait, drawn by `view`'s camera. `ground` (rig-c/pose#369, the run only): the
+ * figure is carried on a floor instead of hung from a fixed mid_hip — every joint moved up by `heightOf`, so the
+ * stance ankle stays on the floor and the two flights of each stride lift both feet and the hips; the joints'
+ * relations, depths and truth are the same as without it.
+ */
+export function depthCycle(gait: Gait, view: View, cycles = 1, ground = false): DepthFrame[] {
   const P = STRIDE[gait];
   const armGain = gait === 'walk' ? -0.6 : -0.9;
   const elbow = gait === 'walk' ? 20 : 70;
@@ -154,8 +196,9 @@ export function depthCycle(gait: Gait, view: View, cycles = 1): DepthFrame[] {
     const lifted: Array<'r' | 'l'> = [];
     for (const [side, s, du] of [['r', -1, 0], ['l', 1, 0.5]] as const) {
       const u = ((i % P) / P + du) % 1;
-      if (u >= SWING[gait]) lifted.push(side);
-      const { thigh, knee } = leg(gait, u);
+      const swing = ground ? GROUND_SWING : SWING[gait];
+      if (u >= swing - (ground ? 1e-9 : 0)) lifted.push(side);
+      const { thigh, knee } = leg(gait, u, swing);
       const legB = 6 * Math.sin(phi);
       const armB = 4 * Math.cos(phi);
       const hip = add(midHip, [s * 15, 0, 0]);
@@ -170,6 +213,10 @@ export function depthCycle(gait: Gait, view: View, cycles = 1): DepthFrame[] {
     // The head: upright on the neck, the face forward.
     const nose = add(neck, [0, 30, 8]);
     Object.assign(j3, { nose, r_eye: add(nose, [-6, 5, -2]), l_eye: add(nose, [6, 5, -2]), r_ear: add(nose, [-14, 2, -10]), l_ear: add(nose, [14, 2, -10]) });
+    if (ground) {
+      const h = heightOf(gait, (i % P) / P);
+      for (const k of Object.keys(j3)) j3[k] = add(j3[k]!, [0, h, 0]);
+    }
     const draw = (p: V3): Pt => (view === 'front' ? [200 + p[0], 400 - p[1]] : view === 'back' ? [200 - p[0], 400 - p[1]] : [200 + p[2], 400 - p[1]]);
     const near = (p: V3): number => (view === 'front' ? p[2] : view === 'back' ? -p[2] : -p[0]);
     const joints = Object.fromEntries(Object.entries(j3).map(([n, p]) => [n, draw(p)]));
