@@ -168,7 +168,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     const slots = slotsOf(doc0);
     resolveMap(map, rest, a.map, slots, input.sets);
 
-    const r = retarget(rest, map, frames, times, { ...a, ...(seq.travel !== undefined ? { travel: seq.travel } : {}), ...(seq.cleaned!.params.loop ? { loop: true } : {}), ...(seq.pelvisSource !== undefined ? { pelvis: { source: seq.pelvisSource, tilt: seq.frames.map((f) => f.pelvisTilt ?? null) } } : {}), ...(contactKeys !== null ? { contactKeys } : {}) }, slots, input.sets);
+    const r = retarget(rest, map, frames, times, { ...a, ...(seq.travel !== undefined ? { travel: seq.travel } : {}), ...(seq.cleaned!.params.loop ? { loop: true } : {}), ...(seq.pelvisSource !== undefined ? { pelvis: { source: seq.pelvisSource, tilt: seq.frames.map((f) => f.pelvisTilt ?? null) } } : {}), ...(contactKeys !== null ? { contactKeys } : {}), ...(seq.cleaned!.params.depth !== undefined ? { gait: seq.cleaned!.params.depth.gait } : {}) }, slots, input.sets);
     if (fragment.length > 0 && ((r.face?.sets?.length ?? 0) > 0 || (r.body?.sets?.length ?? 0) > 0)) {
       const known = knownSetsOf(map, input.sets);
       for (const s of [...(r.face?.sets ?? []), ...(r.body?.sets ?? [])]) {

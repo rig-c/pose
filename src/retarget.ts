@@ -76,7 +76,7 @@ import type { Body18 } from './joints.ts';
 import { isBody18, VIRTUAL } from './joints.ts';
 import type { Chain, JointMap, Rest, RigSets, RigSlots } from './map.ts';
 import { aimAngle, aimEnds, bodyYawSets, descends, faceYawSets, knownSetsOf, partBone, pointParts, rigPoint } from './map.ts';
-import type { Joint, Travel } from './pose.ts';
+import type { DepthGait, Joint, Travel } from './pose.ts';
 import { TRAVEL_IN_PLACE } from './pose.ts';
 import { Problems, Refusal } from './problems.ts';
 import type { ArtRange, AttachmentKey, ByHip, Raised, ReachShort, SetRuns, SlotTrack, Switch, SwitchOptions } from './switch.ts';
@@ -188,6 +188,28 @@ export interface RetargetOptions extends SwitchOptions {
    * frame they cover they decide the support. Absent, nothing changes.
    */
   contactKeys?: ContactKeys;
+  /**
+   * rig-c/pose#344: the gait the sequence was cleaned as (its `cleaned.params.depth.gait`, `clean --depth`). An
+   * in-place walk anchors the upper body (`TorsoAnchor`): the pelvis sways under it. Absent, or a run, nothing changes.
+   */
+  gait?: DepthGait;
+}
+
+/**
+ * rig-c/pose#344: in an in-place walk the upper body is the anchor and the pelvis sways under it. The pelvis bone
+ * carries the torso (its child), so its turn and its travel would swing the chest around it; the first spine bone
+ * (`bone`: the pelvis bone's child on the way to the trunk chain's bone) is keyed with the counter: a rotate of minus
+ * the pelvis's turn (none when it is the trunk bone itself, whose aim is already in the world), and a translate that
+ * puts its origin back where the pelvis's turn moved it from, up and down, and sideways where it holds `point` (the
+ * trunk chain's aim bone: the top of the trunk) at the world x `x`, the setup x plus the pelvis's mean travel. The
+ * pelvis's own keys are as read; `sway` is the peak-to-peak of the first spine bone's sideways counter, world units.
+ */
+export interface TorsoAnchor {
+  gait: DepthGait;
+  bone: string;
+  point: string;
+  x: number;
+  sway: number;
 }
 
 /**
@@ -208,6 +230,8 @@ export interface PelvisReading {
   hipLine: number;
   /** The frames keyed from the hip line on a sequence that carries a track: the frames its reading declined. */
   declined: Array<[number, number]>;
+  /** rig-c/pose#344: the torso held over the swaying pelvis, in an in-place walk only. */
+  anchor?: TorsoAnchor;
 }
 
 export interface Hold {
@@ -904,6 +928,26 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   }
   p.throwIfAny();
 
+  // rig-c/pose#344: an in-place walk holds the upper body over the swaying pelvis, on the first spine bone.
+  const anchorOf = ((): { bone: string; trunk: string; point: string; pelvis: string } | null => {
+    if (opts.gait !== 'walk' || opts.travel !== TRAVEL_IN_PLACE || pelvisChain === null) return null;
+    const pelvisBone = pelvisChain.bones[0]!;
+    const trunk = map.chains.find((c) => !c.reach && c.joints[0] === 'mid_hip' && descends(rest, c.bones[0]!, pelvisBone));
+    if (trunk === undefined) return null;
+    const tb = trunk.bones[0]!;
+    let first = tb;
+    while (rest.get(first)!.parent !== pelvisBone) first = rest.get(first)!.parent!;
+    const aim = trunk.aim[0]!;
+    const point = rest.has(aim) && descends(rest, aim, tb) ? aim : tb;
+    return { bone: first, trunk: tb, point, pelvis: pelvisBone };
+  })();
+  if (anchorOf !== null && anchorOf.bone !== anchorOf.trunk && !targets.has(anchorOf.bone)) {
+    // Not in a chain: its world turn is held at setup, so the bones below it are keyed against none.
+    const a0 = restAngle(rest, anchorOf.bone, 'x');
+    restOf.set(anchorOf.bone, a0);
+    targets.set(anchorOf.bone, Array.from({ length: n }, () => a0));
+  }
+
   // The short hold, on every segment the pose aims directly (not a reach): its
   // picture length against its own median, on the points the angle was read from.
   // A horizontal line across the body (`isAcross`: pelvis, shoulders, head line)
@@ -1509,7 +1553,30 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     const r = turnAbove(parent, i) / DEG;
     const ox = own.worldX - rest.get(parent)!.worldX;
     const oy = own.worldY - rest.get(parent)!.worldY;
-    return [po[0] + Math.cos(r) * ox - Math.sin(r) * oy + nod[0], po[1] + Math.sin(r) * ox + Math.cos(r) * oy + nod[1]];
+    const at: Pt = [po[0] + Math.cos(r) * ox - Math.sin(r) * oy + nod[0], po[1] + Math.sin(r) * ox + Math.cos(r) * oy + nod[1]];
+    if (anchorOf === null || b !== anchorOf.bone || anchorRaw) return at;
+    const s = anchorShift(i, at, po, oy);
+    return [at[0] + s[0], at[1] + s[1]];
+  };
+  /**
+   * rig-c/pose#344: the world shift that holds the first spine bone over the pelvis: up and down, its origin where
+   * the pelvis's travel alone puts it (the pelvis's turn taken out); sideways, the trunk's top point at `anchorX`.
+   */
+  let anchorRaw = false;
+  let anchorX: number | null = null;
+  const anchorShift = (i: number, at: Pt, po: Pt, oy: number): Pt => {
+    const a = anchorOf!;
+    if (anchorX === null) {
+      let sum = 0;
+      anchorRaw = true;
+      for (let k = 0; k < n; k++) sum += posedOrigin(a.pelvis, k)[0] - rest.get(a.pelvis)!.worldX;
+      anchorRaw = false;
+      anchorX = rest.get(a.point)!.worldX + sum / n;
+    }
+    anchorRaw = true;
+    const top = posedOrigin(a.point, i);
+    anchorRaw = false;
+    return [anchorX - top[0], po[1] + oy - at[1]];
   };
   /** A rig point (a bone, `name:tip`, `a+b`) posed on frame i the same way. */
   const posedPoint = (spec: string, i: number): Pt => {
@@ -2999,6 +3066,42 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       }
     }
   }
+  // rig-c/pose#344: the first spine bone's counter — its rotate when it is not the trunk bone, and its translate.
+  let anchor: TorsoAnchor | null = null;
+  if (anchorOf !== null) {
+    const a = anchorOf;
+    if (a.bone !== a.trunk) {
+      const above = mappedAbove(a.bone);
+      let prev = 0;
+      const keys: MotionKey[] = [];
+      for (let i = 0; i < n; i++) {
+        const raw = turn(a.bone, i) - (above === null ? 0 : turn(above, i));
+        prev = i === 0 ? wrap(raw) : prev + wrap(raw - prev);
+        keys.push({ t: keyTimes[i]!, v: [r3(prev)] });
+      }
+      tracks.push({ bone: a.bone, property: 'rotate', keys });
+    }
+    const pr = rest.get(a.pelvis)!;
+    const det = pr.a * pr.d - pr.b * pr.c;
+    const keys: MotionKey[] = [];
+    const xs: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const held = posedOrigin(a.bone, i);
+      anchorRaw = true;
+      const free = posedOrigin(a.bone, i);
+      anchorRaw = false;
+      const wx = held[0] - free[0];
+      const wy = held[1] - free[1];
+      xs.push(wx);
+      // Into the pelvis's turned frame, then through its setup matrix: the translate is in the parent's local axes.
+      const r = -turnAbove(a.pelvis, i) / DEG;
+      const ux = Math.cos(r) * wx - Math.sin(r) * wy;
+      const uy = Math.sin(r) * wx + Math.cos(r) * wy;
+      keys.push({ t: keyTimes[i]!, v: [r3((pr.d * ux - pr.b * uy) / det), r3((-pr.c * ux + pr.a * uy) / det)] });
+    }
+    tracks.push({ bone: a.bone, property: 'translate', keys });
+    anchor = { gait: 'walk', bone: a.bone, point: a.point, x: r3(anchorX!), sway: r3(Math.max(...xs) - Math.min(...xs)) };
+  }
   let face: FaceReading | null = null;
   if (map.face !== undefined) {
     const rEar = series.get('r_ear') ?? (() => {
@@ -3136,6 +3239,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
 
   const pivot = pivotOf(rest, t?.bone ?? null, legs);
   const pelvis = pelvisReadingOf(pelvisChain, opts.pelvis, track, fromTrack, tracks);
+  if (pelvis !== null && anchor !== null) pelvis.anchor = anchor;
   const scaleFit = t === null || scale === null || origin === null ? null : scaleFitOf({
     joints: t.scale.pose, joint: t.joint, bone: t.bone, lengths: scaleLengths, factor: scale.factor,
     series, good, legLength: feet?.legLength ?? null, legStraight, rigLeg,
@@ -3187,10 +3291,16 @@ export function pelvisLine(r: PelvisReading, frames: number): string {
   const where = r.bone === null ? '' : `bone "${r.bone}", chain "${r.chain}"`;
   if (r.bone === null) return `PELVIS: not keyed — the sequence carries a ${r.trackSource} track (${frames - r.declined.reduce((s, [a, b]) => s + b - a + 1, 0)} of ${frames} frames read) and the map has no pelvis chain (one bone, joints r_hip → l_hip); no bone turns with the pelvis`;
   const swing = r.swing === null ? '' : `, swing ${r.swing.toFixed(2)}°`;
-  if (r.trackSource === null) return `PELVIS: from hip line (no track)${swing} (${where}; every frame from r_hip → l_hip)`;
-  if (r.track === 0) return `PELVIS: from hip line (the ${r.trackSource} track read none of the ${frames} frames)${swing} (${where}; every frame from r_hip → l_hip)`;
+  if (r.trackSource === null) return `PELVIS: from hip line (no track)${swing} (${where}; every frame from r_hip → l_hip)${anchorClause(r.anchor)}`;
+  if (r.track === 0) return `PELVIS: from hip line (the ${r.trackSource} track read none of the ${frames} frames)${swing} (${where}; every frame from r_hip → l_hip)${anchorClause(r.anchor)}`;
   const rest = r.hipLine === 0 ? `all ${frames} frames from the track` : `${r.track} of ${frames} frames from the track, the hip line on the ${r.hipLine} it declined (frames ${spans(r.declined)})`;
-  return `PELVIS: from ${r.source}${swing} (${where}; ${rest})`;
+  return `PELVIS: from ${r.source}${swing} (${where}; ${rest})${anchorClause(r.anchor)}`;
+}
+
+/** rig-c/pose#344: the PELVIS line's clause for the torso held over the pelvis. */
+function anchorClause(a: TorsoAnchor | undefined): string {
+  if (a === undefined) return '';
+  return `; torso anchored (in-place ${a.gait}): bone "${a.bone}" keyed with the pelvis's counter, "${a.point}" held at x ${a.x.toFixed(2)} (its sideways counter ${a.sway.toFixed(2)} peak to peak), the pelvis swaying under it`;
 }
 
 /** A reach bone's origin within this many world units of the anchor's, with nothing above it moved, is aimed along the pair: no REACH line. */
