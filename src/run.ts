@@ -11,7 +11,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { knownSetsOf, readMap, resolveMap, type JointMap, type Rest } from './map.ts';
 import { cleanLine, cleanSummaryLine, inferredSource } from './clean.ts';
 import { depthLine, layersOf, type FrameLayers } from './depth.ts';
-import { drawOrderFromDepth, drawOrderKeys, drawOrderLines, type DrawOrderReading } from './draworder.ts';
+import { drawGapLines, drawOrderFromDepth, drawOrderKeys, drawOrderLines, type DrawOrderReading } from './draworder.ts';
 import { convertCoco17, personTrack, readPoseSequence, TRAVEL_IN_PLACE, type CameraFrame } from './pose.ts';
 import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './problems.ts';
 import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, readIdle, targetOf, trackLabel, type IdleReading, type RigcTrack, type Target } from './idle.ts';
@@ -137,7 +137,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
   const mapSnapshot = readReportInput(a.map), poseSnapshot = readReportInput(a.pose);
   const map = readMap(mapSnapshot.bytes.toString('utf8'), a.map);
   // #283: each chain --reduce names must be the map's; a bone takes its chain's tolerance (the tighter, if two chains name it).
-  const reduceOf = a.reduce === undefined ? null : reduceTolerances(map, a.reduce, a.reduceChains, a.map);
+  let reduceOf = a.reduce === undefined ? null : reduceTolerances(map, a.reduce, a.reduceChains, a.map);
   const poseText = poseSnapshot.bytes.toString('utf8');
   const seq = a.coco ? convertCoco17(poseText, a.pose) : readPoseSequence(poseText, a.pose);
   if (seq.cleaned === undefined) refuse([{ code: 'POSE_NOT_CLEANED', text: notCleaned(a.pose, a.coco) }]);
@@ -235,7 +235,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     if (layers !== null) say(`  ${depthLine(layers, seq.frames, seq.cleaned!.params.depth?.gait ?? null)}`);
     // rig-c/pose#304: with --draw-order depth, the legs' draw order keyed from those layers.
     const drawOrder: DrawOrderReading | null = a.drawOrder === 'depth' && layers !== null ? drawOrderFromDepth(layers, frames, seq.frames.map((x) => x.depth), r.times, map, rest, doc0.slots, input.sets, seq.cleaned!.params.loop) : null;
-    if (drawOrder !== null) for (const l of drawOrderLines(drawOrder)) say(`  ${l}`);
+    if (drawOrder !== null) for (const l of [...drawOrderLines(drawOrder), ...drawGapLines(drawOrder)]) say(`  ${l}`);
     if (r.pivot !== null) say(`  PIVOT  bone "${r.pivot.bone}"'s origin is ${r.pivot.distance.toFixed(2)} units (${r.pivot.hipWidths.toFixed(3)} hip widths) from its thigh roots' midpoint (${r.pivot.roots.join(' + ')}): dx ${r.pivot.offset[0].toFixed(2)}, dy ${r.pivot.offset[1].toFixed(2)}, at setup — the pivot every hip turn swings the legs about`);
     if (r.feet !== null) {
       const f = r.feet;
@@ -264,14 +264,23 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     if (r.face !== null) say(`  FACE   ${faceLine(r.face)}`);
     if (r.body !== null) say(`  BODY   ${bodyLine(r.body)}`);
 
+    // #320: a mapped bone above a planted or aimed chain --reduce names is held to that chain's tolerance when its own is looser.
+    const held = reduceOf === null || a.reduceChains === undefined ? [] : holdParents(map, rest, new Set(r.targets.keys()), a.reduceChains, reduceOf, r.ankles === null ? [] : [r.ankles.bones.r, r.ankles.bones.l]);
+    if (held.length > 0) {
+      const first = reduceOf!;
+      reduceOf = (bone) => held.find((h) => h.bone === bone)?.to ?? first(bone);
+      for (const h of held) say(`  REDUCE ${heldLine(h)}`);
+    }
     // --reduce (#32): the dense keys thinned top-down, before anything reads the tracks.
     const reduced = a.reduce === undefined ? null : a.reduceChains === undefined ? reduceTracks(r, map, rest, a.reduce, a.reduceHip, a.reduceKeepPlanted === true) : reduceTracks(r, map, rest, a.reduce, a.reduceHip, a.reduceKeepPlanted === true, reduceOf!);
     if (reduced !== null) {
       for (const row of reduced.rows) {
         const [who, track, what, unit] = row.kind === 'angle' ? ['bone', 'rotate', 'aim', '°'] : row.kind === 'origin' ? ['hip', 'translate', 'origin', ' units'] : ['bone', 'scalex', 'scale', ' of its setup length'];
-        const own = row.kind === 'angle' && reduceOf!(row.bone) !== a.reduce ? ` — within its chain's ${reduceOf!(row.bone)}°` : '';
+        const hold = held.find((h) => h.bone === row.bone && row.kind === 'angle');
+        const own = row.kind === 'angle' && reduceOf!(row.bone) !== a.reduce ? (hold === undefined ? ` — within its chain's ${reduceOf!(row.bone)}°` : ` — held to ${hold.to}° for ${hold.for.map((c) => `chain "${c.chain}"`).join(', ')} below it`) : '';
         say(`  REDUCE ${who} "${row.bone}" ${track}: ${row.before} → ${row.after} key(s); worst ${what} error ${row.worst.toPrecision(3)}${unit} at frame ${row.frame} (t=${r.times[row.frame]!.toFixed(3)}s)${own}`);
       }
+      for (const u of reduced.unsmoothed ?? []) say(`  REDUCE ${unsmoothedLine(u)}`);
       const sum = (kind: ReduceRow['kind'], k: 'before' | 'after') => reduced.rows.filter((x) => x.kind === kind).reduce((t, x) => t + x[k], 0);
       const scales = reduced.rows.some((x) => x.kind === 'scale') ? `; scalex keys ${sum('scale', 'before')} → ${sum('scale', 'after')} within ${SCALE_REDUCE} of the setup length` : '';
       say(`  REDUCE rotate keys ${sum('angle', 'before')} → ${sum('angle', 'after')} (${(sum('angle', 'before') / sum('angle', 'after')).toFixed(2)}×) within ${a.reduce}°${chainsText(a.reduceChains)}${scales}${a.reduceHip === undefined ? '; the hip stays dense (no --reduce-hip)' : ''}`);
@@ -485,7 +494,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         // Only when the sequence carries depth (#281): a sequence without it writes the report it always has.
         ...(layers !== null ? { layers: layers.map((l, frame) => ({ frame, order: l.order, depth: l.depth })) } : {}),
         // Only with --draw-order depth (#304).
-        ...(drawOrder !== null ? { drawOrder: { source: 'depth', pairs: drawOrder.pairs, keys: drawOrder.keys, spans: drawOrder.spans } } : {}),
+        ...(drawOrder !== null ? { drawOrder: { source: 'depth', pairs: drawOrder.pairs, keys: drawOrder.keys, spans: drawOrder.spans, gaps: drawOrder.gaps ?? [] } } : {}),
         // Only with --contact-keys (#303).
         ...(r.feet?.contactKeys !== undefined && contactKeysSnapshot !== null ? { contactKeys: { path: a.contactKeysFile, sha256: createHash('sha256').update(contactKeysSnapshot).digest('hex'), keys: r.feet.contactKeys.keys.length, from: r.feet.contactKeys.from, changed: r.feet.contactKeys.changed, kept: r.feet.contactKeys.kept, unreached: r.feet.contactKeys.unreached } } : {}),
         stance: r.stance === null ? null : { tolerance: r.stance.tolerance, release: r.stance.release, minSeconds: r.stance.minSeconds, bounds: r.stance.bounds, ...(r.stance.range === undefined ? {} : { range: r.stance.range }), runs: r.stance.runs, over: r.stance.over },
@@ -494,7 +503,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         idleDropped: idle === null ? null : idle.dropped,
         idleKeptOut: idle === null ? null : idle.keptOut,
         merged: fragment.map((tr) => ({ track: trackLabel(tr, groups), keys: tr.keys.length })),
-        reduce: reduced === null ? null : { tolerance: a.reduce, ...(a.reduceChains === undefined ? {} : { chains: a.reduceChains }), hipTolerance: a.reduceHip ?? null, rows: reduced.rows, ankleDrift: drift },
+        reduce: reduced === null ? null : { tolerance: a.reduce, ...(a.reduceChains === undefined ? {} : { chains: a.reduceChains }), ...(held.length === 0 ? {} : { held }), ...(reduced.unsmoothed === undefined ? {} : { unsmoothed: reduced.unsmoothed }), hipTolerance: a.reduceHip ?? null, rows: reduced.rows, ankleDrift: drift },
       }, map, { frameTimes: r.times }, f.meshes !== null && doc.slots.length > 0 ? reportRenderDomain(JSON.parse(readFileSync(join(f.frames, '..', 'frames.json'), 'utf8')), a.name) : seamRead.frames === null ? null : reportRenderDomain(seamRead.frames, a.name), {rig:rigSnapshot.identity,map:mapSnapshot.identity,pose:poseSnapshot.identity});
     if (a.build !== undefined) {
       // Built again where it will live, not copied: rigc's page paths are relative to the build (#18).
@@ -1383,6 +1392,80 @@ export function reduceTolerances(map: JointMap, tolerance: number, chains: Recor
     for (const b of c.bones) by.set(b, Math.min(by.get(b) ?? t, t));
   }
   return (bone) => by.get(bone) ?? tolerance;
+}
+
+/** rig-c/pose#320: a mapped bone held to the tolerance of a planted or aimed chain below it. */
+export interface ReduceHeld {
+  /** The held bone, and the map chain it is a bone of (null for a mapped bone no chain lists). */
+  bone: string;
+  chain: string | null;
+  /** Its tolerance as --reduce gave it (the run's, or its own chain's), degrees. */
+  from: number;
+  /** The tolerance it is held to: the tightest planted or aimed chain --reduce names below it, degrees. */
+  to: number;
+  /**
+   * Each such chain below it reduced within `to`, in the map's order: its name, what holds it (`ankle`: it carries
+   * a planted ankle's landing; `aim`: the map aims it), its first bone, and the lever — that bone's origin's setup
+   * distance from the held bone's origin, rig units.
+   */
+  for: Array<{ chain: string; by: 'ankle' | 'aim'; bone: string; lever: number }>;
+}
+
+/**
+ * rig-c/pose#320: every mapped bone above a planted or aimed chain `chains`
+ * names, whose own tolerance (`tolOf`) is looser than that chain's, held to it
+ * — to the tightest such chain when several hang below it. A chain is planted
+ * when it carries an ankle the landing check holds (`ankles`), aimed when the
+ * map gives it an `aim` other than "x".
+ *
+ * The lever. A turn error θ on a bone turns everything under it rigidly: a
+ * chain below has its first bone moved by θ·L (L = `lever`) and its aim turned
+ * by θ. The reduction refits the chain against the turn (`target = dense −
+ * e_above`), so the aim is the chain's own error, but not the move: the ankle
+ * allowance (`footReduce`) sums every segment from the legs' top down — the
+ * held bone's lever among them — times the leg's own degrees. θ·L ≤ θ_leg·L is
+ * θ ≤ θ_leg whatever L is. An aimed chain is refitted, and on the trunk
+ * smoothed (#116), against its parent's error as it stands: held to the
+ * chain's degrees, that error never asks the chain to absorb more than its own
+ * tolerance. A bent chain (an arm, a leg with no ankle check) has only its aim
+ * checked, which the refit holds, so it holds nothing above it. Only a
+ * per-chain entry can be tighter than a bone above it: with none, nothing is held.
+ */
+export function holdParents(map: JointMap, rest: Rest, mapped: ReadonlySet<string>, chains: Record<string, number>, tolOf: (bone: string) => number, ankles: readonly string[]): ReduceHeld[] {
+  const held: ReduceHeld[] = [];
+  for (const c of map.chains) {
+    const t = Object.hasOwn(chains, c.name) ? chains[c.name] : undefined;
+    const top = c.bones[0];
+    const by = c.bones.some((b) => ankles.includes(b)) ? ('ankle' as const) : c.aim.some((x) => x !== 'x') ? ('aim' as const) : null;
+    if (t === undefined || top === undefined || by === null || !rest.has(top)) continue;
+    const at = rest.get(top)!;
+    for (let p = at.parent; p !== null; p = rest.get(p)?.parent ?? null) {
+      if (!mapped.has(p) || c.bones.includes(p) || !(tolOf(p) > t)) continue;
+      const was = held.findIndex((h) => h.bone === p);
+      if (was >= 0 && held[was]!.to < t) continue;
+      const x = rest.get(p)!;
+      const child = { chain: c.name, by, bone: top, lever: Number(Math.hypot(at.worldX - x.worldX, at.worldY - x.worldY).toPrecision(6)) };
+      if (was >= 0 && held[was]!.to === t) held[was]!.for.push(child);
+      else if (was >= 0) held[was] = { ...held[was]!, to: t, for: [child] };
+      else held.push({ bone: p, chain: map.chains.find((m) => m.bones.includes(p))?.name ?? null, from: tolOf(p), to: t, for: [child] });
+    }
+  }
+  return held;
+}
+
+/** rig-c/pose#320: the REDUCE line naming a held bone, the chains it was held for, and why. */
+export function heldLine(h: ReduceHeld): string {
+  const below = h.for.map((c) => `chain "${c.chain}" (${c.by === 'ankle' ? 'a planted ankle' : 'aimed'}; L = ${c.lever} units to bone "${c.bone}")`).join(', ');
+  const why = [
+    ...(h.for.some((c) => c.by === 'ankle') ? ['the ankle allowance counts L at the leg\'s own degrees'] : []),
+    ...(h.for.some((c) => c.by === 'aim') ? ['an aimed chain refits against its parent\'s error within its own'] : []),
+  ].join(' and ');
+  return `held: bone "${h.bone}"${h.chain === null ? '' : ` (chain "${h.chain}")`} reduced within ${h.to}°, not ${h.from}° — for ${below} below it, reduced within ${h.to}°: a turn error θ on bone "${h.bone}" moves a chain below it by θ·L and turns it by θ, and ${why}, so θ ≤ ${h.to}°`;
+}
+
+/** rig-c/pose#320: the REDUCE line for a trunk smoothing (#116) not kept. */
+export function unsmoothedLine(u: { root: string; bone: string; worst: number; tolerance: number }): string {
+  return `smoothing (rig-c/pose#116) from bone "${u.root}" down not kept: it left bone "${u.bone}" at ${u.worst.toPrecision(3)}°, past its ${u.tolerance}°; the fitted keys stand, each within its tolerance`;
 }
 
 /** rig-c/pose#283: the per-chain tolerances as the run and REDUCE lines print them; empty without. */

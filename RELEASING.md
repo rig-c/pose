@@ -67,8 +67,15 @@ Dispatch when the GitHub release `vX.Y.Z` exists and
 `npm view @rig-c/pose@X.Y.Z version` serves nothing:
 
 ```sh
-gh workflow run release.yml -f tag=vX.Y.Z
+gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z
 ```
+
+`--ref vX.Y.Z` puts the run itself on the tag. npm's provenance reads the run's
+`GITHUB_REF` and `GITHUB_SHA`, which the later checkout of the tag does not
+change, so without it the published package would claim the default branch's
+head as its source. `--ref` also runs the tag's own `release.yml`, so only a tag
+whose `release.yml` carries the `tag` dispatch input can be recovered this way:
+v0.40.0 and later. A tag up to v0.39.0 is carried by the next cut instead.
 
 The `release` job then skips release-please (a dispatch never cuts a tag or a
 release) and its *Resolve the tag to publish* step checks the tag; every step
@@ -83,6 +90,7 @@ rule:
 | `RELEASE_DISPATCH_INPUT` | the dispatch gave both `tag` and `version`, or neither |
 | `RELEASE_TAG_FORM` | the tag is not `vX.Y.Z` (or `vX.Y.Z-<prerelease>`) |
 | `RELEASE_TAG_UNRELEASED` | the tag has no GitHub release: only a tag release-please cut is published |
+| `RELEASE_REF_NOT_TAG` | the run is not on the tag: its `GITHUB_REF` is not `refs/tags/<tag>` (dispatched without `--ref`), or its `GITHUB_SHA` is not the tag's commit |
 | `RELEASE_ALREADY_PUBLISHED` | the registry already serves that version of `@rig-c/pose` |
 | `RELEASE_TAG_BELOW_LATEST` | the version is below the registry's `latest` for `@rig-c/pose` (a prerelease is below its release) |
 
@@ -319,7 +327,7 @@ Every key `rig-pose-report/1` can carry, once: the keys `src/run.ts` writes, and
 | `idleDropped` | courtesy | — | |
 | `idleKeptOut` | courtesy | — | |
 | `merged` | courtesy | — | |
-| `reduce` | courtesy | — | |
+| `reduce` | courtesy | — | `held` only when a parent was held, `unsmoothed` only when a trunk smoothing was not kept (rig-c/pose#320) |
 
 An **event row**, as review reads it under #209, carries: `frame` or `frames` (an inclusive pair below `frames`), or `t`/`times` in seconds; `seconds`/`spanSeconds`; and the names `bone`, `slot`, `bones`, `joint`, `point`, `chain`, `chains`, `joints`, `side`, `set`, `attachment`, `line`. Those row fields are promised wherever a promised key carries event rows. A new key, or a new field in a row, is not a change: readers ignore what they do not read.
 

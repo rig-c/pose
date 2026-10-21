@@ -358,7 +358,7 @@ describe('refusals, the pair rule and the sets', () => {
     expect(r.ran.status).toBe(0);
     expect(linesOf(r.ran, 'DRAWORDER')).toEqual([
       'DRAWORDER from depth, 0 key(s) over 0 span(s) (no pair keyed)',
-      'DRAWORDER leg_r / leg_l not keyed: their slots do not overlap in the draw order: "torso" is drawn between them, and a swap would re-layer it (the setup order is not changed here)',
+      'DRAWORDER leg_r / leg_l not keyed: 1 slot: "torso" is drawn between them, and a swap would re-layer it (the setup order is not changed here)',
     ]);
     expect('drawOrder' in r.motion.animations.run!).toBe(false);
   }, SLOW);
@@ -450,4 +450,60 @@ describe('mutants: the rule\'s direction and its tie, each making bar (1) red', 
       }
     }, SLOW);
   }
+});
+
+describe('rig-c/pose#324: why nothing keyed — the slot count first, and the leg depth gap against the tie', () => {
+  type Gap = { a: string; b: string; median: number | null; max: number | null; medianLegs: number | null; maxLegs: number | null; tie: number | null; tieLegs: number | null; passed: number; frames: number };
+  const gapsOf = (r: Retargeted): Gap[] => (r.report.drawOrder as unknown as { gaps: Gap[] }).gaps;
+  const gapLine = (g: Gap): string =>
+    `DRAWGAP ${g.a} / ${g.b}: leg depth gap median ${g.median} px (${g.medianLegs} leg), max ${g.max} px (${g.maxLegs} leg), against the tie of ${g.tie} px (${g.tieLegs} leg); ${g.passed} of ${g.frames} frame(s) passed it`;
+
+  test('bar 1: slots between the pair — the count is in stdout, and the not-keyed pair still gets its gap line', () => {
+    const r = retargeted('run', true, { order: ['leg_l0', 'leg_l1', 'torso', 'leg_r0', 'leg_r1'] });
+    expect(r.ran.status).toBe(0);
+    expect(r.ran.stdout).toContain('not keyed: 1 slot: "torso" is drawn between them');
+    expect(r.report.drawOrder!.pairs[0]!.why).toBe('1 slot: "torso" is drawn between them, and a swap would re-layer it (the setup order is not changed here)');
+    const gaps = gapsOf(r);
+    expect(gaps).toHaveLength(1);
+    expect(linesOf(r.ran, 'DRAWGAP')).toEqual([gapLine(gaps[0]!)]);
+  }, SLOW);
+
+  test('bar 2: the keyed run — the gap line\'s figures match the report, and the report\'s match the layers', () => {
+    const r = retargeted('run', true);
+    expect(r.ran.status).toBe(0);
+    const [g] = gapsOf(r);
+    const line = linesOf(r.ran, 'DRAWGAP');
+    console.log(`  #324 bar 2 — ${line[0]}`);
+    expect(line).toEqual([gapLine(g!)]);
+    expect(line[0]!.length).toBeLessThanOrEqual(260);
+    // The report against the layers it reads: |r_leg − l_leg| per frame, its median and max, the frames at or past the tie.
+    const d = r.report.layers.map((l) => Math.abs(l.depth.r_leg! - l.depth.l_leg!)).sort((x, y) => x - y);
+    const m = d.length >> 1;
+    const median = d.length % 2 === 1 ? d[m]! : (d[m - 1]! + d[m]!) / 2;
+    expect(g!.frames).toBe(d.length);
+    expect(g!.median).toBeCloseTo(median, 2);
+    expect(g!.max).toBeCloseTo(d[d.length - 1]!, 2);
+    expect(g!.tie).toBe(r.report.drawOrder!.pairs[0]!.tie);
+    expect(g!.passed).toBe(d.filter((x) => x > 0 && x >= g!.tie!).length);
+    expect(g!.passed).toBeGreaterThan(0);
+    expect(g!.medianLegs! / g!.median!).toBeCloseTo(g!.tieLegs! / g!.tie!, 3);
+  }, SLOW);
+
+  test('many slots between the pair: the count survives the 260 cut, the list is cut with "+N more"', () => {
+    const between = Array.from({ length: 19 }, (_, i) => `between_slot_${String(i).padStart(2, '0')}`);
+    const reading = { pairs: [{ a: 'leg_r', b: 'leg_l', limbs: ['r_leg', 'l_leg'] as ['r_leg', 'l_leg'], slots: { a: ['x'], b: ['y'] }, keyed: false, tie: 1, why: 'full', between }], keys: [], spans: [] };
+    const line = drawOrderLines(reading)[1]!;
+    console.log(`  #324 many — ${line}`);
+    expect(line.length).toBeLessThanOrEqual(260);
+    expect(line).toStartWith('DRAWORDER leg_r / leg_l not keyed: 19 slots are drawn between them ("between_slot_00", ');
+    expect(line).toMatch(/, … \+\d+ more\), and a swap would re-layer them \(the setup order is not changed here\)$/);
+    const shown = (line.match(/"between_slot_\d+"/g) ?? []).length;
+    expect(line).toContain(`… +${19 - shown} more`);
+  });
+
+  test('without the flag: no DRAWGAP line', () => {
+    const off = retargeted('run', false);
+    expect(off.ran.status).toBe(0);
+    expect(linesOf(off.ran, 'DRAWGAP')).toEqual([]);
+  }, SLOW);
 });

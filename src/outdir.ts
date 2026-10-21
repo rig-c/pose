@@ -14,7 +14,7 @@ export type OutDirs = Map<string, string[]>;
 
 const writable = (dir: string): boolean => {
   try {
-    accessSync(dir, constants.W_OK);
+    accessSync(dir, constants.W_OK | constants.X_OK);
     return true;
   } catch {
     return false;
@@ -22,9 +22,9 @@ const writable = (dir: string): boolean => {
 };
 
 /**
- * Check where each named output lands: its directory is there, or the nearest existing ancestor
- * is a directory this process can write into. A miss is added to `p`; a directory still to make
- * is added to `dirs`. A directory a flag names itself (--build, --render) is checked by its parent.
+ * Check where each named output lands: its directory is there and this process can write into it
+ * (rig-c/pose#323), or the nearest existing ancestor is a directory this process can write into.
+ * A miss is added to `p`; a directory still to make is added to `dirs`. A directory a flag names itself (--build, --render) is checked by its parent.
  */
 export function planOutDirs(outputs: ReadonlyArray<readonly [string, string | undefined]>, p: Problems, dirs: OutDirs = new Map()): OutDirs {
   for (const [flag, path] of outputs) {
@@ -33,7 +33,7 @@ export function planOutDirs(outputs: ReadonlyArray<readonly [string, string | un
     let up = dir;
     while (!existsSync(up) && dirname(up) !== up) up = dirname(up);
     if (!statSync(up).isDirectory()) p.add('ARG_PATH', up === dir ? `${flag} ${path} — ${dir} is not a directory` : `${flag} ${path} — ${up} is a file, so directory ${dir} cannot be made under it`);
-    else if (up !== dir && !writable(up)) p.add('ARG_PATH', `${flag} ${path} — ${up} is not writable, so directory ${dir} cannot be made under it`);
+    else if (!writable(up)) p.add('ARG_PATH', up === dir ? `${flag} ${path} — ${dir} is not writable` : `${flag} ${path} — ${up} is not writable, so directory ${dir} cannot be made under it`);
     else if (up !== dir) dirs.set(dir, [...(dirs.get(dir) ?? []), `${flag} ${path}`]);
   }
   return dirs;

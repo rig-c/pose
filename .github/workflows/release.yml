@@ -11,12 +11,15 @@
 # A failure after the tag leaves a version unpublished: release-please has cut
 # the tag and the GitHub release, so a re-run no longer reports
 # `release_created` and skips every publish step. Such a tag is published by a
-# dispatch with the `tag` input (`gh workflow run release.yml -f tag=vX.Y.Z`),
-# which runs the same gate and the same publish steps in this same file, so the
-# trusted publisher and provenance are unchanged (RELEASING.md, "Cutting a
-# release"). A tag below the registry's latest is refused
-# (RELEASE_TAG_BELOW_LATEST): npm will not move latest back to it implicitly,
-# and a dist-tag variant of the dispatch is a follow-up, never a silent attempt.
+# dispatch on the tag with the `tag` input (`gh workflow run release.yml
+# --ref vX.Y.Z -f tag=vX.Y.Z`), which runs the same gate and the same publish
+# steps in this same file, so the trusted publisher and provenance are unchanged
+# (RELEASING.md, "Cutting a release"). The run must be on the tag, because
+# provenance names the run's GITHUB_REF and GITHUB_SHA; a run on any other ref
+# or commit is refused (RELEASE_REF_NOT_TAG). A tag below the registry's latest
+# is refused (RELEASE_TAG_BELOW_LATEST): npm will not move latest back to it
+# implicitly, and a dist-tag variant of the dispatch is a follow-up, never a
+# silent attempt.
 #
 # The dispatch takes exactly one of two inputs, both optional, because GitHub
 # refuses a dispatch that omits a required input and an omitted string input
@@ -41,7 +44,8 @@ on:
   #     land. Release-please never runs on a dispatch, so a dispatch cannot cut
   #     a tag or a GitHub release; it refuses a tag not of the form vX.Y.Z
   #     (RELEASE_TAG_FORM), a tag with no GitHub release
-  #     (RELEASE_TAG_UNRELEASED), a version the registry already serves
+  #     (RELEASE_TAG_UNRELEASED), a run not on that tag's ref and commit
+  #     (RELEASE_REF_NOT_TAG), a version the registry already serves
   #     (RELEASE_ALREADY_PUBLISHED), and a version below the registry's latest
   #     (RELEASE_TAG_BELOW_LATEST): npm refuses to put latest on it implicitly,
   #     so it goes out under a dist-tag or not at all.
@@ -110,6 +114,13 @@ jobs:
           if [ -z "$INPUT_TAG" ]; then echo "::error::RELEASE_DISPATCH_INPUT: neither tag nor version was given; a dispatch takes tag (publish a cut tag) or version (re-run a confirmation), one of them"; exit 1; fi
           if ! printf '%s' "$INPUT_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then echo "::error::RELEASE_TAG_FORM: \"$INPUT_TAG\" is not vX.Y.Z (or vX.Y.Z-<prerelease>)"; exit 1; fi
           if ! gh release view "$INPUT_TAG" --repo "$REPO" >/dev/null 2>&1; then echo "::error::RELEASE_TAG_UNRELEASED: $INPUT_TAG has no GitHub release in $REPO; only a tag release-please cut is published"; exit 1; fi
+          # The run must be the tag's own (`--ref vX.Y.Z`): npm's provenance reads GITHUB_REF and GITHUB_SHA, which the checkout below does not change.
+          if [ "$GITHUB_REF" != "refs/tags/$INPUT_TAG" ]; then echo "::error::RELEASE_REF_NOT_TAG: this run is on $GITHUB_REF, not refs/tags/$INPUT_TAG; provenance would name that ref, so dispatch with --ref $INPUT_TAG (RELEASING.md)"; exit 1; fi
+          if ! tag_object="$(gh api "repos/$REPO/git/ref/tags/$INPUT_TAG" --jq '.object.type + " " + .object.sha')"; then echo "::error::RELEASE_REF_NOT_TAG: the commit of $INPUT_TAG could not be read from $REPO, so this run's commit $GITHUB_SHA cannot be checked against it"; exit 1; fi
+          tag_sha="${tag_object#* }"
+          # An annotated tag points at a tag object; its commit is one hop further.
+          if [ "${tag_object%% *}" = tag ] && ! tag_sha="$(gh api "repos/$REPO/git/tags/$tag_sha" --jq '.object.sha')"; then echo "::error::RELEASE_REF_NOT_TAG: the annotated tag $INPUT_TAG could not be resolved to a commit in $REPO, so this run's commit $GITHUB_SHA cannot be checked against it"; exit 1; fi
+          if [ "$tag_sha" != "$GITHUB_SHA" ]; then echo "::error::RELEASE_REF_NOT_TAG: this run's commit is $GITHUB_SHA, but $INPUT_TAG is $tag_sha; provenance would name the run's commit, so dispatch with --ref $INPUT_TAG (RELEASING.md)"; exit 1; fi
           version="${INPUT_TAG#v}"
           if served="$(npm view "@rig-c/pose@$version" version 2>/dev/null)" && [ "$served" = "$version" ]; then echo "::error::RELEASE_ALREADY_PUBLISHED: the registry already serves @rig-c/pose@$version; a version already up is not dispatched again (RELEASING.md)"; exit 1; fi
           # Semver order with a prerelease below its release, in node rather than `sort -V`, which sorts 1.0.0-rc.1 after 1.0.0.
