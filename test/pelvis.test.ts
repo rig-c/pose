@@ -25,7 +25,7 @@ import { poseRawAnimation, readModel, type RawBone } from 'rig-c/core';
 import { bandTilt, drawFrame, PALETTE_STEP, pelvisTilt, tiltedCycle, variantCycle, writePelvisFixture, type Variant } from '../examples/walk/make-pelvis.ts';
 import { walkDoc } from '../examples/walk/make-walk.ts';
 import { clean } from '../src/clean.ts';
-import { readPelvis, readPelvisKeys } from '../src/pelvis.ts';
+import { CUE_SPREAD, readPelvis, readPelvisKeys } from '../src/pelvis.ts';
 import { readPoseSequence, writePoseSequence } from '../src/pose.ts';
 import { reduceKeys, smoothTrunk, type Reduced } from '../src/reduce.ts';
 import { unsmoothedLine } from '../src/run.ts';
@@ -83,7 +83,7 @@ interface Pipeline {
  * Draw a variant, read it (`mode`, or no `pelvis` step at all with null), clean it as the walk is
  * cleaned (loop, legs 5, rest 7, hold off) and retarget it onto the wave's rig with the pelvis chain.
  */
-function pipeline(variant: Variant, mode: 'silhouette' | 'waistband' | null, dir = tempDir(), cliPath = CLI, extra: string[] = []): Pipeline {
+function pipeline(variant: Variant, mode: 'silhouette' | 'waistband' | 'below-cover' | null, dir = tempDir(), cliPath = CLI, extra: string[] = []): Pipeline {
   const fx = writePelvisFixture(join(dir, 'fixture'), variant);
   const pelvisSeq = mode === null ? null : join(dir, 'pose.pelvis.json');
   const read = mode === null ? null : cli(['pelvis', '--pose', fx.pose, '--frames', fx.frames, '--mode', mode, '--out', pelvisSeq!, ...extra], cliPath);
@@ -332,12 +332,12 @@ describe('the sequence format: minor 1.1 carries the track', () => {
     doc.pelvisSource = 'eyeballed';
     expect(refusal(doc)).toEqual([
       'POSE_PELVIS: p.json frames[6] "pelvisTilt" is the string "level"; it must be Spine degrees in (-180, 180] (the direction r_hip → l_hip, counter-clockwise, y up), or null where the reading declined the frame',
-      'POSE_PELVIS: p.json "pelvisSource" is the string "eyeballed"; it must be one of "silhouette", "waistband", "keys" (where every frame\'s "pelvisTilt" came from)',
+      'POSE_PELVIS: p.json "pelvisSource" is the string "eyeballed"; it must be one of "silhouette", "waistband", "below-cover", "keys" (where every frame\'s "pelvisTilt" came from)',
       'POSE_PELVIS: p.json has "pelvisSource" and frame(s) 5 carry no "pelvisTilt"; with a pelvis track every frame carries one (null where the reading declined it)',
     ]);
     delete doc.pelvisSource;
     doc.frames[6]!.pelvisTilt = 0;
-    expect(refusal(doc)).toEqual(['POSE_PELVIS: p.json has "pelvisTilt" on 23 frame(s) and no "pelvisSource"; a pelvis track says where it came from (silhouette, waistband, keys)']);
+    expect(refusal(doc)).toEqual(['POSE_PELVIS: p.json has "pelvisTilt" on 23 frame(s) and no "pelvisSource"; a pelvis track says where it came from (silhouette, waistband, below-cover, keys)']);
   });
 
   test('a file of a newer minor is read, and each key it adds is refused naming the minor the file says wrote it', () => {
@@ -547,7 +547,7 @@ describe('rig-pose pelvis → clean → retarget on the walk with a drawn pelvis
     // Usage: exactly one of --frames and --pelvis-keys; --mode only with the frames.
     expect(cli(['pelvis', '--pose', fx.pose, '--out', join(dir, 'z.json')]).status).toBe(2);
     expect(cli(['pelvis', '--pose', fx.pose, '--out', join(dir, 'z.json'), '--frames', fx.frames, '--pelvis-keys', 'k.json']).status).toBe(2);
-    expect(cli(['pelvis', '--pose', fx.pose, '--out', join(dir, 'z.json'), '--frames', fx.frames, '--mode', 'hem']).stderr).toContain('--mode is "hem"; it must be silhouette or waistband');
+    expect(cli(['pelvis', '--pose', fx.pose, '--out', join(dir, 'z.json'), '--frames', fx.frames, '--mode', 'hem']).stderr).toContain('--mode is "hem"; it must be silhouette or waistband or below-cover');
   }, SLOW);
 
   test('mutant: the reader\'s right-to-left sense flipped makes the drawn walk\'s correlation negative (the bar is signed)', () => {
@@ -781,5 +781,67 @@ describe('the band\'s top edge (rig-c/pose#318)', () => {
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
+  }, SLOW);
+});
+
+/**
+ * rig-c/pose#342: a garment hanging over the waistband hides it. `sweater`: shorts turned with the drawn pelvis (−15·sin φ)
+ * under a sweater whose hem hangs level over the shorts' top. The bars (the card): the below-cover reader recovers the drawn
+ * tilt from the shorts' hem and where the legs leave them; the band-top reader does not (it reads the level cover or
+ * declines). Where an uncovered band and the hem disagree beyond the stated spread (`covered`: the band turned, the hem
+ * level), the frame is declined by name.
+ */
+describe('the pelvis below the cover (rig-c/pose#342)', () => {
+  test('sweater: below-cover reads every frame within 1.5° of the drawn pelvis, from the hem and the thigh roots; the band-top reader recovers none of it', () => {
+    const cycle = variantCycle('sweater');
+    const seq = readPoseSequence(readFileSync(writePelvisFixture(tempDir(), 'sweater').pose, 'utf8'), 'fixture');
+    const errs: number[] = [];
+    const band: number[] = [];
+    cycle.forEach((f, i) => {
+      const plate = drawFrame(f, 'sweater');
+      const j = seq.frames[i]!.people[0]!.joints;
+      const r = readPelvis(plate, j, 'below-cover');
+      if (!('tilt' in r)) throw new Error(`frame ${i} declined: ${r.why}`);
+      expect(r.cues!.hem).not.toBeNull();
+      expect(r.cues!.roots).not.toBeNull();
+      expect(r.cues!.band === null || r.cues!.band === 'covered').toBe(true);
+      errs.push(Math.abs(r.tilt - pelvisTilt(f.phi)));
+      const w = readPelvis(plate, j, 'waistband');
+      if ('tilt' in w) band.push(w.tilt);
+    });
+    expect(Math.max(...errs)).toBeLessThan(1.5);
+    // The band-top reader reads the sweater's level hem where it reads at all: not the drawn ±15°.
+    for (const t of band) expect(Math.abs(t)).toBeLessThan(1);
+  });
+
+  test('covered: an uncovered band is a cue; where it and the level hem differ by more than the spread the frame is declined by name', () => {
+    const cycle = variantCycle('covered');
+    const seq = readPoseSequence(readFileSync(writePelvisFixture(tempDir(), 'covered').pose, 'utf8'), 'fixture');
+    const kinds = cycle.map((f, i) => {
+      const r = readPelvis(drawFrame(f, 'covered'), seq.frames[i]!.people[0]!.joints, 'below-cover');
+      if ('tilt' in r) {
+        expect(typeof r.cues!.band).toBe('number');
+        const fitted = [r.cues!.hem, r.cues!.band].filter((v): v is number => typeof v === 'number');
+        expect(Math.max(...fitted) - Math.min(...fitted)).toBeLessThanOrEqual(CUE_SPREAD);
+        return 'read';
+      }
+      return r.kind;
+    });
+    expect(kinds[0]).toBe('cues disagree');
+    expect(kinds[12]).toBe('cues disagree');
+    for (const k of kinds) expect(['read', 'cues disagree']).toContain(k);
+  });
+
+  test('sweater, below-cover → clean → retarget: the posed pelvis swings within 1.5× of the drawn one and correlates ≥ 0.7; a CUES line per frame', () => {
+    const run = pipeline('sweater', 'below-cover');
+    expect(run.read!.stderr).toBe('');
+    expect(run.read!.status).toBe(0);
+    expect(linesOf(run.read!, 'CUES')).toHaveLength(N);
+    expect(linesOf(run.read!, 'CUES')[0]).toMatch(/^CUES frame 0: hem [+-]\d+\.\d\d°, roots [+-]\d+\.\d\d°, band (covered|not read), hips [+-]\d+\.\d\d° \(not fitted\) → [+-]\d+\.\d\d°; hips sign [+−0], fit sign [+−0]$/);
+    expect(run.retarget.status).toBe(0);
+    const b = bars(run.build, drawn());
+    expect(b.ratio).toBeGreaterThanOrEqual(1 / 1.5);
+    expect(b.ratio).toBeLessThanOrEqual(1.5);
+    expect(b.r).toBeGreaterThanOrEqual(0.7);
   }, SLOW);
 });

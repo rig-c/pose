@@ -80,9 +80,10 @@ export type DepthGait = (typeof DEPTH_GAITS)[number];
 /**
  * Where a sequence's `pelvisTilt` came from (rig-c/pose#288): `silhouette` — the
  * straight edge of the drawn figure across the hips; `waistband` — the top edge
- * of a garment covering them; `keys` — a hand file (`--pelvis-keys`).
+ * of a garment covering them; `below-cover` — the cues under a garment hanging
+ * over the waistband (rig-c/pose#342); `keys` — a hand file (`--pelvis-keys`).
  */
-export const PELVIS_SOURCES = ['silhouette', 'waistband', 'keys'] as const;
+export const PELVIS_SOURCES = ['silhouette', 'waistband', 'below-cover', 'keys'] as const;
 export type PelvisSource = (typeof PELVIS_SOURCES)[number];
 export const POSE_SPACE = { units: 'picture-px', origin: 'top-left', y: 'down' } as const;
 /**

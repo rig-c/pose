@@ -176,6 +176,7 @@ No other repository in the org (core, parts, play, adapters, parts-examples, tra
 | `rig-pose retarget` | promised | S, X, D |
 | `rig-pose clean` | promised | D |
 | `rig-pose pelvis` (rig-c/pose#288) | courtesy | — |
+| `rig-pose pelvis --mode below-cover` (the cues under a cover: hem, thigh roots, an uncovered band; `pelvisSource` "below-cover", the `CUES` and `HIPS-SIGN` lines, rig-c/pose#342) | courtesy | — |
 | `rig-pose compare` | promised | S (the R3 sheet offers it) |
 | `rig-pose convert` | courtesy | — |
 | `rig-pose --version`, `--help` | promised | S, X |

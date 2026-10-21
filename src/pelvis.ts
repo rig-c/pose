@@ -59,7 +59,7 @@ type Pt = [number, number];
 type RGB = [number, number, number];
 
 /** The two readers. */
-export const PELVIS_MODES = ['silhouette', 'waistband'] as const;
+export const PELVIS_MODES = ['silhouette', 'waistband', 'below-cover'] as const;
 export type PelvisMode = (typeof PELVIS_MODES)[number];
 export const PELVIS_KEYS_SPEC = 'rig-pose-pelvis-keys/1';
 
@@ -85,13 +85,41 @@ export const MIN_SPAN = 6;
 export const CLIMB_SPREAD = 2;
 /** The band's top is climbed against at most this many garment colours (rig-c/pose#318): a paletted garment's own, or a painted one's fullest cells. */
 export const MAX_CLOTH = 16;
+/** rig-c/pose#342: the below-cover cues read the same line when their tilts lie within this many degrees (max − min). */
+export const CUE_SPREAD = 8;
+/** ... a leg's colour is sampled this far along its thigh, hip → knee. */
+export const LEG_AT = 0.7;
+/** ... the hem and a thigh root are where the garment stops for this many px (rows, or along the thigh) in a row. */
+export const LEAVE = 3;
 
 /**
  * One frame's reading: the tilt (Spine degrees, r_hip → l_hip), or why it was declined. A waistband
  * read through the window mean says so (`mean`), and one whose colour was found below the hips says
  * how far (`below`, px); one whose band top lay above the colour's edge in some columns says how many (`raised`, #318).
  */
-export type Reading = { tilt: number; cover: number; rms: number; mean?: true; below?: number; raised?: number } | { kind: string; why: string };
+export type Reading = { tilt: number; cover: number; rms: number; mean?: true; below?: number; raised?: number; cues?: CueTilts } | { kind: string; why: string };
+
+/**
+ * rig-c/pose#342: the below-cover cues of one frame, Spine degrees r_hip → l_hip; null where the cue was not read. `band` is
+ * "covered" when something other than the ground lies over the band's top. `hips` is the keypoints' line: reported, not fitted.
+ */
+export interface CueTilts {
+  hem: number | null;
+  roots: number | null;
+  band: number | 'covered' | null;
+  hips: number;
+}
+
+/** rig-c/pose#342: a below-cover reading's figures and points (the picture's), and why each cue not read was not. */
+export interface CueDetail {
+  tilts: CueTilts;
+  why: { hem?: string; roots?: string; band?: string };
+  garment: RGB;
+  legs: { r: RGB | null; l: RGB | null };
+  hem: { pts: Pt[]; fit: { m: number; q: number; rms: number } | null };
+  roots: { r: Pt | null; l: Pt | null; paths: Array<[Pt, Pt]> };
+  band: { m: number; q: number } | null;
+}
 
 /** The frame as RGB over white, its background colour, and which pixels are masked (forearms, hands). */
 interface Frame {
@@ -194,7 +222,38 @@ export function readPelvis(plate: Plate, joints: Partial<Record<Body18, Joint>>,
   const f = frameOf(plate, arms, Math.max(3, ARM_RADIUS * span));
   if (x0 < 0 || x1 >= f.w || c[1] < 0 || c[1] >= f.h) return { kind: 'hips outside the frame', why: `the hips (${c[0].toFixed(1)}, ${c[1].toFixed(1)}) lie outside the ${f.w}×${f.h} frame` };
   const cols = x1 - x0 + 1;
-  return mode === 'silhouette' ? silhouette(f, c, span, x0, x1, cols, rHip, lHip) : waistband(f, c, span, x0, x1, cols, rHip, lHip);
+  if (mode === 'silhouette') return silhouette(f, c, span, x0, x1, cols, rHip, lHip);
+  if (mode === 'waistband') return waistband(f, c, span, x0, x1, cols, rHip, lHip);
+  return belowCover(f, c, span, x0, x1, cols, rHip, lHip, pt).reading;
+}
+
+/**
+ * rig-c/pose#342: the below-cover reading of one frame with every cue's figures and points, for a picture of it. Null when
+ * the frame is declined before any cue is read (no hips, side-on, outside the frame); the reading is `readPelvis`'s.
+ */
+export function readBelowCover(plate: Plate, joints: Partial<Record<Body18, Joint>>): { reading: Reading; detail: CueDetail | null } {
+  const reading = readPelvis(plate, joints, 'below-cover');
+  const pt = (n: Body18): Pt | null => {
+    const j = joints[n];
+    return j === undefined || j.state === 'missing' || j.at === undefined ? null : [j.at[0], j.at[1]];
+  };
+  const rHip = pt('r_hip');
+  const lHip = pt('l_hip');
+  if (rHip === null || lHip === null) return { reading, detail: null };
+  const span = Math.hypot(lHip[0] - rHip[0], lHip[1] - rHip[1]);
+  const x0 = Math.round(Math.min(rHip[0], lHip[0]));
+  const x1 = Math.round(Math.max(rHip[0], lHip[0]));
+  if (span < MIN_SPAN || x1 - x0 + 1 < MIN_SPAN) return { reading, detail: null };
+  const c: Pt = [(rHip[0] + lHip[0]) / 2, (rHip[1] + lHip[1]) / 2];
+  const arms: Array<[Pt, Pt]> = [];
+  for (const [e, w] of [['r_elbow', 'r_wrist'], ['l_elbow', 'l_wrist']] as const) {
+    const a = pt(e);
+    const b = pt(w);
+    if (a !== null && b !== null) arms.push([a, b]);
+  }
+  const f = frameOf(plate, arms, Math.max(3, ARM_RADIUS * span));
+  if (x0 < 0 || x1 >= f.w || c[1] < 0 || c[1] >= f.h) return { reading, detail: null };
+  return { reading, detail: belowCover(f, c, span, x0, x1, x1 - x0 + 1, rHip, lHip, pt).detail };
 }
 
 function silhouette(f: Frame, c: Pt, span: number, x0: number, x1: number, cols: number, rHip: Pt, lHip: Pt): Reading {
@@ -272,7 +331,8 @@ function meanOf(f: Frame): (x: number, y: number) => RGB | null {
   };
 }
 
-function waistband(f: Frame, c: Pt, span: number, x0: number, x1: number, cols: number, rHip: Pt, lHip: Pt): Reading {
+/** `out.fit`, when given, receives the edge read (rig-c/pose#342 looks at what lies above it). */
+function waistband(f: Frame, c: Pt, span: number, x0: number, x1: number, cols: number, rHip: Pt, lHip: Pt, out?: { fit?: { m: number; q: number } }): Reading {
   // The garment's colour: the median over the unmasked pixels of a patch at the hips' midpoint (or below it), as they are or through the window mean.
   const r = Math.max(2, 0.3 * span);
   const raw = (x: number, y: number): RGB | null => f.rgb(x, y);
@@ -341,6 +401,7 @@ function waistband(f: Frame, c: Pt, span: number, x0: number, x1: number, cols: 
   if (Math.abs(Math.atan(fit.m)) * (180 / Math.PI) > 45) return { kind: 'waistband too steep', why: `the garment's top edge runs ${(Math.atan(fit.m) * (180 / Math.PI)).toFixed(1)}° from level; a waistband is within 45°` };
   const off = notTheBand(f, fit, tops, top, colourAt);
   if (off !== null) return off;
+  if (out !== undefined) out.fit = { m: fit.m, q: fit.q };
   return { tilt: tiltOf(fit.m, rHip, lHip), cover: share, rms: fit.rms, ...(isMean ? { mean: true as const } : {}), ...(below > 0 ? { below } : {}), ...(raised > 0 ? { raised } : {}) };
 }
 
@@ -533,6 +594,193 @@ function notTheBand(f: Frame, fit: { m: number; q: number }, tops: Pt[], top: nu
 }
 
 /**
+ * rig-c/pose#342: the pelvis read below a cover. A garment hanging over the waistband (a sweater's hem) hides the band's top
+ * and hangs level whatever the pelvis does, so the band-top reader reads the cover. What the cover cannot hide is read:
+ *
+ * - `hem`: the bottomwear's lower hem across the hip span — in each column, from the hips' row down, the last garment row
+ *   before `LEAVE` rows that are not garment; a line fitted through them (≥ `MIN_COVER` of the columns);
+ * - `roots`: where each thigh leaves the garment — along hip → knee (keypoints), the last garment point before `LEAVE` px
+ *   that are not; the line from the right root to the left;
+ * - `band`: the waistband reader's band top, used only when the ground lies above it (nothing covers it);
+ * - `hips`: the keypoints' line, reported but not fitted — a detector's hips keep a fraction of a drawn tilt (#288).
+ *
+ * Every colour is the window mean (`DITHER_RADIUS`); a pixel is garment when it is nearest the garment's colour among the
+ * garment's, each leg's (sampled `LEG_AT` along its thigh) and the ground's, so both shades of a cloth and the ink on it
+ * are garment and skin or ground under the hem are not. The tilt is the mean of the cues fitted (hem, roots, an
+ * uncovered band); fewer than two, or two that differ by more than `CUE_SPREAD`, decline the frame by name.
+ */
+function belowCover(f: Frame, c: Pt, span: number, x0: number, x1: number, cols: number, rHip: Pt, lHip: Pt, pt: (n: Body18) => Pt | null): { reading: Reading; detail: CueDetail | null } {
+  const r = Math.max(2, 0.3 * span);
+  const mean = meanOf(f);
+  const disc = (at: Pt): RGB | null => {
+    const ps: RGB[] = [];
+    for (let y = Math.floor(at[1] - r); y <= Math.ceil(at[1] + r); y++) {
+      for (let x = Math.floor(at[0] - r); x <= Math.ceil(at[0] + r); x++) {
+        if (x < 0 || y < 0 || x >= f.w || y >= f.h || Math.hypot(x - at[0], y - at[1]) > r || f.masked(x, y)) continue;
+        const p = mean(x, y);
+        if (p !== null) ps.push(p);
+      }
+    }
+    return ps.length === 0 ? null : ([0, 1, 2].map((k) => median(ps.map((p) => p[k]!))) as RGB);
+  };
+  const holds = (at: Pt, g: RGB) => {
+    let n = 0;
+    let k = 0;
+    for (let y = Math.floor(at[1] - r); y <= Math.ceil(at[1] + r); y++) {
+      for (let x = Math.floor(at[0] - r); x <= Math.ceil(at[0] + r); x++) {
+        if (x < 0 || y < 0 || x >= f.w || y >= f.h || Math.hypot(x - at[0], y - at[1]) > r || f.masked(x, y)) continue;
+        const p = mean(x, y);
+        if (p === null) continue;
+        n++;
+        if (diff(p, g) <= GARMENT_DIFF) k++;
+      }
+    }
+    return n > 0 && k >= HOLD * n;
+  };
+  const mid = disc(c);
+  if (mid === null) return { reading: { kind: 'hips behind a forearm', why: 'the hips\' midpoint is covered by a forearm; no garment colour to read' }, detail: null };
+  let g: RGB = mid;
+  for (const drop of [0, r, 2 * r]) {
+    const at: Pt = [c[0], c[1] + drop];
+    const p = drop === 0 ? mid : disc(at);
+    if (p !== null && diff(p, f.bg) > FIGURE_DIFF && holds(at, p)) {
+      g = p;
+      break;
+    }
+  }
+  if (diff(g, f.bg) <= FIGURE_DIFF) return { reading: { kind: 'no garment over the hips', why: `the colour at the hips' midpoint (${g.map((v) => v.toFixed(0)).join(', ')}) is the background's (${f.bg.map((v) => v.toFixed(0)).join(', ')})` }, detail: null };
+  const knee = { r: pt('r_knee'), l: pt('l_knee') };
+  const hip = { r: rHip, l: lHip };
+  const legs = { r: null as RGB | null, l: null as RGB | null };
+  for (const s of ['r', 'l'] as const) {
+    const k = knee[s];
+    if (k === null) continue;
+    const L = disc([hip[s][0] + LEG_AT * (k[0] - hip[s][0]), hip[s][1] + LEG_AT * (k[1] - hip[s][1])]);
+    if (L !== null && diff(L, g) > GARMENT_DIFF) legs[s] = L;
+  }
+  const others = [f.bg, ...(legs.r !== null ? [legs.r] : []), ...(legs.l !== null ? [legs.l] : [])];
+  if (others.length === 1) return { reading: { kind: 'no leg below the garment', why: `neither thigh carries a colour of its own ${LEG_AT} of the way to its knee (${knee.r === null || knee.l === null ? 'a knee has no position' : 'both within ' + GARMENT_DIFF + ' of the garment\'s'}); nothing below the garment to tell its hem by` }, detail: null };
+  // Garment: nearest the garment's colour among it, the legs' and the ground's (a tie is garment). Null where every pixel of the window is masked.
+  const isGarment = (x: number, y: number): boolean | null => {
+    if (x < 0 || y < 0 || x >= f.w || y >= f.h || f.masked(x, y)) return null;
+    const p = mean(x, y);
+    if (p === null) return null;
+    return diff(p, g) <= Math.min(...others.map((o) => diff(p, o)));
+  };
+  const why: CueDetail['why'] = {};
+  // The hem.
+  const hemPts: Pt[] = [];
+  const yEnd = Math.min(f.h - 1, Math.floor(c[1] + 2.5 * span));
+  for (let x = x0; x <= x1; x++) {
+    let inside = false;
+    let last = -1;
+    let out = 0;
+    for (let y = Math.max(0, Math.round(c[1])); y <= yEnd; y++) {
+      const gm = isGarment(x, y);
+      if (gm === null) {
+        if (inside) break;
+        continue;
+      }
+      if (gm) {
+        inside = true;
+        last = y;
+        out = 0;
+      } else if (inside && ++out >= LEAVE) {
+        hemPts.push([x, last]);
+        break;
+      }
+    }
+  }
+  const hemFit = hemPts.length >= MIN_COVER * cols ? fitLine(hemPts) : null;
+  let hem: number | null = null;
+  if (hemFit === null) why.hem = hemPts.length < MIN_COVER * cols ? `the hem is found in ${hemPts.length} of the ${cols} columns between the hips (< ${100 * MIN_COVER}%)` : 'the hem rows do not fit a line';
+  else hem = tiltOf(hemFit.m, rHip, lHip);
+  // The thigh roots.
+  const root = { r: null as Pt | null, l: null as Pt | null };
+  const rootWhy: string[] = [];
+  const paths: Array<[Pt, Pt]> = [];
+  for (const s of ['r', 'l'] as const) {
+    const k = knee[s];
+    if (k === null) {
+      rootWhy.push(`${s}_knee has no position`);
+      continue;
+    }
+    const h = hip[s];
+    paths.push([h, k]);
+    const len = Math.hypot(k[0] - h[0], k[1] - h[1]);
+    const n = Math.ceil(len / 0.5);
+    let inside = false;
+    let last: Pt | null = null;
+    let out = 0;
+    let hidden = false;
+    for (let i = 0; i <= n; i++) {
+      const p: Pt = [h[0] + (i / n) * (k[0] - h[0]), h[1] + (i / n) * (k[1] - h[1])];
+      const gm = isGarment(Math.round(p[0]), Math.round(p[1]));
+      if (gm === null) {
+        if (inside) {
+          hidden = true;
+          break;
+        }
+        continue;
+      }
+      if (gm) {
+        inside = true;
+        last = p;
+        out = 0;
+      } else if (inside && ++out * (len / n) >= LEAVE) {
+        root[s] = last;
+        break;
+      }
+    }
+    if (root[s] === null) rootWhy.push(hidden ? `the ${s} thigh's root is behind a forearm` : inside ? `the ${s} thigh does not leave the garment before its knee` : `the ${s} thigh's path carries no garment`);
+  }
+  let roots: number | null = null;
+  if (root.r !== null && root.l !== null) {
+    if (Math.abs(root.l[0] - root.r[0]) < MIN_SPAN) rootWhy.push(`the roots are ${Math.abs(root.l[0] - root.r[0]).toFixed(1)} px apart across (< ${MIN_SPAN})`);
+    else roots = pictureAngle(root.r, root.l);
+  }
+  if (roots === null) why.roots = rootWhy.join('; ');
+  // The band's top, when nothing covers it.
+  const edge: { fit?: { m: number; q: number } } = {};
+  const wb = waistband(f, c, span, x0, x1, cols, rHip, lHip, edge);
+  let band: number | 'covered' | null = null;
+  if (!('tilt' in wb) || edge.fit === undefined) why.band = 'kind' in wb ? `${wb.kind}` : 'no edge';
+  else {
+    const above: RGB[] = [];
+    for (let x = x0; x <= x1; x++) {
+      const y = Math.round(edge.fit.m * x + edge.fit.q) - 3 * (DITHER_RADIUS + 1);
+      if (y < 0 || y >= f.h || f.masked(x, y)) continue;
+      const p = mean(x, y);
+      if (p !== null) above.push(p);
+    }
+    const a = above.length === 0 ? null : ([0, 1, 2].map((k) => median(above.map((p) => p[k]!))) as RGB);
+    if (a !== null && diff(a, f.bg) <= FIGURE_DIFF) band = wb.tilt;
+    else {
+      band = 'covered';
+      why.band = a === null ? 'nothing seen above the band\'s top' : `the band's top is covered (${a.map((v) => v.toFixed(0)).join(', ')} lies ${3 * (DITHER_RADIUS + 1)} px above it, not the ground)`;
+    }
+  }
+  const hips = pictureAngle(rHip, lHip);
+  const tilts: CueTilts = { hem, roots, band, hips };
+  const detail: CueDetail = { tilts, why, garment: g, legs, hem: { pts: hemPts, fit: hemFit === null ? null : { m: hemFit.m, q: hemFit.q, rms: hemFit.rms } }, roots: { ...root, paths }, band: typeof band === 'number' ? edge.fit! : null };
+  const fitted: Array<[string, number]> = [];
+  if (hem !== null) fitted.push(['hem', hem]);
+  if (roots !== null) fitted.push(['roots', roots]);
+  if (typeof band === 'number') fitted.push(['band', band]);
+  const fmt = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}°`;
+  if (fitted.length < 2) {
+    const missing = (['hem', 'roots', 'band'] as const).filter((k) => why[k] !== undefined).map((k) => `${k}: ${why[k]}`);
+    return { reading: { kind: 'too few cues below the cover', why: `${fitted.length} of the cues read (${fitted.map(([n, v]) => `${n} ${fmt(v)}`).join(', ') || 'none'}); ${missing.join('; ')}` }, detail };
+  }
+  const base = fitted[0]![1];
+  const about = fitted.map(([, v]) => base + wrap(v - base));
+  const spread = Math.max(...about) - Math.min(...about);
+  if (spread > CUE_SPREAD) return { reading: { kind: 'cues disagree', why: `${fitted.map(([n, v]) => `${n} ${fmt(v)}`).join(', ')}: ${spread.toFixed(1)}° apart (> ${CUE_SPREAD}°); they do not read one line (hips ${fmt(hips)}, not fitted)` }, detail };
+  const tilt = wrap(about.reduce((s, v) => s + v, 0) / about.length);
+  return { reading: { tilt, cover: hemPts.length / cols, rms: hemFit?.rms ?? 0, mean: true, cues: tilts }, detail };
+}
+
+/**
  * `rig-pose-pelvis-keys/1`: `{ spec, keys: [{ frame, deg }], note? }` — frames of the
  * sequence, strictly increasing, within its span [0, frames − 1]; `deg` the tilt in
  * the track's sense (Spine degrees of r_hip → l_hip, about 0 for a figure facing
@@ -686,6 +934,17 @@ export function runPelvis(a: PelvisArgs, say: (l: string) => void): void {
   const tilt = readings.map((r) => ('tilt' in r ? r.tilt : null));
   const read = tilt.filter((v): v is number => v !== null);
   say(`rig-pose pelvis: ${n} frame(s) of person "${person}" from ${a.pose}, read by ${a.mode} off ${dir} (${files.length} PNG)`);
+  if (a.mode === 'below-cover') {
+    // rig-c/pose#342: every frame's cues, read or not, so a decline or a reading can be checked cue by cue.
+    const fmt = (v: number | 'covered' | null) => (v === null ? 'not read' : v === 'covered' ? 'covered' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}°`);
+    readings.forEach((r, i) => {
+      if (!('tilt' in r) || r.cues === undefined) return;
+      // The hips stay out of the vote; their sign is printed beside the fit, and an opposite sign is warned.
+      const sign = (v: number) => (Math.abs(v) < 0.5 ? '0' : v > 0 ? '+' : '−');
+      say(`  CUES frame ${i}: hem ${fmt(r.cues.hem)}, roots ${fmt(r.cues.roots)}, band ${fmt(r.cues.band)}, hips ${fmt(r.cues.hips)} (not fitted) → ${fmt(r.tilt)}; hips sign ${sign(r.cues.hips)}, fit sign ${sign(r.tilt)}`);
+      if (sign(r.cues.hips) !== '0' && sign(r.tilt) !== '0' && sign(r.cues.hips) !== sign(r.tilt)) say(`  HIPS-SIGN frame ${i}: the hip keypoints tilt ${fmt(r.cues.hips)}, opposite the fit's ${fmt(r.tilt)} (the hips are not fitted)`);
+    });
+  }
   for (const d of declinedRuns(readings)) say(`  DECLINED frame${d.from === d.to ? ` ${d.from}` : `s ${d.from}–${d.to}`} (${d.to - d.from + 1}): ${d.kind} — ${d.same ? d.why : `frame ${d.from}: ${d.why}; the figures differ frame to frame`}`);
   if (read.length > 0) {
     const covers = readings.flatMap((r) => ('tilt' in r ? [r.cover] : []));
