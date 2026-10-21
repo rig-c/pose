@@ -485,8 +485,9 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         pelvis: r.pelvis,
         // Only when the sequence carries depth (#281): a sequence without it writes the report it always has.
         ...(layers !== null ? { layers: layers.map((l, frame) => ({ frame, order: l.order, depth: l.depth })) } : {}),
-        // Only with --draw-order depth (#304).
-        ...(drawOrder !== null ? { drawOrder: { source: 'depth', pairs: drawOrder.pairs, keys: drawOrder.keys, spans: drawOrder.spans, gaps: drawOrder.gaps ?? [] } } : {}),
+        // Only with --draw-order depth (#304). A key's `t` here is its frame's time, the report's clock (#214); the
+        // motion's key is written half a frame before it (#325).
+        ...(drawOrder !== null ? { drawOrder: { source: 'depth', pairs: drawOrder.pairs, keys: drawOrder.keys.map((k) => ({ ...k, t: r.times[k.frame]! })), spans: drawOrder.spans, gaps: drawOrder.gaps ?? [] } } : {}),
         stance: r.stance === null ? null : { tolerance: r.stance.tolerance, release: r.stance.release, minSeconds: r.stance.minSeconds, bounds: r.stance.bounds, ...(r.stance.range === undefined ? {} : { range: r.stance.range }), runs: r.stance.runs, over: r.stance.over },
         feet: r.feet === null ? null : { planted: r.planted, legLength: r.feet.legLength, straight: r.legStraight, rigLeg: r.rigLeg, segments: r.segments, supports: r.feet.supports, jumps: r.feet.jumps, steps: r.feet.steps, changes: r.feet.changes, ...(r.feet.lowered === undefined ? {} : { lowered: r.feet.lowered }), ...(r.feet.tracked === undefined ? {} : { tracked: r.feet.tracked }), floor: r.floor?.y ?? null, shifts: r.floor?.shifts ?? [], blend: r.blendHold === null ? null : { bounds: r.blendHold.bounds, ...(r.blendHold.range === undefined ? {} : { range: r.blendHold.range }), runs: r.blendHold.runs, over: r.blendHold.over }, reading: feetReading, closure: r.closure },
         shear,

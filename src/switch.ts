@@ -476,8 +476,14 @@ function moveBoundaries(vals: ReadonlyArray<AlternateSet | null>, pos: readonly 
   return moves;
 }
 
-/** The key time for a change that shows on frame i: half a frame before it, 0 on the first frame. */
-const changeAt = (times: readonly number[], i: number): number => (i === 0 ? 0 : r6((times[i - 1]! + times[i]!) / 2));
+/**
+ * The key time for a stepped change that shows on frame i: half a frame before it, 0 on the first frame. A key
+ * exactly on a frame time is a tie the render breaks either way (its track time is a running sum of 1/fps, key
+ * times are held as float32, and a key applies when its time ≤ the track time), so about half such keys land a
+ * frame late (rig-c/pose#325); the midpoint sits half a frame from both ties. Used for the attachment and offset
+ * keys here and the draw-order keys in `draworder.ts`.
+ */
+export const keyAtFrame = (times: readonly number[], i: number): number => (i === 0 ? 0 : r6((times[i - 1]! + times[i]!) / 2));
 
 function keyHandOffset(a: AlternateSet, map: JointMap, cn: string): [number, number] | null {
   const c = map.chains.find((x) => x.name === cn);
@@ -1116,7 +1122,7 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
     const keys: AttachmentKey[] = [];
     row.forEach((v, i) => {
       if (v === prev) return;
-      keys.push({ t: changeAt(times, i), v });
+      keys.push({ t: keyAtFrame(times, i), v });
       prev = v;
     });
     if (keys.length > 0) slotTracks.push({ slot: s, property: 'attachment', keys });
@@ -1129,7 +1135,7 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
     row.forEach((v, i) => {
       const prev = row[i - 1];
       if (i === 0 || (prev![0] === v[0] && prev![1] === v[1])) return;
-      keys.push({ t: changeAt(times, i), v: [r3(v[0]), r3(v[1])] });
+      keys.push({ t: keyAtFrame(times, i), v: [r3(v[0]), r3(v[1])] });
     });
     // Every key but the last holds until the next (a stepped curve on the last has nothing to ease to).
     for (let k = 0; k + 1 < keys.length; k++) keys[k]!.ease = 'stepped';
