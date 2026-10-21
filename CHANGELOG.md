@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.45.2](https://github.com/rig-c/pose/compare/v0.45.1...v0.45.2) (2026-10-21)
+
+
+### Bug Fixes
+
+* **release:** refuse push provenance mismatches ([#372](https://github.com/rig-c/pose/issues/372)) ([034de04](https://github.com/rig-c/pose/commit/034de045f5e7fb60b25fb5eddf4738d0bc8c3e58))
+
 ## [0.45.1](https://github.com/rig-c/pose/compare/v0.45.0...v0.45.1) (2026-10-21)
 
 
