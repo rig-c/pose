@@ -22,7 +22,15 @@
  * - `waistband`: the top edge of a garment covering the hips — the colour at the
  *   hips' midpoint, where it is not the background's, and in each column of the
  *   hip span the first row from 1.5 hip widths above the hips where three pixels
- *   in a row carry it; the line fitted through those tops.
+ *   in a row carry it; the line fitted through those tops. The colour must hold
+ *   (rig-c/pose#293): ≥ `HOLD` of the patch's pixels carry its median. A dithered
+ *   or paletted garment does not hold pixel by pixel — its channels alternate
+ *   between palette steps — so it is read through the mean of a 5×5 window,
+ *   which does; hips on the band's top edge give a patch half garment, half
+ *   ground, so the patch is tried below them (up to two patch radii), and the
+ *   scan runs down to where the colour was found. The first patch that holds
+ *   and is not the background is the garment; with none, the midpoint's median
+ *   is read as it is.
  *
  * The forearms are not read: pixels near the segments elbow → wrist (and the
  * hands) are masked, since a hanging arm passes the hips in a walk. A frame
@@ -53,6 +61,10 @@ export const PELVIS_KEYS_SPEC = 'rig-pose-pelvis-keys/1';
 export const FIGURE_DIFF = 64;
 /** A pixel carries the garment's colour when no channel differs from it by more than this. */
 export const GARMENT_DIFF = 40;
+/** A garment's colour holds on a patch when at least this share of its pixels carry it (within `GARMENT_DIFF`). */
+export const HOLD = 0.75;
+/** A garment that does not hold pixel by pixel is read through the mean of the square window this many px either side of a pixel (5×5: a 4×4 ordered dither's period and a pixel more). */
+export const DITHER_RADIUS = 2;
 /** The silhouette reader scores lines within this many degrees of level. */
 export const MAX_TILT = 40;
 /** A line is read when it covers at least this share of the hip span's columns. */
@@ -64,8 +76,12 @@ export const ARM_RADIUS = 0.15;
 /** Hips closer than this in the picture, px, have no span to read across (a figure seen side-on). */
 export const MIN_SPAN = 6;
 
-/** One frame's reading: the tilt (Spine degrees, r_hip → l_hip), or why it was declined. */
-export type Reading = { tilt: number; cover: number; rms: number } | { kind: string; why: string };
+/**
+ * One frame's reading: the tilt (Spine degrees, r_hip → l_hip), or why it was declined. A waistband
+ * read through the window mean says so (`mean`), and one whose colour was found below the hips says
+ * how far (`below`, px).
+ */
+export type Reading = { tilt: number; cover: number; rms: number; mean?: true; below?: number } | { kind: string; why: string };
 
 /** The frame as RGB over white, its background colour, and which pixels are masked (forearms, hands). */
 interface Frame {
@@ -221,22 +237,76 @@ function silhouette(f: Frame, c: Pt, span: number, x0: number, x1: number, cols:
   return { tilt: tiltOf(fit.m, rHip, lHip), cover: share, rms: fit.rms };
 }
 
-function waistband(f: Frame, c: Pt, span: number, x0: number, x1: number, cols: number, rHip: Pt, lHip: Pt): Reading {
-  // The garment's colour: the median over the unmasked pixels near the hips' midpoint.
-  const r = Math.max(2, 0.3 * span);
-  const patch: RGB[] = [];
-  for (let y = Math.floor(c[1] - r); y <= Math.ceil(c[1] + r); y++) {
-    for (let x = Math.floor(c[0] - r); x <= Math.ceil(c[0] + r); x++) {
-      if (x < 0 || y < 0 || x >= f.w || y >= f.h || Math.hypot(x - c[0], y - c[1]) > r || f.masked(x, y)) continue;
-      patch.push(f.rgb(x, y));
+/** The mean colour of the unmasked pixels in the window `DITHER_RADIUS` either side of (x, y), or null when all are masked. Cached per frame. */
+function meanOf(f: Frame): (x: number, y: number) => RGB | null {
+  const cache = new Map<number, RGB | null>();
+  return (x, y) => {
+    const key = y * f.w + x;
+    const hit = cache.get(key);
+    if (hit !== undefined) return hit;
+    const s: RGB = [0, 0, 0];
+    let n = 0;
+    for (let v = Math.max(0, y - DITHER_RADIUS); v <= Math.min(f.h - 1, y + DITHER_RADIUS); v++) {
+      for (let u = Math.max(0, x - DITHER_RADIUS); u <= Math.min(f.w - 1, x + DITHER_RADIUS); u++) {
+        if (f.masked(u, v)) continue;
+        const p = f.rgb(u, v);
+        s[0] += p[0];
+        s[1] += p[1];
+        s[2] += p[2];
+        n++;
+      }
     }
+    const m: RGB | null = n === 0 ? null : [s[0] / n, s[1] / n, s[2] / n];
+    cache.set(key, m);
+    return m;
+  };
+}
+
+function waistband(f: Frame, c: Pt, span: number, x0: number, x1: number, cols: number, rHip: Pt, lHip: Pt): Reading {
+  // The garment's colour: the median over the unmasked pixels of a patch at the hips' midpoint (or below it), as they are or through the window mean.
+  const r = Math.max(2, 0.3 * span);
+  const raw = (x: number, y: number): RGB | null => f.rgb(x, y);
+  const mean = meanOf(f);
+  const patchAt = (cy: number, colour: (x: number, y: number) => RGB | null): { g: RGB; holds: boolean } | null => {
+    const patch: RGB[] = [];
+    for (let y = Math.floor(cy - r); y <= Math.ceil(cy + r); y++) {
+      for (let x = Math.floor(c[0] - r); x <= Math.ceil(c[0] + r); x++) {
+        if (x < 0 || y < 0 || x >= f.w || y >= f.h || Math.hypot(x - c[0], y - cy) > r || f.masked(x, y)) continue;
+        const p = colour(x, y);
+        if (p !== null) patch.push(p);
+      }
+    }
+    if (patch.length === 0) return null;
+    const g: RGB = [0, 1, 2].map((k) => median(patch.map((p) => p[k]!))) as RGB;
+    return { g, holds: patch.filter((p) => diff(p, g) <= GARMENT_DIFF).length >= HOLD * patch.length };
+  };
+  const mid = patchAt(c[1], raw);
+  if (mid === null) return { kind: 'hips behind a forearm', why: 'the hips\' midpoint is covered by a forearm; no garment colour to read' };
+  // The first patch that holds and is not the background: at the midpoint, then one and two patch radii below; as they are, then through the window mean.
+  let found: { g: RGB; below: number; isMean: boolean } | null = null;
+  for (const below of [0, r, 2 * r]) {
+    for (const isMean of [false, true]) {
+      const pa = below === 0 && !isMean ? mid : patchAt(c[1] + below, isMean ? mean : raw);
+      if (pa !== null && pa.holds && diff(pa.g, f.bg) > FIGURE_DIFF) {
+        found = { g: pa.g, below, isMean };
+        break;
+      }
+    }
+    if (found !== null) break;
   }
-  if (patch.length === 0) return { kind: 'hips behind a forearm', why: 'the hips\' midpoint is covered by a forearm; no garment colour to read' };
-  const g: RGB = [0, 1, 2].map((k) => median(patch.map((p) => p[k]!))) as RGB;
+  // None: the midpoint's median as it is.
+  const g = found?.g ?? mid.g;
+  const isMean = found?.isMean ?? false;
+  const below = found?.below ?? 0;
   if (diff(g, f.bg) <= FIGURE_DIFF) return { kind: 'no garment over the hips', why: `the colour at the hips' midpoint (${g.map((v) => v.toFixed(0)).join(', ')}) is the background's (${f.bg.map((v) => v.toFixed(0)).join(', ')})` };
   const top = Math.max(0, Math.floor(c[1] - 1.5 * span));
-  const bottom = Math.floor(c[1]);
-  const garment = (x: number, y: number) => y < f.h && diff(f.rgb(x, y), g) <= GARMENT_DIFF;
+  const bottom = Math.floor(c[1] + below);
+  const colourAt = isMean ? mean : raw;
+  const garment = (x: number, y: number) => {
+    if (y >= f.h) return false;
+    const p = colourAt(x, y);
+    return p !== null && diff(p, g) <= GARMENT_DIFF;
+  };
   const tops: Pt[] = [];
   let above = 0;
   for (let x = x0; x <= x1; x++) {
@@ -258,7 +328,7 @@ function waistband(f: Frame, c: Pt, span: number, x0: number, x1: number, cols: 
   if (fit === null) return { kind: 'no line', why: 'the garment\'s top edge does not fit a line (fewer than three columns)' };
   if (fit.rms > MAX_RMS) return { kind: 'not a straight waistband', why: `the garment's top edge lies ${fit.rms.toFixed(2)} px from its line (root mean square > ${MAX_RMS}); not a straight waistband` };
   if (Math.abs(Math.atan(fit.m)) * (180 / Math.PI) > 45) return { kind: 'waistband too steep', why: `the garment's top edge runs ${(Math.atan(fit.m) * (180 / Math.PI)).toFixed(1)}° from level; a waistband is within 45°` };
-  return { tilt: tiltOf(fit.m, rHip, lHip), cover: share, rms: fit.rms };
+  return { tilt: tiltOf(fit.m, rHip, lHip), cover: share, rms: fit.rms, ...(isMean ? { mean: true as const } : {}), ...(below > 0 ? { below } : {}) };
 }
 
 /**
@@ -341,6 +411,17 @@ function declinedRuns(readings: Reading[]): Array<{ from: number; to: number; ki
   return out;
 }
 
+/** How the waistband found its colour where it was not the midpoint's pixels as they are (rig-c/pose#293); empty when every frame read them. */
+function viaNote(readings: Reading[]): string {
+  const ok = readings.flatMap((r) => ('tilt' in r ? [r] : []));
+  const mean = ok.filter((r) => r.mean === true).length;
+  const below = ok.filter((r) => r.below !== undefined).length;
+  const parts: string[] = [];
+  if (mean > 0) parts.push(`${mean} through the ${2 * DITHER_RADIUS + 1}×${2 * DITHER_RADIUS + 1} window mean (the garment's colour does not hold pixel by pixel: a dithered or paletted picture)`);
+  if (below > 0) parts.push(`${below} with the colour found below the hips (up to ${Math.max(...ok.map((r) => r.below ?? 0)).toFixed(1)} px; the hips on the band's edge)`);
+  return parts.length === 0 ? '' : `; of the frames read, ${parts.join(', ')}`;
+}
+
 /** The sequence with the track: the one person, `pelvisTilt` on every frame, `pelvisSource`. */
 export function withPelvis(seq: PoseSequence, person: string, tilt: ReadonlyArray<number | null>, source: PelvisSource): PoseSequence {
   return {
@@ -404,7 +485,7 @@ export function runPelvis(a: PelvisArgs, say: (l: string) => void): void {
   if (read.length > 0) {
     const covers = readings.flatMap((r) => ('tilt' in r ? [r.cover] : []));
     const rms = readings.flatMap((r) => ('tilt' in r ? [r.rms] : []));
-    say(`  PELVIS ${a.mode} read ${read.length} of ${n} frame(s), ${n - read.length} declined (null: marked, not guessed); swing ${swingOf(read).toFixed(2)}° over the frames read (Spine degrees, r_hip → l_hip); cover ${(100 * Math.min(...covers)).toFixed(0)}–${(100 * Math.max(...covers)).toFixed(0)}% of the hip span, fit within ${Math.max(...rms).toFixed(2)} px`);
+    say(`  PELVIS ${a.mode} read ${read.length} of ${n} frame(s), ${n - read.length} declined (null: marked, not guessed); swing ${swingOf(read).toFixed(2)}° over the frames read (Spine degrees, r_hip → l_hip); cover ${(100 * Math.min(...covers)).toFixed(0)}–${(100 * Math.max(...covers)).toFixed(0)}% of the hip span, fit within ${Math.max(...rms).toFixed(2)} px${viaNote(readings)}`);
   } else {
     say(`  PELVIS ${a.mode} read none of the ${n} frame(s) (every frame null: marked, not guessed); retarget keys the hip line and its PELVIS line says so`);
   }

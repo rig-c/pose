@@ -9,7 +9,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import pkg from './package.json' with { type: 'json' };
 import { clean, cleanLine, holdRegions, unheldText, untestedText, HOLD_BLEND, HOLD_MIN_SECONDS, HOLD_REACH, HOLD_SPEED, HOLD_SPEED_WINDOW, LEGS, OCCLUSION_SCORE, OCCLUSION_WINDOW, SPIKE_TRUNKS, SPIKE_WINDOW, windowProblem } from './src/clean.ts';
-import { convertCoco17, readPoseSequence, writePoseSequence } from './src/pose.ts';
+import { convertCoco17, DEPTH_GAITS, readPoseSequence, writePoseSequence, type DepthGait } from './src/pose.ts';
+import { FLAT_BAND, SIDE_ON } from './src/depth.ts';
 import { parseWindows } from './src/compare.ts';
 import { lineOf, Refusal } from './src/problems.ts';
 import { runCompare, type CompareArgs } from './src/runcompare.ts';
@@ -21,7 +22,7 @@ const HELP = `rig-pose ${pkg.version} — motion from a pose sequence onto a rig
 
 Usage:
   rig-pose pelvis --pose <pose.json> --out <pose.pelvis.json> (--frames <dir> [--mode silhouette|waistband] | --pelvis-keys <keys.json>) [--person <id>]
-  rig-pose clean --pose <pose.json> --out <pose.clean.json> [--loop] [--legs 5] [--rest 7] [--hold off] [--coco] [--person <id>]
+  rig-pose clean --pose <pose.json> --out <pose.clean.json> [--loop] [--legs 5] [--rest 7] [--hold off] [--depth walk|run] [--coco] [--person <id>]
   rig-pose retarget --rig <rig> --map <map.json> --sequence <pose.json> --out <motion.json> [--animation dance] [flags]
   rig-pose convert --coco <coco17.json> --out <pose.json>
   rig-pose compare --reference <pose.json> --render <pose.json> --map <map.json> [flags]
@@ -72,6 +73,17 @@ clean (required before retarget; rig-c/pose#67)
   --hold off            turn the stillness hold off (rig-c/pose#91); recorded as hold: "off"
   --hold-speed <n>      the hold's speed limit, trunk lengths per frame (default: 0.015)
   --hold-reach <n>      how far a held joint may lie from its span median, trunk lengths (default: 0.03)
+  --depth walk|run      derive each limb segment's depth on every frame (rig-c/pose#281; off by default, and
+                        without it the output is unchanged): "depth": { "<segment>": { ratio, sign, source:
+                        "derived" } }, written as rig-pose-sequence/1.2. ratio = drawn length ÷ rest length (the
+                        larger side's 95th-percentile length over the clip); sign +1 when the segment's far end is
+                        nearer the camera, -1 farther, 0 flat (ratio within 0.95–1.05, or above it) or undecided
+                        (the trunk side-on). Which way a foreshortened segment leans comes from the body, with
+                        "forward" the trunk's facing: thigh and forearm forward (a hip flexes forward, an elbow
+                        bends back); an upper arm with the opposite leg (forward when the other thigh is the more
+                        foreshortened); a shin forward in a walk (the lifted foot comes forward) and back in a run
+                        (it is kicked back) — the gait is this flag's value. tools/skeleton.ts colours the segments
+                        by it, and retarget --report orders the limbs front to back by it (layers)
 
   In order, each step printed with its figures: (1) spikes — a joint more than 0.2 trunk lengths
   (neck → mid_hip, the median over the clip) from its 5-frame median takes the median, each listed by
@@ -515,10 +527,12 @@ function runsOf(frames: number[]): string {
 
 /** `rig-pose clean` (#67): read, clean, print each step's figures, write. */
 function runClean(argv: string[], say: (l: string) => void): void {
-  const f = parseFlags(argv, ['pose', 'out', 'legs', 'rest', 'person', 'hold', 'hold-speed', 'hold-reach'], ['loop', 'coco', 'hips-inferred']);
+  const f = parseFlags(argv, ['pose', 'out', 'legs', 'rest', 'person', 'hold', 'hold-speed', 'hold-reach', 'depth'], ['loop', 'coco', 'hips-inferred']);
   const input = need(f, 'pose');
   const out = need(f, 'out');
-  const params = { loop: f.has('loop'), legs: windowOf(f, 'legs', 5), rest: windowOf(f, 'rest', 7), hipsInferred: f.has('hips-inferred'), hold: holdOf(f) };
+  const gait = f.get('depth');
+  if (gait !== undefined && !(DEPTH_GAITS as readonly string[]).includes(gait)) throw new Usage(`--depth is "${gait}"; it must be ${DEPTH_GAITS.join(' or ')} (the gait decides which way a foreshortened shin leans: forward in a walk, back in a run)`);
+  const params = { loop: f.has('loop'), legs: windowOf(f, 'legs', 5), rest: windowOf(f, 'rest', 7), hipsInferred: f.has('hips-inferred'), hold: holdOf(f), ...(gait !== undefined ? { depth: gait as DepthGait } : {}) };
   const text = readFileSync(input, 'utf8');
   const seq = f.has('coco') ? convertCoco17(text, input) : readPoseSequence(text, input);
   const c = clean(seq, params, f.get('person'), input);
@@ -555,6 +569,11 @@ function runClean(argv: string[], say: (l: string) => void): void {
     }
     say(`  HOLDS  ${c.holds.length} found over ${new Set(c.holds.map((x) => x.joint)).size} joint(s) (per joint: a span ≥ ${HOLD_MIN_SECONDS} s still by speed < ${h.speed} trunk/frame and reach ≤ ${h.reach} trunk; ${HOLD_BLEND}-frame blend in and out)`);
   }
+  if (c.depth !== null) {
+    const d = c.depth;
+    const rest = (['upper_arm', 'forearm', 'thigh', 'shin'] as const).map((k) => `${k} ${d.rest[k] === null ? 'not placed' : fmt(d.rest[k]!)}`).join(', ');
+    say(`  DEPTH  derived per segment for a ${params.depth} (rig-c/pose#281): ratio = drawn ÷ rest, rest the larger side's 95th-percentile length (${rest} px); flat within ${FLAT_BAND[0]}–${FLAT_BAND[1]}; toward ${d.signs.toward}, away ${d.signs.away}, flat or undecided ${d.signs.flat} segment-frame(s); the trunk faced the camera on ${d.facing.toward}, away on ${d.facing.away}, side-on (under ${SIDE_ON} trunk wide, sign 0) on ${d.facing.side} frame(s)`);
+  } else if (c.seq.frames.some((x) => x.depth !== undefined)) say('  DEPTH  measured depth (a 3D detector\'s) carried through as read');
   if (c.inferred !== null) say(`  INFERRED r_hip on ${c.inferred.r_hip} frame(s), l_hip on ${c.inferred.l_hip} frame(s) of ${n} marked "inferred" (every frame where it has a position): declared at clean (--hips-inferred); positions and scores unchanged`);
   writeFileSync(out, writePoseSequence(c.seq));
   say(`  CLEAN  ${cleanLine(c.record)}`);
