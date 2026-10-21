@@ -80,6 +80,12 @@ export interface Reduced {
   rows: ReduceRow[];
   /** Each bone's world-aim error on every frame (reduced less dense, degrees), as the poser evaluates the reduced keys. */
   errors: Map<string, number[]>;
+  /**
+   * rig-c/pose#320: each trunk root whose smoothing (`smoothTrunk`, #116) was not kept because it left a bone it
+   * manages past that bone's own tolerance — the bone, its smoothed worst error and its tolerance (degrees); the
+   * fitted keys stand. Absent when every smoothing was kept.
+   */
+  unsmoothed?: Array<{ root: string; bone: string; worst: number; tolerance: number }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -607,7 +613,9 @@ function solveLimbPreservingJitter(
  * above the sequence's own. Optimizing knot values and handle y-coordinates
  * jointly within the ±tolerance world-aim tube removes those C0 breaks while
  * keeping any limb chains hanging from the trunk within 0.04 of their landing
- * and jitter.
+ * and jitter. The tube's bounds are a penalty, not a constraint: a root whose
+ * smoothing leaves any bone it manages past that bone's own tolerance keeps its
+ * fitted keys instead, recorded in `out.unsmoothed` (rig-c/pose#320).
  */
 export function smoothTrunk(
   times: readonly number[],
@@ -737,6 +745,16 @@ export function smoothTrunk(
       }
     };
 
+    // rig-c/pose#320: the smoothing is kept only within every managed bone's own tolerance; past it, the fitted keys
+    // (within it by construction) stand, and the run says so.
+    const past = allManaged.map((b) => {
+      const e = b === root ? eRoot : eSub.get(b)!;
+      return { b, worst: Math.max(...e.map(Math.abs)) };
+    }).find((x) => x.worst > tolOf(x.b));
+    if (past !== undefined) {
+      (out.unsmoothed ??= []).push({ root, bone: past.b, worst: past.worst, tolerance: tolOf(past.b) });
+      continue;
+    }
     updateBone(root, smRoot.keys, eRoot);
     for (const b of [...headBones, ...arm0Bones, ...arm1Bones]) {
       updateBone(b, smSub.get(b)!.keys, eSub.get(b)!);

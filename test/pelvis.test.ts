@@ -27,6 +27,8 @@ import { walkDoc } from '../examples/walk/make-walk.ts';
 import { clean } from '../src/clean.ts';
 import { readPelvis, readPelvisKeys } from '../src/pelvis.ts';
 import { readPoseSequence, writePoseSequence } from '../src/pose.ts';
+import { reduceKeys, smoothTrunk, type Reduced } from '../src/reduce.ts';
+import { unsmoothedLine } from '../src/run.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const CLI = join(ROOT, 'cli.ts');
@@ -567,4 +569,131 @@ describe('rig-pose pelvis → clean → retarget on the walk with a drawn pelvis
       rmSync(d, { recursive: true, force: true });
     }
   }, SLOW);
+});
+
+// --- #320: --reduce holds a reduced parent to its tightest planted or aimed child ----------------
+
+describe('#320: a per-chain --reduce holds the pelvis to the legs\' tolerance under a pelvis track', () => {
+  /**
+   * The drawn walk read by the silhouette and cleaned as above: the pelvis chain carries the drawn ±15° on bone
+   * "hip", above both legs. Under `--plant-feet` each leg carries an ankle the landing check holds, within an allowance
+   * that counts the hip's lever to the thigh at the leg's own degrees (#94, #283) — so the hip must be reduced within
+   * them too, or its error moves both ankles past it.
+   */
+  function tracked(dir = tempDir()): { dir: string; map: string; cleaned: string } {
+    const fx = writePelvisFixture(join(dir, 'fixture'), 'drawn');
+    const read = join(dir, 'pose.pelvis.json');
+    expect(cli(['pelvis', '--pose', fx.pose, '--frames', fx.frames, '--mode', 'silhouette', '--out', read]).status).toBe(0);
+    const cleaned = join(dir, 'pose.clean.json');
+    expect(cli(['clean', '--pose', read, '--out', cleaned, '--loop', '--legs', '5', '--rest', '7', '--hold', 'off']).status).toBe(0);
+    return { dir, map: pelvisMap(dir), cleaned };
+  }
+  interface HeldReport {
+    landings: Array<{ bone: string; kind: string; worst: number; tolerance: number }>;
+    reduce: { held?: unknown[] };
+  }
+  function run(c: { dir: string; map: string; cleaned: string }, reduce: string, name: string, cliPath = CLI): { ran: Ran; rep: HeldReport | null; motion: string } {
+    const motion = join(c.dir, `${name}.motion.json`);
+    const report = join(c.dir, `${name}.report.json`);
+    const ran = cli(['retarget', '--rig', RIG, '--map', c.map, '--sequence', c.cleaned, '--out', motion, '--name', 'walk', '--plant-feet', '--reduce', reduce, '--report', report], cliPath);
+    return { ran, rep: ran.status === 0 ? (JSON.parse(readFileSync(report, 'utf8')) as HeldReport) : null, motion };
+  }
+  const LEGS = '3,leg_r=0.2,leg_l=0.2';
+
+  test('the legs\' 0.2° holds bone "hip" to 0.2°: both ankles and the head land with no pelvis= entry, and the report says why', () => {
+    const c = tracked();
+    const x = run(c, LEGS, 'legs');
+    expect(x.ran.stderr).toBe('');
+    expect(x.ran.status).toBe(0);
+    for (const b of ['leg_r1:tip', 'leg_l1:tip', 'head']) {
+      const l = x.rep!.landings.find((y) => y.bone === b)!;
+      expect(l.worst).toBeLessThanOrEqual(l.tolerance);
+    }
+    expect(x.rep!.landings.find((y) => y.bone === 'hip' && y.kind === 'angle')!.tolerance).toBe(0.21);
+    expect(linesOf(x.ran, 'REDUCE held')).toEqual([
+      'REDUCE held: bone "hip" (chain "pelvis") reduced within 0.2°, not 3° — for chain "leg_r" (a planted ankle; L = 15 units to bone "leg_r0"), chain "leg_l" (a planted ankle; L = 15 units to bone "leg_l0") below it, reduced within 0.2°: a turn error θ on bone "hip" moves a chain below it by θ·L and turns it by θ, and the ankle allowance counts L at the leg\'s own degrees, so θ ≤ 0.2°',
+    ]);
+    expect(linesOf(x.ran, 'REDUCE bone "hip" rotate:')[0]).toEndWith('— held to 0.2° for chain "leg_r", chain "leg_l" below it');
+    expect(x.rep!.reduce.held).toEqual([
+      { bone: 'hip', chain: 'pelvis', from: 3, to: 0.2, for: [{ chain: 'leg_r', by: 'ankle', bone: 'leg_r0', lever: 15 }, { chain: 'leg_l', by: 'ankle', bone: 'leg_l0', lever: 15 }] },
+    ]);
+    // The hold is the hand entry it replaces, byte for byte.
+    const hand = run(c, `${LEGS},pelvis=0.2`, 'hand');
+    expect(hand.ran.status).toBe(0);
+    expect(readFileSync(x.motion).equals(readFileSync(hand.motion))).toBe(true);
+    expect(linesOf(hand.ran, 'REDUCE held')).toEqual([]);
+    expect('held' in hand.rep!.reduce).toBe(false);
+  }, SLOW);
+
+  test('an aimed chain holds the bones above it; a plain --reduce, a bent chain\'s entry, and a chain at the run\'s own tolerance hold nothing', () => {
+    const c = tracked();
+    const head = run(c, `${LEGS},head=1`, 'head');
+    expect(head.ran.status).toBe(0);
+    expect(head.rep!.reduce.held).toEqual([
+      { bone: 'chest', chain: 'trunk', from: 3, to: 1, for: [{ chain: 'head', by: 'aim', bone: 'head', lever: 105 }] },
+      { bone: 'hip', chain: 'pelvis', from: 3, to: 0.2, for: [{ chain: 'leg_r', by: 'ankle', bone: 'leg_r0', lever: 15 }, { chain: 'leg_l', by: 'ankle', bone: 'leg_l0', lever: 15 }] },
+    ]);
+    expect(head.rep!.landings.find((y) => y.bone === 'chest' && y.kind === 'angle')!.tolerance).toBe(1.01);
+    expect(linesOf(head.ran, 'REDUCE held: bone "chest"')[0]).toContain('an aimed chain refits against its parent\'s error within its own, so θ ≤ 1°');
+    const plain = run(c, '3', 'plain');
+    expect(plain.ran.status).toBe(0);
+    for (const [reduce, name] of [['3,arm_r=0.5', 'arm'], ['3,leg_r=3,pelvis=3', 'same']] as const) {
+      const y = run(c, reduce, name);
+      expect(y.ran.status).toBe(0);
+      expect(linesOf(y.ran, 'REDUCE held')).toEqual([]);
+      expect('held' in y.rep!.reduce).toBe(false);
+    }
+    expect(linesOf(plain.ran, 'REDUCE held')).toEqual([]);
+    expect('held' in plain.rep!.reduce).toBe(false);
+    expect(readFileSync(join(c.dir, 'same.motion.json')).equals(readFileSync(plain.motion))).toBe(true);
+  }, SLOW);
+
+  // 0.40.0's behaviour: the hold computed and printed but not handed to the reduction — the hip reduced within 3° moves both ankles past their allowance.
+  test('mutant: the hold not applied — POSE_LANDS names both planted ankles', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'run.ts');
+      const before = readFileSync(path, 'utf8');
+      const from = 'reduceOf = (bone) => held.find((h) => h.bone === bone)?.to ?? first(bone);';
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'reduceOf = first;'));
+      const c = tracked();
+      expect(run(c, LEGS, 'ours').ran.status).toBe(0);
+      const m = run(c, LEGS, 'mutant', join(d, 'cli.ts'));
+      expect(m.ran.status).toBe(1);
+      const miss = m.ran.stderr.split('\n').filter((l) => /POSE_LANDS: bone "leg_[rl]1:tip" ankle/.test(l));
+      expect(miss).toHaveLength(2);
+      console.log(`  mutant "#320 hold not applied": ${miss[0]!.slice(0, 160)}`);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+
+  test('the trunk smoothing (#116) is kept only within every bone\'s own tolerance; past it the fitted keys stand, named', () => {
+    const times = Array.from({ length: 24 }, (_, i) => i / 24);
+    // The control: a slow turn the fit holds within 1°, and its smoothing with it.
+    const bone = (name: string, above: string | null, dense: number[]) => ({ bone: name, above, dense, keep: new Set<number>() });
+    const slow = [bone('chest', null, times.map((t) => 20 * Math.sin(2 * Math.PI * t))), bone('head', 'chest', times.map((t) => 10 * Math.cos(2 * Math.PI * t)))];
+    const kept = reduceKeys(times, slow, 1, null);
+    smoothTrunk(times, slow, 1, kept, new Set(['chest', 'head']));
+    expect(kept.unsmoothed).toBeUndefined();
+    for (const e of kept.errors.values()) expect(Math.max(...e.map(Math.abs))).toBeLessThanOrEqual(1);
+    // Planted: three keys handed in on a ±10° zigzag that no curve on them follows within 1°.
+    const zig = times.map((_, i) => (i % 2 === 0 ? 10 : -10));
+    const planted = [bone('chest', null, zig), bone('head', 'chest', zig.map((v) => -v))];
+    const three = [{ t: times[0]!, v: [0] }, { t: times[12]!, v: [0] }, { t: times[23]!, v: [0] }];
+    const out: Reduced = { rotate: new Map([['chest', three], ['head', three]]), hip: null, rows: [], errors: new Map([['chest', zig.map((v) => -v)], ['head', zig.map(() => 0)]]) };
+    smoothTrunk(times, planted, 1, out, new Set(['chest', 'head']));
+    expect(out.rotate.get('chest')).toBe(three);
+    expect(out.rotate.get('head')).toBe(three);
+    expect(out.unsmoothed).toHaveLength(1);
+    const u = out.unsmoothed![0]!;
+    expect(u.root).toBe('chest');
+    expect(u.worst).toBeGreaterThan(u.tolerance);
+    expect(unsmoothedLine({ root: 'chest', bone: 'head', worst: 3.1605, tolerance: 3 })).toBe('smoothing (rig-c/pose#116) from bone "chest" down not kept: it left bone "head" at 3.16°, past its 3°; the fitted keys stand, each within its tolerance');
+  });
 });
