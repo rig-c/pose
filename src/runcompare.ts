@@ -5,12 +5,12 @@
  * not a failure: the run exits 0 whenever it compared.
  */
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
 import { compare, findingLine, readCloth, readHands, readSpans, summaryLine, writeComparison, type ClothWindow, type CompareInput, type Comparison } from './compare.ts';
 import { readMap } from './map.ts';
 import { personTrack, readPoseSequence, type PoseSequence } from './pose.ts';
 import { Problems, Refusal } from './problems.ts';
 import { drawable, drawSheet } from './sheet.ts';
+import { makeOutDirs, planOutDirs } from './outdir.ts';
 
 export interface CompareArgs {
   reference: string;
@@ -37,12 +37,9 @@ export function runCompare(a: CompareArgs, log: (line: string) => void): Compari
     if (!existsSync(path)) p.add('ARG_PATH', `${flag} ${path} does not exist`);
     else if (!statSync(path).isFile()) p.add('ARG_PATH', `${flag} ${path} is not a file`);
   }
-  for (const [flag, path] of [['--report', a.report], ['--sheet', a.sheet]] as const) {
-    if (path === undefined) continue;
-    const dir = dirname(path);
-    if (!existsSync(dir)) p.add('ARG_PATH', `${flag} ${path} — directory ${dir} does not exist`);
-    else if (!statSync(dir).isDirectory()) p.add('ARG_PATH', `${flag} ${path} — ${dir} is not a directory`);
-  }
+  // #284: a directory --report or --sheet names that is not there yet is made just before that file is written.
+  const reportDirs = planOutDirs([['--report', a.report]], p);
+  const sheetDirs = planOutDirs([['--sheet', a.sheet]], p);
   p.throwIfAny();
 
   // Every reader runs, and every refusal is reported together.
@@ -98,6 +95,7 @@ export function runCompare(a: CompareArgs, log: (line: string) => void): Compari
     if (c.cloth.windows.length > 0) log(`  CLOTH  the render's stroke threshold ${c.cloth.stroke.render.toFixed(4)} of its hip widths = ${c.cloth.stroke.carried}`);
   }
   if (a.report !== undefined) {
+    makeOutDirs(reportDirs, log);
     writeFileSync(a.report, writeComparison(c, {
       reference: a.reference, render: a.render, map: a.map, retargetReport: a.retargetReport ?? null,
       referenceHands: a.referenceHands ?? null, renderHands: a.renderHands ?? null, clothReference: a.clothReference ?? null, clothRender: a.clothRender ?? null,
@@ -108,6 +106,7 @@ export function runCompare(a: CompareArgs, log: (line: string) => void): Compari
     const plate = drawSheet({ frames: ref!.frames, width: ref!.seq.width, height: ref!.seq.height }, { frames: ren!.frames, width: ren!.seq.width, height: ren!.seq.height }, c.findings);
     if (plate === null) log(`  SHEET  no finding has a frame to draw (${c.findings.length} finding(s), none outside cloth); ${a.sheet} not written`);
     else {
+      makeOutDirs(sheetDirs, log);
       plate.writePng(a.sheet);
       log(`  SHEET  ${drawable(c.findings).length} finding(s), reference | render at each worst frame: wrote ${a.sheet}`);
     }

@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.39.0](https://github.com/rig-c/pose/compare/v0.38.0...v0.39.0) (2026-10-21)
+
+
+### Features
+
+* **clean:** derive each limb segment's depth (clean --depth walk|run), colour it on the stick figure, order the limbs in the report ([#281](https://github.com/rig-c/pose/issues/281)) ([#302](https://github.com/rig-c/pose/issues/302)) ([e1f0a75](https://github.com/rig-c/pose/commit/e1f0a75bf85beec63ea9e57649be49f73fbcfb93))
+* **retarget:** the last LEG-SCALE line says when the --leg-scale range clamped no frame on any leg ([#287](https://github.com/rig-c/pose/issues/287)) ([#306](https://github.com/rig-c/pose/issues/306)) ([944774d](https://github.com/rig-c/pose/commit/944774da2ea6ad80c05bfd3b9b9297c11f77fdc7))
+
+
+### Bug Fixes
+
+* **cli:** every output flag makes its missing parent directories, or refuses by name ([#284](https://github.com/rig-c/pose/issues/284)) ([#300](https://github.com/rig-c/pose/issues/300)) ([a63c2c4](https://github.com/rig-c/pose/commit/a63c2c4aae74c9e6ca121ec4351ef0eb81f35a87))
+* **pelvis:** the waistband reader reads a dithered or paletted picture, and hips on the band's edge ([#293](https://github.com/rig-c/pose/issues/293)) ([#301](https://github.com/rig-c/pose/issues/301)) ([fb30473](https://github.com/rig-c/pose/commit/fb304733475c8964d7056a9c8e0e4dca102de57c))
+* **retarget:** on a frontal walk, read support from the ankle's vertical speed, not ankle height alone ([#280](https://github.com/rig-c/pose/issues/280)) ([#299](https://github.com/rig-c/pose/issues/299)) ([44e35dc](https://github.com/rig-c/pose/commit/44e35dc11da4093f95abec605ffa5642b68492ad))
+* **retarget:** POSTURE reads the tilt from the pelvis track and says when its sway includes the track's turn ([#295](https://github.com/rig-c/pose/issues/295)) ([#307](https://github.com/rig-c/pose/issues/307)) ([77f24a5](https://github.com/rig-c/pose/commit/77f24a5d77d24e01a8715b4e9228055d99cba2ef))
+
 ## [0.38.0](https://github.com/rig-c/pose/compare/v0.37.1...v0.38.0) (2026-10-21)
 
 

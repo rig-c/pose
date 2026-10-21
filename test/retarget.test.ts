@@ -1875,6 +1875,67 @@ describe('the pelvis tilts and the trunk reaches from the posed hip for the shou
     expect(reach[0]!.ratio!).toBeGreaterThan(1.5);
     expect(jitter.find((j) => j.bone === 'chest')!.ratio!).toBeGreaterThan(1.5);
   }, SLOW);
+
+  // --- #282: where a reach starts, against the source joint it re-aims from ------------
+
+  type OriginRow = { chain: string; bone: string; joints: [string, string]; anchor: string; setup: number; posed: { max: number; frame: number; t: number }; segment: number; ofSegment: number; warn: boolean; threshold: number };
+  const originRun = (o: { rig?: RigOpts; map: Record<string, unknown>; pose?: Record<string, unknown> }) => {
+    const c = setup(o);
+    const report = join(c.dir, 'report.json');
+    const r = retarget(c, ['--report', report]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    const doc = JSON.parse(readFileSync(report, 'utf8')) as { reachOrigin?: OriginRow[]; jitter: JitterRow[] };
+    return { r, doc, origin: linesOf(r, 'REACH-ORIGIN'), warn: linesOf(r, 'WARN'), chest: doc.jitter.find((j) => j.bone === 'chest')! };
+  };
+  /** The chest's origin k units above the hip's, the neck kept 150 above it: the segment stays 150 units. */
+  const chestAt = (k: number) => (bs: BoneSpec[]): BoneSpec[] => bs.map((b) => (b.name === 'chest' ? { ...b, y: k } : b.name === 'neck' ? { ...b, y: 150 - k } : b));
+
+  test('REACH-ORIGIN: a trunk whose origin sits far above the translated hip, with "reach": true, prints the distance and a WARN, and its JITTER shows the cost', () => {
+    const on = originRun({ map: reachTrunk() });
+    expect(on.origin).toEqual(['REACH-ORIGIN chain "trunk" bone "chest" (mid_hip → neck): its origin 75.00 units from the source joint mid_hip (bone "hip"\'s origin) at setup, up to 75.00 on the frames (frame 0, t=0.000s): 0.500 of the 150.00-unit segment']);
+    expect(on.warn).toEqual(['WARN   REACH_ORIGIN: chain "trunk" bone "chest" starts 0.500 of the segment from mid_hip, past 0.20: re-aimed from there, it turns more than the pair (JITTER bone "chest"); "reach": false follows the measured angle']);
+    expect(on.doc.reachOrigin).toEqual([{ chain: 'trunk', bone: 'chest', joints: ['mid_hip', 'neck'], anchor: 'hip', setup: 75, posed: { max: 75, frame: 0, t: 0 }, segment: 150, ofSegment: 0.5, warn: true, threshold: 0.2 }]);
+    // The symptom: the chest's jitter, about 1 ÷ (1 − 0.5) = 2× its pair's with "reach", the pair's own without.
+    expect(on.chest.ratio!).toBeGreaterThan(1.9);
+    const off = originRun({ map: baseMap() });
+    expect(off.chest.ratio!).toBeCloseTo(1, 2);
+    expect(on.chest.pair).toBe(off.chest.pair!);
+  }, SLOW);
+
+  test('REACH-ORIGIN control: the same trunk with "reach": false prints no line and no WARN, and the report has no reachOrigin', () => {
+    const off = originRun({ map: { ...baseMap(), chains: baseChains().map((c) => (c.name === 'trunk' ? { ...c, reach: false } : c)) } });
+    expect(off.origin).toEqual([]);
+    expect(off.warn).toEqual([]);
+    expect('reachOrigin' in off.doc).toBe(false);
+  }, SLOW);
+
+  test('REACH-ORIGIN: below a turning pelvis the origin keeps its distance on the frames, and the WARN reads the same', () => {
+    const run = originRun({ rig: { bones: ctlBones }, map: pelvisMap(true), pose: pelvisPose() });
+    expect(run.origin).toHaveLength(1);
+    expect(run.origin[0]).toStartWith('REACH-ORIGIN chain "trunk" bone "chest" (mid_hip → mid_shoulder): its origin 75.00 units from the source joint mid_hip (bone "hip"\'s origin) at setup, up to 75.00 on the frames');
+    expect(run.warn).toHaveLength(1);
+    expect(run.doc.reachOrigin![0]!.posed.max).toBe(75);
+  }, SLOW);
+
+  // The threshold (0.2 of the segment, fixed before the case above was measured) against origins along the trunk:
+  // the WARN fires strictly past it, and the jitter follows the lever 1 ÷ (1 − f).
+  const sweep: Array<{ k: number; f: string; warn: boolean }> = [
+    { k: 0, f: '0.000', warn: false },
+    { k: 15, f: '0.100', warn: false },
+    { k: 30, f: '0.200', warn: false },
+    { k: 45, f: '0.300', warn: true },
+  ];
+  for (const sw of sweep) {
+    test(`REACH-ORIGIN: an origin ${sw.k} units up a 150-unit trunk reads ${sw.f} of the segment, ${sw.warn ? 'past 0.20: WARN' : 'not past 0.20: no WARN'}`, () => {
+      const run = originRun({ rig: { bones: chestAt(sw.k) }, map: reachTrunk() });
+      expect(run.origin).toHaveLength(1);
+      expect(run.origin[0]).toEndWith(`: ${sw.f} of the 150.00-unit segment`);
+      expect(run.warn).toHaveLength(sw.warn ? 1 : 0);
+      expect(run.doc.reachOrigin![0]!.warn).toBe(sw.warn);
+      expect(Math.abs(run.chest.ratio! - 1 / (1 - Number(sw.f)))).toBeLessThan(0.05);
+    }, SLOW);
+  }
 });
 
 describe('JITTER: each keyed bone against its map pair (#236)', () => {

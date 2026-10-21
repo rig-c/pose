@@ -12,7 +12,7 @@ A runnable loop with no art and no video, on the wave's stick figure:
 rig-pose retarget --rig examples/wave/rig --map examples/walk/map.json --sequence examples/walk/pose.json --out walk.motion.json --name walk --plant-feet --leg-scale 0.8,1.05 --build walk-build
 ```
 
-`--leg-scale 0.8,1.05` keys the swinging leg's foreshortening as a `scalex` on its thigh and shin; without it the rig's legs keep their full length and only turn.
+`--leg-scale 0.8,1.05` keys the swinging leg's foreshortening as a `scalex` on its thigh and shin; without it the rig's legs keep their full length and only turn. The range clamps no frame here: the thigh's picture length ÷ straight bottoms out at 0.850 at mid-swing and the shin's at 0.970, both inside it, so the last LEG-SCALE line adds `no frame clamped on any leg segment: the range [0.8, 1.05] holds the picture's whole spread, picture length ÷ straight 0.850 … 1.000 over the 4 segment(s)`. A floor above 0.850 clamps the thigh at mid-swing: `--leg-scale 0.9,1.05` clamps 5 frames on each (frames 16–20 right, 4–8 left).
 
 ## The cycle
 
