@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.45.1](https://github.com/rig-c/pose/compare/v0.45.0...v0.45.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* **legs:** on a frontal run, a foot well above the other is in the air whatever its speed ([#369](https://github.com/rig-c/pose/issues/369)) ([#371](https://github.com/rig-c/pose/issues/371)) ([47705da](https://github.com/rig-c/pose/commit/47705da160985a52afe0564137567c7c94405e23))
+* **readme:** link the record of the gait levers tried, measured and rejected ([#367](https://github.com/rig-c/pose/issues/367)) ([#368](https://github.com/rig-c/pose/issues/368)) ([6fe7fb3](https://github.com/rig-c/pose/commit/6fe7fb32f881fc7737c82f96429be299d2660380))
+
 ## [0.45.0](https://github.com/rig-c/pose/compare/v0.44.0...v0.45.0) (2026-10-21)
 
 
