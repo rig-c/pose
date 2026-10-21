@@ -180,8 +180,28 @@ export interface Uncovered {
   times: number[];
 }
 
+/** One run of frames (rig-c/pose#279): first and last frame, how many, and the seconds the minimum span measured it by (first frame's time to the next frame's, the animation's end for the last). */
+export interface FrameRun {
+  frames: [number, number];
+  count: number;
+  seconds: number;
+}
+
+/**
+ * rig-c/pose#279: per set selected by angle (not `phase`), the runs of frames on which it was the nearest set within
+ * the tolerance (inside its `frames` window, before bridging, hysteresis and the minimum span), and the runs the
+ * minimum span dropped — shorter than `switchMin` where they stood — on frames the set did not show in the end.
+ */
+export interface SetRuns {
+  set: string;
+  nearest: FrameRun[];
+  suppressed: FrameRun[];
+}
+
 export interface Switches {
   switches: Switch[];
+  /** rig-c/pose#279: one per set without a `phase`, in the map's order. */
+  runs: SetRuns[];
   /** The `attachment` tracks, one per slot whose picture changes. */
   slotTracks: SlotTrack[];
   /** The offsets' `translate` tracks, one per bone a shown set offsets. */
@@ -490,6 +510,11 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
   const distances = setDistances(map, targets, n, opts.shortInfo);
   const hyst = opts.switchHysteresis ?? SWITCH_LEAVE_HYSTERESIS;
   const switches: Switch[] = [];
+  // rig-c/pose#279: per angle set, the frames it was nearest on and the frames the minimum span dropped it from.
+  const nearestOn = new Map<string, boolean[]>();
+  const droppedOn = new Map<string, boolean[]>();
+  const runOf = (i: number, j: number): FrameRun => ({ frames: [i, j], count: j - i + 1, seconds: r3((j + 1 < n ? times[j + 1]! : duration) - times[i]!) });
+  const runsOfFlags = (flag: readonly boolean[]): FrameRun[] => runsOf(flag, 0).map(([i, j]) => runOf(i, j));
   // rig-c/pose#286: the supporting side on each frame, from the report's support spans (null: no foot, or no set declares a phase).
   const supportAt: Array<Side | null> = Array.from({ length: n }, () => null);
   for (const sp of opts.phaseSupports ?? []) for (let i = sp.frames[0]; i <= Math.min(sp.frames[1], n - 1); i++) supportAt[i] = sp.side;
@@ -545,6 +570,10 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
         }
       }
       pick.push(best);
+    }
+    for (const a of group) {
+      nearestOn.set(a.name, pick.map((p) => p === a));
+      droppedOn.set(a.name, Array.from({ length: n }, () => false));
     }
     const bridgeSame = (arr: Array<AlternateSet | null>) => {
       for (let i = 0; i < n;) {
@@ -604,7 +633,13 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
       let j = i;
       while (j + 1 < n && pick[j + 1] === a) j++;
       const to = j + 1 < n ? times[j + 1]! : duration;
-      if (a !== null && a !== undefined && to - times[i]! < opts.switchMin - 1e-9) for (let k = i; k <= j; k++) pick[k] = null;
+      if (a !== null && a !== undefined && to - times[i]! < opts.switchMin - 1e-9) {
+        const dropped = droppedOn.get(a.name)!;
+        for (let k = i; k <= j; k++) {
+          pick[k] = null;
+          dropped[k] = true;
+        }
+      }
       i = j + 1;
     }
     if (hyst > 0) {
@@ -658,8 +693,14 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
       }
       if (dropped) bridgeSame(pick);
     }
+    // rig-c/pose#279: a dropped frame the set came back to (hysteresis, bridging) was not suppressed.
+    for (const a of group) {
+      const dropped = droppedOn.get(a.name)!;
+      for (let k = 0; k < n; k++) if (pick[k] === a) dropped[k] = false;
+    }
     spans(pick, opts);
   }
+  const runs: SetRuns[] = map.alternates.filter((a) => nearestOn.has(a.name)).map((a) => ({ set: a.name, nearest: runsOfFlags(nearestOn.get(a.name)!), suppressed: runsOfFlags(droppedOn.get(a.name)!) }));
   const order = (name: string) => map.alternates.findIndex((a) => a.name === name);
   switches.sort((x, y) => x.frames[0] - y.frames[0] || order(x.set) - order(y.set));
 
@@ -1094,7 +1135,7 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
     for (let k = 0; k + 1 < keys.length; k++) keys[k]!.ease = 'stepped';
     offsetTracks.push({ bone: b, property: 'translate', keys });
   }
-  return { switches, slotTracks, offsetTracks, shown, distances, chainHolds };
+  return { switches, runs, slotTracks, offsetTracks, shown, distances, chainHolds };
 }
 
 /** Per chain, the frames on which a switch of a set depicting it shows: its art was painted for that pose. */
@@ -1277,6 +1318,27 @@ export function phaseLines(map: JointMap, switches: readonly Switch[]): string[]
       return `${s.frames[0]}–${s.frames[1]} (${on}, ${off})`;
     });
     out.push(`${head}: ${own.length} span(s), ${count} frame(s): ${spansText.join(', ')}`);
+  }
+  return out;
+}
+
+/** How many runs a `SWITCH-MIN` line lists before it points at the report for the rest. */
+export const SWITCH_MIN_LISTED = 4;
+
+/**
+ * rig-c/pose#279: one `SWITCH-MIN` line per set the minimum span held back — the runs it dropped (frames, count,
+ * seconds), and the set's nearest runs (how many, and the longest) — so a set that matched but was held back reads
+ * apart from one that never matched. A set with nothing suppressed prints no line.
+ */
+export function switchMinLines(runs: readonly SetRuns[], switchMin: number): string[] {
+  const runText = (r: FrameRun) => `${r.count === 1 ? `frame ${r.frames[0]}` : `frames ${r.frames[0]}–${r.frames[1]}`} (${r.count} frame${r.count === 1 ? '' : 's'}, ${r.seconds.toFixed(3)}s)`;
+  const out: string[] = [];
+  for (const s of runs) {
+    if (s.suppressed.length === 0) continue;
+    const listed = s.suppressed.slice(0, SWITCH_MIN_LISTED).map(runText).join(', ');
+    const more = s.suppressed.length > SWITCH_MIN_LISTED ? `, and ${s.suppressed.length - SWITCH_MIN_LISTED} more (the report's switchRuns lists every one)` : '';
+    const longest = s.nearest.reduce((m, r) => (r.count > m.count ? r : m), s.nearest[0]!);
+    out.push(`set "${s.set}": ${s.suppressed.length} run(s) shorter than --switch-min ${switchMin}s not shown: ${listed}${more}; nearest on ${s.nearest.length} run(s), the longest ${runText(longest)}`);
   }
   return out;
 }

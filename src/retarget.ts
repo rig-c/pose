@@ -79,7 +79,7 @@ import { aimAngle, aimEnds, bodyYawSets, descends, faceYawSets, knownSetsOf, par
 import type { Joint, Travel } from './pose.ts';
 import { TRAVEL_IN_PLACE } from './pose.ts';
 import { Problems, Refusal } from './problems.ts';
-import type { ArtRange, AttachmentKey, ByHip, Raised, ReachShort, SlotTrack, Switch, SwitchOptions } from './switch.ts';
+import type { ArtRange, AttachmentKey, ByHip, Raised, ReachShort, SetRuns, SlotTrack, Switch, SwitchOptions } from './switch.ts';
 import { clampArt, coveredChains, isRaised, measureArt, overflow, phaseGroupProblems, RAISED_WRIST_EYES, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
 import type { BlendHold, Closure, Feet, SupportDepth, Floor, LegScale, LegSegmentRatio, PathPose, Posing, Side, Stance } from './legs.ts';
 import { figureScaleOf, freeAnkleShiftOf, holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, percentile, plantHip, posePath, rootOf, scaleSupport, shiftOver, SIDES, stanceOf, stanceRangeOf, STRAIGHT_PERCENTILE, supportsOf, tipOf, unshortenStanceShin } from './legs.ts';
@@ -449,6 +449,8 @@ export interface Retarget {
   scaleFit: ScaleFit | null;
   /** The spans each alternate set shows, with their art turn. */
   switches: Switch[];
+  /** rig-c/pose#279: per set without a `phase`, the runs it was nearest on and the runs the minimum span suppressed. */
+  switchRuns: SetRuns[];
   /** Per switched or hidden slot, what it shows on each frame (null: nothing). */
   shown: Map<string, Array<string | null>>;
   /** Per set, its distance to the pose on each frame, degrees. */
@@ -3137,7 +3139,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   return {
     animation: { duration: keyTimes[n - 1]!, tracks },
     times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale, scaleFit,
-    switches: sw.switches, shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
+    switches: sw.switches, switchRuns: sw.runs, shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
     legScale, segments, legStraight, rigLeg, scales, feet, planted: plantOn, stance, floor, blendHold, closure, openDrift, ankles, pivot, raised, byHip, face, body, figureScale, headNod: headNodReading, nodSkipped, reach, reachOrigin, pelvis,
   };
 }

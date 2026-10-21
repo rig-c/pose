@@ -41,13 +41,66 @@ a commit message on the branch.
    empty directory, runs `rig-pose --version`, then retargets the public wave
    from the install and holds its motion to the pinned bytes
    (`scripts/smoke_install.sh`, rig-c/pose#260; exit 3 = the registry did not
-   serve it in time; re-run with Actions → release → Run workflow).
+   serve it in time; re-run the confirmation alone, which publishes nothing,
+   with `gh workflow run release.yml -f version=X.Y.Z`).
 
 Before any of that, every pull request's `install` job packs the branch, runs
 the same smoke on the tarball, and plants two failures beside it
 (`scripts/smoke_mutants.sh`): a `src` module left out of the tarball must go
 red at `--version`, and the gate's launcher resolved by a name the install does
 not have must go red at the retarget — a failure `--version` alone passes.
+
+### When the tag is cut but the publish did not land
+
+a release-please failure after the tag leaves a version unpublished; the next cut carries it, or the tag is republished by dispatch.
+
+It happens when the run that merged the release pull request gets as far as
+the tag and the GitHub release and then stops before the publish lands (on
+another package of the toolchain, `npm publish --provenance` once failed on a
+transient signing-service error). Re-running that run cannot recover:
+release-please no longer reports `release_created` for a tag it has already
+cut, so every step after it is skipped and the registry keeps serving the
+previous version. A publish by hand would lose provenance, and the trusted
+publisher names `release.yml`.
+
+Dispatch when the GitHub release `vX.Y.Z` exists and
+`npm view @rig-c/pose@X.Y.Z version` serves nothing:
+
+```sh
+gh workflow run release.yml -f tag=vX.Y.Z
+```
+
+The `release` job then skips release-please (a dispatch never cuts a tag or a
+release) and its *Resolve the tag to publish* step checks the tag; every step
+after it is the push path's own (checkout of the tag, the gate in
+`prepublishOnly`, `npm publish --provenance`, the registry confirmation), run
+under the same condition, from the same file. Then confirm the cut as after any
+release. The resolve step refuses, each as one `::error::` line naming its
+rule:
+
+| refusal | when |
+| --- | --- |
+| `RELEASE_DISPATCH_INPUT` | the dispatch gave both `tag` and `version`, or neither |
+| `RELEASE_TAG_FORM` | the tag is not `vX.Y.Z` (or `vX.Y.Z-<prerelease>`) |
+| `RELEASE_TAG_UNRELEASED` | the tag has no GitHub release: only a tag release-please cut is published |
+| `RELEASE_ALREADY_PUBLISHED` | the registry already serves that version of `@rig-c/pose` |
+| `RELEASE_TAG_BELOW_LATEST` | the version is below the registry's `latest` for `@rig-c/pose` (a prerelease is below its release) |
+
+**Two inputs, one per dispatch.** `tag` publishes a cut tag; `version` re-runs
+a confirmation. Both are optional, because GitHub refuses a dispatch that omits
+a required input; an omitted string input reads as empty. The `confirm` job
+runs only on a dispatch with `version` and no `tag`; any other dispatch runs the
+`release` job, where the resolve step publishes a `tag` alone and refuses the
+rest.
+
+**Below latest.** `npm publish` refuses to put `latest` on a version lower than
+the highest one published unless a `--tag` is given, and the publish step
+passes `--tag` only for a prerelease. So once a later version is out, the
+dispatch refuses the older tag by name before anything is checked out or
+published; it is never attempted silently. Such a version goes out, if at all,
+under a dist-tag, with a `--tag` variant of this dispatch, which is a follow-up
+and not in this workflow. The comparison is semver order computed in `node`,
+not `sort -V`, which sorts `1.0.0-rc.1` after `1.0.0`.
 
 ## The first publish, and trusted publishing (owner)
 
@@ -188,6 +241,7 @@ Every flag `parseFlags` reads in `cli.ts`, once. `test/promise.test.ts` holds th
 | `retarget` | `--carry-idle` | promised | S, X 2 | |
 | `retarget` | `--raised-by-head` | courtesy | — | |
 | `retarget` | `--reduce-keep-planted` | courtesy | — | |
+| `retarget` | `--draw-order` | courtesy | — | (rig-c/pose#304) |
 | `retarget` | `--verbose` | courtesy | — | |
 | `retarget` | `--summary` | courtesy | — | |
 | `retarget` | `--sequence` | promised | X 1 | alias of `--pose` |
@@ -248,6 +302,8 @@ Every key `rig-pose-report/1` can carry, once: the keys `src/run.ts` writes, and
 | `folds` | courtesy | — | |
 | `seams` | courtesy | — | |
 | `seamPairs` | courtesy | — | |
+| `switchRuns` | courtesy | — | (rig-c/pose#279) |
+| `drawOrder` | courtesy | — | (rig-c/pose#304) |
 | `reach` | courtesy | — | |
 | `reachOrigin` | courtesy | — | only when the map has a `reach` chain (rig-c/pose#282) |
 | `byHip` | courtesy | — | |

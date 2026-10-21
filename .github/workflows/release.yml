@@ -8,6 +8,22 @@
 # npm's trusted publisher is configured on a package that already exists
 # (RELEASING.md).
 #
+# A failure after the tag leaves a version unpublished: release-please has cut
+# the tag and the GitHub release, so a re-run no longer reports
+# `release_created` and skips every publish step. Such a tag is published by a
+# dispatch with the `tag` input (`gh workflow run release.yml -f tag=vX.Y.Z`),
+# which runs the same gate and the same publish steps in this same file, so the
+# trusted publisher and provenance are unchanged (RELEASING.md, "Cutting a
+# release"). A tag below the registry's latest is refused
+# (RELEASE_TAG_BELOW_LATEST): npm will not move latest back to it implicitly,
+# and a dist-tag variant of the dispatch is a follow-up, never a silent attempt.
+#
+# The dispatch takes exactly one of two inputs, both optional, because GitHub
+# refuses a dispatch that omits a required input and an omitted string input
+# reads as the empty string: `tag` publishes a cut tag (the `release` job),
+# `version` re-runs a confirmation (the `confirm` job). Both, or neither, is
+# refused by name (RELEASE_DISPATCH_INPUT) and runs nothing else.
+#
 # Two constraints are load-bearing:
 #   - The publish must stay in THIS file: npm's trusted publisher is pinned to
 #     the workflow filename `release.yml`.
@@ -18,13 +34,26 @@ name: release
 on:
   push:
     branches: [main]
-  # Re-run a confirmation that ran out of wait, without publishing anything:
-  # the `release` job runs only on a push.
+  # Two things on demand, one per dispatch:
+  #   - `version`: re-run a confirmation that ran out of wait, publishing
+  #     nothing. Such a dispatch reaches the `confirm` job and nothing else.
+  #   - `tag`: publish a tag release-please already cut whose publish did not
+  #     land. Release-please never runs on a dispatch, so a dispatch cannot cut
+  #     a tag or a GitHub release; it refuses a tag not of the form vX.Y.Z
+  #     (RELEASE_TAG_FORM), a tag with no GitHub release
+  #     (RELEASE_TAG_UNRELEASED), a version the registry already serves
+  #     (RELEASE_ALREADY_PUBLISHED), and a version below the registry's latest
+  #     (RELEASE_TAG_BELOW_LATEST): npm refuses to put latest on it implicitly,
+  #     so it goes out under a dist-tag or not at all.
   workflow_dispatch:
     inputs:
+      tag:
+        description: An existing release tag to publish, e.g. v1.2.3 (leave version empty)
+        required: false
+        type: string
       version:
-        description: The published version to confirm, without the leading v (e.g. 0.1.1)
-        required: true
+        description: The published version to confirm, without the leading v, e.g. 0.1.1 (leave tag empty)
+        required: false
         type: string
 
 permissions: {}
@@ -35,7 +64,12 @@ concurrency:
 
 jobs:
   release:
-    if: ${{ github.event_name == 'push' }}
+    # The publish, the tag and the GitHub release live in this job. It runs on
+    # a push to main, and on a dispatch that is not a confirmation alone: a
+    # `tag` dispatch publishes after the refusals below, and a dispatch with
+    # both inputs or neither reaches the resolve step only to be refused there.
+    # Release-please, which makes tags and releases, runs on a push only.
+    if: ${{ github.event_name == 'push' || inputs.tag != '' || inputs.version == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -46,34 +80,72 @@ jobs:
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
+        if: ${{ github.event_name == 'push' }}
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+      # What to publish: on a push, the tag release-please just cut, if it cut
+      # one; on a dispatch, the `tag` input once it is a cut tag the registry
+      # does not serve yet. Each refusal is one `::error::` line naming its rule.
+      # The inputs reach the script through the environment, never interpolated.
+      - name: Resolve the tag to publish
+        id: target
+        env:
+          EVENT: ${{ github.event_name }}
+          CREATED: ${{ steps.release.outputs.release_created }}
+          CUT_TAG: ${{ steps.release.outputs.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = push ]; then
+            if [ "$CREATED" = true ]; then echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$CUT_TAG" >> "$GITHUB_OUTPUT"; else echo "publish=false" >> "$GITHUB_OUTPUT"; fi
+            exit 0
+          fi
+          if [ -n "$INPUT_TAG" ] && [ -n "$INPUT_VERSION" ]; then echo "::error::RELEASE_DISPATCH_INPUT: both tag \"$INPUT_TAG\" and version \"$INPUT_VERSION\" were given; a dispatch takes tag (publish a cut tag) or version (re-run a confirmation), one of them"; exit 1; fi
+          if [ -z "$INPUT_TAG" ]; then echo "::error::RELEASE_DISPATCH_INPUT: neither tag nor version was given; a dispatch takes tag (publish a cut tag) or version (re-run a confirmation), one of them"; exit 1; fi
+          if ! printf '%s' "$INPUT_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then echo "::error::RELEASE_TAG_FORM: \"$INPUT_TAG\" is not vX.Y.Z (or vX.Y.Z-<prerelease>)"; exit 1; fi
+          if ! gh release view "$INPUT_TAG" --repo "$REPO" >/dev/null 2>&1; then echo "::error::RELEASE_TAG_UNRELEASED: $INPUT_TAG has no GitHub release in $REPO; only a tag release-please cut is published"; exit 1; fi
+          version="${INPUT_TAG#v}"
+          if served="$(npm view "@rig-c/pose@$version" version 2>/dev/null)" && [ "$served" = "$version" ]; then echo "::error::RELEASE_ALREADY_PUBLISHED: the registry already serves @rig-c/pose@$version; a version already up is not dispatched again (RELEASING.md)"; exit 1; fi
+          # Semver order with a prerelease below its release, in node rather than `sort -V`, which sorts 1.0.0-rc.1 after 1.0.0.
+          if latest="$(npm view "@rig-c/pose" version 2>/dev/null)" && [ -n "$latest" ] && [ "$(VERSION="$version" LATEST="$latest" node -e '
+            const parse = (v) => { const [core, pre] = v.split("-", 2); return { core: core.split(".").map(Number), pre: pre === undefined ? null : pre.split(".") }; };
+            const ids = (a, b) => { for (let i = 0; i < Math.max(a.length, b.length); i++) { if (a[i] === undefined) return -1; if (b[i] === undefined) return 1; const na = /^[0-9]+$/.test(a[i]), nb = /^[0-9]+$/.test(b[i]); if (na && nb && Number(a[i]) !== Number(b[i])) return Number(a[i]) - Number(b[i]); if (na !== nb) return na ? -1 : 1; if (!na && a[i] !== b[i]) return a[i] < b[i] ? -1 : 1; } return 0; };
+            const cmp = (x, y) => { const a = parse(x), b = parse(y); for (let i = 0; i < 3; i++) if (a.core[i] !== b.core[i]) return a.core[i] - b.core[i]; if (a.pre === null || b.pre === null) return a.pre === b.pre ? 0 : a.pre === null ? 1 : -1; return ids(a.pre, b.pre); };
+            process.stdout.write(cmp(process.env.VERSION, process.env.LATEST) < 0 ? "below" : "not-below");
+          ')" = below ]; then echo "::error::RELEASE_TAG_BELOW_LATEST: $INPUT_TAG is below the registry's latest @rig-c/pose@$latest; republish under a dist-tag with a \`--tag\` variant of this dispatch (a follow-up), not under latest; npm refuses that implicitly"; exit 1; fi
+          echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+
+      # Everything below runs only when a tag is to be published: the push that
+      # merged the release PR, or a dispatched tag the step above resolved.
       - uses: actions/checkout@v4
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
         with:
-          ref: ${{ steps.release.outputs.tag_name }}
+          ref: ${{ steps.target.outputs.tag }}
 
       - uses: oven-sh/setup-bun@v2
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
 
       - uses: actions/setup-node@v4
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
       # Node 22 ships npm 10; the OIDC exchange landed in npm 11.5.1.
       - name: Use an npm that speaks OIDC
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
         run: |
           npm install -g npm@latest
           npm --version
 
       - name: Install dependencies
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
         run: bun install --frozen-lockfile
 
       # Nothing to build — the package ships TypeScript sources and bun runs
@@ -81,7 +153,7 @@ jobs:
       # tagged tree, so a broken gate fails the publish rather than shipping.
       # A version with a hyphen goes out under the `rc` dist-tag.
       - name: Publish to npm
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
         run: |
           set -euo pipefail
           tag=""
@@ -89,13 +161,17 @@ jobs:
           npm publish --provenance --access public $tag
 
       - name: Confirm the published package installs and runs
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
         env:
-          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+          TAG_NAME: ${{ steps.target.outputs.tag }}
         run: bash scripts/confirm_registry.sh "${TAG_NAME#v}" 15
 
+  # The same confirmation, on demand, for a cut whose wait ran out. It
+  # publishes nothing and can publish nothing: `npm publish` exists only in the
+  # job above, which a `version` dispatch skips. A `tag` dispatch does not run
+  # this job; its own run ends in the confirmation step above.
   confirm:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.version != '' && inputs.tag == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
