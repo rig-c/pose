@@ -143,19 +143,29 @@ export function segmentDepth(d: SegmentDepth, length: number): number {
   return d.sign * (length / d.ratio) * Math.sqrt(1 - r * r);
 }
 
+/**
+ * A limb's two joint depths on one frame, px (+ toward the camera): its middle joint (the upper segment's) and its end
+ * joint (the middle's plus the lower segment's), from the shoulder or hip at 0, unrounded; null where its segments are
+ * not both named and placed.
+ */
+export function limbJointDepths(joints: Joints, depth: FrameDepth, limb: Limb): { mid: number; end: number } | null {
+  const [upper, lower] = LIMBS[limb];
+  const du = depth[upper];
+  const dl = depth[lower];
+  const lu = drawn(joints, upper);
+  const ll = drawn(joints, lower);
+  if (du === undefined || dl === undefined || lu === null || ll === null) return null;
+  const mid = segmentDepth(du, lu);
+  return { mid, end: mid + segmentDepth(dl, ll) };
+}
+
 /** The limbs' front-to-back order on one frame, from its depth and its joints' drawn lengths. */
 export function layersOf(joints: Joints, depth: FrameDepth): FrameLayers {
   const z: Partial<Record<Limb, number>> = {};
   for (const limb of LIMB_NAMES) {
-    const [upper, lower] = LIMBS[limb];
-    const du = depth[upper];
-    const dl = depth[lower];
-    const lu = drawn(joints, upper);
-    const ll = drawn(joints, lower);
-    if (du === undefined || dl === undefined || lu === null || ll === null) continue;
-    const mid = segmentDepth(du, lu);
-    const end = mid + segmentDepth(dl, ll);
-    z[limb] = Math.round(((mid + end) / 2) * 100) / 100;
+    const j = limbJointDepths(joints, depth, limb);
+    if (j === null) continue;
+    z[limb] = Math.round(((j.mid + j.end) / 2) * 100) / 100;
   }
   const placed = LIMB_NAMES.filter((l) => z[l] !== undefined).sort((a, b) => z[b]! - z[a]! || LIMB_NAMES.indexOf(a) - LIMB_NAMES.indexOf(b));
   const order: Limb[][] = [];

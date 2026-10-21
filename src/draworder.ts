@@ -31,13 +31,22 @@
  *   order — or, on a looped sequence, the order the clip ends in, held across
  *   the seam. A key is written where the order changes, and none while it is the
  *   setup order from the start.
+ * - **The run: by the ankle** (rig-c/pose#332). On a sequence cleaned with
+ *   `--depth run` the pair is ordered by each leg's ankle joint depth (the hip at
+ *   0, plus the thigh's, plus the shin's: `limbJointDepths`' end) instead of the
+ *   limb mean: a run's kicked-back leg has its knee forward and its ankle back, so
+ *   the mean of the two cancels near 0 and keys nothing. The tie is scaled to the
+ *   joint: √(1 − 0.95²) × (thigh + shin), the depth a fully flat leg's ankle can
+ *   hold, the smaller leg's. The walk (and measured depth, which names no gait)
+ *   keeps the limb mean: which one the walk's truth is waits on the owner
+ *   (rig-c/pose#326).
  *
  * Pure: no clock, no randomness, no disk.
  */
 import type { Body18 } from './joints.ts';
-import { FLAT_BAND, LIMBS, type FrameLayers, type Limb } from './depth.ts';
+import { FLAT_BAND, LIMBS, limbJointDepths, type FrameLayers, type Limb } from './depth.ts';
 import { knownSetsOf, type JointMap, type Rest, type RigSets } from './map.ts';
-import { DEPTH_SEGMENTS, type DepthSegment, type FrameDepth, type Joint } from './pose.ts';
+import { DEPTH_SEGMENTS, type DepthGait, type DepthSegment, type FrameDepth, type Joint } from './pose.ts';
 
 /** The limb pairs `--draw-order depth` keys. */
 export const DRAW_ORDER_PAIRS: ReadonlyArray<readonly [Limb, Limb]> = [['r_leg', 'l_leg']];
@@ -65,6 +74,8 @@ export interface DrawOrderPair {
   keyed: boolean;
   /** #281's tie for the pair, px: depths closer than this hold the order before (null where a rest length is unread: no tie, equal depths only). */
   tie: number | null;
+  /** #332: present on a run only — the pair is ordered by the ankle joint's depth, the tie scaled to the joint. Absent: the limb mean (#304). */
+  by?: 'ankle';
   /** Why the pair is not keyed. */
   why?: string;
 }
@@ -187,11 +198,14 @@ function restOf(track: readonly Joints[], depth: ReadonlyArray<FrameDepth | unde
   return vals.length % 2 === 1 ? vals[m]! : (vals[m - 1]! + vals[m]!) / 2;
 }
 
-/** #281's tie for two limbs, px: √(1 − 0.95²) × (upper + lower ÷ 2), the smaller limb's; null where a rest length is unread. */
-function tieOf(track: readonly Joints[], depth: ReadonlyArray<FrameDepth | undefined>, limbs: readonly [Limb, Limb]): number | null {
+/**
+ * #281's tie for two limbs, px: √(1 − 0.95²) × (upper + lower ÷ 2), the smaller limb's; null where a rest length is
+ * unread. By the end joint (#332): √(1 − 0.95²) × (upper + lower), what a fully flat limb's end can hold.
+ */
+function tieOf(track: readonly Joints[], depth: ReadonlyArray<FrameDepth | undefined>, limbs: readonly [Limb, Limb], byEnd = false): number | null {
   const hidden = limbs.map((l) => {
     const [u, w] = LIMBS[l].map((s) => restOf(track, depth, s));
-    return u === null || u === undefined || w === null || w === undefined ? null : u + w / 2;
+    return u === null || u === undefined || w === null || w === undefined ? null : u + (byEnd ? w : w / 2);
   });
   return hidden.some((h) => h === null) ? null : Math.round(TIE_PER_LENGTH * Math.min(hidden[0]!, hidden[1]!) * 100) / 100;
 }
@@ -199,21 +213,38 @@ function tieOf(track: readonly Joints[], depth: ReadonlyArray<FrameDepth | undef
 /**
  * The draw-order keys from the frames' layers. `track` and `depth` are the sequence's
  * joints and depth per frame (the rest lengths the tie reads); `order` is the rig's
- * setup draw order (the compiled model's slots); `times` the frames' times.
+ * setup draw order (the compiled model's slots); `times` the frames' times. `gait` is
+ * the gait clean derived the depth for: 'run' orders by the ankle joint (#332); any
+ * other, or none, by the limb mean (#304).
  */
-export function drawOrderFromDepth(layers: readonly FrameLayers[], track: readonly Joints[], depth: ReadonlyArray<FrameDepth | undefined>, times: readonly number[], map: JointMap, rest: Rest, order: ReadonlyArray<{ name: string; bone: string }>, sets?: RigSets, loop = false): DrawOrderReading {
+export function drawOrderFromDepth(layers: readonly FrameLayers[], track: readonly Joints[], depth: ReadonlyArray<FrameDepth | undefined>, times: readonly number[], map: JointMap, rest: Rest, order: ReadonlyArray<{ name: string; bone: string }>, sets?: RigSets, loop = false, gait: DepthGait | null = null): DrawOrderReading {
+  const byAnkle = gait === 'run';
   const resolved = DRAW_ORDER_PAIRS.map((p) => resolvePair(p, map, rest, order, sets));
-  for (const r of resolved) r.pair.tie = tieOf(track, depth, r.pair.limbs);
+  for (const r of resolved) {
+    r.pair.tie = tieOf(track, depth, r.pair.limbs, byAnkle);
+    if (byAnkle) r.pair.by = 'ankle';
+  }
+  // #332: a run's per-frame depths are the end joints' (rounded as the layers are); otherwise the layers' limb means.
+  const zs: ReadonlyArray<Partial<Record<Limb, number>>> = byAnkle
+    ? track.map((j, i) => {
+        const z: Partial<Record<Limb, number>> = {};
+        for (const limb of new Set(DRAW_ORDER_PAIRS.flat())) {
+          const d = depth[i] === undefined ? null : limbJointDepths(j, depth[i]!, limb);
+          if (d !== null) z[limb] = Math.round(d.end * 100) / 100;
+        }
+        return z;
+      })
+    : layers.map((l) => l.depth);
   const names = order.map((s) => s.name);
   // Per pair, per frame: who is behind ('a' | 'b'), or null for the setup order before any decision.
   const states = resolved.map((r) => {
     const tie = r.pair.tie ?? 0;
     const pass = (start: 'a' | 'b' | null): Array<'a' | 'b' | null> => {
       let state = start;
-      return layers.map((l) => {
+      return zs.map((z) => {
         if (!r.pair.keyed) return null;
-        const za = l.depth[r.pair.limbs[0]];
-        const zb = l.depth[r.pair.limbs[1]];
+        const za = z[r.pair.limbs[0]];
+        const zb = z[r.pair.limbs[1]];
         if (za !== undefined && zb !== undefined && za !== zb && Math.abs(za - zb) >= tie) state = za < zb ? 'a' : 'b';
         return state;
       });
@@ -231,7 +262,7 @@ export function drawOrderFromDepth(layers: readonly FrameLayers[], track: readon
       .sort((x, y) => names.indexOf(x.slot) - names.indexOf(y.slot));
   const keys: DrawOrderReading['keys'] = [];
   let last = '[]';
-  for (let f = 0; f < layers.length; f++) {
+  for (let f = 0; f < zs.length; f++) {
     const offs = offsetsAt(f);
     const text = JSON.stringify(offs);
     if (text === last) continue;
@@ -263,7 +294,9 @@ const span = (f: [number, number]): string => (f[0] === f[1] ? `${f[0]}` : `${f[
  */
 export function drawOrderLines(d: DrawOrderReading, prefix = 'DRAWORDER '): string[] {
   const keyed = d.spans.filter((s) => s.keyed);
-  const head = `${prefix}from depth, ${d.keys.length} key(s) over ${keyed.length} span(s)`;
+  // #332: a run's keyed pair names its per-joint reading and its joint-scaled tie.
+  const ankle = d.pairs.find((p) => p.by === 'ankle' && p.keyed);
+  const head = `${prefix}from depth${ankle === undefined ? '' : ` by the ankle joint (run; tie ${ankle.tie === null ? 'none' : `${ankle.tie} px`})`}, ${d.keys.length} key(s) over ${keyed.length} span(s)`;
   const groups = new Map<string, string[]>();
   for (const s of keyed) {
     const g = `${s.behind} behind ${s.front}`;

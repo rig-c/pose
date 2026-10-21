@@ -191,7 +191,9 @@ retarget
                         (the shortfall listed). RAISED lines (default: off; rig-c/pose#62)
   --draw-order depth    key the legs' draw order from the sequence's depth (clean --depth; rig-c/pose#304): on
                         each frame the leg whose depth reads farther from the camera is drawn behind the other,
-                        a tie (equal depths) holding the order before, in rig-c's drawOrder timeline. The legs'
+                        a tie (equal depths) holding the order before, in rig-c's drawOrder timeline. A run
+                        (clean --depth run) is read at the ankle joint, a walk by the limb mean (rig-c/pose#332).
+                        The legs'
                         slots must fill one unbroken run of the setup draw order (else the pair is not keyed and
                         the line names the slot between); a set's slot goes with the leg it depicts. Refused on
                         a sequence without depth (DRAWORDER_NO_DEPTH). DRAWORDER lines (default: off)
