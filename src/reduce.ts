@@ -48,6 +48,8 @@ export interface ReduceBone {
   dense: number[];
   /** Frame indices that must keep a key regardless (the first and last always do). */
   keep: ReadonlySet<number>;
+  /** Its own world-aim tolerance in degrees, in place of the call's (rig-c/pose#283: its chain's). */
+  tolerance?: number;
 }
 export interface ReduceHip {
   bone: string;
@@ -328,6 +330,7 @@ export function reduceKeys(times: readonly number[], bones: readonly ReduceBone[
   const byName = new Map<string, ReduceBone>();
   for (const b of bones) {
     if (byName.has(b.bone)) throw new Error(`reduce: bone "${b.bone}" is given twice`);
+    if (b.tolerance !== undefined && !(Number.isFinite(b.tolerance) && b.tolerance > 0)) throw new Error(`reduce: bone "${b.bone}"'s tolerance is ${b.tolerance}°, not a positive number`);
     if (b.dense.length !== n) throw new Error(`reduce: bone "${b.bone}" has ${b.dense.length} dense key(s) for ${n} frame(s)`);
     byName.set(b.bone, b);
   }
@@ -349,7 +352,7 @@ export function reduceKeys(times: readonly number[], bones: readonly ReduceBone[
     const keys = fitTrack(times, samples, {
       targets,
       keep: keptFrames(b.keep, n, `bone "${b.bone}"`),
-      tolerance,
+      tolerance: b.tolerance ?? tolerance,
       error: (i, v) => Math.abs(v[0]! - targets[i]![0]!),
     });
     const e = trackAt(keys, samples, 1).map((v, i) => v[0]! - targets[i]![0]!);
@@ -617,11 +620,12 @@ export function smoothTrunk(
   if (n < 4 || trunkBones.size === 0) return;
   const samples = samplesOf(times);
   const byName = new Map(bones.map((b) => [b.bone, b]));
+  /** rig-c/pose#283: a bone's own tolerance (its chain's under a per-chain --reduce), else the call's. */
+  const tolOf = (b: string): number => byName.get(b)?.tolerance ?? tolerance;
   const roots = [...trunkBones].filter((b) => {
     const info = byName.get(b);
     return info !== undefined && (info.above === null || !trunkBones.has(info.above));
   });
-  const tolInner = 0.985 * tolerance;
 
   for (const root of roots) {
     const rootKeys = out.rotate.get(root);
@@ -646,8 +650,10 @@ export function smoothTrunk(
     const targetRoot = rootInfo.dense.map((d, i) => d - eAboveRoot[i]!);
     const yRootOld = yOldOf.get(root)!;
 
-    const rootLb = targetRoot.map((t) => t - tolInner);
-    const rootUb = targetRoot.map((t) => t + tolInner);
+    // #283: each bone's own tolerance (its chain's under a per-chain --reduce; the call's otherwise).
+    const rootInner = 0.985 * tolOf(root);
+    const rootLb = targetRoot.map((t) => t - rootInner);
+    const rootUb = targetRoot.map((t) => t + rootInner);
     let smRoot = optimizeBasis(basisOf.get(root)!, rootLb, rootUb);
     let eRoot = smRoot.y.map((v, i) => v - targetRoot[i]!);
 
@@ -667,14 +673,15 @@ export function smoothTrunk(
       for (const h of headBones) {
         const dH = byName.get(h)!.dense;
         const targetH = dH.map((d, i) => d - eRoot[i]!);
-        const smH = optimizeBasis(basisOf.get(h)!, targetH.map((t) => t - tolInner), targetH.map((t) => t + tolInner));
+        const hInner = 0.985 * tolOf(h);
+        const smH = optimizeBasis(basisOf.get(h)!, targetH.map((t) => t - hInner), targetH.map((t) => t + hInner));
         smSub.set(h, smH);
         eSub.set(h, smH.y.map((v, i) => v - targetH[i]!));
       }
       for (const b0 of arm0Bones) {
         const yOld = yOldOf.get(b0)!;
         const wOld = Math.max(...out.errors.get(b0)!.map(Math.abs));
-        const cap = Math.min(0.98 * tolerance, wOld + 0.035 * tolerance);
+        const cap = Math.min(0.98 * tolOf(b0), wOld + 0.035 * tolOf(b0));
         const targetB = byName.get(b0)!.dense.map((d, i) => d - eRoot[i]!);
         const smB = solveLimbPreservingJitter(basisOf.get(b0)!, yOld, targetB.map((t) => t - cap), targetB.map((t) => t + cap));
         smSub.set(b0, smB);
@@ -685,7 +692,7 @@ export function smoothTrunk(
         const eUp = eSub.get(up)!;
         const yOld = yOldOf.get(b1)!;
         const wOld = Math.max(...out.errors.get(b1)!.map(Math.abs));
-        const cap = Math.min(0.98 * tolerance, wOld + 0.035 * tolerance);
+        const cap = Math.min(0.98 * tolOf(b1), wOld + 0.035 * tolOf(b1));
         const targetB = byName.get(b1)!.dense.map((d, i) => d - eUp[i]!);
         const smB = solveLimbPreservingJitter(basisOf.get(b1)!, yOld, targetB.map((t) => t - cap), targetB.map((t) => t + cap));
         smSub.set(b1, smB);
@@ -699,17 +706,17 @@ export function smoothTrunk(
       for (let i = 0; i < n; i++) {
         for (const h of headBones) {
           const eh = eSub.get(h)![i]!;
-          if (Math.abs(eh) > 0.99 * tolerance) {
-            tightenAround(i, Math.abs(eh) - 0.975 * tolerance);
+          if (Math.abs(eh) > 0.99 * tolOf(h)) {
+            tightenAround(i, Math.abs(eh) - 0.975 * tolOf(h));
             anyTightened = true;
           }
         }
         for (const b of [...arm0Bones, ...arm1Bones]) {
           const wOld = Math.max(...out.errors.get(b)!.map(Math.abs));
-          const cap = Math.min(0.985 * tolerance, wOld + 0.04 * tolerance);
+          const cap = Math.min(0.985 * tolOf(b), wOld + 0.04 * tolOf(b));
           const eb = eSub.get(b)![i]!;
           if (Math.abs(eb) > cap) {
-            tightenAround(i, Math.abs(eb) - (cap - 0.01 * tolerance));
+            tightenAround(i, Math.abs(eb) - (cap - 0.01 * tolOf(b)));
             anyTightened = true;
           }
         }
@@ -827,6 +834,8 @@ export interface UnderBone {
   /** The dense rotate keys (unwrapped, as written). */
   dense: readonly number[];
   keep: ReadonlySet<number>;
+  /** Its own world-aim tolerance in degrees, in place of the call's (rig-c/pose#283). */
+  tolerance?: number;
 }
 
 /**
@@ -879,7 +888,7 @@ export function reduceUnderScale(times: readonly number[], bones: readonly Under
       return Math.abs(wrap180(Math.atan2(w[1], w[0]) * DEG - b.target[i]!));
     };
     const keep = keptFrames(b.keep, n, `bone "${b.bone}"`);
-    const rk = fitTrack(times, samples, { targets: solved.map((k) => [k]), keep, tolerance, error: (i, v) => aimError(i, v[0]!) });
+    const rk = fitTrack(times, samples, { targets: solved.map((k) => [k]), keep, tolerance: b.tolerance ?? tolerance, error: (i, v) => aimError(i, v[0]!) });
     const kAt = trackAt(rk, samples, 1).map((v) => v[0]!);
     const ae = worstOf(kAt.map((_, i) => i), (i) => aimError(i, kAt[i]!))!;
     rows.push({ bone: b.bone, kind: 'angle', before: n, after: rk.length, worst: ae.worst, frame: ae.frame });

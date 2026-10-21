@@ -24,6 +24,7 @@ import { scaleSupport, type Feet, type LegScale } from '../src/legs.ts';
 import { readMap, type Chain } from '../src/map.ts';
 import { overFloor, projectSeams, readSeamPairs } from '../src/seams.ts';
 import { writeReport, type RenderDomain, type ReportInputs } from '../src/report.ts';
+import { walkCycle, walkDoc } from '../examples/walk/make-walk.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const CLI = join(ROOT, 'cli.ts');
@@ -10728,6 +10729,166 @@ describe('#279: the runs --switch-min suppressed are reported, per set, with the
       expect(rep.switchRuns.map((s) => [s.set, s.nearest.map((x) => x.frames), s.suppressed])).toEqual([['up', [UP_ON], []], ['out', [OUT_ON], []]]);
     } finally {
       rmSync(c.dir, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
+// --- #283: --reduce <deg>,<chain>=<deg> ---------------------------------------
+
+describe('#283: a per-chain --reduce holds the legs against slide while the trunk is smoothed', () => {
+  /**
+   * The public walk (examples/walk) made to travel: its cycle three times (72 frames at 24 fps), each swinging ankle
+   * 12 px fore and aft (its knee half that), and every joint carried by what keeps the lower ankle's x still. Cleaned
+   * with legs 5, rest 7, the hold off, no loop. On the wave's rig with the walk's map, its trunk given `reach` — which
+   * carries 2.00× the pair's jitter (#236) — one global tolerance cannot pass slide ≤ 0.005 and jitter ≤ 1.1 together.
+   */
+  function travellingWalk(): Record<string, unknown> {
+    const base = walkCycle();
+    const P = base.length;
+    const frames = Array.from({ length: 3 * P }, (_, i) => {
+      const j = { ...base[i % P]!.joints };
+      const fwd = 12 * Math.cos((2 * Math.PI * (i % P)) / P);
+      j.r_ankle = [j.r_ankle![0] + fwd, j.r_ankle![1]];
+      j.l_ankle = [j.l_ankle![0] - fwd, j.l_ankle![1]];
+      j.r_knee = [j.r_knee![0] + fwd / 2, j.r_knee![1]];
+      j.l_knee = [j.l_knee![0] - fwd / 2, j.l_knee![1]];
+      return { ...base[i % P]!, joints: j };
+    });
+    const lower = (i: number): 'r' | 'l' => (frames[i]!.joints.r_ankle![1] >= frames[i]!.joints.l_ankle![1] ? 'r' : 'l');
+    const dx: number[] = [0];
+    for (let i = 1; i < frames.length; i++) dx.push(dx[i - 1]! + frames[i - 1]!.joints[`${lower(i)}_ankle`]![0] - frames[i]!.joints[`${lower(i)}_ankle`]![0]);
+    for (let i = 0; i < frames.length; i++) {
+      const j = frames[i]!.joints;
+      for (const n of Object.keys(j)) j[n] = [j[n]![0] + dx[i]!, j[n]![1]];
+    }
+    const doc = walkDoc(frames, 'synthetic: examples/walk travelling, test/retarget.test.ts #283');
+    const c = clean(readPoseSequence(JSON.stringify(doc), 'fixture'), { loop: false, legs: 5, rest: 7, hold: 'off' }, undefined, 'fixture');
+    return JSON.parse(writePoseSequence(c.seq)) as Record<string, unknown>;
+  }
+  function walkCase(): Case {
+    const dir = tempDir();
+    const map = JSON.parse(readFileSync(join(ROOT, 'examples', 'walk', 'map.json'), 'utf8')) as { chains: Array<Record<string, unknown>> };
+    map.chains.find((c) => c.name === 'trunk')!.reach = true;
+    writeFileSync(join(dir, 'map.json'), JSON.stringify(map, null, 2));
+    writeFileSync(join(dir, 'pose.json'), JSON.stringify(travellingWalk()));
+    return { dir, rig: join(ROOT, 'examples', 'wave', 'rig'), map: join(dir, 'map.json'), pose: join(dir, 'pose.json'), out: join(dir, 'motion.out.json'), build: join(dir, 'build') };
+  }
+  const FLAGS = ['--plant-feet', '--leg-scale', '0.8,1.05'];
+  const PER_CHAIN = ['--reduce', '3,leg_r=0.2,leg_l=0.2'];
+  interface Rep {
+    options: Record<string, unknown>;
+    landings: Array<{ bone: string; kind: string; worst: number; tolerance: number }>;
+    jitter: Array<{ bone: string; ratio: number | null }>;
+    feet: { reading: { plants: Array<{ horizontalLegs: number }> } };
+    reduce: null | { tolerance: number; chains?: Record<string, number>; ankleDrift: Array<{ bone: string; legTolerance?: number }> };
+  }
+  function run(c: Case, extra: string[], cliPath = CLI): { ran: Ran; rep: Rep; slide: number; jitter: number } {
+    const report = join(c.dir, 'report.json');
+    const ran = retarget(c, [...FLAGS, ...extra, '--report', report], cliPath);
+    if (ran.status !== 0) return { ran, rep: null as unknown as Rep, slide: NaN, jitter: NaN };
+    const rep = JSON.parse(readFileSync(report, 'utf8')) as Rep;
+    return { ran, rep, slide: Math.max(...rep.feet.reading.plants.map((p) => p.horizontalLegs)), jitter: Math.max(...rep.jitter.map((j) => j.ratio ?? 0)) };
+  }
+  const passes = (x: { slide: number; jitter: number }) => x.slide <= 0.005 && x.jitter <= 1.1;
+
+  test('the trade: no global tolerance passes both bars, with or without --reduce-keep-planted; the per-chain one does', () => {
+    const c = walkCase();
+    const rows: Array<[string, string[]]> = [
+      ['global 0.2', ['--reduce', '0.2']],
+      ['global 3', ['--reduce', '3']],
+      ['keep-planted 0.2', ['--reduce', '0.2', '--reduce-keep-planted']],
+      ['keep-planted 3', ['--reduce', '3', '--reduce-keep-planted']],
+      ['per-chain 3,leg_r=0.2,leg_l=0.2', PER_CHAIN],
+    ];
+    const got = new Map<string, { slide: number; jitter: number }>();
+    for (const [name, extra] of rows) {
+      const x = run(c, extra);
+      expect(x.ran.status).toBe(0);
+      got.set(name, x);
+      console.log(`  #283 ${name}: slide (FEET worst horizontal drift) ${x.slide.toFixed(4)} leg lengths, jitter (worst JITTER ratio) ${x.jitter.toFixed(2)}`);
+    }
+    // Global: the tight tolerance holds the ankle but leaves the reach trunk's jitter; the loose one smooths it and slides.
+    expect(got.get('global 0.2')!.slide).toBeLessThanOrEqual(0.005);
+    expect(got.get('global 0.2')!.jitter).toBeGreaterThan(1.1);
+    expect(got.get('global 3')!.jitter).toBeLessThanOrEqual(1.1);
+    expect(got.get('global 3')!.slide).toBeGreaterThan(0.005);
+    // #251 holds the ankle at every tolerance but cannot smooth the trunk without seaming the supporting leg.
+    expect(got.get('keep-planted 0.2')!.jitter).toBeGreaterThan(1.1);
+    expect(got.get('keep-planted 3')!.jitter).toBeGreaterThan(1.1);
+    for (const name of ['global 0.2', 'global 3', 'keep-planted 0.2', 'keep-planted 3']) expect(passes(got.get(name)!)).toBe(false);
+    expect(passes(got.get('per-chain 3,leg_r=0.2,leg_l=0.2')!)).toBe(true);
+  }, SLOW);
+
+  test('the run names each chain held tighter, and its LAND lines and ankle allowance follow that chain', () => {
+    const c = walkCase();
+    const x = run(c, PER_CHAIN);
+    expect(x.ran.status).toBe(0);
+    expect(x.ran.stdout).toContain('reduce 3° (chain "leg_r" 0.2°, chain "leg_l" 0.2°)');
+    expect(linesOf(x.ran, 'REDUCE').filter((l) => l.startsWith('REDUCE rotate keys'))[0]).toContain('within 3° (chain "leg_r" 0.2°, chain "leg_l" 0.2°)');
+    for (const b of ['leg_r0', 'leg_r1', 'leg_l0', 'leg_l1']) {
+      expect(linesOf(x.ran, 'REDUCE').some((l) => l.startsWith(`REDUCE bone "${b}" rotate:`) && l.endsWith(`— within its chain's 0.2°`))).toBe(true);
+      const land = x.rep.landings.find((l) => l.bone === b && l.kind === 'angle')!;
+      expect(land.tolerance).toBe(0.21);
+      expect(land.worst).toBeLessThanOrEqual(0.21);
+    }
+    for (const b of ['chest', 'head', 'sleeve_r0']) expect(x.rep.landings.find((l) => l.bone === b && l.kind === 'angle')!.tolerance).toBe(3.01);
+    expect(linesOf(x.ran, 'REDUCE').filter((l) => l.includes('its leg reduced within 0.2°'))).toHaveLength(2);
+    expect(x.rep.reduce!.ankleDrift.map((d) => d.legTolerance)).toEqual([0.2, 0.2]);
+    expect(x.rep.reduce!.chains).toEqual({ leg_r: 0.2, leg_l: 0.2 });
+    expect(x.rep.options.reduceChains).toEqual({ leg_r: 0.2, leg_l: 0.2 });
+    // Without it, neither key is written, and a chain at the run's own tolerance writes the run's keys.
+    const g = run(c, ['--reduce', '3']);
+    expect(g.ran.status).toBe(0);
+    expect('chains' in g.rep.reduce!).toBe(false);
+    expect('reduceChains' in g.rep.options).toBe(false);
+    expect(g.rep.reduce!.ankleDrift.some((d) => 'legTolerance' in d)).toBe(false);
+    const motion = readFileSync(c.out);
+    const same = run(c, ['--reduce', '3,leg_r=3']);
+    expect(same.ran.status).toBe(0);
+    expect(readFileSync(c.out).equals(motion)).toBe(true);
+  }, SLOW);
+
+  test('refused by name: a chain the map lacks, a malformed item, a tolerance out of range, a chain twice', () => {
+    const c = walkCase();
+    const r = retarget(c, [...FLAGS, '--reduce', '3,legs=0.2']);
+    expect(r.status).toBe(1);
+    expect(fails(r).some((l) => l.includes('POSE_REDUCE: --reduce names chain "legs"') && l.includes('its chains are "trunk", "head", "arm_r", "arm_l", "leg_r", "leg_l"'))).toBe(true);
+    for (const [v, text] of [
+      ['3,leg_r', '"leg_r" is not <chain>=<deg>'],
+      ['3,leg_r=0', 'chain "leg_r" is "0", and it must be degrees in (0, 180)'],
+      ['3,leg_r=180', 'chain "leg_r" is "180"'],
+      ['x,leg_r=1', 'its first item "x" must be degrees in (0, 180)'],
+      ['3,leg_r=1,leg_r=2', 'chain "leg_r" is given twice'],
+    ] as const) {
+      const u = retarget(c, [...FLAGS, '--reduce', v]);
+      expect(u.status).toBe(2);
+      expect(u.stderr).toContain(text);
+    }
+    expect(existsSync(c.out)).toBe(false);
+  }, SLOW);
+
+  // The chains' tolerances parsed and printed but not handed to the reduction: the legs thinned within 3° must miss their 0.21° LAND, by name.
+  test('mutant: the chain tolerance not passed to the reduction — POSE_LANDS names a leg bone against its chain\'s tolerance', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'run.ts');
+      const from = 'const own = (b: string): { tolerance?: number } => (tolOf(b) === tolerance ? {} : { tolerance: tolOf(b) });';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'const own = (_b: string): { tolerance?: number } => ({});'));
+      const c = walkCase();
+      expect(run(c, PER_CHAIN).ran.status).toBe(0);
+      const m = run(c, PER_CHAIN, join(d, 'cli.ts'));
+      expect(m.ran.status).toBe(1);
+      const miss = fails(m.ran).filter((l) => l.includes('POSE_LANDS') && /bone "leg_[rl][01]" aim .* the tolerance is 0\.21°/.test(l));
+      expect(miss.length).toBeGreaterThan(0);
+      console.log(`  mutant "#283 chain tolerance dropped": ${miss[0]!.slice(0, 200)}`);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
     }
   }, SLOW);
 });
