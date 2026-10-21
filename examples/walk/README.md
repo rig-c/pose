@@ -4,7 +4,8 @@ A runnable loop with no art and no video, on the wave's stick figure:
 
 - `pose.json`: one walk cycle in place at 24 fps, written by `make-walk.ts` from joint angles and passed through `rig-pose clean` with `--loop` (legs 5, rest 7, the stillness hold off), so it carries the `cleaned` record `retarget` requires and is declared `"travel": "in-place"` (`bun examples/walk/make-walk.ts` writes it again);
 - `map.json`: the wave's map. The hinges are `"bend": "free"`, the legs have no `range`;
-- the rig is the wave's (`examples/wave/rig`): the figure has the same bone lengths.
+- the rig is the wave's (`examples/wave/rig`): the figure has the same bone lengths;
+- `make-pelvis.ts` ([#288](https://github.com/rig-c/pose/issues/288)): the same cycle with a drawn pelvis tilt, −15·sin φ (30° peak to peak), drawn as line-art PNG frames with rig-c's plate, beside hip keypoints that keep 0.15 of it, as a detector's do. Three variants: `drawn` (the pelvis an outlined trapezoid along the tilt), `covered` (a garment band whose top edge turns 12·cos φ, its hem level) and `masked` (the pelvis painted out). `bun examples/walk/make-pelvis.ts <out-dir> [drawn|covered|masked]` writes the frames and the sequence (before clean); `test/pelvis.test.ts` writes them into a temporary folder. `walkCycle` takes the tilt as an option, so without it `pose.json` is unchanged.
 
 ```sh
 rig-pose retarget --rig examples/wave/rig --map examples/walk/map.json --sequence examples/walk/pose.json --out walk.motion.json --name walk --plant-feet --leg-scale 0.8,1.05 --build walk-build
