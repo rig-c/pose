@@ -74,7 +74,7 @@ export interface SegmentDepth {
   source: DepthSource;
 }
 export type FrameDepth = Partial<Record<DepthSegment, SegmentDepth>>;
-/** The gait `clean --depth` was told the clip is: it decides the sign of a foreshortened shin. */
+/** The gait `clean --depth` was told the clip is (rig-c/pose#336): the signs are the same for both; it decides the joint `--draw-order depth` orders the legs by. */
 export const DEPTH_GAITS = ['walk', 'run'] as const;
 export type DepthGait = (typeof DEPTH_GAITS)[number];
 /**

@@ -82,8 +82,10 @@ clean (required before retarget; rig-c/pose#67)
                         (the trunk side-on). Which way a foreshortened segment leans comes from the body, with
                         "forward" the trunk's facing: thigh and forearm forward (a hip flexes forward, an elbow
                         bends back); an upper arm with the opposite leg (forward when the other thigh is the more
-                        foreshortened); a shin forward in a walk (the lifted foot comes forward) and back in a run
-                        (it is kicked back) — the gait is this flag's value. tools/skeleton.ts colours the segments
+                        foreshortened); a shin back (a knee folds it back) — the same in a walk and a run, after
+                        the owner's two statements (rig-c/pose#336): a walk's lifted foot is behind the supporting
+                        leg, a run's lifted leg is in front, its knee protruding. The gait is this flag's value and
+                        decides the joint --draw-order depth reads. tools/skeleton.ts colours the segments
                         by it, and retarget --report orders the limbs front to back by it (layers)
 
   In order, each step printed with its figures: (1) spikes — a joint more than 0.2 trunk lengths
@@ -191,10 +193,13 @@ retarget
                         (the shortfall listed). RAISED lines (default: off; rig-c/pose#62)
   --draw-order depth    key the legs' draw order from the sequence's depth (clean --depth; rig-c/pose#304): on
                         each frame the leg whose depth reads farther from the camera is drawn behind the other,
-                        a tie (equal depths) holding the order before, in rig-c's drawOrder timeline. The legs'
+                        a tie (equal depths) holding the order before, in rig-c's drawOrder timeline. The depth is
+                        read at the joint the gait names (rig-c/pose#336): a walk (clean --depth walk) by the ankle,
+                        the lifted foot behind; a run by the knee, the lifted leg in front. The legs'
                         slots must fill one unbroken run of the setup draw order (else the pair is not keyed and
                         the line names the slot between); a set's slot goes with the leg it depicts. Refused on
-                        a sequence without depth (DRAWORDER_NO_DEPTH). DRAWORDER lines (default: off)
+                        a sequence without depth (DRAWORDER_NO_DEPTH), and on a walk cleaned before rig-c/pose#336
+                        (a shin leaning forward: DEPTH_RECLEAN; clean it again). DRAWORDER lines (default: off)
   --contact-keys <file> which foot supports, by hand (rig-c/pose#303): rig-pose-contact-keys/1, { "spec":
                         "rig-pose-contact-keys/1", "keys": [{ "frame", "side" }], "note"? }, side l | r | both |
                         none; frames the sequence's, fractional allowed, strictly increasing in [0, N − 1]. A key
@@ -566,7 +571,7 @@ function runClean(argv: string[], say: (l: string) => void): void {
   const input = need(f, 'pose');
   const out = need(f, 'out');
   const gait = f.get('depth');
-  if (gait !== undefined && !(DEPTH_GAITS as readonly string[]).includes(gait)) throw new Usage(`--depth is "${gait}"; it must be ${DEPTH_GAITS.join(' or ')} (the gait decides which way a foreshortened shin leans: forward in a walk, back in a run)`);
+  if (gait !== undefined && !(DEPTH_GAITS as readonly string[]).includes(gait)) throw new Usage(`--depth is "${gait}"; it must be ${DEPTH_GAITS.join(' or ')} (the gait decides the joint --draw-order depth orders the legs by: the ankle in a walk, the knee in a run)`);
   const outPath = new Problems();
   const outDirs = planOutDirs([['--out', out]], outPath);
   outPath.throwIfAny();

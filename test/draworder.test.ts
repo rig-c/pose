@@ -1,20 +1,24 @@
 /**
  * rig-c/pose#304: `retarget --draw-order depth` keys rig-c's `drawOrder`
- * timeline from the sequence's derived depth (#281's `layers`): the leg that
- * reads farther from the camera is drawn behind the other, a frame inside #281's
- * tie holding the order before.
+ * timeline from the sequence's derived depth: the leg that reads farther from
+ * the camera is drawn behind the other, a frame inside the tie holding the order
+ * before. rig-c/pose#336: the depth is read at the joint the owner's statement
+ * for the gait names — a walk's lifted foot is behind the supporting leg (the
+ * ankle), a run's lifted leg is in front, its knee protruding (the knee).
  *
  * The fixtures are #281's (examples/walk/make-depth.ts): the frontal run in place
- * (the swinging shin kicked back to 0.41 of its length) and the frontal walk (the
- * lifted foot forward), cleaned with `--depth`, retargeted onto a synthetic
- * limb-cut rig whose leg slots overlap in the draw order — the left leg drawn
- * first at setup, so the run's kicked-back right leg is a keyed swap. The bars
- * (the card): (1) the run's kicked-back leg is behind the standing leg on every
- * frame its shin reads away, and the order returns to setup at the hand-over;
- * (2) the walk's forward foot is in front on its toward frames; (3) without the
- * flag nothing changes (the 13-file sha256 table is the PR's evidence; here, the
- * control's own output); (4) the render at the run's frame 12 draws no pixel of
- * the right leg over the standing left leg; (5) two runs are byte-equal.
+ * (the swinging shin kicked back to 0.41 of its length while the raised thigh
+ * brings the knee forward) and the frontal walk in place (the lifted foot
+ * behind), cleaned with `--depth`, retargeted onto a synthetic limb-cut rig whose
+ * leg slots overlap in the draw order — the left leg drawn first at setup. The
+ * bars (#336): (1) on the run, the lifted leg is drawn in front on every frame
+ * its knee protrudes, and the order agrees with the generator's knees wherever
+ * they differ by the tie; (2) on the walk, the lifted leg is drawn behind on
+ * every lifted frame, and the order agrees with the generator's ankles; (3)
+ * without the flag nothing changes (the sha256 table is the PR's evidence; here,
+ * the control's own output); (4) the render at the run's frame 5 draws no pixel
+ * of the standing right leg over the lifted left leg; (5) two runs are
+ * byte-equal.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
@@ -22,8 +26,8 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Plate, readPlate } from 'rig-c/plate';
-import { depthDoc, FIXTURES, trueOrder, type DepthFrame } from '../examples/walk/make-depth.ts';
-import { layersOf } from '../src/depth.ts';
+import { depthDoc, FIXTURES, trueJointOrder, trueOrder, type DepthFrame } from '../examples/walk/make-depth.ts';
+import { layersOf, limbJointDepths } from '../src/depth.ts';
 import { drawOrderFromDepth, drawOrderLines, type DrawOrderKey } from '../src/draworder.ts';
 import { readMap, type JointMap, type Rest } from '../src/map.ts';
 import { personTrack, readPoseSequence, type PoseSequence } from '../src/pose.ts';
@@ -36,8 +40,6 @@ const WAVE = join(ROOT, 'examples', 'wave', 'rig', 'rig.json');
 const MAP = join(ROOT, 'examples', 'walk', 'map.json');
 const MUTANTS = join(ROOT, 'node_modules', '.cache', 'rig-pose-mutants');
 const SLOW = 180_000;
-/** Bar (1)'s kicked-back shin: at or under this share of its rest length. */
-const KICKED = 0.5;
 
 const made: string[] = [];
 function tempDir(): string {
@@ -126,7 +128,7 @@ interface Report {
   options: Record<string, unknown>;
   feet: { supports: Array<{ side: 'r' | 'l'; frames: [number, number] }>; changes: Array<{ frame: number; from: string | null; to: string }> };
   layers: Array<{ frame: number; depth: Record<string, number> }>;
-  drawOrder?: { source: string; pairs: Array<{ a: string; b: string; limbs: string[]; keyed: boolean; tie: number | null; why?: string; slots: { a: string[]; b: string[] } }>; keys: Array<DrawOrderKey & { frame: number }>; spans: Array<{ behind: string; front: string; frames: [number, number]; keyed: boolean }> };
+  drawOrder?: { source: string; pairs: Array<{ a: string; b: string; limbs: string[]; keyed: boolean; tie: number | null; by?: string; why?: string; slots: { a: string[]; b: string[] } }>; keys: Array<DrawOrderKey & { frame: number }>; spans: Array<{ behind: string; front: string; frames: [number, number]; keyed: boolean }> };
 }
 
 /** The setup slot order with a key's offsets applied, as rig-c's parser rebuilds it (each key against the setup order). */
@@ -203,33 +205,43 @@ function retargeted(name: 'run' | 'walk', flag: boolean, o: RigOpts & { dir?: st
 }
 
 const SETUP = ['torso', 'leg_l0', 'leg_l1', 'leg_r0', 'leg_r1'];
-const supportAt = (rep: Report, f: number): 'r' | 'l' | null => rep.feet.supports.find((s) => f >= s.frames[0] && f <= s.frames[1])?.side ?? null;
-
+/** The DRAWORDER lines and the run's knee tie on the fixtures (#336), as measured. */
+const RUN_LINE = 'DRAWORDER from depth by the knee (run; tie 24.97 px), 6 key(s) over 3 span(s) (leg_r behind leg_l 2–11, 22–31, 42–51)';
+const WALK_LINE = 'DRAWORDER from depth by the ankle (walk; tie 46.83 px), 5 key(s) over 3 span(s) (leg_r behind leg_l 0–2, 15–26, 39–47)';
+const RUN_TIE = 24.97;
 /**
- * Bar (1)'s reading: on every frame the swinging leg's shin reads away (sign −1), its slots behind the
- * standing leg's. Returns the frames that miss, and the per-frame table.
+ * #336's reading: on every frame the generator lifts one leg (its swing; a run's flight frames lift both and are not
+ * counted), whether the keyed order draws the lifted leg in front or behind. `want` is the owner's statement for the
+ * gait. Returns the frames that miss, the count, and the per-frame table.
  */
-function kickedBehind(seq: PoseSequence, rep: Report, behind: Array<'r' | 'l'>, truth: DepthFrame[]): { misses: number[]; table: string[]; away: number } {
-  const table = ['| frame | support | r shin (ratio, sign) | l shin | depth r / l (px) | keyed behind | generator |', '| --- | --- | --- | --- | --- | --- | --- |'];
+function liftedOrder(seq: PoseSequence, behind: Array<'r' | 'l'>, truth: DepthFrame[], want: 'front' | 'behind'): { misses: number[]; table: string[]; lifted: number } {
+  const table = ['| frame | lifted | r thigh / shin | l thigh / shin | knee r / l (px) | ankle r / l (px) | keyed behind | generator knee | generator ankle |', '| --- | --- | --- | --- | --- | --- | --- | --- | --- |'];
   const misses: number[] = [];
-  let away = 0;
+  let lifted = 0;
+  const track = personTrack(seq, undefined, 'fixture');
   seq.frames.forEach((f, i) => {
-    const stand = supportAt(rep, i);
-    const swing = stand === 'r' ? 'l' : stand === 'l' ? 'r' : null;
-    const kicked = swing !== null && f.depth![`${swing}_shin`]!.sign === -1;
-    if (kicked) {
-      away++;
-      if (behind[i] !== swing) misses.push(i);
+    const up = truth[i]!.lifted;
+    const one = up.length === 1 ? up[0]! : null;
+    if (one !== null) {
+      lifted++;
+      if ((behind[i] === one) !== (want === 'behind')) misses.push(i);
     }
-    const t = trueOrder(truth[i]!, 'r_leg', 'l_leg');
-    const d = (s: 'r' | 'l') => `${f.depth![`${s}_shin`]!.ratio.toFixed(2)} ${f.depth![`${s}_shin`]!.sign}`;
-    table.push(`| ${i} | ${stand ?? '—'} | ${d('r')} | ${d('l')} | ${rep.layers[i]!.depth.r_leg} / ${rep.layers[i]!.depth.l_leg} | ${behind[i]}${kicked ? ' (kicked: ' + swing + ')' : ''} | ${t === 0 ? 'tied' : t > 0 ? 'l behind' : 'r behind'} |`);
+    const d = f.depth!;
+    const z = (s: 'r' | 'l') => limbJointDepths(track[i]!, d, `${s}_leg`)!;
+    const t = (j: 'knee' | 'ankle') => ({ 1: 'r front', 0: 'tied', [-1]: 'l front' })[trueJointOrder(truth[i]!, j)];
+    table.push(`| ${i} | ${up.join('') || '—'} | ${d.r_thigh!.sign} / ${d.r_shin?.sign ?? '—'} | ${d.l_thigh!.sign} / ${d.l_shin?.sign ?? '—'} | ${z('r').mid.toFixed(1)} / ${z('l').mid.toFixed(1)} | ${z('r').end?.toFixed(1) ?? '—'} / ${z('l').end?.toFixed(1) ?? '—'} | ${behind[i]}${one !== null && (behind[i] === one) !== (want === 'behind') ? ' ✗' : ''} | ${t('knee')} | ${t('ankle')} |`);
   });
-  return { misses, table, away };
+  return { misses, table, lifted };
 }
+/** The frames the generator orders the legs at `joint`, on which the keyed order draws the other leg in front. */
+const againstGenerator = (truth: DepthFrame[], behind: Array<'r' | 'l'>, joint: 'knee' | 'ankle'): number[] =>
+  truth.flatMap((f, i) => {
+    const t = trueJointOrder(f, joint);
+    return t !== 0 && behind[i] !== (t > 0 ? 'l' : 'r') ? [i] : [];
+  });
 
-describe('bar (1): the run — the kicked-back leg behind the standing leg on every away frame, the order back to setup at the hand-over', () => {
-  test('every frame whose swinging shin reads away draws that leg behind; each key sits within a frame of a hand-over; the generator agrees wherever it orders the legs', () => {
+describe('bar (1): the run — the lifted leg in front, by the knee (#336)', () => {
+  test('every frame whose lifted leg\'s knee protrudes draws that leg in front; the misses are the early swing, before the knee comes forward; the generator\'s knees agree wherever they differ by the tie', () => {
     const truth = FIXTURES.run();
     const r = retargeted('run', true);
     expect(r.ran.stderr).toBe('');
@@ -241,69 +253,56 @@ describe('bar (1): the run — the kicked-back leg behind the standing leg on ev
     expect(keysOffFrame(keys, r.report.drawOrder!.keys.map((x) => x.frame), r.report.frameTimes.length)).toEqual([]);
     // #334: no discrete key of the motion sits on a frame time.
     expect(keysOnFrameTimes(r.motion as MotionDoc, r.report.frameTimes)).toEqual([]);
-    const k = kickedBehind(r.seq, r.report, behind, truth);
-    console.log(`  #304 bar 1 — run, per frame (setup: the left leg behind):\n${k.table.join('\n')}`);
-    console.log(`  #304 bar 1 — ${k.away} kicked-back frames, ${k.misses.length} drawn in front (${k.misses.join(', ') || 'none'}); keys at frames ${r.report.drawOrder!.keys.map((x) => x.frame).join(', ')}; support changes at ${r.report.feet.changes.filter((c) => c.from !== null).map((c) => c.frame).join(', ')}`);
-    expect(k.away).toBeGreaterThan(20);
-    expect(k.misses).toEqual([]);
-    // Back to setup at the hand-over: every key (swap or restore) sits within one frame of a change of support FEET
-    // reads; the last key, within two of the loop's seam (the clip is cleaned --loop, so its last support hands over to
-    // its first at frame n; FEET reads that last span 11 frames long against the stride's 10, the first 9).
-    const changes = r.report.feet.changes.filter((c) => c.from !== null).map((c) => c.frame);
-    const sup = r.report.feet.supports;
-    expect(sup[0]!.side).not.toBe(sup[sup.length - 1]!.side);
-    const keyFrames = r.report.drawOrder!.keys.map((x) => x.frame);
-    for (const f of keyFrames.slice(0, -1)) expect(changes.some((c) => Math.abs(c - f) <= 1)).toBe(true);
-    expect(truth.length - keyFrames[keyFrames.length - 1]!).toBeLessThanOrEqual(2);
-    expect(r.report.drawOrder!.keys.filter((x) => x.offsets === undefined).length).toBeGreaterThan(0);
-    // Against the generator (true 3D depth), on the frames it orders the legs: a disagreement is only ever a frame
-    // inside #281's tie, where the order was held (the late swing: the knee comes forward of the push-off leg by more
-    // than the tie in 3D, by less in the derived depth). Their count is the tie's cost, printed.
-    const tie = r.report.drawOrder!.pairs[0]!.tie!;
-    const wrong = truth.flatMap((f, i) => {
-      const t = trueOrder(f, 'r_leg', 'l_leg');
-      return t !== 0 && behind[i] !== (t > 0 ? 'l' : 'r') ? [i] : [];
-    });
-    console.log(`  #304 bar 1 — generator-ordered frames ${truth.filter((f) => trueOrder(f, 'r_leg', 'l_leg') !== 0).length}, keyed against it ${wrong.length} (${wrong.join(', ') || 'none'}), every one inside the tie of ${tie} px`);
-    for (const i of wrong) expect(Math.abs(r.report.layers[i]!.depth.r_leg! - r.report.layers[i]!.depth.l_leg!)).toBeLessThan(tie);
-    // The DRAWORDER line, ≤ 260 characters.
+    const k = liftedOrder(r.seq, behind, truth, 'front');
+    // The knee protrudes when the lifted leg's thigh leans forward past the band (the generator's own sign).
+    const protrudes = (i: number) => truth[i]!.lifted.length === 1 && truth[i]!.truth[`${truth[i]!.lifted[0]!}_thigh`].sign === 1;
+    const raised = truth.flatMap((_, i) => (protrudes(i) ? [i] : []));
+    console.log(`  #336 bar 2 — run, per frame (setup: the left leg behind):\n${k.table.join('\n')}`);
+    console.log(`  #336 bar 2 — run: ${k.lifted} frames with one leg lifted, ${k.lifted - k.misses.length} draw it in front; of the ${raised.length} whose knee protrudes, ${raised.filter((i) => !k.misses.includes(i)).length} in front; misses at ${k.misses.join(', ') || 'none'}; keys at frames ${r.report.drawOrder!.keys.map((x) => x.frame).join(', ')}`);
+    expect(raised.length).toBeGreaterThan(20);
+    expect(k.misses.filter((i) => protrudes(i))).toEqual([]);
+    // A miss is the early swing: the lifted thigh still inside the band and the generator's knees within the knee tie,
+    // so neither knee protrudes and the order holds — the landing leg in front, as the generator's ankles have it (its
+    // limb means too, or tied: never the lifted leg in front).
+    for (const i of k.misses) {
+      const landing = truth[i]!.lifted[0] === 'r' ? -1 : 1;
+      expect(truth[i]!.truth[`${truth[i]!.lifted[0]!}_thigh`].sign).toBe(0);
+      expect(trueJointOrder(truth[i]!, 'knee')).toBe(0);
+      expect(trueJointOrder(truth[i]!, 'ankle')).toBe(landing);
+      expect([0, landing]).toContain(trueOrder(truth[i]!, 'r_leg', 'l_leg'));
+    }
+    expect(againstGenerator(truth, behind, 'knee')).toEqual([]);
+    console.log(`  #336 bar 2 — run: the generator orders the knees on ${truth.filter((f) => trueJointOrder(f, 'knee') !== 0).length} of ${truth.length} frames, the keyed order agrees on all`);
+    // The DRAWORDER line, ≤ 260 characters, names the joint and its tie.
     const line = linesOf(r.ran, 'DRAWORDER');
-    expect(line).toEqual(['DRAWORDER from depth, 6 key(s) over 3 span(s) (leg_r behind leg_l 8–17, 28–37, 48–57)']);
-    expect(r.report.drawOrder!.pairs).toEqual([{ a: 'leg_r', b: 'leg_l', limbs: ['r_leg', 'l_leg'], slots: { a: ['leg_r0', 'leg_r1'], b: ['leg_l0', 'leg_l1'] }, keyed: true, tie: 35.89 }]);
+    console.log(`  #336 bar 2 — ${line.join(' | ')}`);
+    expect(line).toEqual([RUN_LINE]);
+    expect(r.report.drawOrder!.pairs).toEqual([{ a: 'leg_r', b: 'leg_l', limbs: ['r_leg', 'l_leg'], slots: { a: ['leg_r0', 'leg_r1'], b: ['leg_l0', 'leg_l1'] }, keyed: true, tie: RUN_TIE, by: 'knee' }]);
     expect(r.report.options.drawOrder).toBe('depth');
   }, SLOW);
 });
 
-describe('bar (2): the walk — the forward foot in front on its toward frames', () => {
-  test('every frame a shin reads toward (sign +1) draws that leg in front', () => {
+describe('bar (2): the walk — the lifted foot behind, by the ankle (#336)', () => {
+  test('every frame with one leg lifted draws that leg behind; the generator\'s ankles agree wherever they differ by the tie', () => {
     const truth = FIXTURES.walk();
     const r = retargeted('walk', true);
+    expect(r.ran.stderr).toBe('');
     expect(r.ran.status).toBe(0);
-    const behind = behindPerFrame(SETUP, r.motion.animations.walk!.drawOrder!, r.report.frameTimes);
-    expect(keysOffFrame(r.motion.animations.walk!.drawOrder!, r.report.drawOrder!.keys.map((x) => x.frame), r.report.frameTimes.length)).toEqual([]);
+    const keys = r.motion.animations.walk!.drawOrder!;
+    const behind = behindPerFrame(SETUP, keys, r.report.frameTimes);
+    expect(keysOffFrame(keys, r.report.drawOrder!.keys.map((x) => x.frame), r.report.frameTimes.length)).toEqual([]);
     expect(keysOnFrameTimes(r.motion as MotionDoc, r.report.frameTimes)).toEqual([]);
-    const table = ['| frame | r thigh / shin | l thigh / shin | depth r / l (px) | keyed in front | generator |', '| --- | --- | --- | --- | --- | --- |'];
-    const misses: number[] = [];
-    let toward = 0;
-    r.seq.frames.forEach((f, i) => {
-      const d = f.depth!;
-      const fwd = (['r', 'l'] as const).filter((s) => d[`${s}_shin`]!.sign === 1);
-      for (const s of fwd) {
-        toward++;
-        if (behind[i] === s) misses.push(i);
-      }
-      const t = trueOrder(truth[i]!, 'r_leg', 'l_leg');
-      table.push(`| ${i} | ${d.r_thigh!.sign} / ${d.r_shin!.sign} | ${d.l_thigh!.sign} / ${d.l_shin!.sign} | ${r.report.layers[i]!.depth.r_leg} / ${r.report.layers[i]!.depth.l_leg} | ${behind[i] === 'r' ? 'l' : 'r'} | ${t === 0 ? 'tied' : t > 0 ? 'r front' : 'l front'} |`);
-    });
-    console.log(`  #304 bar 2 — walk, per frame:\n${table.join('\n')}`);
-    console.log(`  #304 bar 2 — ${toward} toward shin-frames, ${misses.length} drawn behind`);
-    expect(toward).toBeGreaterThan(20);
-    expect(misses).toEqual([]);
-    const wrong = truth.flatMap((f, i) => {
-      const t = trueOrder(f, 'r_leg', 'l_leg');
-      return t !== 0 && behind[i] !== (t > 0 ? 'l' : 'r') ? [i] : [];
-    });
-    expect(wrong).toEqual([]);
+    const k = liftedOrder(r.seq, behind, truth, 'behind');
+    console.log(`  #336 bar 1 — walk, per frame:\n${k.table.join('\n')}`);
+    console.log(`  #336 bar 1 — walk: ${k.lifted} frames with one leg lifted, ${k.lifted - k.misses.length} draw it behind (misses: ${k.misses.join(', ') || 'none'}); keys at frames ${r.report.drawOrder!.keys.map((x) => x.frame).join(', ')}`);
+    expect(k.lifted).toBeGreaterThan(30);
+    expect(k.misses).toEqual([]);
+    expect(againstGenerator(truth, behind, 'ankle')).toEqual([]);
+    console.log(`  #336 bar 1 — walk: the generator orders the ankles on ${truth.filter((f) => trueJointOrder(f, 'ankle') !== 0).length} of ${truth.length} frames, the keyed order agrees on all`);
+    const line = linesOf(r.ran, 'DRAWORDER');
+    console.log(`  #336 bar 1 — ${line.join(' | ')}`);
+    expect(line).toEqual([WALK_LINE]);
+    expect(r.report.drawOrder!.pairs[0]!.by).toBe('ankle');
   }, SLOW);
 });
 
@@ -323,38 +322,44 @@ describe('bar (3): without the flag nothing changes', () => {
   }, SLOW);
 });
 
-describe('bar (4): the render at the run\'s frame 12 draws no shin through the standing leg', () => {
-  test('of the pixels the left (standing) leg draws on its own, none shows the right leg\'s colours with the flag; without it the kicked-back shin covers some (control)', () => {
+describe('bar (4): the render at the run\'s frame 12 draws no pixel of the standing leg over the lifted leg', () => {
+  test('on a rig that draws the right leg first: of the pixels the right (lifted, knee forward) leg draws on its own, none shows the left leg\'s colours with the flag; without it the standing left leg covers some (control)', () => {
     const dir = tempDir();
+    const FRAME = 12;
+    const order = ['torso', 'leg_r0', 'leg_r1', 'leg_l0', 'leg_l1'];
     const count = (r: Retargeted, tag: string): { mask: number; over: number } => {
       const out = join(r.dir, `render-${tag}`);
-      const outL = join(r.dir, `render-${tag}-l`);
-      for (const [o, extra] of [[out, []], [outL, ['--slot', 'leg_l0,leg_l1']]] as const) {
+      const outR = join(r.dir, `render-${tag}-r`);
+      for (const [o, extra] of [[out, []], [outR, ['--slot', 'leg_r0,leg_r1']]] as const) {
         const ran = spawnSync(process.execPath, [rigcCli(), 'render', '--candidate', r.build, '--animation', 'run', '--fps', '24', '--max', '512', '--out', o, ...extra], { encoding: 'utf8', cwd: ROOT });
         expect(ran.status).toBe(0);
       }
-      const png = join(out, 'run@24fps', 'f0012.png');
-      const full = readPlate(png);
-      const l = readPlate(join(outL, 'run@24fps', 'f0012.png'));
-      const bg = l.get(0, 0);
+      const name = `f${String(FRAME).padStart(4, '0')}.png`;
+      const full = readPlate(join(out, 'run@24fps', name));
+      const right = readPlate(join(outR, 'run@24fps', name));
+      const bg = right.get(0, 0);
       const same = (a: ArrayLike<number>, b: ArrayLike<number>) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
       let mask = 0;
       let over = 0;
-      for (let y = 0; y < l.height; y++) for (let x = 0; x < l.width; x++) {
-        if (same(l.get(x, y), bg)) continue;
+      for (let y = 0; y < right.height; y++) for (let x = 0; x < right.width; x++) {
+        if (same(right.get(x, y), bg)) continue;
         mask++;
         const c = full.get(x, y);
-        if (same(c, RED) || same(c, RED_SHIN)) over++;
+        if (same(c, BLUE) || same(c, BLUE_SHIN)) over++;
       }
       return { mask, over };
     };
-    const on = retargeted('run', true, { dir });
-    const off = retargeted('run', false, { dir: join(dir, 'off'), sequence: join(dir, 'run.clean.json') });
+    const on = retargeted('run', true, { dir, order });
+    const off = retargeted('run', false, { dir: join(dir, 'off'), sequence: join(dir, 'run.clean.json'), order });
     expect(on.ran.status).toBe(0);
     expect(off.ran.status).toBe(0);
+    // Frame 12: the right leg lifted, its knee forward (the generator's lifted thigh leans toward the camera).
+    const truth = FIXTURES.run()[FRAME]!;
+    expect(truth.lifted).toEqual(['r']);
+    expect(truth.truth.r_thigh.sign).toBe(1);
     const a = count(on, 'on');
     const b = count(off, 'off');
-    console.log(`  #304 bar 4 — frame 12: the left leg draws ${a.mask} px; the right leg's colours over them: ${a.over} with --draw-order depth, ${b.over} without`);
+    console.log(`  #336 bar 4 — frame ${FRAME}: the lifted right leg draws ${a.mask} px; the standing left leg's colours over them: ${a.over} with --draw-order depth, ${b.over} without`);
     expect(a.mask).toBeGreaterThan(1000);
     expect(a.over).toBe(0);
     expect(b.over).toBeGreaterThan(100);
@@ -450,18 +455,38 @@ describe('refusals, the pair rule and the sets', () => {
   });
 });
 
-describe('mutants: the rule\'s direction and its tie, each making bar (1) red', () => {
+/** The pure draw order on a retargeted fixture's own sequence, through `mod` (the real module or a mutant). */
+function pureBehind(mod: { drawOrderFromDepth: typeof drawOrderFromDepth }, r: Retargeted, gait: 'walk' | 'run' | null, depth?: PoseSequence['frames'][number]['depth'][]): { behind: Array<'r' | 'l'>; tie: number | null } {
+  const track = personTrack(r.seq, undefined, 'run');
+  const ds = depth ?? r.seq.frames.map((f) => f.depth);
+  const layers = track.map((j, i) => layersOf(j, ds[i]!));
+  const map = readMap(readFileSync(MAP, 'utf8'), MAP);
+  const wave = JSON.parse(readFileSync(WAVE, 'utf8')) as { bones: Array<{ name: string; parent?: string }> };
+  const rest = new Map(wave.bones.map((b) => [b.name, { parent: b.parent ?? null }])) as unknown as Rest;
+  const order = SETUP.map((n) => ({ name: n, bone: n === 'torso' ? 'chest' : n }));
+  const d = mod.drawOrderFromDepth(layers, track, ds, r.report.frameTimes, map, rest, order, undefined, true, gait);
+  return { behind: behindPerFrame(SETUP, d.keys, r.report.frameTimes), tie: d.pairs[0]!.tie };
+}
+/** Bar (1)'s misses (the run: a frame whose lifted knee protrudes, drawn behind) and bar (2)'s (the walk: a lifted frame drawn in front). */
+function barMisses(name: 'run' | 'walk', r: Retargeted, behind: Array<'r' | 'l'>): number[] {
+  const truth = FIXTURES[name]();
+  const k = liftedOrder(r.seq, behind, truth, name === 'run' ? 'front' : 'behind');
+  return name === 'walk' ? k.misses : k.misses.filter((i) => truth[i]!.truth[`${truth[i]!.lifted[0]!}_thigh`].sign === 1);
+}
+
+describe('mutants: the rule\'s direction, the gait\'s joint and the limb mean, each making a bar red', () => {
   const MUTS = [
-    { name: 'the nearer leg drawn behind (direction flipped)', from: "state = za < zb ? 'a' : 'b';", to: "state = za < zb ? 'b' : 'a';" },
-    { name: 'no tie (any difference decides)', from: 'const tie = r.pair.tie ?? 0;', to: 'const tie = 0;' },
-  ];
+    { name: 'the nearer leg drawn behind (direction flipped)', from: "state = za < zb ? 'a' : 'b';", to: "state = za < zb ? 'b' : 'a';", red: ['run', 'walk'] },
+    { name: 'the joints swapped: a walk by the knee, a run by the ankle (#281\'s swapped record; the run half is #335\'s reading)', from: "export const ORDER_JOINT: Record<DepthGait, LegJoint> = { walk: 'ankle', run: 'knee' };", to: "export const ORDER_JOINT: Record<DepthGait, LegJoint> = { walk: 'knee', run: 'ankle' };", red: ['run', 'walk'] },
+    { name: 'the limb mean for every gait (#304\'s rule)', from: 'const by = gait === null ? undefined : ORDER_JOINT[gait];', to: 'const by = gait === null ? undefined : (undefined as LegJoint | undefined);', red: ['run', 'walk'] },
+  ] as const;
   for (const mu of MUTS) {
     test(`mutant: ${mu.name}`, async () => {
-      const truth = FIXTURES.run();
-      const ref = retargeted('run', true);
-      expect(ref.ran.status).toBe(0);
+      const refs = { run: retargeted('run', true), walk: retargeted('walk', true) };
+      expect(refs.run.ran.status).toBe(0);
+      expect(refs.walk.ran.status).toBe(0);
       mkdirSync(MUTANTS, { recursive: true });
-      const d = mkdtempSync(join(MUTANTS, 'm304-'));
+      const d = mkdtempSync(join(MUTANTS, 'm336-'));
       try {
         cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
         const path = join(d, 'src', 'draworder.ts');
@@ -469,29 +494,151 @@ describe('mutants: the rule\'s direction and its tie, each making bar (1) red', 
         expect(src.split(mu.from)).toHaveLength(2);
         writeFileSync(path, src.replace(mu.from, mu.to));
         const m = (await import(path)) as { drawOrderFromDepth: typeof drawOrderFromDepth };
-        const track = personTrack(ref.seq, undefined, 'run');
-        const layers = track.map((j, i) => layersOf(j, ref.seq.frames[i]!.depth!));
-        const map = readMap(readFileSync(MAP, 'utf8'), MAP);
-        const wave = JSON.parse(readFileSync(WAVE, 'utf8')) as { bones: Array<{ name: string; parent?: string }> };
-        const rest = new Map(wave.bones.map((b) => [b.name, { parent: b.parent ?? null }])) as unknown as Rest;
-        const order = SETUP.map((n) => ({ name: n, bone: n === 'torso' ? 'chest' : n }));
-        const dd = m.drawOrderFromDepth(layers, track, ref.seq.frames.map((f) => f.depth), ref.report.frameTimes, map, rest, order, undefined, true);
-        const behind = behindPerFrame(SETUP, dd.keys, ref.report.frameTimes);
-        const k = kickedBehind(ref.seq, ref.report, behind, truth);
-        console.log(`  #304 mutant "${mu.name}": ${k.misses.length} of ${k.away} kicked-back frames drawn in front (${k.misses.join(', ')})`);
-        expect(k.misses.length).toBeGreaterThan(0);
+        for (const name of ['run', 'walk'] as const) {
+          // The control: the real module, the same call, no miss.
+          expect(barMisses(name, refs[name], pureBehind({ drawOrderFromDepth }, refs[name], name).behind)).toEqual([]);
+          const misses = barMisses(name, refs[name], pureBehind(m, refs[name], name).behind);
+          console.log(`  #336 mutant "${mu.name}" — ${name}: ${misses.length} frame(s) against the owner's statement (${misses.join(', ') || 'none'})`);
+          if ((mu.red as readonly string[]).includes(name)) expect(misses.length).toBeGreaterThan(0);
+        }
       } finally {
         rmSync(d, { recursive: true, force: true });
       }
     }, SLOW);
   }
+
+  test('the tie, planted: knees 10 px apart (inside the knee tie) hold the order before; mutant: no tie, and they swap it', async () => {
+    const ref = retargeted('run', true);
+    expect(ref.ran.status).toBe(0);
+    const track = personTrack(ref.seq, undefined, 'run');
+    // Frames 3–6: the left leg lifted, its knee forward (decided on frame 2). Plant the standing right thigh leaning
+    // forward too, its knee 10 px in front of the left's: closer than the knee tie, so the left stays in front.
+    const PLANTED = [3, 4, 5, 6];
+    const depth = ref.seq.frames.map((f, i) => {
+      if (!PLANTED.includes(i)) return f.depth;
+      const lKnee = limbJointDepths(track[i]!, f.depth!, 'l_leg')!.mid;
+      const [a, b] = [track[i]!.r_hip!.at!, track[i]!.r_knee!.at!];
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const ratio = 1 / Math.sqrt(1 + ((lKnee + 10) / len) ** 2);
+      return { ...f.depth, r_thigh: { ratio, sign: 1 as const, source: 'derived' as const } };
+    });
+    for (const i of PLANTED) {
+      const z = (s: 'r' | 'l') => limbJointDepths(track[i]!, depth[i]!, `${s}_leg`)!.mid;
+      expect(z('r') - z('l')).toBeCloseTo(10, 6);
+    }
+    const real = pureBehind({ drawOrderFromDepth }, ref, 'run', depth);
+    expect(real.tie! > 10).toBe(true);
+    expect(PLANTED.map((i) => real.behind[i])).toEqual(['r', 'r', 'r', 'r']);
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm336-tie-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      const path = join(d, 'src', 'draworder.ts');
+      const src = readFileSync(path, 'utf8');
+      const from = 'const tie = r.pair.tie ?? 0;';
+      expect(src.split(from)).toHaveLength(2);
+      writeFileSync(path, src.replace(from, 'const tie = 0;'));
+      const m = (await import(path)) as { drawOrderFromDepth: typeof drawOrderFromDepth };
+      const mut = pureBehind(m, ref, 'run', depth);
+      console.log(`  #336 mutant "no tie": the planted frames ${PLANTED.join(', ')} draw the right leg ${PLANTED.map((i) => (mut.behind[i] === 'r' ? 'behind' : 'in front')).join(', ')} (with the tie of ${real.tie} px: behind on all)`);
+      expect(PLANTED.map((i) => mut.behind[i])).toEqual(['l', 'l', 'l', 'l']);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
+describe('#336 review: the knee without the ankle, and a record cleaned with the table before #336', () => {
+  /** The run's sequence with both ankles missing (and the shins' depth gone, as clean writes none there) on `drop` frames. */
+  const withoutAnkles = (seq: PoseSequence, drop: (i: number) => boolean): PoseSequence => ({
+    ...seq,
+    frames: seq.frames.map((f, i) => {
+      if (!drop(i)) return f;
+      const { r_shin: _r, l_shin: _l, ...depth } = f.depth!;
+      return { ...f, depth, people: f.people.map((p) => ({ ...p, joints: { ...p.joints, r_ankle: { state: 'missing' as const }, l_ankle: { state: 'missing' as const } } })) };
+    }),
+  });
+
+  test('a run frame without its ankles still orders the legs at the knee; with no ankle on any frame the knee tie still reads; mutant: the knee requiring the shin holds the order instead', async () => {
+    const ref = retargeted('run', true);
+    expect(ref.ran.status).toBe(0);
+    const base = pureBehind({ drawOrderFromDepth }, ref, 'run');
+    const cases = [
+      { name: 'frames 2–6, 12–16, … (every swing a key decides on)', drop: (i: number) => i % 10 >= 2 && i % 10 <= 6 },
+      { name: 'every frame (no ankle anywhere: a knee-only sequence)', drop: () => true },
+    ];
+    for (const c of cases) {
+      const r2 = { ...ref, seq: withoutAnkles(ref.seq, c.drop) };
+      const got = pureBehind({ drawOrderFromDepth }, r2, 'run', r2.seq.frames.map((f) => f.depth));
+      console.log(`  #336 review 1 — ankles missing on ${c.name}: tie ${got.tie} px, ${got.behind.filter((b, i) => b !== base.behind[i]).length} frame(s) ordered otherwise than with the ankles`);
+      expect(got.tie).toBe(base.tie);
+      expect(got.behind).toEqual(base.behind);
+      expect(barMisses('run', r2, got.behind)).toEqual([]);
+    }
+    // Mutant: the knee depth given only where the shin is named too (the helper before the review).
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm336-knee-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      const path = join(d, 'src', 'depth.ts');
+      const src = readFileSync(path, 'utf8');
+      const from = 'if (du === undefined || lu === null) return null;';
+      expect(src.split(from)).toHaveLength(2);
+      writeFileSync(path, src.replace(from, 'if (du === undefined || dl === undefined || lu === null || ll === null) return null;'));
+      const m = (await import(join(d, 'src', 'draworder.ts'))) as { drawOrderFromDepth: typeof drawOrderFromDepth };
+      const r2 = { ...ref, seq: withoutAnkles(ref.seq, cases[0]!.drop) };
+      const got = pureBehind(m, r2, 'run', r2.seq.frames.map((f) => f.depth));
+      const misses = barMisses('run', r2, got.behind);
+      console.log(`  #336 review 1 mutant "knee needs the shin": ${misses.length} knee-protruding frame(s) drawn behind (${misses.join(', ')})`);
+      expect(misses.length).toBeGreaterThan(0);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+
+  test('a walk record with the shin signs of the table before #336 is refused by name with --draw-order depth (DEPTH_RECLEAN), read without it; a run record from before (the same signs) and a measured depth are read', () => {
+    const dir = tempDir();
+    const fresh = cleaned(FIXTURES.walk(), 'walk', dir, 'walk');
+    // The table before #336 leaned a walk's foreshortened shin forward: the same record with every shin sign the other way.
+    const doc = JSON.parse(readFileSync(fresh, 'utf8')) as { frames: Array<{ depth: Record<string, { sign: number }> }> };
+    let flipped = 0;
+    for (const f of doc.frames) for (const s of ['r_shin', 'l_shin']) if (f.depth[s] !== undefined && f.depth[s]!.sign !== 0) {
+      f.depth[s]!.sign = -f.depth[s]!.sign;
+      flipped++;
+    }
+    expect(flipped).toBe(28);
+    const old = join(dir, 'walk.old.clean.json');
+    writeFileSync(old, JSON.stringify(doc, null, 2));
+    const r = retargeted('walk', true, { dir: join(dir, 'old'), sequence: old });
+    console.log(`  #336 review 2 — ${r.ran.stderr.trim()}`);
+    expect(r.ran.status).toBe(1);
+    expect(r.ran.stderr).toContain(`DEPTH_RECLEAN: ${old} carries derived depth (clean --depth walk) whose foreshortened shin leans forward, the way the trunk faces, on 28 frame(s) (3, 4, 5, 6, 7, … +23 more): the sign table before rig-c/pose#336, where a walk's lifted foot read forward. --draw-order depth reads a walk at the ankle and would draw that foot in front of the supporting leg. Clean it again with this version (rig-pose clean --depth walk), which leans a foreshortened shin back in both gaits; a sequence cleaned with --depth run by an earlier release is read as it is (its signs did not change), and measured depth is not checked`);
+    expect(existsSync(join(dir, 'old', 'walk.motion.json'))).toBe(false);
+    // Without the flag nothing reads the order, and the record is read as before.
+    expect(retargeted('walk', false, { dir: join(dir, 'old-off'), sequence: old }).ran.status).toBe(0);
+    // Cleaned again, it is read.
+    expect(retargeted('walk', true, { dir: join(dir, 'again'), sequence: cleaned(FIXTURES.walk(), 'walk', join(dir), 'walk2') }).ran.status).toBe(0);
+    // A run record: the run's signs did not change, so a release before #336 wrote these bytes (the PR's sha256 table); read.
+    const run = retargeted('run', true, { dir: join(dir, 'run') });
+    expect(run.ran.status).toBe(0);
+    expect(run.ran.stderr).not.toContain('DEPTH_RECLEAN');
+    // Measured depth is a detector's, not the table's: the same forward shins marked measured are read.
+    const measured = structuredClone(doc) as unknown as { frames: Array<{ depth: Record<string, { source: string }> }>; cleaned: { params: Record<string, unknown> } };
+    for (const f of measured.frames) for (const v of Object.values(f.depth)) v.source = 'measured';
+    delete measured.cleaned.params.depth;
+    const mpath = join(dir, 'walk.measured.json');
+    writeFileSync(mpath, JSON.stringify(measured, null, 2));
+    const m = retargeted('walk', true, { dir: join(dir, 'measured'), sequence: mpath });
+    expect(m.ran.stderr).not.toContain('DEPTH_RECLEAN');
+    expect(m.ran.status).toBe(0);
+  }, SLOW);
 });
 
 describe('rig-c/pose#324: why nothing keyed — the slot count first, and the leg depth gap against the tie', () => {
   type Gap = { a: string; b: string; median: number | null; max: number | null; medianLegs: number | null; maxLegs: number | null; tie: number | null; tieLegs: number | null; passed: number; frames: number };
   const gapsOf = (r: Retargeted): Gap[] => (r.report.drawOrder as unknown as { gaps: Gap[] }).gaps;
-  const gapLine = (g: Gap): string =>
-    `DRAWGAP ${g.a} / ${g.b}: leg depth gap median ${g.median} px (${g.medianLegs} leg), max ${g.max} px (${g.maxLegs} leg), against the tie of ${g.tie} px (${g.tieLegs} leg); ${g.passed} of ${g.frames} frame(s) passed it`;
+  const gapLine = (g: Gap, by: string): string =>
+    `DRAWGAP ${g.a} / ${g.b}: leg depth gap at the ${by} median ${g.median} px (${g.medianLegs} leg), max ${g.max} px (${g.maxLegs} leg), against the tie of ${g.tie} px (${g.tieLegs} leg); ${g.passed} of ${g.frames} frame(s) passed it`;
 
   test('bar 1: slots between the pair — the count is in stdout, and the not-keyed pair still gets its gap line', () => {
     const r = retargeted('run', true, { order: ['leg_l0', 'leg_l1', 'torso', 'leg_r0', 'leg_r1'] });
@@ -500,24 +647,27 @@ describe('rig-c/pose#324: why nothing keyed — the slot count first, and the le
     expect(r.report.drawOrder!.pairs[0]!.why).toBe('1 slot: "torso" is drawn between them, and a swap would re-layer it (the setup order is not changed here)');
     const gaps = gapsOf(r);
     expect(gaps).toHaveLength(1);
-    expect(linesOf(r.ran, 'DRAWGAP')).toEqual([gapLine(gaps[0]!)]);
+    expect(linesOf(r.ran, 'DRAWGAP')).toEqual([gapLine(gaps[0]!, 'knee')]);
   }, SLOW);
 
-  test('bar 2: the keyed run — the gap line\'s figures match the report, and the report\'s match the layers', () => {
+  test('bar 2: the keyed run — the gap line\'s figures match the report, and the report\'s match the knee depths the rule reads (#336)', () => {
     const r = retargeted('run', true);
     expect(r.ran.status).toBe(0);
     const [g] = gapsOf(r);
     const line = linesOf(r.ran, 'DRAWGAP');
     console.log(`  #324 bar 2 — ${line[0]}`);
-    expect(line).toEqual([gapLine(g!)]);
+    expect(line).toEqual([gapLine(g!, 'knee')]);
     expect(line[0]!.length).toBeLessThanOrEqual(260);
-    // The report against the layers it reads: |r_leg − l_leg| per frame, its median and max, the frames at or past the tie.
-    const d = r.report.layers.map((l) => Math.abs(l.depth.r_leg! - l.depth.l_leg!)).sort((x, y) => x - y);
+    // The report against the depths it reads, a run's at the knee (#336): |r − l| per frame, its median and max, the frames at or past the tie.
+    const track = personTrack(r.seq, undefined, 'run');
+    const knee = (i: number, s: 'r' | 'l') => Math.round(limbJointDepths(track[i]!, r.seq.frames[i]!.depth!, `${s}_leg`)!.mid * 100) / 100;
+    const d = r.seq.frames.map((_, i) => Math.abs(knee(i, 'r') - knee(i, 'l'))).sort((x, y) => x - y);
     const m = d.length >> 1;
     const median = d.length % 2 === 1 ? d[m]! : (d[m - 1]! + d[m]!) / 2;
     expect(g!.frames).toBe(d.length);
-    expect(g!.median).toBeCloseTo(median, 2);
-    expect(g!.max).toBeCloseTo(d[d.length - 1]!, 2);
+    // The report rounds once, to 0.01 px (a median of two may sit on the half).
+    expect(Math.abs(g!.median! - median)).toBeLessThanOrEqual(0.005 + 1e-9);
+    expect(Math.abs(g!.max! - d[d.length - 1]!)).toBeLessThanOrEqual(0.005 + 1e-9);
     expect(g!.tie).toBe(r.report.drawOrder!.pairs[0]!.tie);
     expect(g!.passed).toBe(d.filter((x) => x > 0 && x >= g!.tie!).length);
     expect(g!.passed).toBeGreaterThan(0);
