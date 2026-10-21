@@ -302,6 +302,7 @@ Every key `rig-pose-report/1` can carry, once: the keys `src/run.ts` writes, and
 | `folds` | courtesy | — | |
 | `seams` | courtesy | — | |
 | `seamPairs` | courtesy | — | |
+| `switchRuns` | courtesy | — | (rig-c/pose#279) |
 | `drawOrder` | courtesy | — | (rig-c/pose#304) |
 | `reach` | courtesy | — | |
 | `reachOrigin` | courtesy | — | only when the map has a `reach` chain (rig-c/pose#282) |
