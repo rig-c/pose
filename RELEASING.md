@@ -114,10 +114,13 @@ No other repository in the org (core, parts, play, adapters, parts-examples, tra
 | exit `0` written · `1` refused (every problem printed, nothing written) · `2` bad invocation | promised | S, X, D |
 | `rig-pose retarget` | promised | S, X, D |
 | `rig-pose clean` | promised | D |
+| `rig-pose pelvis` (rig-c/pose#288) | courtesy | — |
 | `rig-pose compare` | promised | S (the R3 sheet offers it) |
 | `rig-pose convert` | courtesy | — |
 | `rig-pose --version`, `--help` | promised | S, X |
 | `rig-pose-sequence/1` (the pose) | promised | S, R, D |
+| `rig-pose-sequence/1.1` (the pose with the pelvis track, `pelvisTilt` and `pelvisSource`, rig-c/pose#288) | courtesy | — |
+| `rig-pose-pelvis-keys/1` (`pelvis --pelvis-keys`) | courtesy | — |
 | `rig-pose-map/1` (the map) | promised | S, X, D |
 | `rig-pose-report/1` (the report) | promised, as below | S, R |
 | `rig-pose-camera/1` (`--camera`) | promised | S |
@@ -130,6 +133,12 @@ Every flag `parseFlags` reads in `cli.ts`, once. `test/promise.test.ts` holds th
 
 | command | flag | status | use | note |
 | --- | --- | --- | --- | --- |
+| `pelvis` | `--pose` | courtesy | — | |
+| `pelvis` | `--out` | courtesy | — | |
+| `pelvis` | `--frames` | courtesy | — | |
+| `pelvis` | `--mode` | courtesy | — | |
+| `pelvis` | `--pelvis-keys` | courtesy | — | |
+| `pelvis` | `--person` | courtesy | — | |
 | `clean` | `--pose` | promised | D | |
 | `clean` | `--out` | promised | D | |
 | `clean` | `--legs` | courtesy | — | |
@@ -242,6 +251,7 @@ Every key `rig-pose-report/1` can carry, once: the keys `src/run.ts` writes, and
 | `body` | courtesy | — | |
 | `legScale` | courtesy | — | |
 | `pivot` | courtesy | — | |
+| `pelvis` | courtesy | — | |
 | `stance` | courtesy | — | |
 | `idleDropped` | courtesy | — | |
 | `idleKeptOut` | courtesy | — | |

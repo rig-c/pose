@@ -13,17 +13,45 @@ import { convertCoco17, readPoseSequence, writePoseSequence } from './src/pose.t
 import { parseWindows } from './src/compare.ts';
 import { lineOf, Refusal } from './src/problems.ts';
 import { runCompare, type CompareArgs } from './src/runcompare.ts';
+import { PELVIS_MODES, runPelvis, type PelvisMode } from './src/pelvis.ts';
 import { PROVENANCE_FILE } from './src/provenance.ts';
 import { runRetarget, type RetargetArgs } from './src/run.ts';
 
 const HELP = `rig-pose ${pkg.version} — motion from a pose sequence onto a rig-c rig
 
 Usage:
+  rig-pose pelvis --pose <pose.json> --out <pose.pelvis.json> (--frames <dir> [--mode silhouette|waistband] | --pelvis-keys <keys.json>) [--person <id>]
   rig-pose clean --pose <pose.json> --out <pose.clean.json> [--loop] [--legs 5] [--rest 7] [--hold off] [--coco] [--person <id>]
   rig-pose retarget --rig <rig> --map <map.json> --sequence <pose.json> --out <motion.json> [--animation dance] [flags]
   rig-pose convert --coco <coco17.json> --out <pose.json>
   rig-pose compare --reference <pose.json> --render <pose.json> --map <map.json> [flags]
   rig-pose --version | --help
+
+pelvis (before clean; rig-c/pose#288)
+  --pose <file>         rig-pose-sequence/1 as a scan wrote it, before clean (a cleaned one is refused,
+                        PELVIS_AFTER_CLEAN: clean must smooth the track this writes)
+  --out <file>          the same sequence with the pelvis track: "pelvisTilt" on every frame and "pelvisSource",
+                        written as rig-pose-sequence/1.1. pelvisTilt is Spine degrees (counter-clockwise, y up) of
+                        the direction from the figure's right hip to its left — the angle retarget reads off
+                        r_hip → l_hip, about 0 facing the camera — or null on a frame the reading declined
+  --frames <dir>        the picture: one PNG per sequence frame, in file-name order, the sequence's size (no video;
+                        extract the frames first). The hip keypoints place the reading; their angle is not read
+  --mode silhouette|waistband
+                        silhouette (default): the straightest edge of the drawn figure across the hip span (between
+                        the two hip keypoints), within 40° of level and one hip width of the hips' height — a drawn
+                        pelvis line or the edge of a drawn hip. waistband: the top edge of a garment covering the hips
+                        (skirt, shorts) — the colour at the hips' midpoint, its first row in each column of the span.
+                        Forearms (elbow → wrist) and hands are masked. A frame either cannot read (the pelvis blank,
+                        no garment, no straight edge over 60% of the span) is declined, named on a DECLINED line,
+                        and written null: marked, not guessed
+  --pelvis-keys <file>  the hand override, instead of --frames: rig-pose-pelvis-keys/1, { "spec":
+                        "rig-pose-pelvis-keys/1", "keys": [{ "frame", "deg" }], "note"? } — the tilt in pelvisTilt's
+                        sense at frames, linear between keys (the short way round) and held outside them;
+                        pelvisSource "keys"
+  --person <id>         the person to read when the sequence holds more than one; only that person is written
+
+  clean then smooths pelvisTilt as its own track (the legs' window, wrapped with --loop), and retarget keys
+  the map's pelvis chain (one bone, joints r_hip → l_hip) from it, printing PELVIS: from <source>, swing N°.
 
 clean (required before retarget; rig-c/pose#67)
   --pose <file>         rig-pose-sequence/1 as a scan wrote it, or COCO-17 with --coco
@@ -506,6 +534,7 @@ function runClean(argv: string[], say: (l: string) => void): void {
   for (const m of c.missing) say(`  MISSING joint "${m.joint}" frame${m.from === m.to ? ` ${m.from}` : `s ${m.from}–${m.to}`}: no position; left without one (retarget holds it)`);
   const sg = (w: number) => (w === 1 ? '1 frame (none)' : `${w} frames`);
   say(`  SMOOTH quadratic Savitzky–Golay per joint: legs (${LEGS.join(', ')}) over ${sg(params.legs)}, the rest over ${sg(params.rest)}; ${params.loop ? 'circular' : 'the window cut at the ends'}`);
+  if (c.pelvis !== null) say(`  PELVIS pelvisTilt (${c.pelvis.source}) smoothed as its own track over ${sg(c.pelvis.window)} (the legs' window), ${params.loop ? 'circular' : 'the window cut at the ends'}, on the ${c.pelvis.read} of ${c.pelvis.frames} frame(s) that carry a reading (a null stays null); largest change ${fmt(c.pelvis.moved, 3)}°`);
   if (params.loop) {
     if (c.floor === null) say('  FLOOR  no ankle has a position on any frame; not re-pinned');
     else say(`  FLOOR  the lowest ankle over the cycle: y ${fmt(c.floor.before)} before smoothing, ${fmt(c.floor.after)} after; every joint moved ${c.floor.shift >= 0 ? '+' : ''}${fmt(c.floor.shift, 3)} px in y`);
@@ -562,6 +591,15 @@ export function main(argv: string[]): number {
       runClean(rest, (l) => process.stdout.write(`${l}\n`));
       return 0;
     }
+    if (cmd === 'pelvis') {
+      const f = parseFlags(rest, ['pose', 'out', 'frames', 'mode', 'pelvis-keys', 'person'], []);
+      if (f.has('frames') === f.has('pelvis-keys')) throw new Usage(f.has('frames') ? '--frames and --pelvis-keys are both given; the track is read off the frames or taken from the hand keys, so give one' : '--frames <dir> (the picture to read) or --pelvis-keys <file> (the hand override) is required');
+      const mode = f.get('mode') ?? 'silhouette';
+      if (f.has('mode') && f.has('pelvis-keys')) throw new Usage('--mode is given with --pelvis-keys; the mode names a reader of the frames, and the hand keys read none');
+      if (!(PELVIS_MODES as readonly string[]).includes(mode)) throw new Usage(`--mode is "${mode}"; it must be ${PELVIS_MODES.join(' or ')}`);
+      runPelvis({ pose: need(f, 'pose'), out: need(f, 'out'), frames: f.get('frames'), mode: mode as PelvisMode, keys: f.get('pelvis-keys'), person: f.get('person') }, (l) => process.stdout.write(`${l}\n`));
+      return 0;
+    }
     if (cmd === 'convert') {
       const f = parseFlags(rest, ['coco', 'out'], []);
       const input = need(f, 'coco');
@@ -571,7 +609,7 @@ export function main(argv: string[]): number {
       process.stdout.write(`rig-pose convert: ${seq.frames.length} frame(s) of COCO-17 → body-18; wrote ${out}\n`);
       return 0;
     }
-    process.stderr.write(`rig-pose: unknown command "${cmd}" — the commands are: clean, retarget, convert, compare\n`);
+    process.stderr.write(`rig-pose: unknown command "${cmd}" — the commands are: pelvis, clean, retarget, convert, compare\n`);
     return 2;
   } catch (e) {
     if (e instanceof Usage) {
