@@ -82,6 +82,7 @@ import { Problems, Refusal } from './problems.ts';
 import type { ArtRange, AttachmentKey, ByHip, Raised, ReachShort, SetRuns, SlotTrack, Switch, SwitchOptions } from './switch.ts';
 import { clampArt, coveredChains, isRaised, measureArt, overflow, phaseGroupProblems, RAISED_WRIST_EYES, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
 import type { BlendHold, Closure, Feet, Floor, LegScale, LegSegmentRatio, PathPose, Posing, Side, Stance } from './legs.ts';
+import { contactKeysOf, type ContactKeys } from './contacts.ts';
 import { figureScaleOf, freeAnkleShiftOf, holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, percentile, plantHip, posePath, rootOf, scaleSupport, shiftOver, SIDES, stanceOf, stanceRangeOf, STRAIGHT_PERCENTILE, supportsOf, tipOf, unshortenStanceShin } from './legs.ts';
 import type { BodyReading, FaceReading, YawSetSwitch } from './face.ts';
 import { readBody, readFace, readFaceAngles, selectYawSets } from './face.ts';
@@ -181,6 +182,12 @@ export interface RetargetOptions extends SwitchOptions {
    * the hip line on the frames it does not; absent, from the hip line.
    */
   pelvis?: { source: string; tilt: ReadonlyArray<number | null> };
+  /**
+   * rig-c/pose#303: the hand contact keys (`--contact-keys`), read against the
+   * sequence. Applied last over the supports read (`contactKeysOf`): on every
+   * frame they cover they decide the support. Absent, nothing changes.
+   */
+  contactKeys?: ContactKeys;
 }
 
 /**
@@ -1019,6 +1026,11 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       if (hr !== undefined && hl !== undefined && ar !== undefined && al !== undefined) feet = supportsOf({ r: ar, l: al }, { r: hr, l: hl }, keyTimes, secondsOf, inPlace, plantOn); // #113: planted, the support is read from the lower ankle
       else if (plantOn) p.add('LEGS_MAP', `--plant-feet reads both hips and both ankles from the pose; the map's chains use ${['r_hip', 'l_hip', 'r_ankle', 'l_ankle'].filter((j) => !series.has(j)).join(', ')} nowhere`);
     }
+  }
+  // rig-c/pose#303: the contact keys decide last, over every reading above; with no support read they have nothing to decide, so they are refused.
+  if (opts.contactKeys !== undefined) {
+    if (feet !== null) feet = contactKeysOf(feet, opts.contactKeys);
+    else p.add('CONTACT_KEYS', `--contact-keys sets which foot supports, and no support is read: ${legs !== null && 'problems' in legs ? legs.problems.join('; ') : `the map's chains use ${['r_hip', 'l_hip', 'r_ankle', 'l_ankle'].filter((j) => !series.has(j)).join(', ')} nowhere`}`);
   }
   const heldPt = (name: string): Pt[] | null => {
     const known = series.get(name);
