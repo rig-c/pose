@@ -186,6 +186,7 @@ No other repository in the org (core, parts, play, adapters, parts-examples, tra
 | `rig-pose-pelvis-keys/1` (`pelvis --pelvis-keys`; fractional frames, rig-c/pose#294) | courtesy | — |
 | `rig-pose-contact-keys/1` (`retarget --contact-keys`; fractional frames, rig-c/pose#303) | courtesy | — |
 | `rig-pose-map/1` (the map) | promised | S, X, D |
+| `rig-pose-map/1` set field `bind` (a set shown on exactly its bound frames, explicit or cycle-relative; rig-c/pose#360) | courtesy | — |
 | `rig-pose-report/1` (the report) | promised, as below | S, R |
 | `rig-pose-camera/1` (`--camera`) | promised | S |
 | `rig-pose-tracks/1` (`--merge`), `rig-pose-compare/1` (`compare --report`) | courtesy | — |
@@ -296,7 +297,7 @@ Every key `rig-pose-report/1` can carry, once: the keys `src/run.ts` writes, and
 | `short` | promised | R | event rows |
 | `endOn` | promised | R | event rows |
 | `flips` | promised | R | event rows |
-| `switches` | promised | R | event rows (`from`, `to`, `slots`); the `endOnHeld` field is courtesy (rig-c/pose#355) |
+| `switches` | promised | R | event rows (`from`, `to`, `slots`); the `endOnHeld` field is courtesy (rig-c/pose#355), and so is `bound` (rig-c/pose#360) |
 | `uncovered` | promised | R | event rows (`times`, render domain) |
 | `turns` | promised | R | event rows |
 | `range` | promised | R | event rows |
@@ -314,6 +315,7 @@ Every key `rig-pose-report/1` can carry, once: the keys `src/run.ts` writes, and
 | `seams` | courtesy | — | |
 | `seamPairs` | courtesy | — | |
 | `switchRuns` | courtesy | — | (rig-c/pose#279; `turned`, rig-c/pose#355) |
+| `switchBinds` | courtesy | — | only when the map binds a set (rig-c/pose#360) |
 | `drawOrder` | courtesy | — | (rig-c/pose#304) |
 | `contactKeys` | courtesy | — | only with `--contact-keys` (rig-c/pose#303) |
 | `reach` | courtesy | — | |
@@ -340,7 +342,7 @@ Promised codes, with their use:
 - D: `RIG_GATE_BASE`, `POSE_NOT_CLEANED`, `POSE_BEND_ONE_WAY`, `POSE_POINT_NEVER_GOOD`, `STANCE`.
 - X: `ARG_PATH`, `MAP_BEND_SIDE`, `MAP_CHAIN_JOINTS`, `MAP_TRANSLATE_SCALE`, `RIGC`.
 
-Every other code is courtesy (`SET_KEY_DRAWN`, rig-c/pose#355, among them). That a refusal always carries some code is promised; which code it carries is promised only for the codes above.
+Every other code is courtesy (`SET_KEY_DRAWN`, rig-c/pose#355, and `MAP_ALT_BIND`, `SET_BIND_FRAMES` and `SET_BIND_OVERLAP`, rig-c/pose#360, among them). That a refusal always carries some code is promised; which code it carries is promised only for the codes above.
 
 Promised line tags, with their use:
 
@@ -348,7 +350,7 @@ Promised line tags, with their use:
 - D: `GATE`.
 - X: `BODY`, `CLEAN`, `FEET`, `FOLD`, `HOLD`, `IDLE-DROPPED`, `IDLE-KEPT-OUT`, `LAND`, `LEG-SCALE`, `POSTURE`, `RIGC`, `SHEAR`, `STANCE`.
 
-Every other tag is courtesy (`SWITCH-TURN`, rig-c/pose#355, among them).
+Every other tag is courtesy (`SWITCH-TURN`, rig-c/pose#355, and `SWITCH-BIND`, rig-c/pose#360, among them).
 
 ### Imports
 
