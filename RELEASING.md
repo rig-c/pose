@@ -248,6 +248,7 @@ Every key `rig-pose-report/1` can carry, once: the keys `src/run.ts` writes, and
 | `folds` | courtesy | — | |
 | `seams` | courtesy | — | |
 | `seamPairs` | courtesy | — | |
+| `switchRuns` | courtesy | — | (rig-c/pose#279) |
 | `reach` | courtesy | — | |
 | `byHip` | courtesy | — | |
 | `body` | courtesy | — | |
