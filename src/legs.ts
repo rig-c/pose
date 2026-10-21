@@ -742,6 +742,8 @@ export interface Floor {
 }
 
 let trackFn: ((i: number, s: Side) => number) | undefined;
+/** rig-c/pose#285: `plantHip`'s `held`, read by `placeHip` as `trackFn` is. */
+let heldFn: ((i: number, s: Side, at: number) => Pt) | undefined;
 
 /**
  * The hip's world origin on every frame, from the supporting foot (header),
@@ -771,21 +773,36 @@ let trackFn: ((i: number, s: Side) => number) | undefined;
  * planted), and the loop is closed (`closeLoop`, `closure` in the result; null
  * without `follow`). `track(i, side)` (#119): the same world-x ankle track for
  * `feet.tracked` frames on a sequence not declared in place.
+ *
+ * `held(i, side, at)` (rig-c/pose#285, `--leg-scale`): the side's ankle on
+ * frame i posed as `offset` poses it, but with the leg scales of frame `at`.
+ * A plant hands over on the frame the outgoing foot first reads higher than the
+ * incoming one, so on that frame and the blend after it the outgoing foot has
+ * left the floor, and the picture already draws its leg shortened by the lift;
+ * the outgoing plant then holds that ankle with the leg as it was on its last
+ * supporting frame, so the lift is not read as the floor dropping under the
+ * incoming foot. Absent, `offset` everywhere.
+ *
+ * In place (`follow`, #285) the spans' planted heights are a loop's: their drift
+ * over the cycles is closed (`closeHeights`) before the floor is read from them.
  */
-export function plantHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: number) => Pt, start: Pt, floor?: number, follow?: (i: number, s: Side) => number, track?: (i: number, s: Side) => number): { hip: Pt[]; floor: Floor | null; blends: BlendFrame[]; closure: Closure | null } {
+export function plantHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: number) => Pt, start: Pt, floor?: number, follow?: (i: number, s: Side) => number, track?: (i: number, s: Side) => number, held?: (i: number, s: Side, at: number) => Pt): { hip: Pt[]; floor: Floor | null; blends: BlendFrame[]; closure: Closure | null } {
   trackFn = track;
+  heldFn = held;
   try {
     const picture = placeHip(feet, offset, travel, start, null, follow);
-    const heights = feet.supports.map((sp) => picture.anchors.get(sp.frames[0]));
-    if (heights.length === 0) return { hip: picture.hip, floor: null, blends: picture.blends, closure: null };
-    if (heights.some((h) => h === undefined)) throw new Error('plantHip: a support span starts on a frame no plant started on');
-    const y = floor ?? percentile(heights as number[], 0.5);
+    const read = feet.supports.map((sp) => picture.anchors.get(sp.frames[0]));
+    if (read.length === 0) return { hip: picture.hip, floor: null, blends: picture.blends, closure: null };
+    if (read.some((h) => h === undefined)) throw new Error('plantHip: a support span starts on a frame no plant started on');
+    const heights = follow === undefined ? (read as number[]) : closeHeights(read as number[], feet.supports);
+    const y = floor ?? percentile(heights, 0.5);
     const shifts = feet.supports.map((sp, k) => ({ side: sp.side, frames: [sp.frames[0], sp.frames[1]] as [number, number], shift: y - heights[k]! }));
     const placed = placeHip(feet, offset, travel, start, y, follow);
     const closure = follow === undefined ? null : closeLoop(placed.hip, feet.supports);
     return { hip: placed.hip, floor: { y, given: floor !== undefined, shifts }, blends: placed.blends, closure };
   } finally {
     trackFn = undefined;
+    heldFn = undefined;
   }
 }
 
@@ -828,6 +845,32 @@ export function closeLoop(hip: Pt[], supports?: Feet['supports']): Closure {
   return { drift, frames: n };
 }
 
+/**
+ * The planted heights of an in-place loop's support spans, their drift over the
+ * cycles closed (rig-c/pose#285). A span's planted height is chained from the
+ * span before it through the hand-over frame, and support passes only to a foot
+ * already lower than the other, so every hand-over steps the chain the same way:
+ * over identical cycles the heights descend as a staircase while the picture's
+ * floor stays where it is. As `closeLoop` closes the hip's x, the drift between
+ * matching phases — the first and the last span of the side with more spans not
+ * starting on frame 0, a whole number of cycles apart — is taken out linearly by
+ * each span's first frame, so span k and the span a cycle later have one height
+ * and what stays is the within-cycle difference between the two feet. Fewer than
+ * two such spans: nothing to close, the heights as read.
+ */
+export function closeHeights(heights: readonly number[], supports: Feet['supports']): number[] {
+  const bySide: Record<Side, number[]> = { r: [], l: [] };
+  supports.forEach((sp, k) => {
+    if (sp.frames[0] > 0) bySide[sp.side].push(k);
+  });
+  const ks = bySide.r.length >= bySide.l.length ? bySide.r : bySide.l;
+  if (ks.length < 2) return [...heights];
+  const a = ks[0]!;
+  const b = ks[ks.length - 1]!;
+  const perFrame = (heights[b]! - heights[a]!) / (supports[b]!.frames[0] - supports[a]!.frames[0]);
+  return heights.map((h, k) => h - perFrame * supports[k]!.frames[0]);
+}
+
 /** A frame inside the blend after a change of support (or a landing): the side now supporting, and the world y its plant holds the ankle at. */
 export interface BlendFrame {
   frame: number;
@@ -853,9 +896,17 @@ function placeHip(feet: Feet, offset: (i: number, s: Side) => Pt, travel: (i: nu
     | { kind: 'plant'; side: Side; anchor: Pt; from: number }
     | { kind: 'track'; side: Side; anchor: Pt; from: number; at: Pt }
     | { kind: 'travel'; from: number; at: Pt; end?: number; land?: number; carry?: number };
+  /** #285: a plant's ankle on frame i — past its span (the hand-over frame, the blend after it), posed with its leg as on its last supporting frame. */
+  const held = heldFn;
+  const plantOffset = (side: Side, i: number, from: number): Pt => {
+    if (held === undefined || (feet.support[i] ?? null) === side) return offset(i, side);
+    let last = i;
+    while (last > from && (feet.support[last] ?? null) !== side) last--;
+    return held(i, side, last);
+  };
   const of = (mode: Mode, i: number): Pt => {
     if (mode.kind === 'plant') {
-      const o = offset(i, mode.side);
+      const o = plantOffset(mode.side, i, mode.from);
       // In place (#92) the anchor's x follows the supporting ankle's own track from the frame it planted.
       const dx = follow === undefined ? 0 : follow(i, mode.side) - follow(mode.from, mode.side);
       return [mode.anchor[0] + dx - o[0], mode.anchor[1] - o[1]];
