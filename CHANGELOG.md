@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.45.0](https://github.com/rig-c/pose/compare/v0.44.0...v0.45.0) (2026-10-21)
+
+
+### Features
+
+* **draworder:** key each forearm against the trunk from a parts limb layout ([#346](https://github.com/rig-c/pose/issues/346)) ([#363](https://github.com/rig-c/pose/issues/363)) ([e6e6e5e](https://github.com/rig-c/pose/commit/e6e6e5ed908c9781b486d6f43666053d8530276a))
+
+
+### Bug Fixes
+
+* **readme:** choosing the approach: intense motion on a designed character is part animation ([#361](https://github.com/rig-c/pose/issues/361)) ([#366](https://github.com/rig-c/pose/issues/366)) ([69d533f](https://github.com/rig-c/pose/commit/69d533f630050e12e92d17d5cd16135fc8e602db))
+
 ## [0.44.0](https://github.com/rig-c/pose/compare/v0.43.0...v0.44.0) (2026-10-21)
 
 
