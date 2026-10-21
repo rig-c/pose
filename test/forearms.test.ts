@@ -31,7 +31,8 @@ import { Plate } from 'rig-c/plate';
 import { depthCycle, depthDoc, TIE, type DepthFrame } from '../examples/walk/make-depth.ts';
 import { segmentDepth } from '../src/depth.ts';
 import type { DrawOrderKey } from '../src/draworder.ts';
-import { keyGroups, readLayout } from '../src/layout.ts';
+import { bindingProblems, keyGroups, readLayout, resolveGroups } from '../src/layout.ts';
+import { readMap, type Rest } from '../src/map.ts';
 import { personTrack, readPoseSequence, type PoseSequence } from '../src/pose.ts';
 import { Refusal } from '../src/problems.ts';
 
@@ -519,4 +520,189 @@ describe('bar (6): a mutant without the forearm writer keys no forearm', () => {
       rmSync(d, { recursive: true, force: true });
     }
   }, SLOW);
+});
+
+/**
+ * AGENTS.md: a gate nobody has seen fail is not a gate. Every refusal code this card adds, planted by one change beside
+ * the unchanged control (which must refuse nothing), and each check removed in a mutant (its `p.add` made a no-op, or
+ * the parse error swallowed), under which the planted input no longer carries that code.
+ */
+describe('every #346 refusal: one planted change beside its control, and a mutant without the check', () => {
+  type Mod = { readLayout: typeof readLayout; bindingProblems: typeof bindingProblems; resolveGroups: typeof resolveGroups; readMap: typeof readMap };
+  /** The codes a call refuses with (thrown, or a Problems it returns), sorted; [] when it refuses nothing. */
+  const codesOf = (run: () => unknown): string[] => {
+    try {
+      const r = run();
+      if (r !== null && typeof r === 'object' && 'list' in r) return [...new Set((r as { list: Array<{ code: string }> }).list.map((x) => x.code))].sort();
+      return [];
+    } catch (e) {
+      if (e instanceof Refusal || (e as Error).name === 'Refusal') return [...new Set((e as Refusal).problems.map((x) => x.code))].sort();
+      throw e;
+    }
+  };
+  /** The real parts 1.56.0 companion, copied; `plant` changes one thing in the copy. */
+  const producer = (plant?: (dir: string) => void): string => {
+    const dir = tempDir();
+    cpSync(PRODUCER, dir, { recursive: true });
+    plant?.(dir);
+    return join(dir, 'rig.json');
+  };
+  const editLayout = (dir: string, edit: (doc: Record<string, unknown>) => void): void => {
+    const doc = JSON.parse(readFileSync(join(dir, 'layout.json'), 'utf8')) as Record<string, unknown>;
+    edit(doc);
+    writeFileSync(join(dir, 'layout.json'), JSON.stringify(doc, null, 1));
+  };
+  const PRODUCER_BINDING = [{ limb: 'arm_r', parts: ['forearm_r'], depth: 'r_forearm' as const, against: 'trunk' as const }];
+  /** The pose-side inputs of resolveGroups on this file's rig: its layout, the bound map, the wave's bones, the setup order with bones. */
+  const BONE: Record<string, string> = { torso_r: 'chest', torso_l: 'chest', arm_r0: 'sleeve_r0', arm_r1: 'sleeve_r1', arm_l0: 'sleeve_l0', arm_l1: 'sleeve_l1' };
+  const resolveInputs = (m: Mod) => {
+    const dir = tempDir();
+    const rigDir = writeRig(dir);
+    const map = m.readMap(readFileSync(writeMap(dir), 'utf8'), 'map');
+    const wave = JSON.parse(readFileSync(WAVE, 'utf8')) as { bones: Array<{ name: string; parent?: string }> };
+    const rest = new Map(wave.bones.map((b) => [b.name, { parent: b.parent ?? null }])) as unknown as Rest;
+    const order = SETUP.map((n) => ({ name: n, bone: BONE[n] ?? n }));
+    return { layout: m.readLayout(join(rigDir, 'rig.json'))!, map, rest, order };
+  };
+  const mapText = (layout: unknown): string => JSON.stringify({ ...(JSON.parse(readFileSync(MAP, 'utf8')) as object), layout });
+  const withoutAdd = (code: string) => ({ file: code === 'MAP_LAYOUT' ? 'layoutmap.ts' : 'layout.ts', from: `p.add('${code}',`, to: `void ('${code}',` });
+  const CASES: Array<{ code: string; name: string; change: string; control: (m: Mod) => string[]; planted: (m: Mod) => string[]; mutant: { file: string; from: string; to: string } }> = [
+    {
+      code: 'LAYOUT_JSON', name: 'a companion that is not JSON', change: 'layout.json\'s last byte cut off',
+      control: (m) => codesOf(() => m.readLayout(producer())),
+      planted: (m) => codesOf(() => m.readLayout(producer((d) => writeFileSync(join(d, 'layout.json'), readFileSync(join(d, 'layout.json'), 'utf8').trimEnd().slice(0, -1))))),
+      mutant: { file: 'layout.ts', from: "parseJson(bytes.toString('utf8'), path, 'LAYOUT_JSON')", to: "(() => { try { return JSON.parse(bytes.toString('utf8')) as unknown; } catch { return {}; } })()" },
+    },
+    {
+      code: 'LAYOUT_SPEC', name: 'another spec', change: '"spec" "rig-parts-layout/2"',
+      control: (m) => codesOf(() => m.readLayout(producer())),
+      planted: (m) => codesOf(() => m.readLayout(producer((d) => editLayout(d, (x) => (x.spec = 'rig-parts-layout/2'))))),
+      mutant: withoutAdd('LAYOUT_SPEC'),
+    },
+    {
+      code: 'LAYOUT_SHAPE', name: 'a placement without its target', change: 'placements[0].target_slots deleted',
+      control: (m) => codesOf(() => m.readLayout(producer())),
+      planted: (m) => codesOf(() => m.readLayout(producer((d) => editLayout(d, (x) => delete (x.placements as Array<Record<string, unknown>>)[0]!.target_slots)))),
+      mutant: withoutAdd('LAYOUT_SHAPE'),
+    },
+    {
+      code: 'LAYOUT_RIG_SHA', name: 'other rig bytes', change: 'a newline appended to rig.json (same slots)',
+      control: (m) => codesOf(() => m.readLayout(producer())),
+      planted: (m) => codesOf(() => m.readLayout(producer((d) => writeFileSync(join(d, 'rig.json'), `${readFileSync(join(d, 'rig.json'), 'utf8')}\n`)))),
+      mutant: withoutAdd('LAYOUT_RIG_SHA'),
+    },
+    {
+      code: 'LAYOUT_SETS_SHA', name: 'a sets.json beside a layout bound to none', change: 'a sets.json written beside the rig',
+      control: (m) => codesOf(() => m.readLayout(producer())),
+      planted: (m) => codesOf(() => m.readLayout(producer((d) => writeFileSync(join(d, 'sets.json'), '{"spec":"rig-parts-sets/1","sets":{}}')))),
+      mutant: withoutAdd('LAYOUT_SETS_SHA'),
+    },
+    {
+      code: 'LAYOUT_SETS_SHA', name: 'a layout bound to other set bytes', change: '"sets" sha256 of other bytes (sets.json beside, the rig hash kept)',
+      control: (m) => codesOf(() => m.readLayout(producer((d) => {
+        const text = '{"spec":"rig-parts-sets/1","sets":{}}';
+        writeFileSync(join(d, 'sets.json'), text);
+        editLayout(d, (x) => (x.sets = { file: 'sets.json', sha256: createHash('sha256').update(text).digest('hex') }));
+      }))),
+      planted: (m) => codesOf(() => m.readLayout(producer((d) => {
+        writeFileSync(join(d, 'sets.json'), '{"spec":"rig-parts-sets/1","sets":{}}');
+        editLayout(d, (x) => (x.sets = { file: 'sets.json', sha256: createHash('sha256').update('other').digest('hex') }));
+      }))),
+      mutant: withoutAdd('LAYOUT_SETS_SHA'),
+    },
+    {
+      code: 'LAYOUT_SETUP', name: 'setup_slots out of the rig\'s order', change: 'the last two setup_slots swapped (the rig hash kept)',
+      control: (m) => codesOf(() => m.readLayout(producer())),
+      planted: (m) => codesOf(() => m.readLayout(producer((d) => editLayout(d, (x) => {
+        const s = x.setup_slots as string[];
+        [s[s.length - 2], s[s.length - 1]] = [s[s.length - 1]!, s[s.length - 2]!];
+      })))),
+      mutant: withoutAdd('LAYOUT_SETUP'),
+    },
+    {
+      code: 'MAP_LAYOUT', name: 'an unsupported depth source', change: 'one binding\'s "depth" "r_shin"',
+      control: (m) => codesOf(() => m.readMap(mapText(BINDINGS), 'map')),
+      planted: (m) => codesOf(() => m.readMap(mapText([{ ...BINDINGS[0], depth: 'r_shin' }, BINDINGS[1]]), 'map')),
+      mutant: withoutAdd('MAP_LAYOUT'),
+    },
+    {
+      code: 'LAYOUT_UNBOUND', name: 'a placement the map does not bind', change: 'the map\'s "layout" left out',
+      control: (m) => codesOf(() => m.bindingProblems(m.readLayout(producer()), PRODUCER_BINDING, 'rig.json', 'map')),
+      planted: (m) => codesOf(() => m.bindingProblems(m.readLayout(producer()), undefined, 'rig.json', 'map')),
+      mutant: withoutAdd('LAYOUT_UNBOUND'),
+    },
+    {
+      code: 'LAYOUT_MISSING', name: 'a binding with no layout beside the rig', change: 'layout.json removed',
+      control: (m) => codesOf(() => m.bindingProblems(m.readLayout(producer()), PRODUCER_BINDING, 'rig.json', 'map')),
+      planted: (m) => codesOf(() => m.bindingProblems(m.readLayout(producer((d) => rmSync(join(d, 'layout.json')))), PRODUCER_BINDING, 'rig.json', 'map')),
+      mutant: withoutAdd('LAYOUT_MISSING'),
+    },
+    {
+      code: 'LAYOUT_BINDING_UNKNOWN', name: 'a binding no placement has', change: 'a second binding, arm_x [forearm_x] → l_forearm',
+      control: (m) => codesOf(() => m.bindingProblems(m.readLayout(producer()), PRODUCER_BINDING, 'rig.json', 'map')),
+      planted: (m) => codesOf(() => m.bindingProblems(m.readLayout(producer()), [...PRODUCER_BINDING, { limb: 'arm_x', parts: ['forearm_x'], depth: 'l_forearm', against: 'trunk' }], 'rig.json', 'map')),
+      mutant: withoutAdd('LAYOUT_BINDING_UNKNOWN'),
+    },
+    {
+      code: 'LAYOUT_ADJACENCY', name: 'a group not next to its target in the compiled order', change: 'the compiled order with arm_r1 and torso_r swapped (the layout unchanged)',
+      control: (m) => {
+        const x = resolveInputs(m);
+        return codesOf(() => m.resolveGroups(x.layout, x.map.layout!, x.map, x.rest, x.order, []).problems);
+      },
+      planted: (m) => {
+        const x = resolveInputs(m);
+        const swapped = x.order.map((o) => (o.name === 'arm_r1' ? x.order[3]! : o.name === 'torso_r' ? x.order[2]! : o));
+        return codesOf(() => m.resolveGroups(x.layout, x.map.layout!, x.map, x.rest, swapped, []).problems);
+      },
+      mutant: withoutAdd('LAYOUT_ADJACENCY'),
+    },
+    {
+      code: 'LAYOUT_BINDING_BONES', name: 'a group slot not on its source\'s bone', change: 'arm_r bound to l_forearm (one field)',
+      control: (m) => {
+        const x = resolveInputs(m);
+        return codesOf(() => m.resolveGroups(x.layout, x.map.layout!, x.map, x.rest, x.order, []).problems);
+      },
+      planted: (m) => {
+        const x = resolveInputs(m);
+        return codesOf(() => m.resolveGroups(x.layout, [{ ...x.map.layout![0]!, depth: 'l_forearm' }, x.map.layout![1]!], x.map, x.rest, x.order, []).problems);
+      },
+      mutant: { file: 'layout.ts', from: "if (off.length > 0) p.add('LAYOUT_BINDING_BONES',", to: "if (off.length > 0) void ('LAYOUT_BINDING_BONES'," },
+    },
+    {
+      code: 'LAYOUT_BINDING_BONES', name: 'a target slot on a limb', change: 'torso_r\'s bone given as sleeve_l0 in the compiled order',
+      control: (m) => {
+        const x = resolveInputs(m);
+        return codesOf(() => m.resolveGroups(x.layout, x.map.layout!, x.map, x.rest, x.order, []).problems);
+      },
+      planted: (m) => {
+        const x = resolveInputs(m);
+        return codesOf(() => m.resolveGroups(x.layout, x.map.layout!, x.map, x.rest, x.order.map((o) => (o.name === 'torso_r' ? { ...o, bone: 'sleeve_l0' } : o)), []).problems);
+      },
+      mutant: { file: 'layout.ts', from: "if (limbTarget.length > 0) p.add('LAYOUT_BINDING_BONES',", to: "if (limbTarget.length > 0) void ('LAYOUT_BINDING_BONES'," },
+    },
+  ];
+  const real: Mod = { readLayout, bindingProblems, resolveGroups, readMap };
+  for (const c of CASES) {
+    test(`${c.code}: ${c.name} — the control refuses nothing, the plant (${c.change}) refuses with ${c.code} alone; mutant: without the check it does not`, async () => {
+      expect(c.control(real)).toEqual([]);
+      expect(c.planted(real)).toEqual([c.code]);
+      mkdirSync(MUTANTS, { recursive: true });
+      const d = mkdtempSync(join(MUTANTS, 'm346-gate-'));
+      try {
+        cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+        const path = join(d, 'src', c.mutant.file);
+        const src = readFileSync(path, 'utf8');
+        expect(src.split(c.mutant.from).length).toBeGreaterThan(1);
+        writeFileSync(path, src.split(c.mutant.from).join(c.mutant.to));
+        const lay = (await import(join(d, 'src', 'layout.ts'))) as Mod;
+        const mp = (await import(join(d, 'src', 'map.ts'))) as Pick<Mod, 'readMap'>;
+        const mut: Mod = { readLayout: lay.readLayout, bindingProblems: lay.bindingProblems, resolveGroups: lay.resolveGroups, readMap: mp.readMap };
+        const got = c.planted(mut);
+        console.log(`  #346 gate — ${c.code} (${c.name}): control [], planted [${c.planted(real).join(', ')}], mutant without the check [${got.join(', ')}]`);
+        expect(got).not.toContain(c.code);
+      } finally {
+        rmSync(d, { recursive: true, force: true });
+      }
+    });
+  }
 });
