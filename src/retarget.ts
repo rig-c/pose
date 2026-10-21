@@ -370,6 +370,34 @@ export interface ReachReading {
 }
 
 /**
+ * rig-c/pose#282: where a `reach` chain's bone starts against the source joint
+ * it re-aims from. The pose's pair starts at the translated joint, which the
+ * rig puts at the translated bone's posed origin; the reach aims from its own
+ * bone's posed origin. The distance between the two, at setup and on the
+ * frames, is the lever #236 names — a reading, with a WARN past
+ * `REACH_ORIGIN_WARN` of the segment. One per reach chain, in map order.
+ */
+export interface ReachOrigin {
+  chain: string;
+  bone: string;
+  /** The pair: the chain's first joint (the translated joint) and its second. */
+  joints: [string, string];
+  /** The translated bone, whose posed origin is where the rig puts the source joint. */
+  anchor: string;
+  /** The distance at setup, world units. */
+  setup: number;
+  /** The largest distance as posed on the frames, world units, and its frame. */
+  posed: { max: number; frame: number };
+  /** The reached length: the pair's median picture length, scaled (world units). */
+  segment: number;
+  /** max(setup, posed.max) ÷ segment. */
+  ofSegment: number;
+  /** ofSegment > threshold. */
+  warn: boolean;
+  threshold: number;
+}
+
+/**
  * Mean |second difference| of a series of angles, degrees: |wrap(v[i+1] − v[i])
  * − wrap(v[i] − v[i−1])| over every i whose three frames `ok` admits (every
  * frame when it is omitted), and how many triples that was. null on none.
@@ -477,6 +505,8 @@ export interface Retarget {
   nodSkipped: NodSkipped | null;
   /** Each `reach` chain hanging below a bone the animation turns or translates (#236): its aim's departure from the pose pair's angle. */
   reach: ReachReading[];
+  /** rig-c/pose#282: each `reach` chain's origin against the source joint it re-aims from; empty when the map has none. */
+  reachOrigin: ReachOrigin[];
   /** rig-c/pose#288: the pelvis bone's source; null when the map has no pelvis chain and the sequence no track. */
   pelvis: PelvisReading | null;
 }
@@ -1488,6 +1518,8 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   const reaches = map.chains.filter((c) => c.reach).sort((x, y) => depth(x.bones[0]!) - depth(y.bones[0]!));
   let aimReach: ((c: Chain) => void) | null = null;
   const reachAims = new Map<string, { aim: number[]; pair: number[]; length: number }>();
+  /** #282: per reach chain, the distance from its bone's posed origin to the anchor's on each frame (the last aim's). */
+  const reachGaps = new Map<string, number[]>();
   if (reaches.length > 0 && t !== null && scale !== null) {
     const s = scale.factor;
     const tb = rest.get(t.bone)!;
@@ -1496,8 +1528,10 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       const anchor = series.get(c.joints[0]!)!;
       const end = series.get(c.joints[1]!)!;
       const angles: number[] = [];
+      const gaps: number[] = [];
       for (let i = 0; i < n; i++) {
         const o = posedOrigin(b, i);
+        gaps.push(Math.hypot(o[0] - (tb.worldX + travel[i]![0]), o[1] - (tb.worldY + travel[i]![1])));
         const tx = tb.worldX + travel[i]![0] + (end[i]![0] - anchor[i]![0]) * s;
         const ty = tb.worldY + travel[i]![1] - (end[i]![1] - anchor[i]![1]) * s;
         const d = Math.hypot(tx - o[0], ty - o[1]);
@@ -1505,6 +1539,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       }
       fillLeading(angles, () => p.add('POSE_SEGMENT_ZERO', `chain "${c.name}" — bone "${b}" reaches for ${c.joints[1]}, which the pose puts on the bone's posed origin on every frame; it has no direction`));
       targets.set(b, angles);
+      reachGaps.set(c.name, gaps);
       // #236: the aim as reached, before its own range clamp, beside the pair's own angle (a reading).
       reachAims.set(c.name, { aim: [...angles], pair: Array.from({ length: n }, (_, i) => pictureAngle(anchor[i]!, end[i]!)), length: median(Array.from({ length: n }, (_, i) => Math.hypot(end[i]![0] - anchor[i]![0], end[i]![1] - anchor[i]![1]) * s)) });
     };
@@ -3089,6 +3124,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   if (headNodTrack !== null) tracks.push(headNodTrack);
   tracks.push(...sw.offsetTracks, ...sw.slotTracks);
   const reach = reachReadings(rest, map, tracks, reachAims, t?.bone ?? null);
+  const reachOrigin = reachOrigins(rest, map, reachAims, reachGaps, t?.bone ?? null);
 
   const pivot = pivotOf(rest, t?.bone ?? null, legs);
   const pelvis = pelvisReadingOf(pelvisChain, opts.pelvis, track, fromTrack, tracks);
@@ -3102,7 +3138,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     animation: { duration: keyTimes[n - 1]!, tracks },
     times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale, scaleFit,
     switches: sw.switches, switchRuns: sw.runs, shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
-    legScale, segments, legStraight, rigLeg, scales, feet, planted: plantOn, stance, floor, blendHold, closure, openDrift, ankles, pivot, raised, byHip, face, body, figureScale, headNod: headNodReading, nodSkipped, reach, pelvis,
+    legScale, segments, legStraight, rigLeg, scales, feet, planted: plantOn, stance, floor, blendHold, closure, openDrift, ankles, pivot, raised, byHip, face, body, figureScale, headNod: headNodReading, nodSkipped, reach, reachOrigin, pelvis,
   };
 }
 
@@ -3209,6 +3245,47 @@ function reachReadings(rest: Rest, map: JointMap, tracks: ReadonlyArray<MotionTr
     });
   }
   return out;
+}
+
+/**
+ * #282: a reach bone whose origin sits more than this fraction of the segment
+ * from the source joint is warned. The aim from an origin a fraction f up the
+ * pair turns about 1 ÷ (1 − f) times the pair's turn (#236's lever: the example
+ * wave's trunk, f = 0.5, measured 2.00×); 0.2 is 1.25×, a quarter more turn
+ * than the pose has.
+ */
+export const REACH_ORIGIN_WARN = 0.2;
+
+/** #282: each reach chain's origin against the anchor's, at setup and as posed, in map order. */
+function reachOrigins(rest: Rest, map: JointMap, aims: ReadonlyMap<string, { length: number }>, gaps: ReadonlyMap<string, number[]>, anchor: string | null): ReachOrigin[] {
+  const out: ReachOrigin[] = [];
+  if (anchor === null) return out;
+  const a0 = rest.get(anchor)!;
+  for (const c of map.chains) {
+    const got = aims.get(c.name);
+    const g = gaps.get(c.name);
+    if (!c.reach || got === undefined || g === undefined) continue;
+    const b = c.bones[0]!;
+    const bo = rest.get(b)!;
+    const setup = r3(Math.hypot(bo.worldX - a0.worldX, bo.worldY - a0.worldY));
+    let frame = 0;
+    for (let i = 1; i < g.length; i++) if (g[i]! > g[frame]!) frame = i;
+    const max = r3(g[frame] ?? 0);
+    const segment = r3(got.length);
+    const ofSegment = got.length > 0 ? r3(Math.max(setup, max) / got.length) : 0;
+    out.push({ chain: c.name, bone: b, joints: [c.joints[0]!, c.joints[1]!], anchor, setup, posed: { max, frame }, segment, ofSegment, warn: ofSegment > REACH_ORIGIN_WARN, threshold: REACH_ORIGIN_WARN });
+  }
+  return out;
+}
+
+/** #282: the `REACH-ORIGIN` line, one per reach chain. */
+export function reachOriginLine(e: ReachOrigin, times: readonly number[]): string {
+  return `chain "${e.chain}" bone "${e.bone}" (${e.joints[0]} → ${e.joints[1]}): its origin ${e.setup.toFixed(2)} units from the source joint ${e.joints[0]} (bone "${e.anchor}"'s origin) at setup, up to ${e.posed.max.toFixed(2)} on the frames (frame ${e.posed.frame}, t=${times[e.posed.frame]!.toFixed(3)}s): ${e.ofSegment.toFixed(3)} of the ${e.segment.toFixed(2)}-unit segment`;
+}
+
+/** #282: the WARN of a reach chain whose origin sits past REACH_ORIGIN_WARN of the segment. */
+export function reachOriginWarn(e: ReachOrigin): string {
+  return `REACH_ORIGIN: chain "${e.chain}" bone "${e.bone}" starts ${e.ofSegment.toFixed(3)} of the segment from ${e.joints[0]}, past ${e.threshold.toFixed(2)}: re-aimed from there, it turns more than the pair (JITTER bone "${e.bone}"); "reach": false follows the measured angle`;
 }
 
 /** The `REACH` line of a reach chain whose aim departs from its pair (#236). */

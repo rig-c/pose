@@ -14,7 +14,7 @@ import { depthLine, layersOf, type FrameLayers } from './depth.ts';
 import { convertCoco17, personTrack, readPoseSequence, TRAVEL_IN_PLACE, type CameraFrame } from './pose.ts';
 import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './problems.ts';
 import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, readIdle, targetOf, trackLabel, type IdleReading, type RigcTrack, type Target } from './idle.ts';
-import { bendGroupLine, bendGroups, bendLine, endOnLine, flipLine, holdLine, nodLine, pelvisLine, rangeLine, reachCostLine, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions, type ScaleBand, type ScaleFit } from './retarget.ts';
+import { bendGroupLine, bendGroups, bendLine, endOnLine, flipLine, holdLine, nodLine, pelvisLine, rangeLine, reachCostLine, reachOriginLine, reachOriginWarn, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions, type ScaleBand, type ScaleFit } from './retarget.ts';
 import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, readBuild, resolveRig, restOf, seamRender, slotsOf } from './rigc.ts';
 import { partsPath, projectSeams, readSeamDoc, readSeamPairs, seamLines, type SeamPair } from './seams.ts';
 import { artRangeLine, chainsMoving, phaseLines, raisedLine, RAISED_WITHIN, reachLine, switchLine, switchMinLines, uncoveredFolds } from './switch.ts';
@@ -24,6 +24,7 @@ import { M2_IDENTITY, mulM2, reduceKeys, reduceScale, reduceUnderScale, SCALE_RE
 import type { BlendHold, Closure, Feet, Floor, FreeAnkleShift, LegScale, LegSegmentRatio, Lowered, Side, Stance, SupportScaleRun, SupportSignal } from './legs.ts';
 import { reportRenderDomain, writeReport, type ReportInput } from './report.ts';
 import { PROVENANCE_FILE, provenanceText } from './provenance.ts';
+import { madeLine, planOutDirs } from './outdir.ts';
 import { bodyLine, faceLine } from './face.ts';
 
 export interface RetargetArgs extends RetargetOptions {
@@ -105,15 +106,9 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
   const report = a.report ?? defaultReportPath(a.out);
   // A file this run writes goes into a directory the user named: one that is not there yet is made
   // after the run is green (one line says so), as --build and --render make theirs; a file in the way is refused.
-  const makeDirs = new Map<string, string[]>();
-  for (const [flag, path] of [['--out', a.out], ['--report', report], ['--camera', a.camera]] as const) {
-    if (path === undefined) continue;
-    const dir = dirname(path);
-    let up = dir;
-    while (!existsSync(up) && dirname(up) !== up) up = dirname(up);
-    if (!statSync(up).isDirectory()) args.add('ARG_PATH', up === dir ? `${flag} ${path} — ${dir} is not a directory` : `${flag} ${path} — ${up} is a file, so directory ${dir} cannot be made under it`);
-    else if (up !== dir) makeDirs.set(dir, [...(makeDirs.get(dir) ?? []), `${flag} ${path}`]);
-  }
+  const makeDirs = planOutDirs([['--out', a.out], ['--report', report], ['--camera', a.camera]], args);
+  // #284: --build and --render make their own directories (rigc, the copy); a file in the way is refused here, up front.
+  planOutDirs([['--build', a.build], ['--render', a.render]], args);
   if (a.reference !== undefined && a.build === undefined) args.add('ARG_REFERENCE', `--reference ${a.reference} needs --build: the record it goes in is written beside the build (${PROVENANCE_FILE})`);
   args.throwIfAny();
   const input = resolveRig(a.rig, a.baseMotion);
@@ -209,8 +204,15 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     for (const e of r.byHip) say(`  BY-HIP ${raisedLine(e, r.times)}`);
     for (const e of r.byHip) if (e.short.length > 0) say(`  REACH  ${reachLine(e, r.times)}`);
     for (const e of r.reach) say(`  REACH  ${reachCostLine(e, r.times)}`);
+    // rig-c/pose#282: each reach chain's origin against its source joint; a map without one prints none.
+    for (const e of r.reachOrigin) {
+      say(`  REACH-ORIGIN ${reachOriginLine(e, r.times)}`);
+      if (e.warn) say(`  WARN   ${reachOriginWarn(e)}`);
+    }
     for (const e of r.artRange) say(`  ART-RANGE ${artRangeLine(e, r.times)}`);
-    for (const l of r.legScale) say(`  LEG-SCALE ${legScaleLine(l, r.times, r.feet?.legLength ?? null, r.rigLeg)}`);
+    // #287: a range that clamps no frame says so once, on the last segment's line (the line count stays one per segment).
+    const noClamp = legScaleNoClamp(r.legScale);
+    r.legScale.forEach((l, k) => say(`  LEG-SCALE ${legScaleLine(l, r.times, r.feet?.legLength ?? null, r.rigLeg)}${k === r.legScale.length - 1 && noClamp !== null ? `; ${noClamp}` : ''}`));
     for (const l of r.legScale) for (const s of l.support ?? []) say(`  LEG-SCALE ${supportScaleLine(l, s, r.times)}`);
     if (r.pelvis !== null) say(`  ${pelvisLine(r.pelvis, seq.frames.length)}`);
     // rig-c/pose#281: the limbs' front-to-back order from the sequence's depth, only when it carries depth.
@@ -362,7 +364,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
 
     const lengths = new Map(doc.bones.map((b) => [b.name, b.length ?? 0]));
     const hips = seq.cleaned?.params.hipsInferred;
-    const posture = measurePosture(posed, lengths, map, r, frames, a.minScore, inferredSource(seq.cleaned), hips?.by === 'measured' ? hips : null);
+    const posture = measurePosture(posed, lengths, map, r, frames, a.minScore, inferredSource(seq.cleaned), hips?.by === 'measured' ? hips : null, seq.pelvisSource !== undefined ? { source: seq.pelvisSource, tilt: seq.frames.map((f) => f.pelvisTilt ?? null) } : null);
     if (posture !== null) for (const l of postureLines(posture)) say(`  POSTURE ${l}`);
     const legBones = legBonesOf(map);
     const feetReading = legBones === null ? null : measureFeet(posed, lengths, r, legBones);
@@ -423,6 +425,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         uncovered,
         turns: r.turns,
         reach: r.reach,
+        // Only when the map has a reach chain (#282): a map without one writes the report it always has.
+        ...(r.reachOrigin.length > 0 ? { reachOrigin: r.reachOrigin } : {}),
         range: r.range,
         artRange: r.artRange,
         raised: r.raised,
@@ -1104,6 +1108,21 @@ export function legScaleLine(l: LegScale, times: readonly number[], legLength: R
   return `chain "${l.chain}" bone "${l.bone}" (${l.joints[0]} → ${l.joints[1]}): straight length ${l.straight.toFixed(1)}px (larger 95th percentile of ${times.length} frames, both legs)${share}; picture length ÷ straight ${l.ratio.min.toFixed(3)} … ${l.ratio.max.toFixed(3)} (median ${l.ratio.median.toFixed(3)}); scalex keyed in [${l.limits[0]}, ${l.limits[1]}] of the straight length (${limitsPx}): ${clamp(l.low, l.limits[0], 'under', 'low')}; ${clamp(l.high, l.limits[1], 'over', 'high')}${free}`;
 }
 
+/**
+ * rig-c/pose#287: when `--leg-scale`'s range clamps no frame on any leg segment
+ * (no run under the floor, none over the ceiling, no supporting frame scaled past
+ * the floor), the clause naming the range and the picture's own spread across
+ * every segment, so a reader learns the range never bound and what floor would.
+ * Null when any frame was clamped, or with no segment scaled.
+ */
+export function legScaleNoClamp(ls: readonly LegScale[]): string | null {
+  if (ls.length === 0 || ls.some((l) => l.low.length > 0 || l.high.length > 0 || (l.support ?? []).length > 0)) return null;
+  const [floor, ceiling] = ls[0]!.limits;
+  const min = Math.min(...ls.map((l) => l.ratio.min));
+  const max = Math.max(...ls.map((l) => l.ratio.max));
+  return `no frame clamped on any leg segment: the range [${floor}, ${ceiling}] holds the picture's whole spread, picture length ÷ straight ${min.toFixed(3)} … ${max.toFixed(3)} over the ${ls.length} segment(s), so each segment is scaled to the picture on every frame; a floor above ${min.toFixed(3)} would clamp`;
+}
+
 /** A LEG-SCALE past the floor (support) line (rig-c/pose#133): the supporting leg segment scaled below `--leg-scale`'s floor down to #95's bound. */
 export function supportScaleLine(l: LegScale, s: SupportScaleRun, times: readonly number[]): string {
   const span = (x: [number, number]) => (x[0] === x[1] ? `frame ${x[0]} (t=${times[x[0]]!.toFixed(3)}s)` : `frames ${x[0]}–${x[1]} (t=${times[x[0]]!.toFixed(3)}–${times[x[1]]!.toFixed(3)}s)`);
@@ -1186,11 +1205,6 @@ function readSeams(decl: { path: string; pairs: SeamPair[] } | null, rig: string
 /** rig-c/pose#239: the report's path when --report is not given — `<out>.report.json`, beside the motion (a trailing `.json` of --out is replaced). */
 export function defaultReportPath(out: string): string {
   return `${out.endsWith('.json') ? out.slice(0, -'.json'.length) : out}.report.json`;
-}
-
-/** rig-c/pose#239: the line a directory this run made prints — the directory, and the paths that named it. */
-export function madeLine(dir: string, flags: readonly string[]): string {
-  return `  made directory ${dir} — it did not exist; ${flags.join(' and ')} ${flags.length === 1 ? 'is' : 'are'} written into it`;
 }
 
 /** rig-c/pose#239: the report's `wrote` line — whether it was the default, and the mtime of the report it replaced. */

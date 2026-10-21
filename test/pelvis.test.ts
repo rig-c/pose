@@ -398,6 +398,42 @@ describe('rig-pose pelvis → clean → retarget on the walk with a drawn pelvis
     expect(c.ratio).toBeLessThan(0.5);
   }, SLOW);
 
+  /**
+   * rig-c/pose#295: POSTURE reads the tilt off the track the pelvis was keyed from, and its sway says what the
+   * track's turn carries. The bars (the card): the tilt line's reference is the track's swing within 1° and names
+   * the track; the sway line states that the turn includes the pelvis track. The control — the same frames with no
+   * track — reads the hip line, which misses the track's swing by more than 1°, and prints no carry line.
+   */
+  test('POSTURE reads the tilt from the track and names it; the sway states that the rig\'s turn includes the pelvis track (#295)', () => {
+    const run = pipeline('drawn', 'silhouette');
+    expect(run.retarget.status).toBe(0);
+    const tilt = (doc: string) => (JSON.parse(readFileSync(doc, 'utf8')) as { frames: Array<{ pelvisTilt: number }> }).frames.map((f) => f.pelvisTilt);
+    const swing = pp(tilt(run.cleaned));
+    const posture = linesOf(run.retarget, 'POSTURE');
+    const t = /^POSTURE hip tilt range \(chain "pelvis", r_hip → l_hip, Spine degrees\): reference (\d+\.\d)° from silhouette \([^;]*; all 24 frames from the track\), rig /.exec(posture[0]!);
+    expect(t).not.toBeNull();
+    expect(Math.abs(Number(t![1]) - swing)).toBeLessThanOrEqual(1);
+    const report = JSON.parse(readFileSync(join(run.dir, 'report.json'), 'utf8')) as { posture: { tilt: { reference: { range: number } }; tiltTrack: unknown; sway: { reference: { range: number }; rig: { range: number }; carried: { bone: string; origins: string[]; carry: number; trunk: { range: number } } } } };
+    expect(Math.abs(report.posture.tilt.reference.range - swing)).toBeLessThanOrEqual(1);
+    expect(report.posture.tiltTrack).toEqual({ source: 'silhouette', frames: 24, declined: [] });
+    expect(posture[1]).toStartWith('POSTURE sway, x-range of mid_hip − mid_shoulder: ');
+    expect(posture[2]).toMatch(/^POSTURE sway: the rig's \d+\.\d units include the pelvis track's turn — bone "hip" \(keyed from silhouette\) carries "chest" over \d+\.\d units of x; the trunk alone \(mid_shoulder about that origin\) \d+\.\d units — rig\/reference \d\.\d{3} in units$/);
+    const c = report.posture.sway.carried;
+    expect(c).toMatchObject({ bone: 'hip', origins: ['chest'] });
+    // The carry is what moved the rig's sway past the reference's: taken out, the trunk alone is below it.
+    expect(report.posture.sway.rig.range / report.posture.sway.reference.range).toBeGreaterThan(1.5);
+    expect(c.trunk.range).toBeLessThan(report.posture.sway.reference.range);
+
+    const control = pipeline('drawn', null);
+    expect(control.retarget.status).toBe(0);
+    const cp = linesOf(control.retarget, 'POSTURE');
+    const ct = /reference (\d+\.\d)° \(/.exec(cp[0]!);
+    expect(ct).not.toBeNull();
+    expect(Math.abs(Number(ct![1]) - swing)).toBeGreaterThan(1);
+    expect(cp.join('\n')).not.toContain('from the track');
+    expect(cp.some((l) => l.startsWith('POSTURE sway: the rig'))).toBe(false);
+  }, SLOW);
+
   test('covered, read by the waistband: the posed pelvis correlates ≥ 0.7 with the band\'s edge', () => {
     const run = pipeline('covered', 'waistband');
     expect(run.read!.status).toBe(0);
