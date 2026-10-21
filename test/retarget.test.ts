@@ -9656,7 +9656,8 @@ describe('#286: a set with a "phase" switches on the support hand-over — exact
     expect(ran.status).toBe(0);
     return { ran, rep: JSON.parse(readFileSync(report, 'utf8')) as Rep };
   }
-  const SIDES_OF = { step_l: 'l', step_r: 'r' } as const;
+  /** The supporting foot each set shows on: left-step — the left foot is stepping — while the right foot supports. */
+  const SIDES_OF = { step_l: 'r', step_r: 'l' } as const;
 
   test('two phase sets show exactly on their side\'s support spans (0 wrong-side frames, 0 flicker), with and without --plant-feet; PHASE names every span and its hand-overs; control: the same sets without "phase" go by angle', () => {
     // The key skeletons are deliberately off-phase (a quarter cycle from either support's middle): a phase set does not read them.
@@ -9672,7 +9673,7 @@ describe('#286: a set with a "phase" switches on the support hand-over — exact
       expect(b.wrong).toBe(0);
       expect(b.flicker).toBe(0);
       // Every support span is one switch of its side's set, frame for frame, and the report carries the hand-overs.
-      expect(rep.switches.map((s) => [s.set, s.frames])).toEqual(rep.feet.supports.map((sp) => [sp.side === 'l' ? 'step_l' : 'step_r', sp.frames]));
+      expect(rep.switches.map((s) => [s.set, s.frames])).toEqual(rep.feet.supports.map((sp) => [sp.side === 'r' ? 'step_l' : 'step_r', sp.frames]));
       rep.switches.forEach((s, k) => {
         const prev = rep.feet.supports[k - 1];
         const next = rep.feet.supports[k + 1];
@@ -9685,12 +9686,13 @@ describe('#286: a set with a "phase" switches on the support hand-over — exact
       });
       // One PHASE line per set: its spans, each with the hand-over it was switched on and off at.
       expect(lines).toHaveLength(2);
-      for (const [name, step, side] of [['step_l', 'left-step', 'l'], ['step_r', 'right-step', 'r']] as const) {
+      for (const [name, step, side] of [['step_l', 'left-step', 'r'], ['step_r', 'right-step', 'l']] as const) {
         const own = rep.feet.supports.filter((sp) => sp.side === side);
         const other = side === 'l' ? 'r' : 'l';
         const text = own.map((sp) => `${sp.frames[0]}–${sp.frames[1]} (${sp.frames[0] === 0 ? 'on the first frame' : `on frame ${sp.frames[0]} ${other} → ${side}`}, ${sp.frames[1] === NN - 1 ? 'off at the end' : `off frame ${sp.frames[1] + 1} ${side} → ${other}`})`);
         const count = own.reduce((t, sp) => t + sp.frames[1] - sp.frames[0] + 1, 0);
-        expect(lines).toContain(`PHASE  set "${name}" "${step}" — shown while the ${side} foot supports (feet.supports): ${own.length} span(s), ${count} frame(s): ${text.join(', ')}`);
+        const word = (x: 'r' | 'l') => (x === 'l' ? 'left' : 'right');
+        expect(lines).toContain(`PHASE  set "${name}" "${step}" — the ${word(other)} foot is stepping; shown while the ${word(side)} foot supports (feet.supports): ${own.length} span(s), ${count} frame(s): ${text.join(', ')}`);
       }
     }
     // Control: the same two sets without "phase", their key skeletons on the middle of each side's support, go by the
@@ -9700,10 +9702,10 @@ describe('#286: a set with a "phase" switches on the support hand-over — exact
       const sp = first.feet.supports.slice(1, -1).find((x) => x.side === side)!;
       return (sp.frames[0] + sp.frames[1]) >> 1;
     };
-    const angle = setup({ rig: RIG, map: mapOf(stepSet('step_l', mid('l')), stepSet('step_r', mid('r'))), pose: walk() });
+    const angle = setup({ rig: RIG, map: mapOf(stepSet('step_l', mid('r')), stepSet('step_r', mid('l'))), pose: walk() });
     const a = run(angle, []);
     const ab = bar(angle, a.rep, SIDES_OF);
-    console.log(`  #286 control, the same sets by angle (keys on frames ${mid('l')} and ${mid('r')}): wrong-side ${ab.wrong}, flicker ${ab.flicker}; shown ${JSON.stringify(ab.shown)}`);
+    console.log(`  #286 control, the same sets by angle (keys on frames ${mid('r')} and ${mid('l')}): wrong-side ${ab.wrong}, flicker ${ab.flicker}; shown ${JSON.stringify(ab.shown)}`);
     expect(linesOf(a.ran, 'PHASE')).toEqual([]);
   }, SLOW);
 
@@ -9715,16 +9717,16 @@ describe('#286: a set with a "phase" switches on the support hand-over — exact
       expect(r.status).not.toBe(0);
       return fails(r);
     };
-    expect(refused(mapOf(stepSet('step_l', 0, { phase: 'left' })))).toEqual(['FAIL  MAP_ALT_PHASE: set "step_l" "phase" is "left"; it is the step side the set is drawn for, one of "left-step", "right-step" (shown while that side\'s foot supports)']);
-    expect(refused(mapOf(stepSet('step_l', 0, { phase: 'left-step', frames: [[0, 10]] })))).toEqual(['FAIL  MAP_ALT_PHASE: set "step_l" names both "phase" and "frames"; a phase set shows on its side\'s support spans, and a window would cut them — drop one']);
-    expect(refused(mapOf(stepSet('step_l', 0, { phase: 'left-step' }), stepSet('step_r', 12)))).toEqual(['FAIL  PHASE_GROUP: set(s) "step_l" declare "phase" and compete with set(s) "step_r", which declare none (they switch a common slot or offset bone); a phase set shows on its side\'s support spans and an angle set on its distance, and nothing decides between them — give every set of the group a "phase", or none']);
+    expect(refused(mapOf(stepSet('step_l', 0, { phase: 'left' })))).toEqual(['FAIL  MAP_ALT_PHASE: set "step_l" "phase" is "left"; it is the stepping foot the set is drawn for, one of "left-step", "right-step" (left-step: the left foot is stepping; shown while the right foot supports)']);
+    expect(refused(mapOf(stepSet('step_l', 0, { phase: 'left-step', frames: [[0, 10]] })))).toEqual(['FAIL  MAP_ALT_PHASE: set "step_l" names both "phase" and "frames"; a phase set shows on its supporting foot\'s spans, and a window would cut them — drop one']);
+    expect(refused(mapOf(stepSet('step_l', 0, { phase: 'left-step' }), stepSet('step_r', 12)))).toEqual(['FAIL  PHASE_GROUP: set(s) "step_l" declare "phase" and compete with set(s) "step_r", which declare none (they switch a common slot or offset bone); a phase set shows on its supporting foot\'s spans and an angle set on its distance, and nothing decides between them — give every set of the group a "phase", or none']);
     expect(refused(mapOf(stepSet('step_l', 0, { phase: 'left-step' }), stepSet('step_r', 12, { phase: 'left-step' })))).toEqual(['FAIL  PHASE_GROUP: set(s) "step_l", "step_r" all declare "phase": "left-step" and compete (they switch a common slot or offset bone); one drawing shows per support span — keep one "left-step" set per group']);
     // No feet: a map whose chains end at no ankle reads no supports. The set draws an arm here (a leg chain would read the feet).
     const armSet = { name: 'arms', slots: { sleeve_r0: 'seg' }, chains: ['arm_r'], pose: { r_shoulder: [0, 0], r_elbow: [0, 10], r_wrist: [0, 20] }, phase: 'right-step' };
     const noLegs = { ...baseMap(), chains: baseChains().filter((x) => !x.name.startsWith('leg_')), alternates: [armSet] };
     const f = refused(noLegs);
     expect(f).toHaveLength(1);
-    expect(f[0]).toStartWith('FAIL  PHASE_FEET: set(s) "arms" ("phase": "right-step") show while their side\'s foot supports, and this run reads no supports: reading the feet needs one chain ending at "r_ankle"');
+    expect(f[0]).toStartWith('FAIL  PHASE_FEET: set(s) "arms" ("phase": "right-step") show by the supporting foot (left-step while the right foot supports), and this run reads no supports: reading the feet needs one chain ending at "r_ankle"');
     // Control: a phase pair beside an angle set that shares nothing with it runs.
     const c = setup({ rig: { ...RIG, extra: { ...RIG.extra, sleeve_r0: { up: att } } }, map: mapOf(stepSet('step_l', 0, { phase: 'left-step' }), stepSet('step_r', 12, { phase: 'right-step' }), { name: 'up', slots: { sleeve_r0: 'up' }, chains: ['arm_r'], pose: { r_shoulder: [0, 0], r_elbow: [0, -10], r_wrist: [0, -20] } }), pose });
     const ok = retarget(c);

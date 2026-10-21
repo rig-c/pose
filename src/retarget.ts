@@ -1258,7 +1258,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   if (phased.length > 0) {
     if (feet === null) {
       const why = legs !== null && 'problems' in legs ? legs.problems.join('; ') : `the feet are read from both hips and both ankles, and the map's chains use ${['r_hip', 'l_hip', 'r_ankle', 'l_ankle'].filter((j) => !series.has(j)).join(', ')} nowhere`;
-      p.add('PHASE_FEET', `set(s) ${phased.map((a) => `"${a.name}" ("phase": "${a.phase}")`).join(', ')} show while their side's foot supports, and this run reads no supports: ${why}`);
+      p.add('PHASE_FEET', `set(s) ${phased.map((a) => `"${a.name}" ("phase": "${a.phase}")`).join(', ')} show by the supporting foot (left-step while the right foot supports), and this run reads no supports: ${why}`);
     }
     for (const x of phaseGroupProblems(map.alternates)) p.add('PHASE_GROUP', x);
   }

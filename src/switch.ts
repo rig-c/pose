@@ -13,7 +13,7 @@
  * span between two runs of one set is bridged by that set. No other hysteresis.
  *
  * A set with a `phase` (rig-c/pose#286) is not selected by distance: it shows
- * exactly on the frames of its side's support spans (`phaseSupports`, the
+ * exactly on its supporting foot's spans (`phaseSupports`, the
  * report's `feet.supports`) and switches on the hand-over, with none of the
  * rules here or below applied to it.
  *
@@ -93,7 +93,7 @@ export interface SwitchOptions {
 /** A phase set's span (rig-c/pose#286): its step side, and the support hand-overs it was switched on and off at. */
 export interface PhaseSpan {
   step: Phase;
-  /** The supporting foot it shows on. */
+  /** The supporting foot it shows on (left-step: the left foot is stepping, so the right foot supports). */
   side: Side;
   /** The hand-over it starts on: the frame, and the side that supported on the frame before (null: no foot). Null from the first frame. */
   on: { frame: number; from: Side | null } | null;
@@ -279,7 +279,7 @@ export function phaseGroupProblems(sets: readonly AlternateSet[]): string[] {
     if (phased.length === 0) continue;
     const angle = group.filter((a) => a.phase === undefined);
     const named = (xs: readonly AlternateSet[]) => xs.map((a) => `"${a.name}"`).join(', ');
-    if (angle.length > 0) out.push(`set(s) ${named(phased)} declare "phase" and compete with set(s) ${named(angle)}, which declare none (they switch a common slot or offset bone); a phase set shows on its side's support spans and an angle set on its distance, and nothing decides between them — give every set of the group a "phase", or none`);
+    if (angle.length > 0) out.push(`set(s) ${named(phased)} declare "phase" and compete with set(s) ${named(angle)}, which declare none (they switch a common slot or offset bone); a phase set shows on its supporting foot's spans and an angle set on its distance, and nothing decides between them — give every set of the group a "phase", or none`);
     for (const step of Object.keys(PHASE_SIDE) as Phase[]) {
       const same = phased.filter((a) => a.phase === step);
       if (same.length > 1) out.push(`set(s) ${named(same)} all declare "phase": "${step}" and compete (they switch a common slot or offset bone); one drawing shows per support span — keep one "${step}" set per group`);
@@ -517,7 +517,7 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
   };
   const groups = competing(map.alternates);
   for (const group of groups) {
-    // rig-c/pose#286: a group of phase sets shows each exactly on its side's support spans — no tolerance, no minimum run,
+    // rig-c/pose#286: a group of phase sets shows each exactly on its supporting foot's spans — no tolerance, no minimum run,
     // no hysteresis, no bridging, and its boundaries stay on the hand-overs (no --switch-at peak move). The retarget refuses
     // a group mixing phase and angle sets, or two sets of one side (`phaseGroupProblems`), before it gets here.
     if (group.some((a) => a.phase !== undefined)) {
@@ -1262,7 +1262,8 @@ export function phaseLines(map: JointMap, switches: readonly Switch[]): string[]
   for (const set of map.alternates) {
     if (set.phase === undefined) continue;
     const side = PHASE_SIDE[set.phase];
-    const head = `set "${set.name}" "${set.phase}" — shown while the ${side} foot supports (feet.supports)`;
+    const foot = (x: Side) => (x === 'l' ? 'left' : 'right');
+    const head = `set "${set.name}" "${set.phase}" — the ${foot(side === 'l' ? 'r' : 'l')} foot is stepping; shown while the ${foot(side)} foot supports (feet.supports)`;
     const own = switches.filter((s) => s.set === set.name && s.phase !== undefined);
     if (own.length === 0) {
       out.push(`${head}: on no frame — no ${side} support span`);
