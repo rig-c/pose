@@ -11,6 +11,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { knownSetsOf, readMap, resolveMap, type JointMap, type Rest } from './map.ts';
 import { cleanLine, cleanSummaryLine, inferredSource } from './clean.ts';
 import { depthLine, layersOf, type FrameLayers } from './depth.ts';
+import { drawOrderFromDepth, drawOrderKeys, drawOrderLines, type DrawOrderReading } from './draworder.ts';
 import { convertCoco17, personTrack, readPoseSequence, TRAVEL_IN_PLACE, type CameraFrame } from './pose.ts';
 import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './problems.ts';
 import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, readIdle, targetOf, trackLabel, type IdleReading, type RigcTrack, type Target } from './idle.ts';
@@ -78,6 +79,8 @@ export interface RetargetArgs extends RetargetOptions {
    * same in all three and the gate is the same gate.
    */
   output?: 'default' | 'verbose' | 'summary';
+  /** `--draw-order depth` (rig-c/pose#304): key the animation's draw order from the sequence's depth. Absent: no draw-order key, the output as before. */
+  drawOrder?: 'depth';
 }
 
 export interface RunResult {
@@ -135,6 +138,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
   const poseText = poseSnapshot.bytes.toString('utf8');
   const seq = a.coco ? convertCoco17(poseText, a.pose) : readPoseSequence(poseText, a.pose);
   if (seq.cleaned === undefined) refuse([{ code: 'POSE_NOT_CLEANED', text: notCleaned(a.pose, a.coco) }]);
+  // #304: the draw order is read off the sequence's depth; asked for on a sequence without it, refused by name.
+  if (a.drawOrder === 'depth' && !seq.frames.some((x) => x.depth !== undefined)) refuse([{ code: 'DRAWORDER_NO_DEPTH', text: `--draw-order depth keys the draw order from the sequence's depth, and ${a.pose} carries none (rig-pose-sequence/${seq.cleaned!.params.depth === undefined ? '1 or 1.1, no "depth" on any frame' : '1.2 with no frame naming a segment'}); clean it with --depth walk|run, or retarget without --draw-order` }]);
   const frames = personTrack(seq, a.person, a.pose);
   const times = seq.frames.map((f) => f.t);
 
@@ -220,6 +225,9 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     // rig-c/pose#281: the limbs' front-to-back order from the sequence's depth, only when it carries depth.
     const layers: FrameLayers[] | null = seq.frames.some((x) => x.depth !== undefined) ? frames.map((j, i) => layersOf(j, seq.frames[i]!.depth ?? {})) : null;
     if (layers !== null) say(`  ${depthLine(layers, seq.frames, seq.cleaned!.params.depth?.gait ?? null)}`);
+    // rig-c/pose#304: with --draw-order depth, the legs' draw order keyed from those layers.
+    const drawOrder: DrawOrderReading | null = a.drawOrder === 'depth' && layers !== null ? drawOrderFromDepth(layers, frames, seq.frames.map((x) => x.depth), r.times, map, rest, doc0.slots, input.sets, seq.cleaned!.params.loop) : null;
+    if (drawOrder !== null) for (const l of drawOrderLines(drawOrder)) say(`  ${l}`);
     if (r.pivot !== null) say(`  PIVOT  bone "${r.pivot.bone}"'s origin is ${r.pivot.distance.toFixed(2)} units (${r.pivot.hipWidths.toFixed(3)} hip widths) from its thigh roots' midpoint (${r.pivot.roots.join(' + ')}): dx ${r.pivot.offset[0].toFixed(2)}, dy ${r.pivot.offset[1].toFixed(2)}, at setup — the pivot every hip turn swings the legs about`);
     if (r.feet !== null) {
       const f = r.feet;
@@ -305,7 +313,9 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       for (const tr of fragment) say(`  MERGE  ${a.merge}: ${trackLabel(tr, groups)}, ${tr.keys.length} key(s) at t=${tr.keys[0]!.t}${tr.keys.length > 1 ? `–${tr.keys[tr.keys.length - 1]!.t}` : ''}s`);
     }
     const added = [...carried, ...fragment];
-    const animation = added.length === 0 ? r.animation : { ...r.animation, tracks: [...own, ...added] };
+    const tracked = added.length === 0 ? r.animation : { ...r.animation, tracks: [...own, ...added] };
+    // #304: rig-c's one draw-order timeline sits on the animation beside its tracks; written only when keyed.
+    const animation = drawOrder === null || drawOrder.keys.length === 0 ? tracked : { ...tracked, drawOrder: drawOrderKeys(drawOrder) };
     const motion = { ...base, animations: { ...animations, [a.name]: animation } };
     const g1 = gate(input.rig, motion, join(scratch, 'with'), a.profile, a.images);
     if (!g1.green) {
@@ -402,7 +412,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
 
     assertReportInputs([rigSnapshot,mapSnapshot,poseSnapshot]);
     // Every retarget option as resolved: the report's `options`, and with the name the build record's `flags` (#270).
-    const options = { minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', floor: a.floor ?? null, raisedByHead: a.raisedByHead === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', ...(a.reduceChains === undefined ? {} : { reduceChains: a.reduceChains }), reduceHip: a.reduceHip ?? 'off', ...(a.reduceKeepPlanted === true ? { reduceKeepPlanted: true } : {}) };
+    const options = { minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', floor: a.floor ?? null, raisedByHead: a.raisedByHead === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', ...(a.reduceChains === undefined ? {} : { reduceChains: a.reduceChains }), reduceHip: a.reduceHip ?? 'off', ...(a.reduceKeepPlanted === true ? { reduceKeepPlanted: true } : {}), ...(a.drawOrder !== undefined ? { drawOrder: a.drawOrder } : {}) };
     const reportText = writeReport({
         spec: 'rig-pose-report/1',
         rigc,
@@ -463,6 +473,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         pelvis: r.pelvis,
         // Only when the sequence carries depth (#281): a sequence without it writes the report it always has.
         ...(layers !== null ? { layers: layers.map((l, frame) => ({ frame, order: l.order, depth: l.depth })) } : {}),
+        // Only with --draw-order depth (#304).
+        ...(drawOrder !== null ? { drawOrder: { source: 'depth', pairs: drawOrder.pairs, keys: drawOrder.keys, spans: drawOrder.spans } } : {}),
         stance: r.stance === null ? null : { tolerance: r.stance.tolerance, release: r.stance.release, minSeconds: r.stance.minSeconds, bounds: r.stance.bounds, ...(r.stance.range === undefined ? {} : { range: r.stance.range }), runs: r.stance.runs, over: r.stance.over },
         feet: r.feet === null ? null : { planted: r.planted, legLength: r.feet.legLength, straight: r.legStraight, rigLeg: r.rigLeg, segments: r.segments, supports: r.feet.supports, jumps: r.feet.jumps, steps: r.feet.steps, changes: r.feet.changes, ...(r.feet.lowered === undefined ? {} : { lowered: r.feet.lowered }), ...(r.feet.tracked === undefined ? {} : { tracked: r.feet.tracked }), floor: r.floor?.y ?? null, shifts: r.floor?.shifts ?? [], blend: r.blendHold === null ? null : { bounds: r.blendHold.bounds, ...(r.blendHold.range === undefined ? {} : { range: r.blendHold.range }), runs: r.blendHold.runs, over: r.blendHold.over }, reading: feetReading, closure: r.closure },
         shear,
