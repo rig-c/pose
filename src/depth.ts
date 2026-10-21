@@ -152,18 +152,41 @@ export function segmentDepth(d: SegmentDepth, length: number): number {
 
 /**
  * A limb's two joint depths on one frame, px (+ toward the camera): its middle joint (the upper segment's) and its end
- * joint (the middle's plus the lower segment's), from the shoulder or hip at 0, unrounded; null where its segments are
- * not both named and placed.
+ * joint (the middle's plus the lower segment's), from the shoulder or hip at 0, unrounded. Null where the upper segment
+ * is not named and placed; `end` null where the lower one is not (the middle joint does not need it: rig-c/pose#336).
  */
-export function limbJointDepths(joints: Joints, depth: FrameDepth, limb: Limb): { mid: number; end: number } | null {
+export function limbJointDepths(joints: Joints, depth: FrameDepth, limb: Limb): { mid: number; end: number | null } | null {
   const [upper, lower] = LIMBS[limb];
   const du = depth[upper];
   const dl = depth[lower];
   const lu = drawn(joints, upper);
   const ll = drawn(joints, lower);
-  if (du === undefined || dl === undefined || lu === null || ll === null) return null;
+  if (du === undefined || lu === null) return null;
   const mid = segmentDepth(du, lu);
-  return { mid, end: mid + segmentDepth(dl, ll) };
+  return { mid, end: dl === undefined || ll === null ? null : mid + segmentDepth(dl, ll) };
+}
+
+/**
+ * rig-c/pose#336: the frames of a derived depth on which a shin leans the way the trunk faces — the sign table before
+ * #336, where a walk's foreshortened shin read forward. The table since leans it back (−facing) in both gaits, and a run's
+ * never changed, so only a record a release before #336 cleaned with `--depth walk` carries one. A record with no
+ * foreshortened shin reads the same under both tables and is not listed.
+ */
+export function forwardShinFrames(track: readonly Joints[], frames: ReadonlyArray<{ depth?: FrameDepth }>): number[] {
+  const out: number[] = [];
+  frames.forEach((f, i) => {
+    const face = facingOf(track[i] ?? {});
+    if (face === 0) return;
+    if ((['r_shin', 'l_shin'] as const).some((s) => f.depth?.[s]?.source === 'derived' && f.depth[s]!.sign === face)) out.push(i);
+  });
+  return out;
+}
+
+/** The DEPTH_RECLEAN refusal (#336): the file, the gait it records, the frames (the first five), and what to run. */
+export function depthRecleanText(file: string, gait: DepthGait | null, frames: readonly number[]): string {
+  const shown = frames.slice(0, 5).join(', ') + (frames.length > 5 ? `, … +${frames.length - 5} more` : '');
+  const g = gait ?? 'walk';
+  return `${file} carries derived depth (clean --depth ${gait ?? '?'}) whose foreshortened shin leans forward, the way the trunk faces, on ${frames.length} frame(s) (${shown}): the sign table before rig-c/pose#336, where a walk's lifted foot read forward. --draw-order depth reads a walk at the ankle and would draw that foot in front of the supporting leg. Clean it again with this version (rig-pose clean --depth ${g}), which leans a foreshortened shin back in both gaits; a sequence cleaned with --depth run by an earlier release is read as it is (its signs did not change), and measured depth is not checked`;
 }
 
 /** The limbs' front-to-back order on one frame, from its depth and its joints' drawn lengths. */
@@ -171,7 +194,7 @@ export function layersOf(joints: Joints, depth: FrameDepth): FrameLayers {
   const z: Partial<Record<Limb, number>> = {};
   for (const limb of LIMB_NAMES) {
     const j = limbJointDepths(joints, depth, limb);
-    if (j === null) continue;
+    if (j === null || j.end === null) continue;
     z[limb] = Math.round(((j.mid + j.end) / 2) * 100) / 100;
   }
   const placed = LIMB_NAMES.filter((l) => z[l] !== undefined).sort((a, b) => z[b]! - z[a]! || LIMB_NAMES.indexOf(a) - LIMB_NAMES.indexOf(b));

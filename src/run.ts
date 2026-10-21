@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { knownSetsOf, readMap, resolveMap, type JointMap, type Rest } from './map.ts';
 import { cleanLine, cleanSummaryLine, inferredSource } from './clean.ts';
-import { depthLine, layersOf, type FrameLayers } from './depth.ts';
+import { depthLine, depthRecleanText, forwardShinFrames, layersOf, type FrameLayers } from './depth.ts';
 import { drawGapLines, drawOrderFromDepth, drawOrderKeys, drawOrderLines, type DrawOrderReading } from './draworder.ts';
 import { convertCoco17, personTrack, readPoseSequence, TRAVEL_IN_PLACE, type CameraFrame } from './pose.ts';
 import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './problems.ts';
@@ -144,6 +144,12 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
   // #304: the draw order is read off the sequence's depth; asked for on a sequence without it, refused by name.
   if (a.drawOrder === 'depth' && !seq.frames.some((x) => x.depth !== undefined)) refuse([{ code: 'DRAWORDER_NO_DEPTH', text: `--draw-order depth keys the draw order from the sequence's depth, and ${a.pose} carries none (rig-pose-sequence/${seq.cleaned!.params.depth === undefined ? '1 or 1.1, no "depth" on any frame' : '1.2 with no frame naming a segment'}); clean it with --depth walk|run, or retarget without --draw-order` }]);
   const frames = personTrack(seq, a.person, a.pose);
+  // #336: a derived depth whose shins lean the way the trunk faces was cleaned with the table before #336 (a walk's lifted
+  // foot forward); the draw order now reads a walk at the ankle, and would draw that foot in front. Refused by name.
+  if (a.drawOrder === 'depth') {
+    const old = forwardShinFrames(frames, seq.frames);
+    if (old.length > 0) refuse([{ code: 'DEPTH_RECLEAN', text: depthRecleanText(a.pose, seq.cleaned!.params.depth?.gait ?? null, old) }]);
+  }
   // rig-c/pose#303: the contact keys, read against the sequence's frames before any gate runs.
   const contactKeysSnapshot = a.contactKeysFile === undefined ? null : readFileSync(a.contactKeysFile);
   const contactKeys = contactKeysSnapshot === null ? null : readContactKeys(contactKeysSnapshot.toString('utf8'), a.contactKeysFile!, seq.frames.length);

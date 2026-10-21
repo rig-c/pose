@@ -228,7 +228,7 @@ function liftedOrder(seq: PoseSequence, behind: Array<'r' | 'l'>, truth: DepthFr
     const d = f.depth!;
     const z = (s: 'r' | 'l') => limbJointDepths(track[i]!, d, `${s}_leg`)!;
     const t = (j: 'knee' | 'ankle') => ({ 1: 'r front', 0: 'tied', [-1]: 'l front' })[trueJointOrder(truth[i]!, j)];
-    table.push(`| ${i} | ${up.join('') || '—'} | ${d.r_thigh!.sign} / ${d.r_shin!.sign} | ${d.l_thigh!.sign} / ${d.l_shin!.sign} | ${z('r').mid.toFixed(1)} / ${z('l').mid.toFixed(1)} | ${z('r').end.toFixed(1)} / ${z('l').end.toFixed(1)} | ${behind[i]}${one !== null && (behind[i] === one) !== (want === 'behind') ? ' ✗' : ''} | ${t('knee')} | ${t('ankle')} |`);
+    table.push(`| ${i} | ${up.join('') || '—'} | ${d.r_thigh!.sign} / ${d.r_shin?.sign ?? '—'} | ${d.l_thigh!.sign} / ${d.l_shin?.sign ?? '—'} | ${z('r').mid.toFixed(1)} / ${z('l').mid.toFixed(1)} | ${z('r').end?.toFixed(1) ?? '—'} / ${z('l').end?.toFixed(1) ?? '—'} | ${behind[i]}${one !== null && (behind[i] === one) !== (want === 'behind') ? ' ✗' : ''} | ${t('knee')} | ${t('ankle')} |`);
   });
   return { misses, table, lifted };
 }
@@ -541,6 +541,92 @@ describe('mutants: the rule\'s direction, the gait\'s joint and the limb mean, e
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
+  }, SLOW);
+});
+
+describe('#336 review: the knee without the ankle, and a record cleaned with the table before #336', () => {
+  /** The run's sequence with both ankles missing (and the shins' depth gone, as clean writes none there) on `drop` frames. */
+  const withoutAnkles = (seq: PoseSequence, drop: (i: number) => boolean): PoseSequence => ({
+    ...seq,
+    frames: seq.frames.map((f, i) => {
+      if (!drop(i)) return f;
+      const { r_shin: _r, l_shin: _l, ...depth } = f.depth!;
+      return { ...f, depth, people: f.people.map((p) => ({ ...p, joints: { ...p.joints, r_ankle: { state: 'missing' as const }, l_ankle: { state: 'missing' as const } } })) };
+    }),
+  });
+
+  test('a run frame without its ankles still orders the legs at the knee; with no ankle on any frame the knee tie still reads; mutant: the knee requiring the shin holds the order instead', async () => {
+    const ref = retargeted('run', true);
+    expect(ref.ran.status).toBe(0);
+    const base = pureBehind({ drawOrderFromDepth }, ref, 'run');
+    const cases = [
+      { name: 'frames 2–6, 12–16, … (every swing a key decides on)', drop: (i: number) => i % 10 >= 2 && i % 10 <= 6 },
+      { name: 'every frame (no ankle anywhere: a knee-only sequence)', drop: () => true },
+    ];
+    for (const c of cases) {
+      const r2 = { ...ref, seq: withoutAnkles(ref.seq, c.drop) };
+      const got = pureBehind({ drawOrderFromDepth }, r2, 'run', r2.seq.frames.map((f) => f.depth));
+      console.log(`  #336 review 1 — ankles missing on ${c.name}: tie ${got.tie} px, ${got.behind.filter((b, i) => b !== base.behind[i]).length} frame(s) ordered otherwise than with the ankles`);
+      expect(got.tie).toBe(base.tie);
+      expect(got.behind).toEqual(base.behind);
+      expect(barMisses('run', r2, got.behind)).toEqual([]);
+    }
+    // Mutant: the knee depth given only where the shin is named too (the helper before the review).
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm336-knee-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      const path = join(d, 'src', 'depth.ts');
+      const src = readFileSync(path, 'utf8');
+      const from = 'if (du === undefined || lu === null) return null;';
+      expect(src.split(from)).toHaveLength(2);
+      writeFileSync(path, src.replace(from, 'if (du === undefined || dl === undefined || lu === null || ll === null) return null;'));
+      const m = (await import(join(d, 'src', 'draworder.ts'))) as { drawOrderFromDepth: typeof drawOrderFromDepth };
+      const r2 = { ...ref, seq: withoutAnkles(ref.seq, cases[0]!.drop) };
+      const got = pureBehind(m, r2, 'run', r2.seq.frames.map((f) => f.depth));
+      const misses = barMisses('run', r2, got.behind);
+      console.log(`  #336 review 1 mutant "knee needs the shin": ${misses.length} knee-protruding frame(s) drawn behind (${misses.join(', ')})`);
+      expect(misses.length).toBeGreaterThan(0);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+
+  test('a walk record with the shin signs of the table before #336 is refused by name with --draw-order depth (DEPTH_RECLEAN), read without it; a run record from before (the same signs) and a measured depth are read', () => {
+    const dir = tempDir();
+    const fresh = cleaned(FIXTURES.walk(), 'walk', dir, 'walk');
+    // The table before #336 leaned a walk's foreshortened shin forward: the same record with every shin sign the other way.
+    const doc = JSON.parse(readFileSync(fresh, 'utf8')) as { frames: Array<{ depth: Record<string, { sign: number }> }> };
+    let flipped = 0;
+    for (const f of doc.frames) for (const s of ['r_shin', 'l_shin']) if (f.depth[s] !== undefined && f.depth[s]!.sign !== 0) {
+      f.depth[s]!.sign = -f.depth[s]!.sign;
+      flipped++;
+    }
+    expect(flipped).toBe(28);
+    const old = join(dir, 'walk.old.clean.json');
+    writeFileSync(old, JSON.stringify(doc, null, 2));
+    const r = retargeted('walk', true, { dir: join(dir, 'old'), sequence: old });
+    console.log(`  #336 review 2 — ${r.ran.stderr.trim()}`);
+    expect(r.ran.status).toBe(1);
+    expect(r.ran.stderr).toContain(`DEPTH_RECLEAN: ${old} carries derived depth (clean --depth walk) whose foreshortened shin leans forward, the way the trunk faces, on 28 frame(s) (3, 4, 5, 6, 7, … +23 more): the sign table before rig-c/pose#336, where a walk's lifted foot read forward. --draw-order depth reads a walk at the ankle and would draw that foot in front of the supporting leg. Clean it again with this version (rig-pose clean --depth walk), which leans a foreshortened shin back in both gaits; a sequence cleaned with --depth run by an earlier release is read as it is (its signs did not change), and measured depth is not checked`);
+    expect(existsSync(join(dir, 'old', 'walk.motion.json'))).toBe(false);
+    // Without the flag nothing reads the order, and the record is read as before.
+    expect(retargeted('walk', false, { dir: join(dir, 'old-off'), sequence: old }).ran.status).toBe(0);
+    // Cleaned again, it is read.
+    expect(retargeted('walk', true, { dir: join(dir, 'again'), sequence: cleaned(FIXTURES.walk(), 'walk', join(dir), 'walk2') }).ran.status).toBe(0);
+    // A run record: the run's signs did not change, so a release before #336 wrote these bytes (the PR's sha256 table); read.
+    const run = retargeted('run', true, { dir: join(dir, 'run') });
+    expect(run.ran.status).toBe(0);
+    expect(run.ran.stderr).not.toContain('DEPTH_RECLEAN');
+    // Measured depth is a detector's, not the table's: the same forward shins marked measured are read.
+    const measured = structuredClone(doc) as unknown as { frames: Array<{ depth: Record<string, { source: string }> }>; cleaned: { params: Record<string, unknown> } };
+    for (const f of measured.frames) for (const v of Object.values(f.depth)) v.source = 'measured';
+    delete measured.cleaned.params.depth;
+    const mpath = join(dir, 'walk.measured.json');
+    writeFileSync(mpath, JSON.stringify(measured, null, 2));
+    const m = retargeted('walk', true, { dir: join(dir, 'measured'), sequence: mpath });
+    expect(m.ran.stderr).not.toContain('DEPTH_RECLEAN');
+    expect(m.ran.status).toBe(0);
   }, SLOW);
 });
 

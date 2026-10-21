@@ -252,7 +252,9 @@ function restOf(track: readonly Joints[], depth: ReadonlyArray<FrameDepth | unde
 function tieOf(track: readonly Joints[], depth: ReadonlyArray<FrameDepth | undefined>, limbs: readonly [Limb, Limb], by: LegJoint | undefined): { tie: number | null; leg: number | null } {
   const rests = limbs.map((l) => {
     const [u, w] = LIMBS[l].map((s) => restOf(track, depth, s));
-    return u === null || u === undefined || w === null || w === undefined ? null : { hidden: by === 'knee' ? u : by === 'ankle' ? u + w : u + w / 2, leg: u + w };
+    // The knee's tie needs the upper segment alone (#336: a leg whose ankle is never placed still orders at the knee).
+    if (by === 'knee') return u === null || u === undefined ? null : { hidden: u, leg: w === null || w === undefined ? null : u + w };
+    return u === null || u === undefined || w === null || w === undefined ? null : { hidden: by === 'ankle' ? u + w : u + w / 2, leg: u + w };
   });
   if (rests[0] == null || rests[1] == null) return { tie: null, leg: null };
   const r = rests[1].hidden < rests[0].hidden ? rests[1] : rests[0];
@@ -305,7 +307,8 @@ export function drawOrderFromDepth(layers: readonly FrameLayers[], track: readon
           const z: Partial<Record<Limb, number>> = {};
           for (const limb of new Set(DRAW_ORDER_PAIRS.flat())) {
             const d = depth[i] === undefined ? null : limbJointDepths(j, depth[i]!, limb);
-            if (d !== null) z[limb] = Math.round((by === 'knee' ? d.mid : d.end) * 100) / 100;
+            const v = d === null ? null : by === 'knee' ? d.mid : d.end;
+            if (v !== null) z[limb] = Math.round(v * 100) / 100;
           }
           return z;
         });

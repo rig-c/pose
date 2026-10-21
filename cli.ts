@@ -198,7 +198,8 @@ retarget
                         the lifted foot behind; a run by the knee, the lifted leg in front. The legs'
                         slots must fill one unbroken run of the setup draw order (else the pair is not keyed and
                         the line names the slot between); a set's slot goes with the leg it depicts. Refused on
-                        a sequence without depth (DRAWORDER_NO_DEPTH). DRAWORDER lines (default: off)
+                        a sequence without depth (DRAWORDER_NO_DEPTH), and on a walk cleaned before rig-c/pose#336
+                        (a shin leaning forward: DEPTH_RECLEAN; clean it again). DRAWORDER lines (default: off)
   --contact-keys <file> which foot supports, by hand (rig-c/pose#303): rig-pose-contact-keys/1, { "spec":
                         "rig-pose-contact-keys/1", "keys": [{ "frame", "side" }], "note"? }, side l | r | both |
                         none; frames the sequence's, fractional allowed, strictly increasing in [0, N − 1]. A key
