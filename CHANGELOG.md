@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.44.0](https://github.com/rig-c/pose/compare/v0.43.0...v0.44.0) (2026-10-21)
+
+
+### Features
+
+* **sets:** `bind` shows a set on exactly the frames it names ([#360](https://github.com/rig-c/pose/issues/360)) ([#362](https://github.com/rig-c/pose/issues/362)) ([f7f6e9e](https://github.com/rig-c/pose/commit/f7f6e9eb7c1386c620022751b30f3175fdd254f6))
+
+
+### Bug Fixes
+
+* **sets:** refuse a set key that disagrees with its drawing, and show a set only within its art-turn tolerance ([#355](https://github.com/rig-c/pose/issues/355)) ([#356](https://github.com/rig-c/pose/issues/356)) ([ab216cb](https://github.com/rig-c/pose/commit/ab216cb9bbebf170da8c0fadd5864d0a9004e947))
+
 ## [0.43.0](https://github.com/rig-c/pose/compare/v0.42.0...v0.43.0) (2026-10-21)
 
 
