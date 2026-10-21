@@ -10588,3 +10588,85 @@ describe('#285: an in-place run under --plant-feet --leg-scale — the planted h
     }
   }, SLOW);
 });
+
+describe('#279: the runs --switch-min suppressed are reported, per set, with their frames and lengths', () => {
+  /** 30 fps: two sets whose key skeletons the right arm meets for 4 frames each (0.133 s), under the default 0.25 s. */
+  const FPS30 = 30;
+  const KEY_UP: [number, number] = [150, 170];
+  const KEY_OUT: [number, number] = [60, 80];
+  const UP_ON: [number, number] = [8, 11];
+  const OUT_ON: [number, number] = [24, 27];
+  const inRun = (i: number, r: [number, number]) => i >= r[0] && i <= r[1];
+  const motion: Motion = {
+    ...BASE,
+    n: 40,
+    dt: 1 / FPS30,
+    trunk: () => 90,
+    hip: () => [0, 0],
+    ru: (i) => (inRun(i, UP_ON) ? KEY_UP[0] : inRun(i, OUT_ON) ? KEY_OUT[0] : 30),
+    rf: (i) => (inRun(i, UP_ON) ? KEY_UP[1] : inRun(i, OUT_ON) ? KEY_OUT[1] : 50),
+  };
+  const keySkeleton = ([ru, rf]: [number, number]): Record<string, Pt> => {
+    const sh: Pt = [1000, 1000];
+    const el = add(sh, dir(ru, 300));
+    return { r_shoulder: sh, r_elbow: el, r_wrist: add(el, dir(rf, 250)) };
+  };
+  const RIG: RigOpts = { extra: { sleeve_r0: { seg_up: { image: 'seg.png', x: 30, y: 0, rotation: -90 }, seg_out: { image: 'seg.png', x: 30, y: 0, rotation: 0 } } } };
+  const map = (): Record<string, unknown> => ({
+    ...baseMap(),
+    alternates: [
+      { name: 'up', slots: { sleeve_r0: 'seg_up' }, chains: ['arm_r'], pose: keySkeleton(KEY_UP) },
+      { name: 'out', slots: { sleeve_r0: 'seg_out' }, chains: ['arm_r'], pose: keySkeleton(KEY_OUT) },
+    ],
+  });
+  interface RunsRow { set: string; nearest: Array<Record<string, unknown>>; suppressed: Array<Record<string, unknown>> }
+  const reportOf = (path: string): { options: { switchMin: number }; switches: Array<{ set: string; frames: number[] }>; switchRuns: RunsRow[] } => JSON.parse(readFileSync(path, 'utf8'));
+  // The report's times are the motion's key times (rounded to 1e-6 s at the writer).
+  const run4 = (r: [number, number]) => ({ frames: r, count: 4, seconds: 0.133 });
+
+  test('at the default 0.25 s: neither set shows, and SWITCH-MIN and switchRuns name both sets\' 4-frame runs (0.133 s)', () => {
+    const c = setup({ rig: RIG, map: map(), pose: poseDoc(motion) });
+    try {
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--report', report]);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      expect(linesOf(r, 'SWITCH')).toEqual(['SWITCH none — no set within 25° of the pose for 0.25s']);
+      expect(linesOf(r, 'SWITCH-MIN')).toEqual([
+        'SWITCH-MIN set "up": 1 run(s) shorter than --switch-min 0.25s not shown: frames 8–11 (4 frames, 0.133s); nearest on 1 run(s), the longest frames 8–11 (4 frames, 0.133s)',
+        'SWITCH-MIN set "out": 1 run(s) shorter than --switch-min 0.25s not shown: frames 24–27 (4 frames, 0.133s); nearest on 1 run(s), the longest frames 24–27 (4 frames, 0.133s)',
+      ]);
+      const rep = reportOf(report);
+      expect(rep.options.switchMin).toBe(0.25);
+      expect(rep.switches).toEqual([]);
+      expect(rep.switchRuns.map((s) => s.set)).toEqual(['up', 'out']);
+      expect(rep.switchRuns[0]!.nearest).toEqual([{ ...run4(UP_ON), times: [0.266667, 0.366667], spanSeconds: 0.133 }]);
+      expect(rep.switchRuns[0]!.suppressed).toEqual([{ ...run4(UP_ON), times: [0.266667, 0.366667], spanSeconds: 0.133 }]);
+      expect(rep.switchRuns[1]!.nearest).toEqual([{ ...run4(OUT_ON), times: [0.8, 0.9], spanSeconds: 0.133 }]);
+      expect(rep.switchRuns[1]!.suppressed).toEqual([{ ...run4(OUT_ON), times: [0.8, 0.9], spanSeconds: 0.133 }]);
+    } finally {
+      rmSync(c.dir, { recursive: true, force: true });
+    }
+  }, SLOW);
+
+  test('control: at --switch-min 0.1 both sets show on those frames, nothing is suppressed and no SWITCH-MIN line prints', () => {
+    const c = setup({ rig: RIG, map: map(), pose: poseDoc(motion) });
+    try {
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--report', report, '--switch-min', '0.1']);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      expect(linesOf(r, 'SWITCH').map((l) => l.split(';').slice(0, 3).join(';'))).toEqual([
+        'SWITCH set "up" — shows "sleeve_r0" = "seg_up"; chains arm_r; frames 8–11 (t=0.267s until 0.400s) — distance max 0.0°, median 0.0°',
+        'SWITCH set "out" — shows "sleeve_r0" = "seg_out"; chains arm_r; frames 24–27 (t=0.800s until 0.933s) — distance max 0.0°, median 0.0°',
+      ]);
+      expect(linesOf(r, 'SWITCH-MIN')).toEqual([]);
+      const rep = reportOf(report);
+      expect(rep.options.switchMin).toBe(0.1);
+      expect(rep.switches.map((s) => [s.set, s.frames])).toEqual([['up', UP_ON], ['out', OUT_ON]]);
+      expect(rep.switchRuns.map((s) => [s.set, s.nearest.map((x) => x.frames), s.suppressed])).toEqual([['up', [UP_ON], []], ['out', [OUT_ON], []]]);
+    } finally {
+      rmSync(c.dir, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
