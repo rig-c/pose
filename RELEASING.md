@@ -241,6 +241,7 @@ Every flag `parseFlags` reads in `cli.ts`, once. `test/promise.test.ts` holds th
 | `retarget` | `--carry-idle` | promised | S, X 2 | |
 | `retarget` | `--raised-by-head` | courtesy | — | |
 | `retarget` | `--reduce-keep-planted` | courtesy | — | |
+| `retarget` | `--draw-order` | courtesy | — | (rig-c/pose#304) |
 | `retarget` | `--verbose` | courtesy | — | |
 | `retarget` | `--summary` | courtesy | — | |
 | `retarget` | `--sequence` | promised | X 1 | alias of `--pose` |
@@ -302,6 +303,7 @@ Every key `rig-pose-report/1` can carry, once: the keys `src/run.ts` writes, and
 | `seams` | courtesy | — | |
 | `seamPairs` | courtesy | — | |
 | `switchRuns` | courtesy | — | (rig-c/pose#279) |
+| `drawOrder` | courtesy | — | (rig-c/pose#304) |
 | `reach` | courtesy | — | |
 | `reachOrigin` | courtesy | — | only when the map has a `reach` chain (rig-c/pose#282) |
 | `byHip` | courtesy | — | |
