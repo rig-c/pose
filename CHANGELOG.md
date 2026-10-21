@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.38.0](https://github.com/rig-c/pose/compare/v0.37.1...v0.38.0) (2026-10-21)
+
+
+### Features
+
+* **pelvis:** --pelvis-keys accepts fractional frames, so hand keys sit on drawn keys between scan frames ([#294](https://github.com/rig-c/pose/issues/294)) ([#298](https://github.com/rig-c/pose/issues/298)) ([6b02cf9](https://github.com/rig-c/pose/commit/6b02cf9443777112aecb1f9835057bf3a89ccfb0))
+* **pelvis:** read the pelvis line from the frames and carry it as its own track through clean and retarget ([#288](https://github.com/rig-c/pose/issues/288)) ([#291](https://github.com/rig-c/pose/issues/291)) ([aeb5f8e](https://github.com/rig-c/pose/commit/aeb5f8e55166dce37ef429c293d6a6d8fbf61c25))
+* **retarget:** an alternate set with a "phase" switches on the support hand-over, not on angle distance ([#286](https://github.com/rig-c/pose/issues/286)) ([#296](https://github.com/rig-c/pose/issues/296)) ([7e92d17](https://github.com/rig-c/pose/commit/7e92d170872d45e56c13e80f5fb514224c197623))
+
 ## [0.37.1](https://github.com/rig-c/pose/compare/v0.37.0...v0.37.1) (2026-10-21)
 
 
