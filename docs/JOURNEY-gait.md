@@ -191,6 +191,6 @@ README's [Choosing the approach](https://github.com/rig-c/pose#choosing-the-appr
 | [#355](https://github.com/rig-c/pose/issues/355): a set key that disagrees with its drawing won selection | [PR #356](https://github.com/rig-c/pose/pull/356) |
 | [#346](https://github.com/rig-c/pose/issues/346): forearms never keyed against the trunk | [PR #363](https://github.com/rig-c/pose/pull/363) |
 | [#360](https://github.com/rig-c/pose/issues/360): no way to show a set on given frames without forged keys | [PR #362](https://github.com/rig-c/pose/pull/362) |
-| rig-c/parts#646 | parts side |
-| rig-c/parts#647 | parts side |
+| rig-c/parts#646 | parts side: legs contiguous |
+| rig-c/parts#647 | parts side: the limb layout (layout.json) |
 | rig-c/parts#657 | parts side, open |
