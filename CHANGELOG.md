@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.40.0](https://github.com/rig-c/pose/compare/v0.39.0...v0.40.0) (2026-10-21)
+
+
+### Features
+
+* **retarget:** --draw-order depth keys the legs' draw order from the depth track, the away leg behind ([#304](https://github.com/rig-c/pose/issues/304)) ([#315](https://github.com/rig-c/pose/issues/315)) ([c470bd7](https://github.com/rig-c/pose/commit/c470bd76309070f4d5260b1f611c003dadd24a18))
+* **retarget:** --reduce takes per-chain tolerances (&lt;deg&gt;,&lt;chain&gt;=&lt;deg&gt;,…), so a planted ankle and a smoothed trunk hold together ([#283](https://github.com/rig-c/pose/issues/283)) ([#316](https://github.com/rig-c/pose/issues/316)) ([84fd96f](https://github.com/rig-c/pose/commit/84fd96fb55bcb8d12b91c1afa97fdf4d59d512ed))
+* **retarget:** measure how far each reaching chain's origin starts from its source joint, and warn past a fifth of the segment ([#282](https://github.com/rig-c/pose/issues/282)) ([#309](https://github.com/rig-c/pose/issues/309)) ([6bd634c](https://github.com/rig-c/pose/commit/6bd634c4b8642deb646f6fad1a1689b493fda75c))
+* **retarget:** report the alternate-set runs --switch-min held back ([#279](https://github.com/rig-c/pose/issues/279)) ([#308](https://github.com/rig-c/pose/issues/308)) ([0bb9e01](https://github.com/rig-c/pose/commit/0bb9e0162e474f1b440d4c9e47aa5b1aa77ba933))
+
 ## [0.39.0](https://github.com/rig-c/pose/compare/v0.38.0...v0.39.0) (2026-10-21)
 
 
