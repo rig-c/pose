@@ -218,33 +218,40 @@ describe('#280: the report names the signal per stride, and the disagreement', (
     return writePoseSequence(c.seq);
   }
 
-  test('a FEET line per stride names the vertical speed, and the disagreement line names the clip frontal with N stated; control: examples/walk names ankle height', () => {
+  test('two support lines name the vertical speed and the disagreement with N stated, a FEET line per stride names its signal, none over 260 characters; control: examples/walk prints none, by default or under --verbose', () => {
     const dir = mkdtempSync(join(tmpdir(), 'rig-pose-test-'));
     try {
       const pose = join(dir, 'pose.json');
       writeFileSync(pose, frontalPose());
-      const run = (seq: string, out: string) => spawnSync(process.execPath, [CLI, 'retarget', '--rig', join(ROOT, 'examples', 'wave', 'rig'), '--map', join(ROOT, 'examples', 'walk', 'map.json'), '--pose', seq, '--out', join(dir, out), '--name', 'walk', '--plant-feet'], { encoding: 'utf8', cwd: ROOT });
+      const run = (seq: string, out: string, extra: string[] = []) => spawnSync(process.execPath, [CLI, 'retarget', '--rig', join(ROOT, 'examples', 'wave', 'rig'), '--map', join(ROOT, 'examples', 'walk', 'map.json'), '--pose', seq, '--out', join(dir, out), '--name', 'walk', '--plant-feet', ...extra], { encoding: 'utf8', cwd: ROOT });
+      const feetOf = (out: string) => out.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('FEET '));
       const r = run(pose, 'frontal.motion.json');
       expect(r.stderr).toBe('');
       expect(r.status).toBe(0);
-      const feet = r.stdout.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('FEET '));
-      const signal = feet.filter((l) => l.startsWith('FEET   support signals'));
+      const feet = feetOf(r.stdout);
+      const signal = feet.filter((l) => l.startsWith('FEET   support:'));
       const strides = feet.filter((l) => l.startsWith('FEET   stride '));
       console.log(`  #280 run:\n    ${[...signal, ...strides.slice(0, 3)].join('\n    ')}`);
-      expect(signal).toHaveLength(1);
-      expect(signal).toEqual(['FEET   support signals (rig-c/pose#280): the ankle\'s vertical speed contradicts ankle height on 18 of 96 frame(s) (18.8 %) — the lower ankle moving while the higher moves with the ground; past 5 %, and the ankles move more in y than in x against their hips (5th–95th percentile, x · y: r 0.0 · 17.0 px, l 0.0 · 23.0 px), so the clip is read as a frontal view: its support comes from the vertical speed, ankle height only where neither foot moves with the ground']);
+      expect(signal).toEqual([
+        'FEET   support: ankle vertical speed (rig-c/pose#280) — it contradicts ankle height on 18 of 96 frame(s) (18.8 %, past 5 %): the lower ankle moving while the higher moves with the ground',
+        'FEET   support: read as a frontal view — ankles move more in y than x (x · y against the hips: r 0.0 · 17.0 px, l 0.0 · 23.0 px); ankle height only where neither foot moves with the ground',
+      ]);
       expect(strides).toHaveLength(2 * CYCLES);
       expect(strides.slice(0, 2)).toEqual([
         'FEET   stride r 0–7: ankle vertical speed on 8 frame(s) (both feet down on 3); ankle height alone would read l on 1 of them',
         'FEET   stride l 8–15: ankle vertical speed on 8 frame(s) (both feet down on 3); ankle height alone would read r on 2 of them',
       ]);
       expect(strides.every((l) => l.includes(': ankle vertical speed on '))).toBe(true);
-      // Control: the README's walk — not frontal; ankle height decided every stride, in one line, and no stride lines.
+      expect(Math.max(...[...signal, ...strides].map((l) => `  ${l}`.length))).toBeLessThanOrEqual(260);
+      // Control: the README's walk — not frontal; by default no support line and no stride line, so the default output keeps its length.
       const w = run(join(ROOT, 'examples', 'walk', 'pose.json'), 'walk.motion.json');
       expect(w.status).toBe(0);
-      const wfeet = w.stdout.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('FEET '));
-      expect(wfeet.filter((l) => l.startsWith('FEET   stride '))).toEqual([]);
-      expect(wfeet.filter((l) => l.startsWith('FEET   support signals'))).toEqual(['FEET   support signals (rig-c/pose#280): the ankle\'s vertical speed contradicts ankle height on 0 of 24 frame(s) (0.0 %) — the lower ankle moving while the higher moves with the ground; within 5 %, and the ankles move more in x than in y against their hips (5th–95th percentile, x · y: r 28.1 · 14.6 px, l 28.1 · 14.6 px), so ankle height decided every one of the 2 support span(s)']);
+      const wfeet = feetOf(w.stdout);
+      expect(wfeet.filter((l) => l.startsWith('FEET   stride ') || l.startsWith('FEET   support:'))).toEqual([]);
+      // Nor under --verbose: a clip the second signal does not decide prints as before in every mode.
+      const v = run(join(ROOT, 'examples', 'walk', 'pose.json'), 'walk.verbose.motion.json', ['--verbose']);
+      expect(v.status).toBe(0);
+      expect(feetOf(v.stdout).filter((l) => l.startsWith('FEET   support:'))).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

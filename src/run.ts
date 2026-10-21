@@ -917,21 +917,25 @@ function loweredLine(lowered: readonly Lowered[]): string {
 }
 
 /**
- * The support-signal lines (rig-c/pose#280): one line naming how often the
- * ankle's vertical speed contradicts ankle height, against `FRONTAL_DISAGREE`,
- * and where the stride shows (in depth: a frontal view; in x: a side view);
- * then, on a clip read as frontal, one line per support span (a stride) naming
- * the signal that decided its frames, and what ankle height alone would have read.
+ * The support-signal lines (rig-c/pose#280). On a clip read as frontal: two
+ * lines — how often the ankle's vertical speed contradicts ankle height against
+ * `FRONTAL_DISAGREE`, and where the stride shows (in depth) — then one line per
+ * support span (a stride) naming the signal that decided its frames and what
+ * ankle height alone would have read. On any other clip ankle height decided as
+ * before and nothing is printed: the output of a clip the second signal does not
+ * decide stays as it was, in every mode (`Feet.signal` still carries the figures).
  */
 export function signalLines(sig: SupportSignal, supports: Feet['supports']): string[] {
   const span = (x: [number, number]) => (x[0] === x[1] ? `${x[0]}` : `${x[0]}–${x[1]}`);
   const n = Math.round(FRONTAL_DISAGREE * 100);
   const pct = sig.read === 0 ? 0 : (100 * sig.contradict.length) / sig.read;
-  const inDepth = sig.range.r.y > sig.range.r.x && sig.range.l.y > sig.range.l.x;
-  const where = `the ankles move more in ${inDepth ? 'y than in x' : 'x than in y'} against their hips (5th–95th percentile, x · y: r ${sig.range.r.x.toFixed(1)} · ${sig.range.r.y.toFixed(1)} px, l ${sig.range.l.x.toFixed(1)} · ${sig.range.l.y.toFixed(1)} px)`;
-  const head = `support signals (rig-c/pose#280): the ankle's vertical speed contradicts ankle height on ${sig.contradict.length} of ${sig.read} frame(s) (${pct.toFixed(1)} %) — the lower ankle moving while the higher moves with the ground`;
-  if (!sig.frontal) return [`${head}; ${pct > n ? 'past' : 'within'} ${n} %, and ${where}, so ankle height decided every one of the ${supports.length} support span(s)`];
-  const out = [`${head}; past ${n} %, and ${where}, so the clip is read as a frontal view: its support comes from the vertical speed, ankle height only where neither foot moves with the ground`];
+  if (!sig.frontal) return [];
+  const ranges = `x · y against the hips: r ${sig.range.r.x.toFixed(1)} · ${sig.range.r.y.toFixed(1)} px, l ${sig.range.l.x.toFixed(1)} · ${sig.range.l.y.toFixed(1)} px`;
+  const contra = `${sig.contradict.length} of ${sig.read} frame(s) (${pct.toFixed(1)} %`;
+  const out = [
+    `support: ankle vertical speed (rig-c/pose#280) — it contradicts ankle height on ${contra}, past ${n} %): the lower ankle moving while the higher moves with the ground`,
+    `support: read as a frontal view — ankles move more in y than x (${ranges}); ankle height only where neither foot moves with the ground`,
+  ];
   for (const sp of supports) {
     let speed = 0;
     let height = 0;
