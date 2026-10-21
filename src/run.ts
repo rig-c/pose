@@ -16,7 +16,7 @@ import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, re
 import { bendGroupLine, bendGroups, bendLine, endOnLine, flipLine, holdLine, nodLine, pelvisLine, rangeLine, reachCostLine, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions, type ScaleBand, type ScaleFit } from './retarget.ts';
 import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, readBuild, resolveRig, restOf, seamRender, slotsOf } from './rigc.ts';
 import { partsPath, projectSeams, readSeamDoc, readSeamPairs, seamLines, type SeamPair } from './seams.ts';
-import { artRangeLine, chainsMoving, raisedLine, RAISED_WITHIN, reachLine, switchLine, uncoveredFolds } from './switch.ts';
+import { artRangeLine, chainsMoving, phaseLines, raisedLine, RAISED_WITHIN, reachLine, switchLine, uncoveredFolds } from './switch.ts';
 import { jitterLine, landed, type FeetReading, type JitterRow, type Landing, measureFeet, measureJitter, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
 import { legsOf, PLANT_SWITCH, STANCE_BOUNDS } from './legs.ts';
 import { M2_IDENTITY, mulM2, reduceKeys, reduceScale, reduceUnderScale, SCALE_REDUCE, setupLocal, smoothTrunk, type M2, type ReduceBone, type Reduced, type ReduceRow, type UnderBone } from './reduce.ts';
@@ -196,6 +196,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       if (r.switches.length === 0) say(`  SWITCH none — no set within ${a.switchTolerance}° of the pose for ${a.switchMin}s`);
       for (const s of r.switches) say(`  SWITCH ${switchLine(s, r.times)}`);
       for (const l of windowLines(map, r.switches, r.distances, r.times, a.switchTolerance)) say(`  FRAMES ${l}`);
+      for (const l of phaseLines(map, r.switches)) say(`  PHASE  ${l}`);
     }
     for (const e of r.range) say(`  RANGE  ${rangeLine(e, r.times)}`);
     if (a.raisedByHead === true && r.raised.length === 0) say(`  RAISED none — no set drawing an arm within ${RAISED_WITHIN}° of straight up showed; no key moved`);
