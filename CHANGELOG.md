@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.43.0](https://github.com/rig-c/pose/compare/v0.42.0...v0.43.0) (2026-10-21)
+
+
+### Features
+
+* **pelvis:** --mode below-cover reads the tilt below a garment that covers the waistband ([#342](https://github.com/rig-c/pose/issues/342)) ([#350](https://github.com/rig-c/pose/issues/350)) ([d706ff4](https://github.com/rig-c/pose/commit/d706ff4dda935f8cfb295b34497e4fa39db1d219))
+
+
+### Bug Fixes
+
+* **depth:** the run generator's swing knee leads forward from toe-off ([#343](https://github.com/rig-c/pose/issues/343)) ([#345](https://github.com/rig-c/pose/issues/345)) ([7f45c48](https://github.com/rig-c/pose/commit/7f45c4836470966d5985064e94773fa34ec590cf))
+* **retarget:** an in-place walk's torso follows the drawn neck's sideways path while the pelvis sways under it ([#344](https://github.com/rig-c/pose/issues/344)) ([1d460f1](https://github.com/rig-c/pose/commit/1d460f1b7d2ef628890829c8b0611d46b3631311))
+
 ## [0.42.0](https://github.com/rig-c/pose/compare/v0.41.0...v0.42.0) (2026-10-21)
 
 
