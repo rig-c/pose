@@ -209,7 +209,11 @@ retarget
                         --plant-feet and --stance, a scaled bone's scalex is thinned within 5e-5 of its setup
                         length, a bone under one is re-solved through its parent as reduced, and each ankle
                         is held to what the reduced bones above it may move it by (rig-c/pose#94), printed
-                        at the end as "ankle drift allowed" in units and leg lengths (rig-c/pose#240)
+                        at the end as "ankle drift allowed" in units and leg lengths (rig-c/pose#240).
+                        --reduce <deg>,<chain>=<deg>,… gives a map chain its own tolerance, the first item every
+                        other chain's (rig-c/pose#283): legs held tight against slide while the trunk is smoothed,
+                        e.g. --reduce 3,leg_r=0.2,leg_l=0.2; each LAND line and ankle allowance follows its
+                        chain's tolerance, and the run line, the REDUCE lines and the report name them
   --reduce-hip <units>  with --reduce, thin the hip's translate keys too, its world origin within units
                         of the dense keys (default: the hip stays dense)
   --reduce-keep-planted with --reduce and --plant-feet, keep every frame of each support span on the
@@ -439,7 +443,7 @@ function floorOf(f: Map<string, string>): { floor?: number } {
 }
 
 /** --reduce and --reduce-hip (rig-c/pose#32): off unless given; the hip only with the bones. --reduce-keep-planted (rig-c/pose#251): only with both --reduce and --plant-feet. */
-function reduceOf(f: Map<string, string>): { reduce?: number; reduceHip?: number; reduceKeepPlanted?: true } {
+function reduceOf(f: Map<string, string>): { reduce?: number; reduceChains?: Record<string, number>; reduceHip?: number; reduceKeepPlanted?: true } {
   if (f.has('reduce-keep-planted')) {
     const missing = ['reduce', 'plant-feet'].filter((x) => !f.has(x));
     if (missing.length > 0) throw new Usage(`--reduce-keep-planted is given without ${missing.map((x) => `--${x}`).join(' and ')}; it keeps the support spans --plant-feet reads at dense keys inside the reduction --reduce makes`);
@@ -448,9 +452,22 @@ function reduceOf(f: Map<string, string>): { reduce?: number; reduceHip?: number
     if (f.has('reduce-hip')) throw new Usage('--reduce-hip is given without --reduce; the hip is thinned with the bones, not alone');
     return {};
   }
-  const reduce = num(f, 'reduce', 0, (n) => n > 0 && n < 180, 'degrees in (0, 180)');
   const keep = f.has('reduce-keep-planted') ? { reduceKeepPlanted: true as const } : {};
-  return f.has('reduce-hip') ? { reduce, reduceHip: num(f, 'reduce-hip', 0, (n) => n > 0, 'rig units > 0'), ...keep } : { reduce, ...keep };
+  // rig-c/pose#283: "<deg>,<chain>=<deg>,…" — the first item every chain's tolerance, then a map chain's own.
+  const [head, ...rest] = f.get('reduce')!.split(',');
+  const reduce = rest.length === 0 ? num(f, 'reduce', 0, (n) => n > 0 && n < 180, 'degrees in (0, 180)') : Number(head);
+  if (rest.length > 0 && (head === '' || !(reduce > 0 && reduce < 180))) throw new Usage(`--reduce is "${f.get('reduce')}"; its first item "${head}" must be degrees in (0, 180), every chain's tolerance, before any <chain>=<deg>`);
+  const chains: Record<string, number> = {};
+  for (const item of rest) {
+    const m = /^([^=\s]+)=(.*)$/.exec(item);
+    if (m === null) throw new Usage(`--reduce is "${f.get('reduce')}"; "${item}" is not <chain>=<deg> (a chain the map names, then its tolerance in degrees)`);
+    if (Object.hasOwn(chains, m[1]!)) throw new Usage(`--reduce is "${f.get('reduce')}"; chain "${m[1]}" is given twice`);
+    const v = Number(m[2]);
+    if (m[2] === '' || !Number.isFinite(v) || !(v > 0 && v < 180)) throw new Usage(`--reduce is "${f.get('reduce')}"; chain "${m[1]}" is "${m[2]}", and it must be degrees in (0, 180)`);
+    chains[m[1]!] = v;
+  }
+  const per = rest.length === 0 ? {} : { reduceChains: chains };
+  return f.has('reduce-hip') ? { reduce, ...per, reduceHip: num(f, 'reduce-hip', 0, (n) => n > 0, 'rig units > 0'), ...keep } : { reduce, ...per, ...keep };
 }
 
 function compareArgs(argv: string[]): CompareArgs {
