@@ -2169,6 +2169,133 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
     expect(slotTracks(c.out)).toEqual([]);
   }, SLOW);
 
+  describe('#355: a set is shown only where its drawing is within the tolerance of the pose', () => {
+    /** A copy of the package with the #355 rules taken out (today's rule): no key/drawn refusal, every art turn shows, no end-on hold. */
+    function before355(): { cli: string; done: () => void } {
+      mkdirSync(MUTANTS, { recursive: true });
+      const d = mkdtempSync(join(MUTANTS, 'm-'));
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const edit = (file: string, from: string, to: string) => {
+        const path = join(d, 'src', file);
+        const src = readFileSync(path, 'utf8');
+        expect(src.split(from)).toHaveLength(2);
+        writeFileSync(path, src.replace(from, to));
+      };
+      edit('switch.ts', 'export function artShows(a: AlternateSet, targets: ReadonlyMap<string, readonly number[]>, i: number, tolerance: number, shortInfo?: ShortSwitchInfo, map?: JointMap, raisedByHead = false): boolean {', 'export function artShows(a: AlternateSet, targets: ReadonlyMap<string, readonly number[]>, i: number, tolerance: number, shortInfo?: ShortSwitchInfo, map?: JointMap, raisedByHead = false): boolean {\n  if (a !== null) return true;');
+      edit('retarget.ts', "for (const x of keyDrawnProblems(map, opts.switchTolerance, opts.raisedByHead === true)) p.add('SET_KEY_DRAWN', x);", '');
+      edit('retarget.ts', '  if (shortInfo !== undefined) {\n    for (const s of sw.switches) {', '  if (shortInfo !== undefined && shortInfo === null) {\n    for (const s of sw.switches) {');
+      return { cli: join(d, 'cli.ts'), done: () => rmSync(d, { recursive: true, force: true }) };
+    }
+    const TOL = 25;
+    /** The right arm on its key skeleton on frames 2–13 (the upper arm `du` off it on frames 8–13), away from it elsewhere. */
+    const onKey = (du = 0): Motion => ({ ...BASE, trunk: () => 90, hip: () => [0, 0], ru: (i) => (i >= 2 && i <= 13 ? KEY_RU + (i >= 8 ? du : 0) : 30), rf: (i) => (i >= 2 && i <= 13 ? KEY_RF : 50) });
+
+    test('a key that disagrees with its drawn angle by more than --switch-tolerance is refused by name; control: a wider tolerance takes it', () => {
+      const c = setup({ rig: ALT_RIG, map: altMap(up({ drawn: { sleeve_r0: KEY_RU + 40, sleeve_r1: KEY_RF } })), pose: poseDoc(onKey()) });
+      const r = retarget(c);
+      expect(r.status).toBe(1);
+      expect(fails(r)).toEqual([
+        'FAIL  SET_KEY_DRAWN: set "up" bone "sleeve_r0": its key skeleton r_shoulder → r_elbow points at +150.00° and its "drawn" angle is +190.00°, 40.00° apart, more than --switch-tolerance 25°; the set is chosen by its key and shown at its drawn angle, so it would show this drawing turned that far from its pose — make the key skeleton the drawing\'s, or correct "drawn"',
+      ]);
+      expect(existsSync(c.out)).toBe(false);
+      const wide = retarget(c, ['--switch-tolerance', '45']);
+      expect(wide.stderr).toBe('');
+      expect(wide.status).toBe(0);
+    }, SLOW);
+
+    test('no frame shows a drawing turned past the tolerance (N/N); today\'s rule showed six at 35°, and SWITCH-TURN and switchRuns name them', () => {
+      // Drawn 20° from its key (within the tolerance, so taken), the pose on the key on 2–7 (art turn 20°) and 15° off it
+      // the other way on 8–13: the key's distance 15° chooses the set, and its art would turn 35°.
+      const drawnU = KEY_RU + 20;
+      const m = onKey(-15);
+      const c = setup({ rig: ALT_RIG, map: altMap(up({ drawn: { sleeve_r0: drawnU, sleeve_r1: KEY_RF } })), pose: poseDoc(m) });
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--report', report]);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      const turnOf = (i: number) => Math.abs(wrap(m.ru(i) - drawnU));
+      const shown = shows(c.build, 'sleeve_r0').flatMap((v, i) => (v === 'seg_up' ? [i] : []));
+      const within = shown.filter((i) => turnOf(i) <= TOL);
+      console.log(`  #355: ${within.length}/${shown.length} frame(s) shown within ${TOL}° of the drawing`);
+      expect(shown).toEqual([2, 3, 4, 5, 6, 7]);
+      expect(within).toEqual(shown);
+      expect(linesOf(r, 'SWITCH-TURN')).toEqual([
+        'SWITCH-TURN set "up": not shown on 6 frame(s) in 1 run(s) where a bone it draws turned more than --switch-tolerance 25° from its drawn angle (end-on segments held at it): frames 8–13 (6 frames, 0.750s); the nearest other set within the tolerance, or the base art, shows there',
+      ]);
+      const runs = (JSON.parse(readFileSync(report, 'utf8')) as { switchRuns: Array<{ set: string; turned: Array<{ frames: number[] }> }> }).switchRuns;
+      expect(runs.map((x) => [x.set, x.turned.map((t) => t.frames)])).toEqual([['up', [[8, 13]]]]);
+      expect(misses(c.build, m)).toEqual([]);
+      // Today's rule: the key's distance alone shows it on 2–13, six frames with the drawing 35° from the pose.
+      const old = before355();
+      try {
+        const o = setup({ rig: ALT_RIG, map: altMap(up({ drawn: { sleeve_r0: drawnU, sleeve_r1: KEY_RF } })), pose: poseDoc(m) });
+        expect(retarget(o, [], old.cli).status).toBe(0);
+        const oldShown = shows(o.build, 'sleeve_r0').flatMap((v, i) => (v === 'seg_up' ? [i] : []));
+        console.log(`  #355 today's rule: ${oldShown.filter((i) => turnOf(i) <= TOL).length}/${oldShown.length} frame(s) within ${TOL}°, up to ${Math.max(...oldShown.map(turnOf)).toFixed(1)}°`);
+        expect(oldShown).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+      } finally {
+        old.done();
+      }
+    }, SLOW);
+
+    test('control: where no drawing turns past the tolerance, the motion is the bytes today\'s rule writes', () => {
+      const old = before355();
+      try {
+        for (const [name, m, drawn, extra] of [
+          ['on its key', onKey(), { sleeve_r0: KEY_RU, sleeve_r1: KEY_RF }, []],
+          ['10° off its key, drawn 10° the other way', onKey(-10), { sleeve_r0: KEY_RU + 10, sleeve_r1: KEY_RF }, []],
+          ['no drawn angle', onKey(-20), {}, []],
+          ['--short on, nothing end-on', onKey(), { sleeve_r0: KEY_RU, sleeve_r1: KEY_RF }, ['--short', '0.35']],
+        ] as Array<[string, Motion, Record<string, number>, string[]]>) {
+          const a = setup({ rig: ALT_RIG, map: altMap(up({ drawn })), pose: poseDoc(m) });
+          const b = setup({ rig: ALT_RIG, map: altMap(up({ drawn })), pose: poseDoc(m) });
+          expect(retarget(a, extra).status).toBe(0);
+          expect(retarget(b, extra, old.cli).status).toBe(0);
+          const ha = createHash('sha256').update(readFileSync(a.out)).digest('hex');
+          const hb = createHash('sha256').update(readFileSync(b.out)).digest('hex');
+          console.log(`  #355 ${name}: ${ha.slice(0, 12)} / today's ${hb.slice(0, 12)}`);
+          expect(ha).toBe(hb);
+        }
+      } finally {
+        old.done();
+      }
+    }, SLOW);
+
+    test('an end-on segment (under --short) is held at the drawn angle while the set shows; today\'s rule followed the short hold', () => {
+      // The forearm drawn 20° from its key; on frames 6–8 the wrist sits 5 px from the elbow, 90° off: a tenth of its median length.
+      const drawnF = KEY_RF + 20;
+      const m = onKey();
+      const endOn = (i: number) => i >= 6 && i <= 8;
+      const doc = poseDoc(m, (i, j) => {
+        if (!endOn(i)) return;
+        const el = j.r_elbow!.at as Pt;
+        j.r_wrist = { state: 'observed', at: add(el, dir(KEY_RF + 90, 5)), score: 0.9 };
+      });
+      const map = altMap(up({ drawn: { sleeve_r0: KEY_RU, sleeve_r1: drawnF } }));
+      const c = setup({ rig: ALT_RIG, map, pose: doc });
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--short', '0.35', '--report', report]);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      const sw = (JSON.parse(readFileSync(report, 'utf8')) as { switches: Array<{ set: string; frames: number[]; endOnHeld?: Record<string, number[][]> }> }).switches;
+      expect(sw.map((x) => [x.set, x.frames, x.endOnHeld])).toEqual([['up', [2, 13], { sleeve_r1: [[6, 8]] }]]);
+      expect(linesOf(r, 'SWITCH')[0]).toContain('end-on, held at drawn: "sleeve_r1" frames 6–8');
+      // The forearm lands on its drawn angle on the end-on frames, on the pose everywhere else.
+      expect(misses(c.build, m, (b, i) => (b === 'sleeve_r1' && endOn(i) ? drawnF : angleOf(m, b, i)))).toEqual([]);
+      const old = before355();
+      try {
+        const o = setup({ rig: ALT_RIG, map, pose: doc });
+        expect(retarget(o, ['--short', '0.35'], old.cli).status).toBe(0);
+        // Today: the short hold's interpolation, the key's angle (20° from the drawing).
+        expect(misses(o.build, m)).toEqual([]);
+      } finally {
+        old.done();
+      }
+    }, SLOW);
+  });
+
   test('set → set directly: the second set\'s frame puts the first set\'s slots back to setup (its extra slot empty)', () => {
     const pose = poseDoc({ ...BASE, ru: (i) => (i <= 7 ? KEY_RU : 60), rf: (i) => (i <= 7 ? KEY_RF : 80) });
     const c = setup({ rig: ALT_RIG, map: altMap(up(), out()), pose });
@@ -2493,21 +2620,31 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
       expect(rep.range).toEqual([]);
     }, SLOW);
 
-    test('ART-RANGE: inside the span the reference sits 30° off drawn, range ±10 — 20° past it, listed, and the bone not clamped', () => {
-      const c = setup({ rig: ALT_RIG, map: rangedMap([-10, 10], lift({ drawn: { sleeve_r0: -80 } })), pose: poseDoc(RANGED) });
+    // Changed by #355: a key 30° from its drawing (past --switch-tolerance) chose a drawing for a pose it is not of, so it is
+    // now refused; the ART-RANGE reading is held on a drawing 20° from its key, within the tolerance.
+    test('ART-RANGE: inside the span the reference sits 20° off drawn, range ±10 — 10° past it, listed, and the bone not clamped; a drawing 30° off is refused (#355)', () => {
+      const c = setup({ rig: ALT_RIG, map: rangedMap([-10, 10], lift({ drawn: { sleeve_r0: -70 } })), pose: poseDoc(RANGED) });
       const report = join(c.dir, 'report.json');
       const r = retarget(c, ['--report', report]);
       expect(r.stderr).toBe('');
       expect(r.status).toBe(0);
       expect(linesOf(r, 'ART-RANGE')).toEqual([
-        'ART-RANGE set "lift" chain "arm_r" bone "sleeve_r0" turned +30.0° from drawn (range [-10, 10]) frames 4–7 (t=0.500–0.875s): 0.500s, up to 20.0° past it; the bone follows the pose — demand for another drawing of the set',
+        'ART-RANGE set "lift" chain "arm_r" bone "sleeve_r0" turned +20.0° from drawn (range [-10, 10]) frames 4–7 (t=0.500–0.875s): 0.500s, up to 10.0° past it; the bone follows the pose — demand for another drawing of the set',
       ]);
       // Outside the span the key is 10°, at the limit: nothing clamped there either.
       expect(linesOf(r, 'RANGE')).toEqual([]);
       expect(misses(c.build, RANGED)).toEqual([]);
       const rep = reportOf(report);
-      expect(legacyReportRows(rep.artRange, ['times', 'spanSeconds'])).toEqual([{ set: 'lift', chain: 'arm_r', bone: 'sleeve_r0', frames: [4, 7], seconds: 0.5, maxOverflow: 20, turn: 30, limits: [-10, 10], clamped: false }]);
-      expect(rep.switches[0]!.artTurn).toEqual({ sleeve_r0: { max: 30, median: 30 } });
+      expect(legacyReportRows(rep.artRange, ['times', 'spanSeconds'])).toEqual([{ set: 'lift', chain: 'arm_r', bone: 'sleeve_r0', frames: [4, 7], seconds: 0.5, maxOverflow: 10, turn: 20, limits: [-10, 10], clamped: false }]);
+      expect(rep.switches[0]!.artTurn).toEqual({ sleeve_r0: { max: 20, median: 20 } });
+      // The old fixture: drawn −80°, its key −50°, 30° apart — refused by name, nothing written.
+      const off = setup({ rig: ALT_RIG, map: rangedMap([-10, 10], lift({ drawn: { sleeve_r0: -80 } })), pose: poseDoc(RANGED) });
+      const refused = retarget(off);
+      expect(refused.status).toBe(1);
+      expect(fails(refused)).toEqual([
+        'FAIL  SET_KEY_DRAWN: set "lift" bone "sleeve_r0": its key skeleton r_shoulder → r_elbow points at −50.00° and its "drawn" angle is −80.00°, 30.00° apart, more than --switch-tolerance 25°; the set is chosen by its key and shown at its drawn angle, so it would show this drawing turned that far from its pose — make the key skeleton the drawing\'s, or correct "drawn"',
+      ]);
+      expect(existsSync(off.out)).toBe(false);
     }, SLOW);
 
     test('the set\'s turn holds the art: drawn −80°, turn ±10, reference 30° past drawn — clamped at drawn +10°, listed, and the forearm keeps its own angle', () => {

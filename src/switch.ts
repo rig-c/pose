@@ -17,6 +17,24 @@
  * report's `feet.supports`) and switches on the hand-over, with none of the
  * rules here or below applied to it.
  *
+ * The art turn (rig-c/pose#355): a set is chosen by its key skeleton and shown at
+ * its drawn angles. On a bone the set shows by its drawing unaided (`unaided`: no
+ * `turn` on it, and the set not re-solved after selection — no `place`,
+ * `support` or `anchor`, and not an arm set under --raised-by-head), the
+ * retarget refuses an angle set whose key and drawn angle disagree by more than
+ * the tolerance (`keyDrawnProblems`), and the set is a candidate on a frame only
+ * where the bone is within the tolerance of its drawn angle (`artShows`): the art
+ * turn wrap(target − drawn), on the same targets as the distance, and 0 for a
+ * segment end-on there (its picture length under `--short`'s cutoff of its
+ * median, the short hold's notion), which the retarget holds at the drawn angle
+ * while the set shows. A frame whose art turn is past the tolerance falls back
+ * as a frame whose key is past it does: the set is not a candidate there, so the
+ * nearest other set within the tolerance shows, or the base art, and the bridging
+ * and the hysteresis below treat it as they treat a frame past the key's
+ * tolerance. The report's `switchRuns` lists those frames as `turned`. A bone with
+ * a `turn`, or in a re-solved set, is re-aimed on purpose: its key may differ from
+ * its drawing.
+ *
  * Sets compete only with the sets they share a slot with (shown or hidden,
  * transitively), or a bone they offset: two that touch nothing in common — a
  * drawing of each arm — can show at once, and two that do never overlap, so
@@ -88,6 +106,8 @@ export interface SwitchOptions {
   handOffsets?: ReadonlyMap<string, ReadonlyArray<readonly [number, number]>>;
   /** The report's `feet.supports` (rig-c/pose#286): the spans a set with a `phase` shows on. Given only when a set declares one. */
   phaseSupports?: ReadonlyArray<{ side: Side; frames: [number, number] }>;
+  /** --raised-by-head: an arm set is re-solved after selection (rig-c/pose#355's scope). */
+  raisedByHead?: boolean;
 }
 
 /** A phase set's span (rig-c/pose#286): its step side, and the support hand-overs it was switched on and off at. */
@@ -132,6 +152,8 @@ export interface Switch {
   distance: { max: number; median: number };
   /** Per bone the set has a `drawn` angle for: |wrap(target − drawn)| over the frames shown, degrees. */
   artTurn: Record<string, { max: number; median: number }>;
+  /** rig-c/pose#355: per bone the set draws, the runs of frames it was end-on on (under `--short`'s cutoff), held at its drawn angle. Absent: none. */
+  endOnHeld?: Record<string, Array<[number, number]>>;
   /** The boundary it starts on (null from the first frame) and the one it ends on (null to the end); a boundary between two sets is in both. */
   moved: { on: Move | null; off: Move | null };
   /** Only on a set with a `phase` (rig-c/pose#286): the step side and the hand-overs the span was switched on. */
@@ -196,6 +218,8 @@ export interface SetRuns {
   set: string;
   nearest: FrameRun[];
   suppressed: FrameRun[];
+  /** rig-c/pose#355: the runs on which its key was within the tolerance (inside its `frames` window), and the art turn of a bone it shows unaided was past the tolerance, so it was not a candidate there (it shows there only if the bridging or the hysteresis gives it the frame). */
+  turned: FrameRun[];
 }
 
 export interface Switches {
@@ -273,6 +297,66 @@ export function median(xs: readonly number[]): number {
   const s = [...xs].sort((a, b) => a - b);
   const m = s.length >> 1;
   return s.length % 2 === 1 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
+}
+
+/** rig-c/pose#355: degrees within which a set's key and drawn angle, or its art turn, read as on the tolerance (pixel keys against drawn numbers). */
+const TURN_EPS = 1e-6;
+
+/**
+ * rig-c/pose#355 scope: whether the set shows bone b by its drawing unaided — the bone has no `turn`, and the set is not
+ * re-solved after selection (no `place`, `support` or `anchor`, and not an arm set under --raised-by-head). Elsewhere the
+ * art is re-aimed on purpose, and a key apart from the drawing is the contract.
+ */
+export function unaided(a: AlternateSet, b: string, map: JointMap, raisedByHead: boolean): boolean {
+  if (a.turn[b] !== undefined) return false;
+  if ((a.place ?? null) !== null || a.support !== undefined || a.anchor !== undefined) return false;
+  if (raisedByHead && a.chains.some((cn) => map.chains.find((c) => c.name === cn)?.joints[0]?.endsWith('_shoulder') === true)) return false;
+  return true;
+}
+
+/**
+ * rig-c/pose#355: what the retarget refuses about the map's angle sets (no `phase`) against the tolerance, one text each:
+ * a bone whose key skeleton's direction and `drawn` angle disagree by more than it. The set is chosen by the key and shown
+ * at the drawn angle, so such a key chooses a drawing for a pose the drawing is not of.
+ */
+export function keyDrawnProblems(map: JointMap, tolerance: number, raisedByHead = false): string[] {
+  const out: string[] = [];
+  const sg1 = (v: number) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(2)}°`;
+  for (const a of map.alternates) {
+    if (a.phase !== undefined) continue;
+    for (const cn of a.chains) {
+      const c = map.chains.find((x) => x.name === cn)!;
+      c.bones.forEach((b, k) => {
+        const drawn = a.drawn[b];
+        const p0 = a.pose[c.joints[k]!];
+        const p1 = a.pose[c.joints[k + 1]!];
+        if (drawn === undefined || p0 === undefined || p1 === undefined || !unaided(a, b, map, raisedByHead)) return;
+        const key = pictureAngle(p0, p1);
+        const d = Math.abs(wrap(key - drawn));
+        if (d > tolerance + TURN_EPS) out.push(`set "${a.name}" bone "${b}": its key skeleton ${c.joints[k]} → ${c.joints[k + 1]} points at ${sg1(key)} and its "drawn" angle is ${sg1(drawn)}, ${d.toFixed(2)}° apart, more than --switch-tolerance ${tolerance}°; the set is chosen by its key and shown at its drawn angle, so it would show this drawing turned that far from its pose — make the key skeleton the drawing's, or correct "drawn"`);
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * rig-c/pose#355: whether an angle set's art may show on frame i: every bone it draws within the tolerance of its drawn
+ * angle. The art turn is wrap(target − drawn), held inside the set's `turn` for the bone where it has one; a segment end-on
+ * on the frame (its picture length under `--short`'s cutoff of its median, `shortInfo`) is held at the drawn angle while the
+ * set shows, so its turn there is 0.
+ */
+export function artShows(a: AlternateSet, targets: ReadonlyMap<string, readonly number[]>, i: number, tolerance: number, shortInfo?: ShortSwitchInfo, map?: JointMap, raisedByHead = false): boolean {
+  for (const [b, drawn] of Object.entries(a.drawn)) {
+    if (map !== undefined && !unaided(a, b, map, raisedByHead)) continue;
+    const frac = shortInfo?.fractions.get(b);
+    if (frac !== undefined && frac[i]! < shortInfo!.cutoff) continue;
+    let t = wrap(targets.get(b)![i]! - drawn);
+    const lim = a.turn[b];
+    if (lim !== undefined) t = Math.min(Math.max(t, lim[0]), lim[1]);
+    if (Math.abs(t) > tolerance + TURN_EPS) return false;
+  }
+  return true;
 }
 
 const r6 = (v: number) => Math.round(v * 1e6) / 1e6;
@@ -422,7 +506,7 @@ export const MOVE_BOUND = 2;
  * on is within `MOVE_BOUND` × the tolerance of it; none qualifying, the
  * boundary stays. Returns one `Move` per boundary.
  */
-function moveBoundaries(vals: ReadonlyArray<AlternateSet | null>, pos: readonly number[], map: JointMap, targets: ReadonlyMap<string, readonly number[]>, distances: ReadonlyMap<string, readonly number[]>, times: readonly number[], duration: number, opts: SwitchOptions): Move[] {
+function moveBoundaries(vals: ReadonlyArray<AlternateSet | null>, pos: readonly number[], map: JointMap, targets: ReadonlyMap<string, readonly number[]>, distances: ReadonlyMap<string, readonly number[]>, times: readonly number[], duration: number, opts: SwitchOptions, art?: ReadonlyMap<string, readonly boolean[]>): Move[] {
   const n = times.length;
   const at = [...pos];
   const end = (b: number) => (b < n ? times[b]! : duration);
@@ -458,7 +542,8 @@ function moveBoundaries(vals: ReadonlyArray<AlternateSet | null>, pos: readonly 
     const near = (a: AlternateSet | null, from: number, to: number): boolean => {
       if (a === null) return true;
       const d = distances.get(a.name)!;
-      for (let k = from; k < to; k++) if (d[k]! > MOVE_BOUND * opts.switchTolerance) return false;
+      const shows = art?.get(a.name);
+      for (let k = from; k < to; k++) if (d[k]! > MOVE_BOUND * opts.switchTolerance || shows?.[k] === false) return false;
       return true;
     };
     const qualifies = (k: number) => (k < b ? near(arriving, k, b) : near(leaving, b, k));
@@ -520,6 +605,14 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
   // rig-c/pose#279: per angle set, the frames it was nearest on and the frames the minimum span dropped it from.
   const nearestOn = new Map<string, boolean[]>();
   const droppedOn = new Map<string, boolean[]>();
+  // rig-c/pose#355: per angle set, the frames its art may show on, and the frames it did not show on for its art turn.
+  const art = new Map<string, boolean[]>();
+  const turnedOn = new Map<string, boolean[]>();
+  for (const a of map.alternates) {
+    turnedOn.set(a.name, Array.from({ length: n }, () => false));
+    if (a.phase !== undefined) continue;
+    art.set(a.name, Array.from({ length: n }, (_, i) => artShows(a, targets, i, opts.switchTolerance, opts.shortInfo, map, opts.raisedByHead === true)));
+  }
   const runOf = (i: number, j: number): FrameRun => ({ frames: [i, j], count: j - i + 1, seconds: r3((j + 1 < n ? times[j + 1]! : duration) - times[i]!) });
   const runsOfFlags = (flag: readonly boolean[]): FrameRun[] => runsOf(flag, 0).map(([i, j]) => runOf(i, j));
   // rig-c/pose#286: the supporting side on each frame, from the report's support spans (null: no foot, or no set declares a phase).
@@ -534,7 +627,7 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
       pos.push(i);
       vals.push(pick[i] ?? null);
     }
-    const moves = moveBoundaries(vals, pos, map, targets, distances, times, duration, moveOpts);
+    const moves = moveBoundaries(vals, pos, map, targets, distances, times, duration, moveOpts, art);
     for (let s = 0; s < vals.length; s++) {
       const a = vals[s];
       if (a === null || a === undefined) continue;
@@ -569,6 +662,11 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
         if (a.frames !== null && !a.frames.some(([f, l]) => i >= f && i <= l)) continue;
         const d = distances.get(a.name)![i]!;
         if (d > opts.switchTolerance) continue;
+        // rig-c/pose#355: within its key's tolerance, its art turned past it: not a candidate here.
+        if (art.get(a.name)?.[i] === false) {
+          turnedOn.get(a.name)![i] = true;
+          continue;
+        }
         const windowed = a.frames !== null;
         if ((windowed && !bestWindowed) || (windowed === bestWindowed && d < bestD)) {
           best = a;
@@ -704,10 +802,12 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
     for (const a of group) {
       const dropped = droppedOn.get(a.name)!;
       for (let k = 0; k < n; k++) if (pick[k] === a) dropped[k] = false;
+      const turned = turnedOn.get(a.name)!;
+      for (let k = 0; k < n; k++) if (pick[k] === a) turned[k] = false;
     }
     spans(pick, opts);
   }
-  const runs: SetRuns[] = map.alternates.filter((a) => nearestOn.has(a.name)).map((a) => ({ set: a.name, nearest: runsOfFlags(nearestOn.get(a.name)!), suppressed: runsOfFlags(droppedOn.get(a.name)!) }));
+  const runs: SetRuns[] = map.alternates.filter((a) => nearestOn.has(a.name)).map((a) => ({ set: a.name, nearest: runsOfFlags(nearestOn.get(a.name)!), suppressed: runsOfFlags(droppedOn.get(a.name)!), turned: runsOfFlags(turnedOn.get(a.name)!) }));
   const order = (name: string) => map.alternates.findIndex((a) => a.name === name);
   switches.sort((x, y) => x.frames[0] - y.frames[0] || order(x.set) - order(y.set));
 
@@ -1295,6 +1395,8 @@ export function switchLine(s: Switch, times: readonly number[]): string {
   if (offs.length > 0) parts.push(`offsets ${offs.map(([b, o]) => `"${b}" (${o[0]}, ${o[1]})`).join(', ')}`);
   const art = Object.entries(s.artTurn);
   if (art.length > 0) parts.push(`art turn ${art.map(([b, a]) => `"${b}" max ${deg(a.max)}, median ${deg(a.median)}`).join('; ')}`);
+  const held = Object.entries(s.endOnHeld ?? {});
+  if (held.length > 0) parts.push(`end-on, held at drawn: ${held.map(([b, rs]) => `"${b}" ${rs.map(([x, y]) => (x === y ? `frame ${x}` : `frames ${x}–${y}`)).join(', ')}`).join('; ')}`);
   const moves = (['on', 'off'] as const).filter((k) => s.moved[k] !== null).map((k) => `${k} ${moveText(s.moved[k]!)}`);
   if (moves.length > 0) parts.push(`moved ${moves.join(', ')}`);
   return parts.join('; ');
@@ -1346,6 +1448,23 @@ export function switchMinLines(runs: readonly SetRuns[], switchMin: number): str
     const more = s.suppressed.length > SWITCH_MIN_LISTED ? `, and ${s.suppressed.length - SWITCH_MIN_LISTED} more (the report's switchRuns lists every one)` : '';
     const longest = s.nearest.reduce((m, r) => (r.count > m.count ? r : m), s.nearest[0]!);
     out.push(`set "${s.set}": ${s.suppressed.length} run(s) shorter than --switch-min ${switchMin}s not shown: ${listed}${more}; nearest on ${s.nearest.length} run(s), the longest ${runText(longest)}`);
+  }
+  return out;
+}
+
+/**
+ * rig-c/pose#355: one `SWITCH-TURN` line per angle set that did not show on some frames for its art turn — the runs (as
+ * `SWITCH-MIN` lists them), and what showed there instead. A set whose art never turned past the tolerance prints no line.
+ */
+export function switchTurnLines(runs: readonly SetRuns[], tolerance: number): string[] {
+  const runText = (r: FrameRun) => `${r.count === 1 ? `frame ${r.frames[0]}` : `frames ${r.frames[0]}–${r.frames[1]}`} (${r.count} frame${r.count === 1 ? '' : 's'}, ${r.seconds.toFixed(3)}s)`;
+  const out: string[] = [];
+  for (const s of runs) {
+    if (s.turned.length === 0) continue;
+    const count = s.turned.reduce((t, r) => t + r.count, 0);
+    const listed = s.turned.slice(0, SWITCH_MIN_LISTED).map(runText).join(', ');
+    const more = s.turned.length > SWITCH_MIN_LISTED ? `, and ${s.turned.length - SWITCH_MIN_LISTED} more (the report's switchRuns lists every one)` : '';
+    out.push(`set "${s.set}": not shown on ${count} frame(s) in ${s.turned.length} run(s) where a bone it draws turned more than --switch-tolerance ${tolerance}° from its drawn angle (end-on segments held at it): ${listed}${more}; the nearest other set within the tolerance, or the base art, shows there`);
   }
   return out;
 }

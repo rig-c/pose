@@ -80,7 +80,7 @@ import type { DepthGait, Joint, Travel } from './pose.ts';
 import { TRAVEL_IN_PLACE } from './pose.ts';
 import { Problems, Refusal } from './problems.ts';
 import type { ArtRange, AttachmentKey, ByHip, Raised, ReachShort, SetRuns, SlotTrack, Switch, SwitchOptions } from './switch.ts';
-import { clampArt, coveredChains, isRaised, keyAtFrame, measureArt, overflow, phaseGroupProblems, RAISED_WRIST_EYES, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
+import { clampArt, coveredChains, isRaised, keyAtFrame, keyDrawnProblems, measureArt, overflow, phaseGroupProblems, RAISED_WRIST_EYES, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
 import type { BlendHold, Closure, Feet, Floor, LegScale, LegSegmentRatio, PathPose, Posing, Side, Stance } from './legs.ts';
 import { contactKeysOf, type ContactKeys } from './contacts.ts';
 import { figureScaleOf, freeAnkleShiftOf, holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, percentile, plantHip, posePath, rootOf, scaleSupport, shiftOver, SIDES, stanceOf, stanceRangeOf, STRAIGHT_PERCENTILE, supportsOf, tipOf, unshortenStanceShin } from './legs.ts';
@@ -1363,6 +1363,9 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     }
     for (const x of phaseGroupProblems(map.alternates)) p.add('PHASE_GROUP', x);
   }
+  // rig-c/pose#355: an angle set is chosen by its key skeleton and shown at its drawn angles; a key that disagrees with
+  // its drawing by more than the tolerance would show the drawing turned that far from the pose.
+  for (const x of keyDrawnProblems(map, opts.switchTolerance, opts.raisedByHead === true)) p.add('SET_KEY_DRAWN', x);
   p.throwIfAny();
   const askedScales = new Map<string, number[]>();
   for (const ls of legScale) askedScales.set(ls.bone, ls.asked);
@@ -1693,6 +1696,28 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     for (const [b, info] of fractions) {
       for (const s of capShortSteps(targets.get(b)!, info.fraction, covered.get(info.chain))) {
         short.push({ chain: info.chain, bone: b, joints: info.joints, ...s });
+      }
+    }
+  }
+  // rig-c/pose#355: while an angle set shows, a segment it draws that is end-on on a frame — its picture length under
+  // --short's cutoff of its median, the short hold's notion, where its picture direction is noise — is held at the set's
+  // drawn angle (the selection read its art turn there as 0, `artShows`).
+  if (shortInfo !== undefined) {
+    for (const s of sw.switches) {
+      const set = map.alternates.find((a) => a.name === s.set)!;
+      if (set.phase !== undefined) continue;
+      for (const [b, drawn] of Object.entries(set.drawn)) {
+        const frac = shortInfo.fractions.get(b);
+        if (frac === undefined) continue;
+        const t = targets.get(b)!;
+        const flag = Array.from({ length: n }, () => false);
+        for (let i = s.frames[0]; i <= s.frames[1]; i++) {
+          if (frac[i]! >= shortInfo.cutoff) continue;
+          t[i] = drawn;
+          flag[i] = true;
+        }
+        const held = runsOf(flag, 0);
+        if (held.length > 0) (s.endOnHeld ??= {})[b] = held;
       }
     }
   }
