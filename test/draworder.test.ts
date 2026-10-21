@@ -28,6 +28,7 @@ import { drawOrderFromDepth, drawOrderLines, type DrawOrderKey } from '../src/dr
 import { readMap, type JointMap, type Rest } from '../src/map.ts';
 import { personTrack, readPoseSequence, type PoseSequence } from '../src/pose.ts';
 import { rigcCli } from '../src/rigc.ts';
+import { keysOnFrameTimes, type MotionDoc } from './discrete.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const CLI = join(ROOT, 'cli.ts');
@@ -238,6 +239,8 @@ describe('bar (1): the run — the kicked-back leg behind the standing leg on ev
     const behind = behindPerFrame(SETUP, keys, r.report.frameTimes);
     // #325: every key first shows on the frame it was decided on, read as the render reads it.
     expect(keysOffFrame(keys, r.report.drawOrder!.keys.map((x) => x.frame), r.report.frameTimes.length)).toEqual([]);
+    // #334: no discrete key of the motion sits on a frame time.
+    expect(keysOnFrameTimes(r.motion as MotionDoc, r.report.frameTimes)).toEqual([]);
     const k = kickedBehind(r.seq, r.report, behind, truth);
     console.log(`  #304 bar 1 — run, per frame (setup: the left leg behind):\n${k.table.join('\n')}`);
     console.log(`  #304 bar 1 — ${k.away} kicked-back frames, ${k.misses.length} drawn in front (${k.misses.join(', ') || 'none'}); keys at frames ${r.report.drawOrder!.keys.map((x) => x.frame).join(', ')}; support changes at ${r.report.feet.changes.filter((c) => c.from !== null).map((c) => c.frame).join(', ')}`);
@@ -278,6 +281,7 @@ describe('bar (2): the walk — the forward foot in front on its toward frames',
     expect(r.ran.status).toBe(0);
     const behind = behindPerFrame(SETUP, r.motion.animations.walk!.drawOrder!, r.report.frameTimes);
     expect(keysOffFrame(r.motion.animations.walk!.drawOrder!, r.report.drawOrder!.keys.map((x) => x.frame), r.report.frameTimes.length)).toEqual([]);
+    expect(keysOnFrameTimes(r.motion as MotionDoc, r.report.frameTimes)).toEqual([]);
     const table = ['| frame | r thigh / shin | l thigh / shin | depth r / l (px) | keyed in front | generator |', '| --- | --- | --- | --- | --- | --- |'];
     const misses: number[] = [];
     let toward = 0;

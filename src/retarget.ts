@@ -80,7 +80,7 @@ import type { Joint, Travel } from './pose.ts';
 import { TRAVEL_IN_PLACE } from './pose.ts';
 import { Problems, Refusal } from './problems.ts';
 import type { ArtRange, AttachmentKey, ByHip, Raised, ReachShort, SetRuns, SlotTrack, Switch, SwitchOptions } from './switch.ts';
-import { clampArt, coveredChains, isRaised, measureArt, overflow, phaseGroupProblems, RAISED_WRIST_EYES, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
+import { clampArt, coveredChains, isRaised, keyAtFrame, measureArt, overflow, phaseGroupProblems, RAISED_WRIST_EYES, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
 import type { BlendHold, Closure, Feet, Floor, LegScale, LegSegmentRatio, PathPose, Posing, Side, Stance } from './legs.ts';
 import { figureScaleOf, freeAnkleShiftOf, holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, percentile, plantHip, posePath, rootOf, scaleSupport, shiftOver, SIDES, stanceOf, stanceRangeOf, STRAIGHT_PERCENTILE, supportsOf, tipOf, unshortenStanceShin } from './legs.ts';
 import type { BodyReading, FaceReading, YawSetSwitch } from './face.ts';
@@ -3048,7 +3048,6 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         if (!slotOrder.includes(sl)) slotOrder.push(sl);
       }
     }
-    const yawExactAt = new Map<string, Set<number>>();
     for (const s of activeYawSets) {
       const def = known.get(s.set);
       if (def === undefined) continue;
@@ -3058,10 +3057,6 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         const row = sw.shown.get(sl)!;
         for (const [lo, hi] of s.spans) {
           for (let i = lo; i <= hi; i++) row[i] = v;
-          const exact = yawExactAt.get(sl) ?? new Set<number>();
-          exact.add(lo);
-          if (hi + 1 < n) exact.add(hi + 1);
-          yawExactAt.set(sl, exact);
         }
       }
     }
@@ -3071,11 +3066,12 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       if (row === undefined) continue;
       let prev = slots.get(sl)?.setup ?? null;
       const keys: AttachmentKey[] = [];
-      const exact = yawExactAt.get(sl);
       row.forEach((v, i) => {
         if (v === prev) return;
-        const t = i === 0 ? 0 : exact?.has(i) === true ? keyTimes[i]! : r6((keyTimes[i - 1]! + keyTimes[i]!) / 2);
-        keys.push({ t, v });
+        // Half a frame before the frame it shows on, as every discrete key pose writes (`keyAtFrame`, rig-c/pose#334):
+        // written on their frames' exact times, 7 of the 10 yaw swaps of the 24 fps head turn in test/retarget.test.ts
+        // showed a frame late under the render's clock.
+        keys.push({ t: keyAtFrame(keyTimes, i), v });
         prev = v;
       });
       if (keys.length > 0) rebuilt.push({ slot: sl, property: 'attachment', keys });

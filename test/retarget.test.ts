@@ -25,6 +25,7 @@ import { readMap, type Chain } from '../src/map.ts';
 import { overFloor, projectSeams, readSeamPairs } from '../src/seams.ts';
 import { writeReport, type RenderDomain, type ReportInputs } from '../src/report.ts';
 import { walkCycle, walkDoc } from '../examples/walk/make-walk.ts';
+import { firstFrames, keysOnFrameTimes, type MotionDoc } from './discrete.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const CLI = join(ROOT, 'cli.ts');
@@ -2254,6 +2255,9 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
       { t: 0.5625, v: [3, -2], ease: 'stepped' },
       { t: 1.3125, v: [0, 0] },
     ]);
+    // #334: no attachment or stepped key sits on a frame time.
+    const frameTimes = (JSON.parse(readFileSync(report, 'utf8')) as { frameTimes: number[] }).frameTimes;
+    expect(keysOnFrameTimes(motionOf(c.out) as unknown as MotionDoc, frameTimes)).toEqual([]);
     // The forearm's origin in its parent's axes: setup (70, 0), plus the offset over the span — on every frame and halfway between.
     const doc = loadBuild(c.build);
     const poses = poseRawAnimation(doc, 'dance', Array.from({ length: 2 * (BASE.n - 1) }, () => BASE.dt / 2));
@@ -6996,21 +7000,22 @@ describe('#173: body yaw reading from camera-normalised shoulder and hip width',
       animations: { dance: { tracks: Array<{ slot?: string; property: string; keys: Array<{ t: number; v: string | null }> }> } };
     };
     const slotTrack = (s: string) => motion.animations.dance.tracks.find((tr) => tr.slot === s && tr.property === 'attachment');
-    // head_slot enters T1 at f15 (t = 15/30 = 0.5), leaves T1 back to head_base at f24 (t = 24/30 = 0.8), and enters T8 at f48 (t = 48/30 = 1.6).
+    // head_slot enters T1 at f15, leaves T1 back to head_base at f24, and enters T8 at f48. Each key sits half a frame
+    // before its frame (#334): f15's is r6((0.466667 + 0.5) / 2) = 0.483334, f24's 0.783334, f48's 1.583334.
     expect(slotTrack('head_slot')?.keys).toEqual([
-      { t: 0.5, v: 'T1_head' },
-      { t: 0.8, v: 'head_base' },
-      { t: 1.6, v: 'T8_head' },
+      { t: 0.483334, v: 'T1_head' },
+      { t: 0.783334, v: 'head_base' },
+      { t: 1.583334, v: 'T8_head' },
     ]);
     // ear_l is hidden by T1 on 15..23, restored to ear_base at f24, and switched to T8_ear by T8 at f48.
     expect(slotTrack('ear_l')?.keys).toEqual([
-      { t: 0.5, v: null },
-      { t: 0.8, v: 'ear_base' },
-      { t: 1.6, v: 'T8_ear' },
+      { t: 0.483334, v: null },
+      { t: 0.783334, v: 'ear_base' },
+      { t: 1.583334, v: 'T8_ear' },
     ]);
     // sleeve_l0 is hidden by T8 at f48 and never left before the end (1 key).
     expect(slotTrack('sleeve_l0')?.keys).toEqual([
-      { t: 1.6, v: null },
+      { t: 1.583334, v: null },
     ]);
 
     // Mutant: if selectYawSets ignores --switch-min and enters on any single frame >= above, the 4-frame spike 1..4 flips T1 (4 swaps > 2).
@@ -7039,6 +7044,108 @@ describe('#173: body yaw reading from camera-normalised shoulder and hip width',
       expect(rMut.status).toBe(0);
       const mutRep = JSON.parse(readFileSync(mutRepFile, 'utf8')) as { face: { sets: Array<{ swaps: number }> } };
       expect(mutRep.face.sets[0]!.swaps).toBeGreaterThan(2);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
+describe('#334: the face and body yaw sets\' attachment keys sit half a frame before the frame they show on', () => {
+  // A head turn at 24 fps: the face yaw at 50° (T1 enters at ≥ 45°) on frames 13–21, 26–47, 55–59 and 70–78, 0° elsewhere;
+  // the body turned 75° (T8) on frames 31–41. --switch-min 0.1 s (3 frames) keeps every span and gap.
+  const N = 96;
+  const FPS = 24;
+  const FACE: Array<[number, number]> = [[13, 21], [26, 47], [55, 59], [70, 78]];
+  const BODY: Array<[number, number]> = [[31, 41]];
+  const inAny = (spans: Array<[number, number]>, i: number) => spans.some(([a, b]) => i >= a && i <= b);
+  const m: Motion = { ...BASE, n: N, dt: 1 / FPS, hip: () => [0, 0], trunk: () => 90, ru: () => 120, rf: () => 128, lu: () => 60, lf: () => 50, rt: () => -90, rs: () => -95, lt: () => -90, ls: () => -90 };
+  const pose = poseDoc(m, (i, j) => {
+    const neck = (j.neck as { at: Pt }).at;
+    const midEye: Pt = [neck[0], neck[1] - 35];
+    j.r_eye = { state: 'observed', at: [midEye[0] - 6, midEye[1]], score: 0.95 };
+    j.l_eye = { state: 'observed', at: [midEye[0] + 6, midEye[1]], score: 0.95 };
+    j.r_ear = { state: 'observed', at: [midEye[0] - 12, midEye[1] + 5], score: 0.95 };
+    j.l_ear = { state: 'observed', at: [midEye[0] + 12, midEye[1] + 5], score: 0.95 };
+    const ty = Math.tan((inAny(FACE, i) ? 50 : 0) * RAD);
+    j.nose = { state: 'observed', at: [midEye[0] - (ty * 12) / 1.25, midEye[1] + 5], score: 0.95 };
+    const c = Math.cos((inAny(BODY, i) ? 75 : 0) * RAD);
+    for (const [r, l] of [['r_shoulder', 'l_shoulder'], ['r_hip', 'l_hip']] as const) {
+      const a = j[r]!.at as Pt;
+      const b = j[l]!.at as Pt;
+      const mx = (a[0] + b[0]) / 2;
+      const half = ((b[0] - a[0]) / 2) * c;
+      j[r] = { ...j[r]!, at: [mx - half, a[1]] };
+      j[l] = { ...j[l]!, at: [mx + half, b[1]] };
+    }
+  });
+  const rigOpts: RigOpts = {
+    bones: (bs) => [...bs, { name: 'yaw_dial', parent: 'root' }],
+    extraSlots: [
+      { name: 'head_slot', bone: 'neck', attachment: 'head_base' },
+      { name: 'body_slot', bone: 'chest', attachment: 'body_base' },
+    ],
+    extra: {
+      head_slot: { head_base: { image: 'seg.png', x: 0, y: 0 }, T1_head: { image: 'seg.png', x: 0, y: 0 } },
+      body_slot: { body_base: { image: 'seg.png', x: 0, y: 0 }, T8_body: { image: 'seg.png', x: 0, y: 0 } },
+    },
+    sets: { spec: 'rig-parts-sets/1', sets: { T1: { slots: { head_slot: 'T1_head' }, hides: [] }, T8: { slots: { body_slot: 'T8_body' }, hides: [] } } },
+  };
+  const map = { ...baseMap(), face: { yaw: { bone: 'yaw_dial', range: [-15, 15], sets: [{ set: 'T1', above: 45 }] } }, body: { sets: [{ set: 'T8', above: 45 }] } };
+  type Out = { motion: MotionDoc & { animations: { dance: { tracks: Array<{ slot?: string; property: string; keys: Array<{ t: number; v: string | null }> }> } } }; frameTimes: number[]; face: Array<[number, number]>; body: Array<[number, number]> };
+  const run = (cliPath = CLI): Out => {
+    const c = setup({ rig: rigOpts, map, pose });
+    const rep = join(c.dir, 'report.json');
+    const r = retarget(c, ['--bends', 'clamp', '--switch-min', '0.1', '--report', rep], cliPath);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    const report = JSON.parse(readFileSync(rep, 'utf8')) as { frameTimes: number[]; face: { sets: Array<{ spans: Array<[number, number]> }> }; body: { sets: Array<{ spans: Array<[number, number]> }> } };
+    return { motion: JSON.parse(readFileSync(c.out, 'utf8')) as Out['motion'], frameTimes: report.frameTimes, face: report.face.sets[0]!.spans, body: report.body.sets[0]!.spans };
+  };
+  /** Per swap, `slot frame f: shows on g` where the render's reading shows the key on another frame than its span says. */
+  const late = (o: Out): string[] => {
+    const rows: string[] = [];
+    for (const [slot, spans] of [['head_slot', o.face], ['body_slot', o.body]] as const) {
+      const want = spans.flatMap(([lo, hi]) => (hi + 1 < N ? [lo, hi + 1] : [lo]));
+      const keys = o.motion.animations.dance.tracks.find((tr) => tr.slot === slot && tr.property === 'attachment')!.keys;
+      expect(keys).toHaveLength(want.length);
+      firstFrames(keys, N, FPS).forEach((g, k) => {
+        if (g !== want[k]) rows.push(`${slot} frame ${want[k]} (t=${keys[k]!.t}): shows on ${g}`);
+      });
+    }
+    return rows;
+  };
+
+  test('every yaw swap first shows on the frame its span starts or ends on, read as the render reads it; no discrete key is on a frame time', () => {
+    const o = run();
+    expect(o.face).toEqual(FACE);
+    expect(o.body).toEqual(BODY);
+    expect(keysOnFrameTimes(o.motion, o.frameTimes)).toEqual([]);
+    expect(late(o)).toEqual([]);
+  }, SLOW);
+
+  test('mutant: the yaw keys written on their frames\' exact times sit on frame times, and 7 of the 10 swaps show a frame late', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm334-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'retarget.ts');
+      const from = 'keys.push({ t: keyAtFrame(keyTimes, i), v });';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'keys.push({ t: keyTimes[i]!, v });'));
+      const o = run(join(d, 'cli.ts'));
+      expect(keysOnFrameTimes(o.motion, o.frameTimes)).toHaveLength(10);
+      expect(late(o)).toEqual([
+        'head_slot frame 13 (t=0.541667): shows on 14',
+        'head_slot frame 22 (t=0.916667): shows on 23',
+        'head_slot frame 55 (t=2.291667): shows on 56',
+        'head_slot frame 60 (t=2.5): shows on 61',
+        'head_slot frame 70 (t=2.916667): shows on 71',
+        'head_slot frame 79 (t=3.291667): shows on 80',
+        'body_slot frame 31 (t=1.291667): shows on 32',
+      ]);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
