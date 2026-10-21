@@ -572,9 +572,9 @@ export function rollingFloor(ys: readonly number[], times: readonly number[]): n
  * (`frontalOf`); `signal` says which signal decided each frame.
  *
  * rig-c/pose#313: `depth`, the sequence's depth and gait (only a sequence
- * `clean --depth` wrote), decides first on every frame where it names one
- * swinging leg (`depthOf`); the reading above is its fallback. Absent, the
- * result is the reading above, unchanged.
+ * `clean --depth` wrote), decides first on every frame of a walk where it names
+ * one swinging leg (`depthOf`); the reading above is its fallback. Absent, or a
+ * run, the result is the reading above, unchanged.
  */
 export function supportsOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, times: readonly number[], secondsOf: (run: [number, number]) => number, inPlace = false, lowerAnkle = false, depth?: SupportDepth): Feet {
   const feet = frontalOf(ankle, hip, heightSupportsOf(ankle, hip, times, secondsOf, inPlace, lowerAnkle));
@@ -935,7 +935,7 @@ export interface SupportDepth {
 /** rig-c/pose#313: the depth's reading of a clip, set on `SupportSignal` when it decided at least one frame. */
 export interface DepthSignal {
   gait: DepthGait;
-  /** The sign a swinging leg's segment reads: toward the camera (+1) in a walk, away (−1) in a run. */
+  /** The sign a swinging leg's segment reads: toward the camera (+1) in a walk (the only gait read). */
   sense: 1 | -1;
   /** Per frame, the leg whose thigh or shin reads `sense`: one side, both, or null (neither, a frame with no depth, or a jump). */
   swing: Array<Side | 'both' | null>;
@@ -945,16 +945,23 @@ export interface DepthSignal {
  * rig-c/pose#313: the support from the sequence's depth (#281). A slow, drawn
  * frontal walk can step under the vertical speed's still tolerance and stride
  * as far in x as in y, so #280's reading never takes over; its depth still says
- * which leg is swinging. A walk's lifted foot comes forward, toward the camera,
- * and a run's is kicked back, away: on a frame where exactly one leg's thigh or
- * shin reads that sign (`clean --depth`'s gait), the other leg supports. On a
- * frame where neither leg reads it, or both do, and on a jump frame, the support
- * is the reading before (#280's, or ankle height's), unchanged. A clip whose
- * depth decides no frame keeps that reading whole; one it decides is rebuilt as
- * #280's is — a plant ends where the other foot takes support, so no step
- * releases one and none is tracked.
+ * which leg is swinging. A walk's lifted foot comes forward, toward the camera:
+ * on a frame where exactly one leg's thigh or shin reads toward, the other leg
+ * supports. On a frame where neither leg reads it, or both do, and on a jump
+ * frame, the support is the reading before (#280's, or ankle height's),
+ * unchanged. A clip whose depth decides no frame keeps that reading whole; one
+ * it decides is rebuilt as #280's is — a plant ends where the other foot takes
+ * support, so no step releases one and none is tracked.
+ *
+ * Only a walk (`clean --depth walk`) is read. A run's kicked-back shin reads
+ * away from push-off through its flight, while no foot is down and no jump is
+ * read, so "the other leg" is the incoming one still in the air. On #281's
+ * frontal run fixture the reading changed only those flight frames (7 of 60,
+ * one a stride and the loop's last two) and none of its 42 stance frames, so a
+ * run keeps the reading before.
  */
 function depthOf(feet: Feet, depth: SupportDepth): Feet {
+  if (depth.gait !== 'walk') return feet;
   const n = feet.support.length;
   const sense: 1 | -1 = depth.gait === 'walk' ? 1 : -1;
   const jump = new Array<boolean>(n).fill(false);
