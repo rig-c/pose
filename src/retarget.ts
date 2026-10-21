@@ -80,7 +80,7 @@ import type { Joint, Travel } from './pose.ts';
 import { TRAVEL_IN_PLACE } from './pose.ts';
 import { Problems, Refusal } from './problems.ts';
 import type { ArtRange, AttachmentKey, ByHip, Raised, ReachShort, SlotTrack, Switch, SwitchOptions } from './switch.ts';
-import { clampArt, coveredChains, isRaised, measureArt, overflow, RAISED_WRIST_EYES, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
+import { clampArt, coveredChains, isRaised, measureArt, overflow, phaseGroupProblems, RAISED_WRIST_EYES, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
 import type { BlendHold, Closure, Feet, Floor, LegScale, LegSegmentRatio, PathPose, Posing, Side, Stance } from './legs.ts';
 import { figureScaleOf, freeAnkleShiftOf, holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, percentile, plantHip, posePath, rootOf, scaleSupport, shiftOver, SIDES, stanceOf, stanceRangeOf, STRAIGHT_PERCENTILE, supportsOf, tipOf, unshortenStanceShin } from './legs.ts';
 import type { BodyReading, FaceReading, YawSetSwitch } from './face.ts';
@@ -1211,6 +1211,16 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   if (opts.stance !== undefined && opts.stance !== 'off' && !plantOn) p.add('STANCE', `--stance ${opts.stance} plants the free foot beside the supporting one that --plant-feet holds, and --plant-feet is not given`);
   if (opts.floor !== undefined && !plantOn) p.add('FLOOR', `--floor ${opts.floor} is the floor --plant-feet plants every support span on, and --plant-feet is not given`);
   if (opts.floor !== undefined && !Number.isFinite(opts.floor)) p.add('FLOOR', `--floor is ${opts.floor}; it must be a finite world y`);
+  // rig-c/pose#286: a set with a `phase` shows on the report's support spans, read with or without --plant-feet; a run that
+  // reads no feet has none to show it on, and a group of competing sets mixing phase and angle sets has no rule.
+  const phased = map.alternates.filter((a) => a.phase !== undefined);
+  if (phased.length > 0) {
+    if (feet === null) {
+      const why = legs !== null && 'problems' in legs ? legs.problems.join('; ') : `the feet are read from both hips and both ankles, and the map's chains use ${['r_hip', 'l_hip', 'r_ankle', 'l_ankle'].filter((j) => !series.has(j)).join(', ')} nowhere`;
+      p.add('PHASE_FEET', `set(s) ${phased.map((a) => `"${a.name}" ("phase": "${a.phase}")`).join(', ')} show while their side's foot supports, and this run reads no supports: ${why}`);
+    }
+    for (const x of phaseGroupProblems(map.alternates)) p.add('PHASE_GROUP', x);
+  }
   p.throwIfAny();
   const askedScales = new Map<string, number[]>();
   for (const ls of legScale) askedScales.set(ls.bone, ls.asked);
@@ -1485,7 +1495,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     }
   }
   const rawTargets = new Map<string, number[]>([...targets].map(([b, arr]) => [b, [...arr]]));
-  const sw = selectSwitches(map, targets, keyTimes, keyTimes[n - 1]!, slots, { ...opts, shortInfo, handOffsets });
+  const sw = selectSwitches(map, targets, keyTimes, keyTimes[n - 1]!, slots, { ...opts, shortInfo, handOffsets, ...(phased.length > 0 && feet !== null ? { phaseSupports: feet.supports } : {}) });
 
   // The range clamp, outside the spans of a set depicting the bone's chain. Parents
   // first, so a bone below takes its clamped parent into its key; a reach is aimed

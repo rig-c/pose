@@ -58,6 +58,12 @@
  * `place: "by-hip"` (rig-c/pose#93) places the wrist of each of its chains that
  * `pose` puts within one hip width of the mid-hip by its offset from the hip
  * (`byHipChains`; the retarget solves it).
+ * `phase: "left-step" | "right-step"` (rig-c/pose#286) declares a gait set drawn
+ * for one step side: it shows exactly on the frames the report's `feet.supports`
+ * names that side's foot supporting — a left-step painting is the step on the
+ * left foot (its left leg straight under the body, the right folded and
+ * swinging), shown while the LEFT foot supports — and is switched on the support
+ * hand-over, not on angle distance (`PHASE_SIDE`).
  * `switch.ts` decides when each one shows.
  */
 import type { RawBone } from 'rig-c/core';
@@ -86,6 +92,9 @@ export interface Translate {
   joint: string;
   scale: { pose: [string, string]; rig: [string, string] };
 }
+/** The step sides a set may declare as its `phase` (rig-c/pose#286), and the supporting foot each one shows on. */
+export const PHASE_SIDE = { 'left-step': 'l', 'right-step': 'r' } as const;
+export type Phase = keyof typeof PHASE_SIDE;
 /** An alternate drawing: a set of slots switched together, and the key skeleton it is selected by. */
 export interface AlternateSet {
   name: string;
@@ -113,6 +122,8 @@ export interface AlternateSet {
   support?: string[];
   /** `anchor` (rig-c/pose#191): the set's two-bone arm chains whose hand-tip is anchored to the set's `drawn` head-local offset while the set shows. */
   anchor?: string[];
+  /** `phase` (rig-c/pose#286): the step side the set is drawn for; it shows exactly while that side's foot supports (`feet.supports`), switched on the hand-over. Absent: the angle rule. */
+  phase?: Phase;
 }
 export interface YawSet {
   set: string;
@@ -423,7 +434,7 @@ function readBodyMap(p: Problems, where: string, raw: unknown): BodyMap | undefi
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-const SET_SHAPE = '{ name, slots: { "<slot>": "<attachment>" }, hides?: [slot], chains: [chain], pose: { "<joint>": [x, y] }, drawn?: { "<bone>": deg }, offsets?: { "<bone>": [dx, dy] }, turn?: { "<bone>": [min, max] }, frames?: [[first, last], …], place?: "by-hip" }';
+const SET_SHAPE = '{ name, slots: { "<slot>": "<attachment>" }, hides?: [slot], chains: [chain], pose: { "<joint>": [x, y] }, drawn?: { "<bone>": deg }, offsets?: { "<bone>": [dx, dy] }, turn?: { "<bone>": [min, max] }, frames?: [[first, last], …], place?: "by-hip", phase?: "left-step" | "right-step" }';
 
 /** The joints a wrist is, for `place: "by-hip"`: a chain whose last joint is one of them carries a wrist. */
 export const WRISTS: readonly string[] = ['r_wrist', 'l_wrist'];
@@ -472,7 +483,7 @@ function readAlternates(p: Problems, where: string, raw: unknown, chains: readon
       p.add('MAP_ALT_SHAPE', `${aw} is ${typeName(a)}; a set is ${SET_SHAPE}`);
       return;
     }
-    refuseUnknownKeys(p, 'MAP_KEYS', aw, a, ['name', 'note', 'slots', 'hides', 'chains', 'pose', 'drawn', 'offsets', 'turn', 'frames', 'place', 'symmetric', 'support', 'anchor']);
+    refuseUnknownKeys(p, 'MAP_KEYS', aw, a, ['name', 'note', 'slots', 'hides', 'chains', 'pose', 'drawn', 'offsets', 'turn', 'frames', 'place', 'symmetric', 'support', 'anchor', 'phase']);
     const name = typeof a.name === 'string' && a.name !== '' ? a.name : null;
     if (name === null) p.add('MAP_ALT_NAME', `${aw} "name" is ${typeName(a.name)}; it must be a non-empty string`);
     else if (names.has(name)) p.add('MAP_ALT_NAME', `${aw} "name" "${name}" names two sets`);
@@ -676,7 +687,18 @@ function readAlternates(p: Problems, where: string, raw: unknown, chains: readon
         if (ok) anchor = anc;
       }
     }
-    if (ok && name !== null && cs !== null) out.push({ name, slots, hides, chains: cs, pose, drawn, offsets, turn, frames, ...(place === null ? {} : { place }), ...(symmetric === undefined ? {} : { symmetric }), ...(support === undefined ? {} : { support }), ...(anchor === undefined ? {} : { anchor }) });
+    let phase: Phase | undefined;
+    if ('phase' in a) {
+      const phases = Object.keys(PHASE_SIDE);
+      if (typeof a.phase !== 'string' || !phases.includes(a.phase)) {
+        p.add('MAP_ALT_PHASE', `${label} "phase" is ${JSON.stringify(a.phase)}; it is the step side the set is drawn for, one of ${phases.map((x) => `"${x}"`).join(', ')} (shown while that side's foot supports)`);
+        ok = false;
+      } else if ('frames' in a) {
+        p.add('MAP_ALT_PHASE', `${label} names both "phase" and "frames"; a phase set shows on its side's support spans, and a window would cut them — drop one`);
+        ok = false;
+      } else phase = a.phase as Phase;
+    }
+    if (ok && name !== null && cs !== null) out.push({ name, slots, hides, chains: cs, pose, drawn, offsets, turn, frames, ...(place === null ? {} : { place }), ...(symmetric === undefined ? {} : { symmetric }), ...(support === undefined ? {} : { support }), ...(anchor === undefined ? {} : { anchor }), ...(phase === undefined ? {} : { phase }) });
   });
   return out;
 }
