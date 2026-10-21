@@ -191,6 +191,11 @@ README's [Choosing the approach](https://github.com/rig-c/pose#choosing-the-appr
 | [#355](https://github.com/rig-c/pose/issues/355): a set key that disagrees with its drawing won selection | [PR #356](https://github.com/rig-c/pose/pull/356) |
 | [#346](https://github.com/rig-c/pose/issues/346): forearms never keyed against the trunk | [PR #363](https://github.com/rig-c/pose/pull/363) |
 | [#360](https://github.com/rig-c/pose/issues/360): no way to show a set on given frames without forged keys | [PR #362](https://github.com/rig-c/pose/pull/362) |
-| rig-c/parts#646 | parts side |
-| rig-c/parts#647 | parts side |
+| [#369](https://github.com/rig-c/pose/issues/369): on a frontal run, `--plant-feet` planted the lifted foot (a side effect of #280's speed reading) | [PR #371](https://github.com/rig-c/pose/pull/371) |
+| rig-c/parts#646 | parts side: legs contiguous |
+| rig-c/parts#647 | parts side: the limb layout (layout.json) |
 | rig-c/parts#657 | parts side, open |
+
+## Known limit
+
+Support selection is right on a frontal run since [#369](https://github.com/rig-c/pose/issues/369), but the posing around it still has a limit that was not carded. While the regression was measured, the plant-feet bars also failed with the right supports in two cases. The first is a run whose stances are only 3 frames long, where the hip's blend over so short a stance and the slide of the planted foot break them. The second is a tilted camera that draws depth as height. The public fixture added for #369 uses 4-frame stances for that reason. Intense motion on a designed character is part animation in any case ([Choosing the approach](https://github.com/rig-c/pose#choosing-the-approach)); for a mannequin run with very short stances, check these bars on the clip itself.

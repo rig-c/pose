@@ -757,7 +757,7 @@ export type Contact = Side | 'both' | null;
 export interface SpeedSignal {
   /** Each side's ground speed: the median of its ankle's vertical step (picture px a frame, y down) over the frames outside every jump. */
   ground: Record<Side, number>;
-  /** Per frame: the feet that move with the ground, on the step into the frame or the step out of it (null on a jump frame or where neither does). */
+  /** Per frame: the feet that move with the ground, on the step into the frame or the step out of it, and are not `DEPTH_BAND` or more above the other (null on a jump frame or where neither does). */
   contact: Contact[];
   /** The frames the two signals contradict: the lower ankle (by ≥ `PLANT_SWITCH` leg lengths) leaves the ground's speed while the higher moves with it. */
   contradict: number[];
@@ -774,9 +774,11 @@ export interface SpeedSignal {
  * on a step that departs from it by less than `STILL_SPEED` of that side's leg
  * length. A frame's foot is down when either the step into the frame or the
  * step out of it moves with the ground, so a drawing a foot lands or lifts on
- * reads it down. `contradict` lists the frames where this and ankle height
- * disagree in the way a frontal view's depth makes them: the lower ankle is
- * the moving one, the higher the one moving with the ground.
+ * reads it down — unless it is `DEPTH_BAND` or more above the other ankle,
+ * more than depth draws between two feet on the floor (rig-c/pose#369).
+ * `contradict` lists the frames where this and ankle height disagree in the
+ * way a frontal view's depth makes them: the lower ankle is the moving one, the
+ * higher the one moving with the ground.
  */
 export function speedSignalOf(ankle: Record<Side, readonly Pt[]>, feet: Pick<Feet, 'legLength' | 'jumps'>): SpeedSignal {
   const n = ankle.r.length;
@@ -796,8 +798,10 @@ export function speedSignalOf(ankle: Record<Side, readonly Pt[]>, feet: Pick<Fee
     const v = step(s, i);
     return v !== null && Math.abs(v - ground[s]) < STILL_SPEED * feet.legLength[s];
   };
-  const down = (s: Side, i: number) => withGround(s, i) || withGround(s, i + 1);
   const mean = (feet.legLength.r + feet.legLength.l) / 2;
+  // rig-c/pose#369: a foot higher than the other by DEPTH_BAND leg lengths or more is off the floor, whatever its speed.
+  const aloft = (s: Side, i: number) => ankle[s === 'r' ? 'l' : 'r'][i]![1] - ankle[s][i]![1] >= DEPTH_BAND * mean;
+  const down = (s: Side, i: number) => (withGround(s, i) || withGround(s, i + 1)) && !aloft(s, i);
   const contact: Contact[] = [];
   const contradict: number[] = [];
   let read = 0;
@@ -816,6 +820,21 @@ export function speedSignalOf(ankle: Record<Side, readonly Pt[]>, feet: Pick<Fee
   }
   return { ground, contact, contradict, read };
 }
+
+/**
+ * rig-c/pose#369: the most height a frontal view draws between two feet on the
+ * floor, in leg lengths (the clip's mean). Seen from the front a foot's depth is
+ * drawn as height, so a planted foot behind may sit above one in front — by a
+ * step's depth foreshortened by the camera's elevation: 0.14 on the tests'
+ * synthetic frontal walk (#280), where that is the gap on every frame both feet
+ * are down. A foot higher than the other by this much or more is in the air and
+ * the vertical speed does not read it down. Near the top of a run's swing the
+ * lifted foot is nearly still while the landed foot still settles, so on a run's
+ * short stances it read as moving with the ground and was planted (0.36 above
+ * on the tests' frontal run carried on a floor, 0.72 on a frontal run
+ * reference); ankle height reads those frames.
+ */
+export const DEPTH_BAND = 0.25;
 
 /**
  * A clip whose two support signals contradict on more than this share of the
