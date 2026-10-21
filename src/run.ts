@@ -18,9 +18,9 @@ import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, rea
 import { partsPath, projectSeams, readSeamDoc, readSeamPairs, seamLines, type SeamPair } from './seams.ts';
 import { artRangeLine, chainsMoving, phaseLines, raisedLine, RAISED_WITHIN, reachLine, switchLine, uncoveredFolds } from './switch.ts';
 import { jitterLine, landed, type FeetReading, type JitterRow, type Landing, measureFeet, measureJitter, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
-import { legsOf, PLANT_SWITCH, STANCE_BOUNDS } from './legs.ts';
+import { FRONTAL_DISAGREE, legsOf, PLANT_SWITCH, STANCE_BOUNDS } from './legs.ts';
 import { M2_IDENTITY, mulM2, reduceKeys, reduceScale, reduceUnderScale, SCALE_REDUCE, setupLocal, smoothTrunk, type M2, type ReduceBone, type Reduced, type ReduceRow, type UnderBone } from './reduce.ts';
-import type { BlendHold, Closure, Floor, FreeAnkleShift, LegScale, LegSegmentRatio, Lowered, Side, Stance, SupportScaleRun } from './legs.ts';
+import type { BlendHold, Closure, Feet, Floor, FreeAnkleShift, LegScale, LegSegmentRatio, Lowered, Side, Stance, SupportScaleRun, SupportSignal } from './legs.ts';
 import { reportRenderDomain, writeReport, type ReportInput } from './report.ts';
 import { PROVENANCE_FILE, provenanceText } from './provenance.ts';
 import { bodyLine, faceLine } from './face.ts';
@@ -217,6 +217,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       say(`  FEET   ${r.planted ? 'planted' : 'read, not planted (no --plant-feet)'}: leg length (median hip → ankle) r ${f.legLength.r.toFixed(1)}px, l ${f.legLength.l.toFixed(1)}px; ${f.supports.length} support span(s), ${f.changes.filter((c) => c.from !== null).length} change(s) of support, ${f.jumps.length} jump(s), ${f.steps.length} step(s)`);
       for (const sg of r.segments) say(`  FEET   ${segmentLine(sg)}`);
       say(`  FEET   supports: ${f.supports.map((x) => `${x.side} ${span(x.frames)}`).join(', ') || 'none'}`);
+      if (f.signal !== undefined) for (const l of signalLines(f.signal, f.supports)) say(`  FEET   ${l}`);
       say(`  FEET   jumps (both ankles and mid_hip > 0.05 leg lengths above their rolling floor, ≥ 2 frames): ${f.jumps.map(span).join(', ') || 'none'}`);
       if (f.lowered !== undefined) say(`  FEET   ${loweredLine(f.lowered)}`);
       if (f.tracked !== undefined) say(`  FEET   tracked (the lower foot supports on the floor, following its scaled ankle track until still, rig-c/pose#119): ${f.tracked.map((x) => `${x.side} ${span(x.frames)}`).join(', ')}`);
@@ -914,6 +915,48 @@ function loweredLine(lowered: readonly Lowered[]): string {
   if (lowered.length === 0) return `${head}: no frame reads differently from before`;
   const frames = lowered.reduce((k, x) => k + x.frames[1] - x.frames[0] + 1, 0);
   return `${head}: ${frames} frame(s) read differently from before — ${lowered.map((x) => `frames ${span(x.frames)} ${side(x.was)} → ${side(x.now)}${x.cause === undefined ? '' : ` (${CAUSE[x.cause]})`}`).join(', ')}`;
+}
+
+/**
+ * The support-signal lines (rig-c/pose#280). On a clip read as frontal: two
+ * lines — how often the ankle's vertical speed contradicts ankle height against
+ * `FRONTAL_DISAGREE`, and where the stride shows (in depth) — then one line per
+ * support span (a stride) naming the signal that decided its frames and what
+ * ankle height alone would have read. On any other clip ankle height decided as
+ * before and nothing is printed: the output of a clip the second signal does not
+ * decide stays as it was, in every mode (`Feet.signal` still carries the figures).
+ */
+export function signalLines(sig: SupportSignal, supports: Feet['supports']): string[] {
+  const span = (x: [number, number]) => (x[0] === x[1] ? `${x[0]}` : `${x[0]}–${x[1]}`);
+  const n = Math.round(FRONTAL_DISAGREE * 100);
+  const pct = sig.read === 0 ? 0 : (100 * sig.contradict.length) / sig.read;
+  if (!sig.frontal) return [];
+  const ranges = `x · y against the hips: r ${sig.range.r.x.toFixed(1)} · ${sig.range.r.y.toFixed(1)} px, l ${sig.range.l.x.toFixed(1)} · ${sig.range.l.y.toFixed(1)} px`;
+  const contra = `${sig.contradict.length} of ${sig.read} frame(s) (${pct.toFixed(1)} %`;
+  const out = [
+    `support: ankle vertical speed (rig-c/pose#280) — it contradicts ankle height on ${contra}, past ${n} %): the lower ankle moving while the higher moves with the ground`,
+    `support: read as a frontal view — ankles move more in y than x (${ranges}); ankle height only where neither foot moves with the ground`,
+  ];
+  for (const sp of supports) {
+    let speed = 0;
+    let height = 0;
+    let both = 0;
+    let differ = 0;
+    const was = new Set<string>();
+    for (let i = sp.frames[0]; i <= sp.frames[1]; i++) {
+      if (sig.by[i] === 'speed') speed++;
+      else if (sig.by[i] === 'height') height++;
+      if (sig.contact[i] === 'both') both++;
+      if (sig.height[i] !== sp.side) {
+        differ++;
+        was.add(sig.height[i] ?? 'none');
+      }
+    }
+    const by = speed > 0 ? `ankle vertical speed on ${speed} frame(s)${height > 0 ? `, ankle height on ${height} (neither foot moved with the ground)` : ''}` : `ankle height on ${height} frame(s) (neither foot moved with the ground)`;
+    const alone = differ === 0 ? 'ankle height alone reads the same' : `ankle height alone would read ${[...was].join(' or ')} on ${differ} of them`;
+    out.push(`stride ${sp.side} ${span(sp.frames)}: ${by} (both feet down on ${both}); ${alone}`);
+  }
+  return out;
 }
 
 /**
