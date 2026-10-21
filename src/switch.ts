@@ -12,6 +12,11 @@
  * span is dropped, and the base art shows there; a gap shorter than the minimum
  * span between two runs of one set is bridged by that set. No other hysteresis.
  *
+ * A set with a `phase` (rig-c/pose#286) is not selected by distance: it shows
+ * exactly on its supporting foot's spans (`phaseSupports`, the
+ * report's `feet.supports`) and switches on the hand-over, with none of the
+ * rules here or below applied to it.
+ *
  * Sets compete only with the sets they share a slot with (shown or hidden,
  * transitively), or a bone they offset: two that touch nothing in common — a
  * drawing of each arm — can show at once, and two that do never overlap, so
@@ -52,8 +57,9 @@
  * selection put it; it is the CLI's default, because on HQ's dancer the bounded
  * peak still raised the sets' ART-RANGE runs from 24 to 31 (#31, round 2).
  */
-import type { AlternateSet, JointMap, Rest, RigSlots } from './map.ts';
-import { descends } from './map.ts';
+import type { Side } from './legs.ts';
+import type { AlternateSet, JointMap, Phase, Rest, RigSlots } from './map.ts';
+import { descends, PHASE_SIDE } from './map.ts';
 import type { MotionKey, MotionTrack } from './retarget.ts';
 import { pictureAngle, wrap } from './retarget.ts';
 import type { MeshFolds } from './rigc.ts';
@@ -80,6 +86,19 @@ export interface SwitchOptions {
   shortInfo?: ShortSwitchInfo;
   /** Per chain, the reference pose's normalised wrist-from-shoulder offset on each frame, `(wrist - shoulder) / scale`, y down (#180). */
   handOffsets?: ReadonlyMap<string, ReadonlyArray<readonly [number, number]>>;
+  /** The report's `feet.supports` (rig-c/pose#286): the spans a set with a `phase` shows on. Given only when a set declares one. */
+  phaseSupports?: ReadonlyArray<{ side: Side; frames: [number, number] }>;
+}
+
+/** A phase set's span (rig-c/pose#286): its step side, and the support hand-overs it was switched on and off at. */
+export interface PhaseSpan {
+  step: Phase;
+  /** The supporting foot it shows on (left-step: the left foot is stepping, so the right foot supports). */
+  side: Side;
+  /** The hand-over it starts on: the frame, and the side that supported on the frame before (null: no foot). Null from the first frame. */
+  on: { frame: number; from: Side | null } | null;
+  /** The hand-over it ends on: the first frame after it, and the side that supports there (null: no foot). Null to the end. */
+  off: { frame: number; to: Side | null } | null;
 }
 
 /** One boundary of a span: where the selection put it, where it is keyed, and how fast the chains it changes move on each. */
@@ -115,6 +134,8 @@ export interface Switch {
   artTurn: Record<string, { max: number; median: number }>;
   /** The boundary it starts on (null from the first frame) and the one it ends on (null to the end); a boundary between two sets is in both. */
   moved: { on: Move | null; off: Move | null };
+  /** Only on a set with a `phase` (rig-c/pose#286): the step side and the hand-overs the span was switched on. */
+  phase?: PhaseSpan;
 }
 
 export interface AttachmentKey {
@@ -243,6 +264,28 @@ const r3 = (v: number) => {
 /** What a set switches: its slots shown or hidden, and the bones it offsets — each a value that has one track. */
 function touches(a: AlternateSet): string[] {
   return [...Object.keys(a.slots), ...a.hides].map((s) => `slot:${s}`).concat(Object.keys(a.offsets).map((b) => `bone:${b}`));
+}
+
+/**
+ * rig-c/pose#286: what the retarget refuses about the map's phase sets, one text each. A group of competing sets (a
+ * common slot or offset bone, transitively) that holds a phase set must hold only phase sets, and at most one of each
+ * side: the hand-over decides which of them shows, and nothing would decide between two of one side, or between a phase
+ * set and an angle set over the frames they share.
+ */
+export function phaseGroupProblems(sets: readonly AlternateSet[]): string[] {
+  const out: string[] = [];
+  for (const group of competing(sets)) {
+    const phased = group.filter((a) => a.phase !== undefined);
+    if (phased.length === 0) continue;
+    const angle = group.filter((a) => a.phase === undefined);
+    const named = (xs: readonly AlternateSet[]) => xs.map((a) => `"${a.name}"`).join(', ');
+    if (angle.length > 0) out.push(`set(s) ${named(phased)} declare "phase" and compete with set(s) ${named(angle)}, which declare none (they switch a common slot or offset bone); a phase set shows on its supporting foot's spans and an angle set on its distance, and nothing decides between them — give every set of the group a "phase", or none`);
+    for (const step of Object.keys(PHASE_SIDE) as Phase[]) {
+      const same = phased.filter((a) => a.phase === step);
+      if (same.length > 1) out.push(`set(s) ${named(same)} all declare "phase": "${step}" and compete (they switch a common slot or offset bone); one drawing shows per support span — keep one "${step}" set per group`);
+    }
+  }
+  return out;
 }
 
 /** Groups of sets that switch a common slot or offset a common bone, transitively; each in map order. */
@@ -447,8 +490,41 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
   const distances = setDistances(map, targets, n, opts.shortInfo);
   const hyst = opts.switchHysteresis ?? SWITCH_LEAVE_HYSTERESIS;
   const switches: Switch[] = [];
+  // rig-c/pose#286: the supporting side on each frame, from the report's support spans (null: no foot, or no set declares a phase).
+  const supportAt: Array<Side | null> = Array.from({ length: n }, () => null);
+  for (const sp of opts.phaseSupports ?? []) for (let i = sp.frames[0]; i <= Math.min(sp.frames[1], n - 1); i++) supportAt[i] = sp.side;
+  /** One group's pick, as segments between boundaries, then each boundary moved (#31), pushed as switches. */
+  const spans = (pick: ReadonlyArray<AlternateSet | null>, moveOpts: SwitchOptions): void => {
+    const vals: Array<AlternateSet | null> = [pick[0] ?? null];
+    const pos: number[] = [];
+    for (let i = 1; i < n; i++) {
+      if (pick[i] === pick[i - 1]) continue;
+      pos.push(i);
+      vals.push(pick[i] ?? null);
+    }
+    const moves = moveBoundaries(vals, pos, map, targets, distances, times, duration, moveOpts);
+    for (let s = 0; s < vals.length; s++) {
+      const a = vals[s];
+      if (a === null || a === undefined) continue;
+      const i = s === 0 ? 0 : moves[s - 1]!.frame[1];
+      const j = s < pos.length ? moves[s]!.frame[1] - 1 : n - 1;
+      const from = times[i]!;
+      const to = j + 1 < n ? times[j + 1]! : duration;
+      const ds = distances.get(a.name)!.slice(i, j + 1);
+      const phase: PhaseSpan | undefined = a.phase === undefined ? undefined : { step: a.phase, side: PHASE_SIDE[a.phase], on: i === 0 ? null : { frame: i, from: supportAt[i - 1] ?? null }, off: j + 1 < n ? { frame: j + 1, to: supportAt[j + 1] ?? null } : null };
+      switches.push({ set: a.name, chains: a.chains, slots: a.slots, hides: a.hides, offsets: a.offsets, from, to, frames: [i, j], distance: { max: r3(Math.max(...ds)), median: r3(median(ds)) }, artTurn: {}, moved: { on: s === 0 ? null : moves[s - 1]!, off: s < pos.length ? moves[s]! : null }, ...(phase === undefined ? {} : { phase }) });
+    }
+  };
   const groups = competing(map.alternates);
   for (const group of groups) {
+    // rig-c/pose#286: a group of phase sets shows each exactly on its supporting foot's spans — no tolerance, no minimum run,
+    // no hysteresis, no bridging, and its boundaries stay on the hand-overs (no --switch-at peak move). The retarget refuses
+    // a group mixing phase and angle sets, or two sets of one side (`phaseGroupProblems`), before it gets here.
+    if (group.some((a) => a.phase !== undefined)) {
+      const pick = supportAt.map((side) => (side === null ? null : group.find((a) => a.phase !== undefined && PHASE_SIDE[a.phase] === side) ?? null));
+      spans(pick, { ...opts, switchAt: 'first' });
+      continue;
+    }
     const layer = groupLayering(group, map, slots);
     const pick: Array<AlternateSet | null> = [];
     for (let i = 0; i < n; i++) {
@@ -582,25 +658,7 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
       }
       if (dropped) bridgeSame(pick);
     }
-    // The segments between boundaries, then each boundary moved (#31).
-    const vals: Array<AlternateSet | null> = [pick[0] ?? null];
-    const pos: number[] = [];
-    for (let i = 1; i < n; i++) {
-      if (pick[i] === pick[i - 1]) continue;
-      pos.push(i);
-      vals.push(pick[i] ?? null);
-    }
-    const moves = moveBoundaries(vals, pos, map, targets, distances, times, duration, opts);
-    for (let s = 0; s < vals.length; s++) {
-      const a = vals[s];
-      if (a === null || a === undefined) continue;
-      const i = s === 0 ? 0 : moves[s - 1]!.frame[1];
-      const j = s < pos.length ? moves[s]!.frame[1] - 1 : n - 1;
-      const from = times[i]!;
-      const to = j + 1 < n ? times[j + 1]! : duration;
-      const ds = distances.get(a.name)!.slice(i, j + 1);
-      switches.push({ set: a.name, chains: a.chains, slots: a.slots, hides: a.hides, offsets: a.offsets, from, to, frames: [i, j], distance: { max: r3(Math.max(...ds)), median: r3(median(ds)) }, artTurn: {}, moved: { on: s === 0 ? null : moves[s - 1]!, off: s < pos.length ? moves[s]! : null } });
-    }
+    spans(pick, opts);
   }
   const order = (name: string) => map.alternates.findIndex((a) => a.name === name);
   switches.sort((x, y) => x.frames[0] - y.frames[0] || order(x.set) - order(y.set));
@@ -632,6 +690,7 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
   // and in a one-sided gesture set keep an arm whose wrist stays behind the torso on its previous behind set.
   const chainHolds: Array<{ set: string; chain: string; frames: [number, number] }> = [];
   for (const group of groups) {
+    if (group.some((a) => a.phase !== undefined)) continue; // #286: a phase group shows exactly its support spans
     const layer = groupLayering(group, map, slots);
     if (!layer.baseInFront) continue;
     const names = new Set(group.map((a) => a.name));
@@ -1191,6 +1250,35 @@ export function switchLine(s: Switch, times: readonly number[]): string {
   const moves = (['on', 'off'] as const).filter((k) => s.moved[k] !== null).map((k) => `${k} ${moveText(s.moved[k]!)}`);
   if (moves.length > 0) parts.push(`moved ${moves.join(', ')}`);
   return parts.join('; ');
+}
+
+/**
+ * rig-c/pose#286: one `PHASE` line per set with a `phase` — the support side it shows on, every span it showed, and the
+ * hand-over each span was switched on and off at (the side before → the side after; "none" where no foot supports).
+ */
+export function phaseLines(map: JointMap, switches: readonly Switch[]): string[] {
+  const out: string[] = [];
+  const sideText = (x: Side | null) => x ?? 'none';
+  for (const set of map.alternates) {
+    if (set.phase === undefined) continue;
+    const side = PHASE_SIDE[set.phase];
+    const foot = (x: Side) => (x === 'l' ? 'left' : 'right');
+    const head = `set "${set.name}" "${set.phase}" — the ${foot(side === 'l' ? 'r' : 'l')} foot is stepping; shown while the ${foot(side)} foot supports (feet.supports)`;
+    const own = switches.filter((s) => s.set === set.name && s.phase !== undefined);
+    if (own.length === 0) {
+      out.push(`${head}: on no frame — no ${side} support span`);
+      continue;
+    }
+    const count = own.reduce((t, s) => t + s.frames[1] - s.frames[0] + 1, 0);
+    const spansText = own.map((s) => {
+      const ph = s.phase!;
+      const on = ph.on === null ? 'on the first frame' : `on frame ${ph.on.frame} ${sideText(ph.on.from)} → ${side}`;
+      const off = ph.off === null ? 'off at the end' : `off frame ${ph.off.frame} ${side} → ${sideText(ph.off.to)}`;
+      return `${s.frames[0]}–${s.frames[1]} (${on}, ${off})`;
+    });
+    out.push(`${head}: ${own.length} span(s), ${count} frame(s): ${spansText.join(', ')}`);
+  }
+  return out;
 }
 
 const spd = (v: number) => `${v.toFixed(1)}°/frame`;

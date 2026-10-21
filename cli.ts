@@ -48,7 +48,8 @@ pelvis (before clean; rig-c/pose#288)
   --pelvis-keys <file>  the hand override, instead of --frames: rig-pose-pelvis-keys/1, { "spec":
                         "rig-pose-pelvis-keys/1", "keys": [{ "frame", "deg" }], "note"? } — the tilt in pelvisTilt's
                         sense at frames, linear between keys (the short way round) and held outside them;
-                        pelvisSource "keys"
+                        pelvisSource "keys". A frame may be fractional (a drawn key between scan frames,
+                        rig-c/pose#294); frames strictly increase within [0, last frame], one outside is refused
   --person <id>         the person to read when the sequence holds more than one; only that person is written
 
   clean then smooths pelvisTilt as its own track (the legs' window, wrapped with --loop), and retarget keys
