@@ -110,25 +110,31 @@ describe('#284: a file a command writes makes the directory it goes into, or is 
     { name: 'clean --out', args: ['clean', '--pose', 'raw.json', '--out', 'ro/t.json'], fail: 'FAIL  ARG_PATH: --out ro/t.json — ro is not writable', absent: [] },
     { name: 'pelvis --out', args: ['pelvis', '--pose', 'raw.json', '--pelvis-keys', 'keys.json', '--out', 'ro/t.json'], fail: 'FAIL  ARG_PATH: --out ro/t.json — ro is not writable', absent: [] },
   ];
-  for (const c of RO_EXISTING) {
-    test(`planted: ${c.name} into an existing directory this process cannot write into is refused by name; nothing written`, () => {
-      // Root writes through a read-only mode, so the plant would not fire; nothing to hold then.
-      if (process.getuid?.() === 0) return;
-      const d = scratch();
-      mkdirSync(join(d, 'ro'));
-      chmodSync(join(d, 'ro'), 0o555);
-      try {
+  // 0o555: no write. 0o222: write without search — creating or opening a child still fails (the review on #331).
+  for (const [mode, how] of [[0o555, 'cannot write into'], [0o222, 'can write but not search']] as const) {
+    for (const c of RO_EXISTING) {
+      test(`planted: ${c.name} into an existing directory this process ${how} is refused by name; nothing written`, () => {
+        // Root writes through a read-only mode, so the plant would not fire; nothing to hold then.
+        if (process.getuid?.() === 0) return;
+        const d = scratch();
+        mkdirSync(join(d, 'ro'));
         const before = tree(d);
-        const r = run(d, c.args);
-        expect(r.status).toBe(1);
-        expect(fails(r)).toEqual([c.fail]);
-        expect(tree(d)).toEqual(before);
-        for (const a of c.absent) expect(existsSync(join(d, a))).toBe(false);
-      } finally {
-        chmodSync(join(d, 'ro'), 0o755);
-        rmSync(d, { recursive: true, force: true });
-      }
-    }, SLOW);
+        chmodSync(join(d, 'ro'), mode);
+        try {
+          const r = run(d, c.args);
+          expect(r.status).toBe(1);
+          expect(fails(r)).toEqual([c.fail]);
+        } finally {
+          chmodSync(join(d, 'ro'), 0o755);
+        }
+        try {
+          expect(tree(d)).toEqual(before);
+          for (const a of c.absent) expect(existsSync(join(d, a))).toBe(false);
+        } finally {
+          rmSync(d, { recursive: true, force: true });
+        }
+      }, SLOW);
+    }
   }
 
   test('control: retarget --out, --report and --build into a fresh directory where none of their parents exist writes all three', () => {

@@ -14,7 +14,7 @@ export type OutDirs = Map<string, string[]>;
 
 const writable = (dir: string): boolean => {
   try {
-    accessSync(dir, constants.W_OK);
+    accessSync(dir, constants.W_OK | constants.X_OK);
     return true;
   } catch {
     return false;
