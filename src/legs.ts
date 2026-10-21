@@ -516,6 +516,12 @@ export interface Feet {
    * rule does not apply.
    */
   tracked?: Array<{ side: Side; frames: [number, number] }>;
+  /**
+   * rig-c/pose#280: the second support signal (the ankle's vertical speed), how
+   * often it contradicts ankle height, and which one decided each frame. Set by
+   * `supportsOf` on every reading.
+   */
+  signal?: SupportSignal;
 }
 
 /** A run of frames whose support the lower-ankle rule (rig-c/pose#113) reads differently from the reading before it. */
@@ -559,8 +565,17 @@ export function rollingFloor(ys: readonly number[], times: readonly number[]): n
  * The frames whose support this changes are `lowered`. On a frame where no foot
  * is planted because the only foot free is the higher one (rig-c/pose#119), the
  * lower foot is tracked (`tracked`).
+ *
+ * rig-c/pose#280: the ankle's vertical speed is read beside ankle height on
+ * every clip (`speedSignalOf`), and on a frontal view it decides the support
+ * (`frontalOf`); `signal` says which signal decided each frame.
  */
 export function supportsOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, times: readonly number[], secondsOf: (run: [number, number]) => number, inPlace = false, lowerAnkle = false): Feet {
+  return frontalOf(ankle, hip, heightSupportsOf(ankle, hip, times, secondsOf, inPlace, lowerAnkle));
+}
+
+/** The support read from ankle height alone: the rules above, #113's included (the whole reading before rig-c/pose#280). */
+function heightSupportsOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, times: readonly number[], secondsOf: (run: [number, number]) => number, inPlace: boolean, lowerAnkle: boolean): Feet {
   if (inPlace || !lowerAnkle) return readSupports(ankle, hip, times, secondsOf, inPlace, false).feet;
   const { feet, released } = readSupports(ankle, hip, times, secondsOf, false, true);
   const before = readSupports(ankle, hip, times, secondsOf, false, false).feet.support;
@@ -725,6 +740,179 @@ function readSupports(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, read
     else tracked.push({ side: s, frames: [i, i] });
   }
   return { feet: { legLength, support, supports, jumps, steps, changes, ...(tracked.length > 0 ? { tracked } : {}) }, released };
+}
+
+// --- the second signal: the ankle's vertical speed against the ground (rig-c/pose#280) ---
+
+/** A foot's contact on one frame, read from the ankles' vertical speed: one side, both, or neither (null). */
+export type Contact = Side | 'both' | null;
+
+export interface SpeedSignal {
+  /** Each side's ground speed: the median of its ankle's vertical step (picture px a frame, y down) over the frames outside every jump. */
+  ground: Record<Side, number>;
+  /** Per frame: the feet that move with the ground, on the step into the frame or the step out of it (null on a jump frame or where neither does). */
+  contact: Contact[];
+  /** The frames the two signals contradict: the lower ankle (by ≥ `PLANT_SWITCH` leg lengths) leaves the ground's speed while the higher moves with it. */
+  contradict: number[];
+  /** The frames both signals read: outside every jump. */
+  read: number;
+}
+
+/**
+ * The ankle's vertical speed as a support signal (rig-c/pose#280). A planted
+ * foot moves with the ground: still under a fixed camera, or sliding at the
+ * ground's speed in a gait drawn in place. Each side's ground speed is the
+ * median of its ankle's vertical step over the frames outside every jump —
+ * a walking foot is down on more than half of them — and a foot moves with it
+ * on a step that departs from it by less than `STILL_SPEED` of that side's leg
+ * length. A frame's foot is down when either the step into the frame or the
+ * step out of it moves with the ground, so a drawing a foot lands or lifts on
+ * reads it down. `contradict` lists the frames where this and ankle height
+ * disagree in the way a frontal view's depth makes them: the lower ankle is
+ * the moving one, the higher the one moving with the ground.
+ */
+export function speedSignalOf(ankle: Record<Side, readonly Pt[]>, feet: Pick<Feet, 'legLength' | 'jumps'>): SpeedSignal {
+  const n = ankle.r.length;
+  const jump = new Array<boolean>(n).fill(false);
+  for (const [a, b] of feet.jumps) for (let i = a; i <= b; i++) jump[i] = true;
+  const step = (s: Side, i: number): number | null => (i < 1 || i >= n || jump[i] || jump[i - 1] ? null : ankle[s][i]![1] - ankle[s][i - 1]![1]);
+  const ground = {} as Record<Side, number>;
+  for (const s of SIDES) {
+    const xs: number[] = [];
+    for (let i = 1; i < n; i++) {
+      const v = step(s, i);
+      if (v !== null) xs.push(v);
+    }
+    ground[s] = xs.length === 0 ? 0 : percentile(xs, 0.5);
+  }
+  const withGround = (s: Side, i: number): boolean => {
+    const v = step(s, i);
+    return v !== null && Math.abs(v - ground[s]) < STILL_SPEED * feet.legLength[s];
+  };
+  const down = (s: Side, i: number) => withGround(s, i) || withGround(s, i + 1);
+  const mean = (feet.legLength.r + feet.legLength.l) / 2;
+  const contact: Contact[] = [];
+  const contradict: number[] = [];
+  let read = 0;
+  for (let i = 0; i < n; i++) {
+    if (jump[i]) {
+      contact.push(null);
+      continue;
+    }
+    read++;
+    const r = down('r', i);
+    const l = down('l', i);
+    contact.push(r && l ? 'both' : r ? 'r' : l ? 'l' : null);
+    const gap = ankle.l[i]![1] - ankle.r[i]![1];
+    const lower: Side | null = Math.abs(gap) < PLANT_SWITCH * mean ? null : gap > 0 ? 'l' : 'r';
+    if (lower !== null && !down(lower, i) && down(lower === 'r' ? 'l' : 'r', i)) contradict.push(i);
+  }
+  return { ground, contact, contradict, read };
+}
+
+/**
+ * A clip whose two support signals contradict on more than this share of the
+ * frames both read is read as a frontal view (rig-c/pose#280), when its stride
+ * also shows in depth (`strideInDepth`). A frontal walk contradicts at every
+ * hand-over, for as long as the nearer foot is in the air below the planted one:
+ * 18 of 96 frames (18.8 %) on the tests' synthetic frontal walk, where ankle
+ * height alone hands support to the nearer foot 1 or 2 frames before it lands
+ * (16 frames in all, declared in place). Every clip the other tests read with
+ * its stride in depth contradicts on none; the shortest contradiction a walk
+ * can make, one frame a step, is 8.3 % of a 1 s cycle at 24 fps (2 of 24).
+ */
+export const FRONTAL_DISAGREE = 0.05;
+
+/** rig-c/pose#280: the two support signals of a clip, and which one decided each frame's support. */
+export interface SupportSignal {
+  /** The frames the signals contradict (`speedSignalOf`), of `read` frames both read. */
+  contradict: number[];
+  read: number;
+  /** Each side's ankle range in the picture, relative to its hip (5th to 95th percentile), px: the stride shows in y on a frontal view and in x on a side view. */
+  range: Record<Side, { x: number; y: number }>;
+  /** The stride shows in depth (y range over x range on both sides) and the signals contradict on more than `FRONTAL_DISAGREE` of the frames: the support comes from the vertical speed. */
+  frontal: boolean;
+  /** Per frame, the vertical speed's reading: the side down, both, or null (a jump, or neither foot moving with the ground). */
+  contact: Contact[];
+  /** Per frame, ankle height's reading (the support before #280). */
+  height: Array<Side | null>;
+  /** Per frame, the signal that decided the support: `speed`, `height`, or null where no foot supports. */
+  by: Array<'speed' | 'height' | null>;
+}
+
+/** Each side's ankle range relative to its hip, px, x and y (5th to 95th percentile). */
+function rangeOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>): Record<Side, { x: number; y: number }> {
+  const span = (xs: number[]) => percentile(xs, 0.95) - percentile(xs, 0.05);
+  const out = {} as Record<Side, { x: number; y: number }>;
+  for (const s of SIDES) out[s] = { x: span(ankle[s].map((a, i) => a[0] - hip[s][i]![0])), y: span(ankle[s].map((a, i) => a[1] - hip[s][i]![1])) };
+  return out;
+}
+
+/**
+ * rig-c/pose#280: the support from the ankle's vertical speed, on a frontal
+ * view. Seen from the front, a foot's depth is drawn as height, so the lower
+ * ankle is the nearer foot, which may be the one in the air. A clip is read as
+ * frontal when both hold: its stride shows in depth — on each side the ankle's
+ * range relative to its hip is larger in y than in x (a side view's stride is
+ * in x) — and the two signals contradict on more than `FRONTAL_DISAGREE` of the
+ * frames both read. Then each frame's support is the vertical speed's: the one
+ * foot down; on frames both are down, the foot that landed (the other side from
+ * the support before the run, or, at the clip's start, the side that stays down
+ * after it), so support passes on the frame the incoming foot lands (as #102
+ * takes it from the landing frame); and ankle height's reading where neither
+ * foot moves with the ground. A plant ends where the other foot lands, so no
+ * step releases one and none is tracked (#113's `lowered` and #119's `tracked`
+ * are not read). Otherwise the feet are ankle height's, unchanged.
+ */
+function frontalOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, feet: Feet): Feet {
+  const sig = speedSignalOf(ankle, feet);
+  const range = rangeOf(ankle, hip);
+  const strideInDepth = SIDES.every((s) => range[s].y > range[s].x);
+  const frontal = strideInDepth && sig.read > 0 && sig.contradict.length > FRONTAL_DISAGREE * sig.read;
+  const height = feet.support.map((s) => s ?? null);
+  const signal = (by: SupportSignal['by']): SupportSignal => ({ contradict: sig.contradict, read: sig.read, range, frontal, contact: sig.contact, height, by });
+  if (!frontal) return { ...feet, signal: signal(height.map((s) => (s === null ? null : 'height'))) };
+  const n = height.length;
+  const other = (s: Side): Side => (s === 'r' ? 'l' : 'r');
+  const support: Array<Side | null> = new Array<Side | null>(n).fill(null);
+  const by: SupportSignal['by'] = new Array<'speed' | 'height' | null>(n).fill(null);
+  const fromHeight = (i: number) => {
+    support[i] = height[i]!;
+    by[i] = height[i] === null ? null : 'height';
+  };
+  for (let i = 0; i < n; i++) {
+    const c = sig.contact[i] ?? null;
+    if (c === 'r' || c === 'l') {
+      support[i] = c;
+      by[i] = 'speed';
+    } else if (c === 'both') {
+      let b = i;
+      while (b + 1 < n && sig.contact[b + 1] === 'both') b++;
+      const before = i > 0 ? (support[i - 1] ?? null) : null;
+      const after = b + 1 < n ? (sig.contact[b + 1] ?? null) : null;
+      const landed: Side | null = before !== null ? other(before) : after === 'r' || after === 'l' ? after : null;
+      for (let k = i; k <= b; k++) {
+        if (landed === null) fromHeight(k);
+        else {
+          support[k] = landed;
+          by[k] = 'speed';
+        }
+      }
+      i = b;
+    } else fromHeight(i);
+  }
+  const supports: Feet['supports'] = [];
+  const changes: Feet['changes'] = [];
+  for (let i = 0; i < n; i++) {
+    const s = support[i];
+    if (s === null || s === undefined) continue;
+    const prev = i > 0 ? (support[i - 1] ?? null) : null;
+    if (prev !== s) changes.push({ frame: i, from: prev, to: s });
+    const last = supports[supports.length - 1];
+    if (last !== undefined && last.side === s && last.frames[1] === i - 1) last.frames[1] = i;
+    else supports.push({ side: s, frames: [i, i] });
+  }
+  return { legLength: feet.legLength, support, supports, jumps: feet.jumps, steps: [], changes, signal: signal(by) };
 }
 
 /** One support span's shift onto the floor (rig-c/pose#85): its side, its frames, and floor − its planted height, world units. */
@@ -1584,3 +1772,4 @@ export function holdBlend(blends: readonly BlendFrame[], n: number, posed: (i: n
   const range = rangeUsed(lower, held);
   return { bounds: STANCE_BOUNDS, ...(range === null ? {} : { range }), runs, over, stretch };
 }
+
