@@ -141,10 +141,38 @@ function applyKey(setup: readonly string[], key: DrawOrderKey | undefined): stri
   for (let i = 0; i < out.length; i++) if (out[i] === undefined) out[i] = rest.shift();
   return out as string[];
 }
+/** The render's frame rate (bar 4's `--fps 24`, the fixtures' rate). */
+const RENDER_FPS = 24;
+/**
+ * The key in force on each frame, read the way the render reads it (rig-c/pose#325): the track time of frame `i`
+ * is the running sum of `i` steps of 1/fps (rig-c's `render`, as spine's AnimationState), each key's time is held
+ * as float32, and a key applies when its time ≤ the track time — no epsilon. A key written exactly on a frame
+ * time is a tie this reading breaks the way the render does, so a late key shows here.
+ */
+function keyPerFrame<K extends DrawOrderKey>(keys: readonly K[], frames: number): Array<K | undefined> {
+  let clock = 0;
+  return Array.from({ length: frames }, (_, i) => {
+    if (i > 0) clock += 1 / RENDER_FPS;
+    return [...keys].reverse().find((k) => Math.fround(k.t) <= clock);
+  });
+}
+/**
+ * The motion's keys that do not first show on the frame the report gives them (`keyFrames`, one per key, in order)
+ * under the render's reading: "frame f (t=…): shows on g".
+ */
+function keysOffFrame(keys: readonly DrawOrderKey[], keyFrames: readonly number[], frames: number): string[] {
+  const on = keyPerFrame(keys, frames);
+  expect(keyFrames).toHaveLength(keys.length);
+  return keys.flatMap((k, i) => {
+    const first = on.indexOf(k);
+    return first === keyFrames[i] ? [] : [`frame ${keyFrames[i]} (t=${k.t}): shows on ${first}`];
+  });
+}
 /** Per frame, which leg the keyed order draws behind: 'r' when the right leg's slots are all before the left's. */
 function behindPerFrame(setup: readonly string[], keys: readonly DrawOrderKey[], times: readonly number[]): Array<'r' | 'l'> {
-  return times.map((t) => {
-    const key = [...keys].reverse().find((k) => k.t <= t + 1e-9);
+  const on = keyPerFrame(keys, times.length);
+  return times.map((t, i) => {
+    const key = on[i];
     const o = applyKey(setup, key);
     const r = ['leg_r0', 'leg_r1'].map((s) => o.indexOf(s));
     const l = ['leg_l0', 'leg_l1'].map((s) => o.indexOf(s));
@@ -208,6 +236,8 @@ describe('bar (1): the run — the kicked-back leg behind the standing leg on ev
     const keys = r.motion.animations.run!.drawOrder!;
     expect(keys.length).toBeGreaterThan(0);
     const behind = behindPerFrame(SETUP, keys, r.report.frameTimes);
+    // #325: every key first shows on the frame it was decided on, read as the render reads it.
+    expect(keysOffFrame(keys, r.report.drawOrder!.keys.map((x) => x.frame), r.report.frameTimes.length)).toEqual([]);
     const k = kickedBehind(r.seq, r.report, behind, truth);
     console.log(`  #304 bar 1 — run, per frame (setup: the left leg behind):\n${k.table.join('\n')}`);
     console.log(`  #304 bar 1 — ${k.away} kicked-back frames, ${k.misses.length} drawn in front (${k.misses.join(', ') || 'none'}); keys at frames ${r.report.drawOrder!.keys.map((x) => x.frame).join(', ')}; support changes at ${r.report.feet.changes.filter((c) => c.from !== null).map((c) => c.frame).join(', ')}`);
@@ -247,6 +277,7 @@ describe('bar (2): the walk — the forward foot in front on its toward frames',
     const r = retargeted('walk', true);
     expect(r.ran.status).toBe(0);
     const behind = behindPerFrame(SETUP, r.motion.animations.walk!.drawOrder!, r.report.frameTimes);
+    expect(keysOffFrame(r.motion.animations.walk!.drawOrder!, r.report.drawOrder!.keys.map((x) => x.frame), r.report.frameTimes.length)).toEqual([]);
     const table = ['| frame | r thigh / shin | l thigh / shin | depth r / l (px) | keyed in front | generator |', '| --- | --- | --- | --- | --- | --- |'];
     const misses: number[] = [];
     let toward = 0;
