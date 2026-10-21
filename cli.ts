@@ -195,6 +195,13 @@ retarget
                         slots must fill one unbroken run of the setup draw order (else the pair is not keyed and
                         the line names the slot between); a set's slot goes with the leg it depicts. Refused on
                         a sequence without depth (DRAWORDER_NO_DEPTH). DRAWORDER lines (default: off)
+  --contact-keys <file> which foot supports, by hand (rig-c/pose#303): rig-pose-contact-keys/1, { "spec":
+                        "rig-pose-contact-keys/1", "keys": [{ "frame", "side" }], "note"? }, side l | r | both |
+                        none; frames the sequence's, fractional allowed, strictly increasing in [0, N − 1]. A key
+                        holds until the next one (contact is a state, not interpolated); before the first key the
+                        support is read as without it. On every frame they cover the keys decide, over the
+                        vertical speed (#280) and ankle height: none is flight; both, the foot that landed. Malformed
+                        keys are refused by name (CONTACT_KEYS). FEET support and stride lines (default: off)
   --idle <name>         the rig's animation read as its idle (default: idle). Every idle track the new
                         animation does not key, on any channel, is listed as IDLE-DROPPED (a blink, a
                         breath); one it keys is IDLE-KEPT-OUT, naming the track that keys it, and so is a
@@ -383,7 +390,7 @@ function legScaleOf(f: Map<string, string>): [number, number] | 'off' {
 const RETARGET_ALIASES = { sequence: 'pose', animation: 'name' } as const;
 
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'reference', 'render', 'parts', 'report', 'camera', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor', 'draw-order'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head', 'reduce-keep-planted', 'verbose', 'summary'], RETARGET_ALIASES);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'reference', 'render', 'parts', 'report', 'camera', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor', 'draw-order', 'contact-keys'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head', 'reduce-keep-planted', 'verbose', 'summary'], RETARGET_ALIASES);
   if (f.has('verbose') && f.has('summary')) throw new Usage('--verbose and --summary are both given; --verbose prints every line in full and --summary one line per measure, so give one');
   if (f.has('reference') && !f.has('build')) throw new Usage(`--reference needs --build: the record it goes in is written beside the build (${PROVENANCE_FILE})`);
   const bends = f.get('bends') ?? 'refuse';
@@ -433,6 +440,7 @@ function retargetArgs(argv: string[]): RetargetArgs {
     ...reduceOf(f),
     output: f.has('verbose') ? 'verbose' : f.has('summary') ? 'summary' : 'default',
     ...(drawOrder !== undefined ? { drawOrder: 'depth' as const } : {}),
+    ...(f.has('contact-keys') ? { contactKeysFile: f.get('contact-keys')! } : {}),
   };
 }
 
