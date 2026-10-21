@@ -4,12 +4,14 @@
  * --report` orders the limbs front to back by it (`layers`).
  *
  * The fixtures are made in 3D from joint angles (examples/walk/make-depth.ts):
- * a frontal run in place (the swinging shin kicked back to 0.41 of its length),
- * a frontal walk (the lifted foot forward), and the run seen from the side. The
- * generator knows every joint's true depth, so it is the hand-read table the
- * derived depth is held to. The bars (the card): (1) on the run, every frame
- * whose shin reads ≤ 0.5 of its rest length carries sign − (kicked back) on
- * every stride, and the same drawing cleaned as a walk carries +; (2) on the
+ * a frontal run in place (the swinging shin kicked back to 0.41 of its length,
+ * the raised thigh bringing the knee forward), a frontal walk in place (the
+ * lifted foot behind), and the run seen from the side. The generator knows every
+ * joint's true depth, so it is the hand-read table the derived depth is held to.
+ * The bars (the card): (1) on the run, every frame whose shin reads ≤ 0.5 of its
+ * rest length carries sign − (kicked back) on every stride, and the same drawing
+ * cleaned as a walk carries the same signs (rig-c/pose#336: the owner's two
+ * statements give one table for both gaits); (2) on the
  * side view every ratio is within 0.95–1.05, sign 0, drawn neutral; (3) the
  * report's `layers` agrees with the generator's front/back on ≥ 90 % of frames,
  * the disagreeing frames listed; (4) without `--depth` nothing changes (the
@@ -88,8 +90,8 @@ function midpoint(seq: PoseSequence, i: number, s: DepthSegment, height: number)
 }
 const same = (a: readonly number[], b: readonly number[]) => a.every((v, i) => v === b[i]);
 
-describe('bar (1): the run\'s kicked-back shin reads away (−) on every stride, and the same drawing as a walk reads toward (+)', () => {
-  test('every frame whose shin is ≤ 0.5 of its rest length carries sign −1 under --depth run and +1 under --depth walk; the generator\'s table agrees with the run; drawn cool and warm', () => {
+describe('bar (1): the run\'s kicked-back shin reads away (−) on every stride, and the same drawing as a walk reads the same', () => {
+  test('every frame whose shin is ≤ 0.5 of its rest length carries sign −1 under --depth run and under --depth walk; the generator\'s table agrees; drawn cool; the two files differ only in the recorded gait', () => {
     const truth = FIXTURES.run();
     const run = cleaned(truth, 'run');
     expect(run.ran.stderr).toBe('');
@@ -114,15 +116,18 @@ describe('bar (1): the run\'s kicked-back shin reads away (−) on every stride,
         perStride.set(`${side} ${stride}`, (perStride.get(`${side} ${stride}`) ?? 0) + 1);
         table.push(`| ${i} | ${stride} | ${s} | ${d.ratio.toFixed(3)} | ${d.sign} | ${sw.frames[i]!.depth![s]!.sign} | ${truth[i]!.truth[s].sign} |`);
         expect(d.sign).toBe(-1);
-        expect(sw.frames[i]!.depth![s]!.sign).toBe(1);
+        expect(sw.frames[i]!.depth![s]!.sign).toBe(-1);
         expect(truth[i]!.truth[s].sign).toBe(-1);
-        // Drawn: the run's shin cool, the walk's warm.
+        // Drawn: the shin cool under either gait.
         const [x, y] = midpoint(sr, i, s, 480);
         expect(same(drawSkeleton(personTrack(sr, undefined, 'fixture')[i]!, sr, { height: 480, minScore: 0.3 }, f.depth).get(x, y), AWAY)).toBe(true);
-        expect(same(drawSkeleton(personTrack(sw, undefined, 'fixture')[i]!, sw, { height: 480, minScore: 0.3 }, sw.frames[i]!.depth).get(x, y), TOWARD)).toBe(true);
+        expect(same(drawSkeleton(personTrack(sw, undefined, 'fixture')[i]!, sw, { height: 480, minScore: 0.3 }, sw.frames[i]!.depth).get(x, y), AWAY)).toBe(true);
       });
     }
     console.log(`  #281 bar 1 — the run's shins at ratio ≤ ${SHORT} (${short} shin-frames):\n${table.join('\n')}`);
+    // #336: one table for both gaits — the walk's file is the run's but for the gait it records.
+    expect(walk.text).toBe(run.text.replace(/("depth": \{\s*"gait": )"run"/, '$1"walk"'));
+    expect(walk.text).not.toBe(run.text);
     // Every stride of each leg has such frames, and the smallest ratio is the card's 0.41.
     for (const side of ['r', 'l']) for (let k = 0; k < 3; k++) expect(perStride.get(`${side} ${k}`) ?? 0).toBeGreaterThan(0);
     const least = Math.min(...sr.frames.flatMap((f) => [f.depth!.r_shin!.ratio, f.depth!.l_shin!.ratio]));
@@ -130,24 +135,27 @@ describe('bar (1): the run\'s kicked-back shin reads away (−) on every stride,
     expect(least).toBeLessThan(0.42);
   });
 
-  test('the walk: the lifted foot comes forward, and every shin the generator says is toward reads + (and none reads −)', () => {
+  test('the walk: the lifted foot goes behind (#336), and every shin the generator says is away reads − (and none reads +)', () => {
     const truth = FIXTURES.walk();
     const w = cleaned(truth, 'walk');
     expect(w.ran.status).toBe(0);
     const seq = seqOf(w.text);
-    const toward: number[] = [];
+    const away: number[] = [];
     for (const side of ['r', 'l'] as const) {
       const s = `${side}_shin` as DepthSegment;
       seq.frames.forEach((f, i) => {
-        expect(f.depth![s]!.sign).not.toBe(-1);
-        if (truth[i]!.truth[s].sign === 1) {
-          toward.push(i);
-          expect(f.depth![s]!.sign).toBe(1);
+        expect(f.depth![s]!.sign).not.toBe(1);
+        expect(truth[i]!.truth[s].sign).not.toBe(1);
+        if (truth[i]!.truth[s].sign === -1) {
+          away.push(i);
+          expect(f.depth![s]!.sign).toBe(-1);
+          // Only a lifted leg's shin leans: the supporting leg stays inside the band.
+          expect(truth[i]!.lifted).toContain(side);
         }
       });
     }
-    console.log(`  #281 walk: ${toward.length} shin-frames the generator draws toward the camera, every one read +`);
-    expect(toward.length).toBeGreaterThan(0);
+    console.log(`  #336 walk: ${away.length} shin-frames the generator draws away from the camera (the lifted foot behind), every one read −`);
+    expect(away.length).toBeGreaterThan(20);
   });
 
   test('from behind the same run reads the other way: the trunk faces away, so the kicked-back shin comes toward the camera', () => {
@@ -369,7 +377,7 @@ describe('the format: rig-pose-sequence/1.2', () => {
 
 describe('mutants: the sign rule and the layers\' depth, each making its bar red', () => {
   const MUTS = [
-    { name: 'the shin\'s gait sign ignored (always forward)', from: "if (kind === 'shin') sense = gait === 'walk' ? 1 : -1;", to: "if (kind === 'shin') sense = 1;", bar: 1 },
+    { name: 'the shin forward (#281\'s swapped walk sign, for every gait)', from: "if (kind === 'shin') sense = -1;", to: "if (kind === 'shin') sense = 1;", bar: 1 },
     { name: 'the facing ignored (forward always toward the camera)', from: "const sign = (r < FLAT_BAND[0] ? face * sense : 0) as -1 | 0 | 1;", to: "const sign = (r < FLAT_BAND[0] ? sense : 0) as -1 | 0 | 1;", bar: 1 },
     { name: 'the upper arm forward always (no opposition)', from: "sense = own === null || opp === null || Math.min(own, opp) >= FLAT_BAND[0] || own === opp ? 1 : opp < own ? 1 : -1;", to: 'sense = 1;', bar: 3 },
   ];
@@ -389,7 +397,7 @@ describe('mutants: the sign rule and the layers\' depth, each making its bar red
           const truth = mu.name.includes('facing') ? depthCycle('run', 'back', 1) : FIXTURES.run();
           const seq = seqOf(cleaned(truth, null).text);
           const track = personTrack(seq, undefined, 'fixture');
-          const dd = m.deriveDepth(track, 'run');
+          const dd = m.deriveDepth(track);
           const wrong = dd.frames.flatMap((f, i) => (['r_shin', 'l_shin'] as const).filter((s) => f[s]!.ratio <= SHORT && f[s]!.sign !== truth[i]!.truth[s].sign).map((s) => `${i} ${s}`));
           console.log(`  #281 mutant "${mu.name}": ${wrong.length} shin-frames at ratio ≤ ${SHORT} read against the generator (frames ${runs([...new Set(wrong.map((w) => Number(w.split(' ')[0])))])})`);
           expect(wrong.length).toBeGreaterThan(0);
@@ -397,7 +405,7 @@ describe('mutants: the sign rule and the layers\' depth, each making its bar red
           const truth = FIXTURES.run();
           const seq = seqOf(cleaned(truth, null).text);
           const track = personTrack(seq, undefined, 'fixture');
-          const dd = m.deriveDepth(track, 'run');
+          const dd = m.deriveDepth(track);
           const layers = track.map((j, i) => ({ frame: i, t: 0, ...m.layersOf(j, dd.frames[i]!) }));
           const bad = disagreements(truth, layers);
           console.log(`  #281 mutant "${mu.name}": layers agree on ${truth.length - bad.length} of ${truth.length} frames`);
