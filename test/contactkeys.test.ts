@@ -128,9 +128,9 @@ describe('#303: a slow drawn frontal walk — the support follows the contact ke
       cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
       const path = join(d, 'src', 'contacts.ts');
       const src = readFileSync(path, 'utf8');
-      const from = 'keyed[i - 1] && prev !== null ? other(prev) :';
+      const from = "prevSide === 'r' || prevSide === 'l' ? other(prevSide) :";
       expect(src.split(from)).toHaveLength(2);
-      writeFileSync(path, src.replace(from, 'keyed[i - 1] && prev !== null ? prev :'));
+      writeFileSync(path, src.replace(from, "prevSide === 'r' || prevSide === 'l' ? prevSide :"));
       const m = (await import(path)) as { contactKeysOf: typeof contactKeysOf; readContactKeys: typeof readContactKeys };
       const { ankle, hip } = slowWalk();
       const keys = m.readContactKeys(keysText(keySheet()), 'keys.json', N);
@@ -160,6 +160,21 @@ describe('#303: a slow drawn frontal walk — the support follows the contact ke
     // Rebuilt from the per-frame support: the r span ends at 20, the flight has none, l runs 24–39, r from 40 to the end.
     expect(feet.supports.filter((s) => s.frames[1] >= 11).map((s) => [s.side, s.frames[1]])).toEqual([['r', 20], ['l', 39], ['r', N - 1]]);
     expect(feet.supports.filter((s) => s.frames[1] >= 11).slice(1).map((s) => s.frames[0])).toEqual([24, 40]);
+  });
+
+  test('both resolves from the key state before it, a key that reaches no frame included: l@0, none@1.1, both@1.2, l@3 — both follows flight, so frame 2 is the l that stays down after (rig-c/pose#338 review)', () => {
+    const { ankle, hip } = slowWalk();
+    const plain = supportsOf(ankle, hip, times, secondsOf, true, true);
+    const keys = readContactKeys(keysText([{ frame: 0, side: 'l' }, { frame: 1.1, side: 'none' }, { frame: 1.2, side: 'both' }, { frame: 3, side: 'l' }]), 'keys.json', N);
+    expect(keys.key.slice(0, 4)).toEqual(['l', 'l', 'both', 'l']);
+    expect(keys.unreached).toEqual([1.1]);
+    const feet = contactKeysOf(plain, keys);
+    console.log(`  #303 review key example: support on frames 0–3 ${feet.support.slice(0, 4).join(' ')}`);
+    expect(feet.support.slice(0, 4)).toEqual(['l', 'l', 'l', 'l']);
+    expect(feet.contactKeys!.keyed[2]).toBe(true);
+    // Control: without the unreached flight key, both follows l on frame 1, and the foot that landed is r.
+    const direct = contactKeysOf(plain, readContactKeys(keysText([{ frame: 0, side: 'l' }, { frame: 1.2, side: 'both' }, { frame: 3, side: 'l' }]), 'keys.json', N));
+    expect(direct.support[2]).toBe('r');
   });
 
   test('bar 5: a bad file is refused by name — not JSON, the shape, a side outside the four, a frame out of span, frames not increasing — every problem in one refusal', () => {
@@ -294,6 +309,55 @@ describe('#303: the run — the report names the contact keys per span; without 
       console.log(`  #303 no legs (exit ${noLegs.status}):\n    ${noLegsFails.join('\n    ')}`);
       expect(noLegs.status).toBe(1);
       expect(noLegsFails.some((l) => l.startsWith('FAIL  CONTACT_KEYS: --contact-keys '))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
+// --- a detected step that runs into the keys ---------------------------------------
+
+/** The README walk's ankles and hips (examples/walk), read as a sequence not declared in place: ankle height releases r on a step from frame 14 to the end. */
+function walkSeries(): { ankle: Record<Side, Pt[]>; hip: Record<Side, Pt[]>; t: number[] } {
+  const doc = JSON.parse(readFileSync(join(ROOT, 'examples', 'walk', 'pose.json'), 'utf8')) as { frames: Array<{ t: number; people: Array<{ joints: Record<string, { at: Pt }> }> }> };
+  const series = (j: string) => doc.frames.map((f) => f.people[0]!.joints[j]!.at);
+  return { ankle: { r: series('r_ankle'), l: series('l_ankle') }, hip: { r: series('r_hip'), l: series('l_hip') }, t: doc.frames.map((f) => f.t) };
+}
+
+describe('#303: a step that begins before the first key is cut at the frame before it (rig-c/pose#338 review)', () => {
+  const STEP_KEY = 18;
+  test('feet.steps: the step r 14–23 read without keys is r 14–17 with a key at 18, its re-plant not read inside the keys', () => {
+    const { ankle, hip, t } = walkSeries();
+    const plain = supportsOf(ankle, hip, t, secondsOf, false, true);
+    expect(plain.steps.map((x) => ({ side: x.side, frames: x.frames }))).toEqual([{ side: 'r', frames: [14, 23] }]);
+    const feet = contactKeysOf(plain, readContactKeys(keysText([{ frame: STEP_KEY, side: 'l' }]), 'keys.json', t.length));
+    console.log(`  #303 step across the first key: without keys ${JSON.stringify(plain.steps)}; with a key at ${STEP_KEY} ${JSON.stringify(feet.steps)}`);
+    expect(feet.steps).toEqual([{ side: 'r', frames: [14, STEP_KEY - 1], replant: null, to: plain.steps[0]!.to }]);
+  });
+
+  test('the run: the FEET steps line and the report\'s feet.steps both end the step at 17; control: without the flag both read 14–23', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rig-pose-test-'));
+    try {
+      const doc = JSON.parse(readFileSync(join(ROOT, 'examples', 'walk', 'pose.json'), 'utf8')) as Record<string, unknown>;
+      delete doc.travel;
+      const pose = join(dir, 'walk.travelling.json');
+      writeFileSync(pose, JSON.stringify(doc));
+      const keys = join(dir, 'keys.json');
+      writeFileSync(keys, keysText([{ frame: STEP_KEY, side: 'l' }]));
+      const run = (out: string, extra: string[] = []) => spawnSync(process.execPath, [CLI, 'retarget', '--rig', join(ROOT, 'examples', 'wave', 'rig'), '--map', join(ROOT, 'examples', 'walk', 'map.json'), '--pose', pose, '--out', join(dir, `${out}.motion.json`), '--name', 'walk', '--plant-feet', ...extra], { encoding: 'utf8', cwd: ROOT });
+      const stepsOf = (out: string) => out.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('FEET   steps '));
+      const reportSteps = (out: string) => (JSON.parse(readFileSync(join(dir, `${out}.motion.report.json`), 'utf8')) as { feet: { steps: unknown } }).feet.steps;
+      const k = run('keyed', ['--contact-keys', keys]);
+      expect(k.stderr).toBe('');
+      expect(k.status).toBe(0);
+      const p = run('plain');
+      expect(p.status).toBe(0);
+      console.log(`  #303 step run:\n    keyed ${stepsOf(k.stdout).join(' ')}\n    plain ${stepsOf(p.stdout).join(' ')}`);
+      expect(stepsOf(k.stdout)).toHaveLength(1);
+      expect(stepsOf(k.stdout)[0]).toEndWith(': r 14–17 → l supports, never re-planted');
+      expect(reportSteps('keyed')).toMatchObject([{ side: 'r', frames: [14, 17], times: [0.583333, 0.708333], replant: null, to: 'l' }]);
+      expect(stepsOf(p.stdout)[0]).toEndWith(': r 14–23 → l supports, never re-planted');
+      expect(reportSteps('plain')).toMatchObject([{ side: 'r', frames: [14, 23], replant: null, to: 'l' }]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -21,10 +21,12 @@
  * Precedence: on every covered frame the keys decide, over #280's vertical
  * speed (a frontal clip) and ankle height. `l`/`r`: that foot supports. `none`:
  * flight, no foot supports. `both`: the foot that landed supports, as #280 hands
- * over on landing — the other side from the support on the frame before the run
- * when that frame is keyed, else the side the next key names (the side that
- * stays down after), else the support on the frame before (the reading without
- * keys); a run none of those name keeps the reading without keys (`kept`).
+ * over on landing. The run's neighbours are read from the keys, not the frames,
+ * so a key that reaches no frame counts (rig-c/pose#338): after an `l` or `r`
+ * key, the other side; after a `none` key (flight), or where the run starts the
+ * cover, the side the next `l` or `r` key names (the side that stays down after);
+ * else, at the cover's start, the support on the frame before (the reading
+ * without keys); a run none of those name keeps the reading without keys (`kept`).
  */
 import type { Feet, Side } from './legs.ts';
 import { isObject, parseJson, Problems, refuseUnknownKeys, typeName } from './problems.ts';
@@ -117,8 +119,9 @@ export interface ContactKeysReading {
  * rebuilds it: support spans and changes from the per-frame support. Outside
  * the cover the support is the reading without keys, unchanged. A step that
  * released a plant (report only) and #113's `lowered` and #119's `tracked` runs
- * are kept where they start before the cover, cut at its first frame: inside it
- * a plant ends where the keys hand support over. Jumps are kept as read (the
+ * are kept where they start before the cover, cut at the frame before it
+ * (rig-c/pose#338; a step's re-plant inside the cover is not read, null): inside
+ * it a plant ends where the keys hand support over. Jumps are kept as read (the
  * hip's rise); on a jump frame a key still decides the support.
  */
 export function contactKeysOf(feet: Feet, keys: ContactKeys): Feet {
@@ -129,6 +132,12 @@ export function contactKeysOf(feet: Feet, keys: ContactKeys): Feet {
   const kept: number[] = [];
   const other = (s: Side): Side => (s === 'r' ? 'l' : 'r');
   const from = keys.key.findIndex((k) => k !== null);
+  /** Per frame, the index in `keys.keys` of the key in force (−1 before the first). */
+  const at: number[] = [];
+  for (let i = 0, k = -1; i < n; i++) {
+    while (k + 1 < keys.keys.length && keys.keys[k + 1]!.frame <= i) k++;
+    at.push(k);
+  }
   for (let i = 0; i < n; i++) {
     const k = keys.key[i] ?? null;
     if (k === null) continue;
@@ -139,9 +148,14 @@ export function contactKeysOf(feet: Feet, keys: ContactKeys): Feet {
     }
     let b = i;
     while (b + 1 < n && keys.key[b + 1] === 'both') b++;
-    const prev = i > 0 ? support[i - 1]! : null;
-    const next = b + 1 < n ? (keys.key[b + 1] ?? null) : null;
-    const landed: Side | null = i > 0 && keyed[i - 1] && prev !== null ? other(prev) : next === 'r' || next === 'l' ? next : prev;
+    // rig-c/pose#338: the states either side come from the keys themselves, not from the frames — a key that reaches no frame (none@1.1 before both@1.2) is the state the run follows.
+    let k0 = at[i]!;
+    while (k0 > 0 && keys.keys[k0 - 1]!.side === 'both') k0--;
+    let k1 = at[b]! + 1;
+    while (k1 < keys.keys.length && keys.keys[k1]!.side === 'both') k1++;
+    const prevSide = k0 > 0 ? keys.keys[k0 - 1]!.side : null;
+    const nextSide = k1 < keys.keys.length ? keys.keys[k1]!.side : null;
+    const landed: Side | null = prevSide === 'r' || prevSide === 'l' ? other(prevSide) : nextSide === 'r' || nextSide === 'l' ? nextSide : prevSide === null && i > 0 ? support[i - 1]! : null;
     for (let f = i; f <= b; f++) {
       if (landed === null) kept.push(f);
       else {
@@ -176,7 +190,8 @@ export function contactKeysOf(feet: Feet, keys: ContactKeys): Feet {
     support,
     supports,
     jumps: feet.jumps,
-    steps: feet.steps.filter((s) => s.frames[0] < from),
+    // rig-c/pose#338: a step running into the cover ends on the frame before it, as lowered and tracked do; a re-plant inside the cover is the keys' to decide, so it is not read (null).
+    steps: cut(feet.steps).map((s) => (s.replant !== null && s.replant >= from ? { ...s, replant: null } : s)),
     changes,
     ...(lowered !== undefined && lowered.length > 0 ? { lowered } : {}),
     ...(tracked !== undefined && tracked.length > 0 ? { tracked } : {}),
