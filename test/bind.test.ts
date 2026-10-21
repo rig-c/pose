@@ -165,7 +165,10 @@ describe('selectSwitches: a bound set shows on exactly its bound frames, its key
       const src = readFileSync(path, 'utf8');
       const edits: Array<[string, string]> = [
         ['        if (a.bind !== undefined) continue;\n        if (a.frames', '        if (a.bind !== undefined && !bound.get(a.name)![i]) continue;\n        if (a.frames'],
-        ['      if (m !== undefined) for (let i = 0; i < n; i++) if (m[i]) pick[i] = a;\n', ''],
+        ['      for (let i = 0; i < n; i++) if (m[i]) pick[i] = a;\n', ''],
+        ['  const groups = competing(map.alternates.filter((a) => a.bind === undefined));', '  const groups = competing(map.alternates);'],
+        ["  for (const b of boundSets) spans(bound.get(b.name)!.map((v) => (v ? b : null)), { ...opts, switchAt: 'first' }, true);\n", ''],
+        ['(a.bind !== undefined && !own)', 'own'],
         ['      if (a.bind !== undefined) continue;\n      nearestOn.set', '      nearestOn.set'],
         ['      if (a.bind !== undefined) continue;\n      const dropped = droppedOn', '      const dropped = droppedOn'],
       ];
@@ -212,5 +215,81 @@ describe('bindProblems: the sequence and overlap refusals', () => {
     expect(bindProblems(map, N).overlap).toEqual(['sets "near" and "fix" are both bound on 1 frame(s), 6, and both draw bone "arm_r0"; one drawing shows per bone and slot on a frame, and nothing decides between two bound sets — bind them on different frames']);
     map.alternates[0]!.bind = { cycle: null, at: [[7, 9]] };
     expect(bindProblems(map, N).overlap).toEqual([]);
+  });
+});
+
+/** Two arms, each an independent single-arm set, beside a two-arm set; every arm on every key on every frame. */
+function twoArms(withBound: boolean): JointMap {
+  const key = { r_shoulder: [0, 0] as [number, number], r_wrist: deg(-90), l_shoulder: [0, 0] as [number, number], l_wrist: deg(-90) };
+  const set = (o: Partial<AlternateSet> & { name: string }): AlternateSet => ({ slots: {}, hides: [], chains: [], pose: key, drawn: {}, offsets: {}, turn: {}, frames: null, place: null, ...o });
+  return {
+    translate: null,
+    chains: [
+      { name: 'arm_r', bones: ['arm_r0'], joints: ['r_shoulder', 'r_wrist'], aim: ['x'], range: {}, bend: 'free', reach: false },
+      { name: 'arm_l', bones: ['arm_l0'], joints: ['l_shoulder', 'l_wrist'], aim: ['x'], range: {}, bend: 'free', reach: false },
+    ],
+    alternates: [
+      set({ name: 'R', slots: { forearm_r: 'R_r' }, chains: ['arm_r'] }),
+      set({ name: 'L', slots: { forearm_l: 'L_l' }, chains: ['arm_l'] }),
+      ...(withBound ? [set({ name: 'both', slots: { forearm_r: 'both_r', forearm_l: 'both_l' }, chains: ['arm_r', 'arm_l'], bind: { cycle: null, at: [[5, 5]] } })] : []),
+    ],
+  };
+}
+
+describe('review of PR #362: a bind changes only its own frames', () => {
+  test('a bound two-arm set joins no groups: two independent single-arm sets show on every unbound frame as without it', () => {
+    const slots: RigSlots = new Map([
+      ['forearm_r', { setup: 'forearm_r', attachments: new Set(['forearm_r', 'R_r', 'both_r']), bone: 'arm_r0' }],
+      ['forearm_l', { setup: 'forearm_l', attachments: new Set(['forearm_l', 'L_l', 'both_l']), bone: 'arm_l0' }],
+    ]);
+    const tg = new Map([['arm_r0', Array.from({ length: N }, () => -90)], ['arm_l0', Array.from({ length: N }, () => -90)]]);
+    const off = selectSwitches(twoArms(false), tg, times, times[N - 1]!, slots, OPTS);
+    const on = selectSwitches(twoArms(true), tg, times, times[N - 1]!, slots, OPTS);
+    expect(showsOf(off, 'R')).toHaveLength(N);
+    expect(showsOf(off, 'L')).toHaveLength(N);
+    const unbound = (sw: typeof on, s: string) => sw.shown.get(s)!.filter((_, i) => i !== 5);
+    const diff = ['forearm_r', 'forearm_l'].map((s) => unbound(on, s).filter((v, k) => v !== unbound(off, s)[k]).length);
+    console.log(`  #362 P2-1: unbound frames that differ with the bind, forearm_r ${diff[0]}, forearm_l ${diff[1]}`);
+    expect(JSON.stringify(['forearm_r', 'forearm_l'].map((s) => unbound(on, s)))).toBe(JSON.stringify(['forearm_r', 'forearm_l'].map((s) => unbound(off, s))));
+    expect(on.shown.get('forearm_r')![5]).toBe('both_r');
+    expect(on.shown.get('forearm_l')![5]).toBe('both_l');
+    expect(showsOf(on, 'R')).toEqual(Array.from({ length: N }, (_, i) => i).filter((i) => i !== 5));
+    expect(showsOf(on, 'L')).toEqual(Array.from({ length: N }, (_, i) => i).filter((i) => i !== 5));
+    expect(showsOf(on, 'both')).toEqual([5]);
+  });
+
+  test('no behind-the-torso bridge reaches a bound frame: only the bound drawing shows there', () => {
+    // #136's layering: two back slots, the torso, the two front setup slots, and B's own slot. A draws both arms behind the
+    // torso and hides the setup arms; B, bound to frame 5, hides the same setup arms and draws its own right arm.
+    const n = 12;
+    const t = Array.from({ length: n }, (_, i) => i / 24);
+    const slots: RigSlots = new Map([
+      ['back_r', { setup: null, attachments: new Set(['A_r']), bone: 'arm_r0' }],
+      ['back_l', { setup: null, attachments: new Set(['A_l']), bone: 'arm_l0' }],
+      ['topwear', { setup: 'topwear', attachments: new Set(['topwear', 'A_top']), bone: 'chest' }],
+      ['forearm_r', { setup: 'forearm_r', attachments: new Set(['forearm_r']), bone: 'arm_r0' }],
+      ['forearm_l', { setup: 'forearm_l', attachments: new Set(['forearm_l']), bone: 'arm_l0' }],
+      ['b_r', { setup: null, attachments: new Set(['B_r']), bone: 'arm_r0' }],
+    ]);
+    const key = { r_shoulder: [0, 0] as [number, number], r_wrist: deg(-90), l_shoulder: [0, 0] as [number, number], l_wrist: deg(-90) };
+    const set = (o: Partial<AlternateSet> & { name: string }): AlternateSet => ({ slots: {}, hides: [], chains: ['arm_r', 'arm_l'], pose: key, drawn: {}, offsets: {}, turn: {}, frames: null, place: null, ...o });
+    const map: JointMap = {
+      translate: null,
+      chains: twoArms(false).chains,
+      alternates: [
+        set({ name: 'A', slots: { back_r: 'A_r', back_l: 'A_l', topwear: 'A_top' }, hides: ['forearm_r', 'forearm_l'], drawn: { arm_r0: -90, arm_l0: -90 } }),
+        set({ name: 'B', slots: { b_r: 'B_r' }, hides: ['forearm_r', 'forearm_l'], chains: ['arm_r'], bind: { cycle: null, at: [[5, 5]] } }),
+      ],
+    };
+    const tg = new Map([['arm_r0', Array.from({ length: n }, () => -90)], ['arm_l0', Array.from({ length: n }, () => -90)]]);
+    const sw = selectSwitches(map, tg, t, t[n - 1]!, slots, OPTS);
+    expect(sw.switches.map((s) => [s.set, s.frames])).toEqual([['A', [0, 4]], ['B', [5, 5]], ['A', [6, 11]]]);
+    const at5 = Object.fromEntries([...slots.keys()].map((s) => [s, sw.shown.has(s) ? sw.shown.get(s)![5] : slots.get(s)!.setup]));
+    console.log(`  #362 P2-2: frame 5 shows ${JSON.stringify(at5)}`);
+    expect(at5).toEqual({ back_r: null, back_l: null, topwear: 'topwear', forearm_r: null, forearm_l: null, b_r: 'B_r' });
+    // Either side of the bind, A's drawing as selected.
+    for (const i of [4, 6]) expect([sw.shown.get('back_r')![i], sw.shown.get('back_l')![i], sw.shown.get('topwear')![i]]).toEqual(['A_r', 'A_l', 'A_top']);
+    // No hold of A on the bound frame.
+    expect((sw.chainHolds ?? []).filter((h) => h.frames[0] <= 5 && h.frames[1] >= 5)).toEqual([]);
   });
 });

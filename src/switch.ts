@@ -14,9 +14,11 @@
  *
  * A set with a `bind` (rig-c/pose#360) is not selected by distance either: it shows exactly on its bound frames
  * (`bindFrames`) and nowhere else — no key-distance test, no art-turn gate, no minimum span, no bridging, no
- * hysteresis, and its boundaries are not moved by `switchAt: 'peak'`. The rest of its group is selected as if the
- * bound sets were absent, then each bound set takes its frames outright (two bound sets never share a frame in one
- * group or on one bone: `bindProblems`). Its keys sit half a frame before each change like any other's.
+ * hysteresis, and its boundaries are not moved by `switchAt: 'peak'`. The selection groups are formed without the
+ * bound sets, so a bind never joins two groups; each group is selected as without them, then every bound set takes its
+ * frames outright from each group it shares a slot or offset bone with, and no behind/front hold or bridge (#136)
+ * reaches them (two bound sets never share a bone or slot on a frame: `bindProblems`). Its keys sit half a frame before
+ * each change like any other's.
  *
  * A set with a `phase` (rig-c/pose#286) is not selected by distance: it shows
  * exactly on its supporting foot's spans (`phaseSupports`, the
@@ -387,7 +389,8 @@ function touches(a: AlternateSet): string[] {
  */
 export function phaseGroupProblems(sets: readonly AlternateSet[]): string[] {
   const out: string[] = [];
-  for (const group of competing(sets)) {
+  // rig-c/pose#360: the groups are formed without the bound sets, as the selection forms them.
+  for (const group of competing(sets.filter((a) => a.bind === undefined))) {
     const phased = group.filter((a) => a.phase !== undefined);
     if (phased.length === 0) continue;
     // rig-c/pose#360: a bound set takes its frames outright, over a phase set too; it is no angle set to decide against.
@@ -463,8 +466,8 @@ const bindText = (b: SetBind): string => (b.cycle === null ? JSON.stringify(b.at
  * rig-c/pose#360: what the retarget refuses about the map's bound sets against an n-frame sequence, one text each.
  * `frames`: an explicit range that leaves the sequence (its last frame is n − 1), or a cycle-relative bind that binds no
  * frame of it. `overlap`: two bound sets bound on a common frame that draw a common bone (a bone of a chain, or an
- * offset bone), switch a common slot, or compete in one group (transitively): one drawing shows per bone and slot on a
- * frame, and nothing would decide between two bound ones.
+ * offset bone) or switch a common slot: one drawing shows per bone and slot on a frame, and nothing would decide between
+ * two bound ones. Bound sets join no selection group, so two that share neither never meet.
  */
 export function bindProblems(map: JointMap, n: number): { frames: string[]; overlap: string[] } {
   const frames: string[] = [];
@@ -478,10 +481,6 @@ export function bindProblems(map: JointMap, n: number): { frames: string[]; over
     } else if (bindFrames(b, n).length === 0) frames.push(`set "${a.name}" "bind" ${bindText(b)} binds no frame of the ${n}-frame sequence (its last frame is ${n - 1})`);
   }
   const masks = boundMasks(bound, n);
-  const groupOf = new Map<string, number>();
-  competing(map.alternates).forEach((g, k) => {
-    for (const a of g) groupOf.set(a.name, k);
-  });
   const bonesOf = (a: AlternateSet) => [...a.chains.flatMap((cn) => map.chains.find((c) => c.name === cn)?.bones ?? []), ...Object.keys(a.offsets)];
   const slotsOf = (a: AlternateSet) => [...Object.keys(a.slots), ...a.hides];
   for (let x = 0; x < bound.length; x++) {
@@ -494,7 +493,7 @@ export function bindProblems(map: JointMap, n: number): { frames: string[]; over
       if (both.length === 0) continue;
       const bone = bonesOf(a).find((v) => bonesOf(b).includes(v));
       const slot = slotsOf(a).find((v) => slotsOf(b).includes(v));
-      const why = bone !== undefined ? `both draw bone "${bone}"` : slot !== undefined ? `both switch slot "${slot}"` : groupOf.get(a.name) === groupOf.get(b.name) ? 'they compete (a common slot or offset bone with another set, transitively)' : null;
+      const why = bone !== undefined ? `both draw bone "${bone}"` : slot !== undefined ? `both switch slot "${slot}"` : null;
       if (why === null) continue;
       const count = both.reduce((t, [f, l]) => t + l - f + 1, 0);
       overlap.push(`sets "${a.name}" and "${b.name}" are both bound on ${count} frame(s), ${runsText(both)}, and ${why}; one drawing shows per bone and slot on a frame, and nothing decides between two bound sets — bind them on different frames`);
@@ -705,12 +704,19 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
     if (a.phase !== undefined || a.bind !== undefined) continue;
     art.set(a.name, Array.from({ length: n }, (_, i) => artShows(a, targets, i, opts.switchTolerance, opts.shortInfo, map, opts.raisedByHead === true)));
   }
-  // rig-c/pose#360: per bound set, its bound frames; each takes them over the group's pick (`overlay`).
+  // rig-c/pose#360: per bound set, its bound frames. The selection groups are formed without the bound sets, so a bind
+  // never joins two groups; each bound set then cuts its frames out of every group it shares a slot or offset bone with
+  // (`overlay`), and shows on them as a span of its own (below).
   const bound = boundMasks(map.alternates, n);
+  const boundSets = map.alternates.filter((a) => a.bind !== undefined);
+  const touching = (group: readonly AlternateSet[]): AlternateSet[] => {
+    const ts = new Set(group.flatMap(touches));
+    return boundSets.filter((b) => touches(b).some((t) => ts.has(t)));
+  };
   const overlay = (group: readonly AlternateSet[], pick: Array<AlternateSet | null>): void => {
-    for (const a of group) {
-      const m = bound.get(a.name);
-      if (m !== undefined) for (let i = 0; i < n; i++) if (m[i]) pick[i] = a;
+    for (const a of touching(group)) {
+      const m = bound.get(a.name)!;
+      for (let i = 0; i < n; i++) if (m[i]) pick[i] = a;
     }
   };
   const runOf = (i: number, j: number): FrameRun => ({ frames: [i, j], count: j - i + 1, seconds: r3((j + 1 < n ? times[j + 1]! : duration) - times[i]!) });
@@ -719,7 +725,7 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
   const supportAt: Array<Side | null> = Array.from({ length: n }, () => null);
   for (const sp of opts.phaseSupports ?? []) for (let i = sp.frames[0]; i <= Math.min(sp.frames[1], n - 1); i++) supportAt[i] = sp.side;
   /** One group's pick, as segments between boundaries, then each boundary moved (#31), pushed as switches. */
-  const spans = (pick: ReadonlyArray<AlternateSet | null>, moveOpts: SwitchOptions): void => {
+  const spans = (pick: ReadonlyArray<AlternateSet | null>, moveOpts: SwitchOptions, own = false): void => {
     const vals: Array<AlternateSet | null> = [pick[0] ?? null];
     const pos: number[] = [];
     for (let i = 1; i < n; i++) {
@@ -730,7 +736,8 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
     const moves = moveBoundaries(vals, pos, map, targets, distances, times, duration, moveOpts, art);
     for (let s = 0; s < vals.length; s++) {
       const a = vals[s];
-      if (a === null || a === undefined) continue;
+      // rig-c/pose#360: a bound set's cut in a group's pick is not its span; it is pushed once, on its own.
+      if (a === null || a === undefined || (a.bind !== undefined && !own)) continue;
       const i = s === 0 ? 0 : moves[s - 1]!.frame[1];
       const j = s < pos.length ? moves[s]!.frame[1] - 1 : n - 1;
       const from = times[i]!;
@@ -740,7 +747,7 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
       switches.push({ set: a.name, chains: a.chains, slots: a.slots, hides: a.hides, offsets: a.offsets, from, to, frames: [i, j], distance: { max: r3(Math.max(...ds)), median: r3(median(ds)) }, artTurn: {}, moved: { on: s === 0 ? null : moves[s - 1]!, off: s < pos.length ? moves[s]! : null }, ...(phase === undefined ? {} : { phase }), ...(a.bind === undefined ? {} : { bound: true as const }) });
     }
   };
-  const groups = competing(map.alternates);
+  const groups = competing(map.alternates.filter((a) => a.bind === undefined));
   for (const group of groups) {
     // rig-c/pose#286: a group of phase sets shows each exactly on its supporting foot's spans — no tolerance, no minimum run,
     // no hysteresis, no bridging, and its boundaries stay on the hand-overs (no --switch-at peak move). The retarget refuses
@@ -913,6 +920,7 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
     overlay(group, pick);
     spans(pick, opts);
   }
+  for (const b of boundSets) spans(bound.get(b.name)!.map((v) => (v ? b : null)), { ...opts, switchAt: 'first' }, true);
   const runs: SetRuns[] = map.alternates.filter((a) => nearestOn.has(a.name)).map((a) => ({ set: a.name, nearest: runsOfFlags(nearestOn.get(a.name)!), suppressed: runsOfFlags(droppedOn.get(a.name)!), turned: runsOfFlags(turnedOn.get(a.name)!) }));
   const order = (name: string) => map.alternates.findIndex((a) => a.name === name);
   switches.sort((x, y) => x.frames[0] - y.frames[0] || order(x.set) - order(y.set));
@@ -948,8 +956,13 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
     const layer = groupLayering(group, map, slots);
     if (!layer.baseInFront) continue;
     const names = new Set(group.map((a) => a.name));
-    // rig-c/pose#360: a bound span takes no part in the behind/front holds and bridges; it is put back over them below.
-    const gSwitches = switches.filter((s) => names.has(s.set) && s.bound !== true);
+    const gSwitches = switches.filter((s) => names.has(s.set));
+    // rig-c/pose#360: the frames a bound set cut out of this group. No hold, bridge or re-aim reaches them: they keep the
+    // slots the spans gave them (the bound drawing, setup elsewhere), and the bound drawing is written over them below.
+    const blocked: boolean[] = Array.from({ length: n }, () => false);
+    for (const b of touching(group)) bound.get(b.name)!.forEach((v, i) => {
+      if (v) blocked[i] = true;
+    });
     const groupChains = [...new Set(group.flatMap((a) => a.chains))];
     const cClamp = new Map<string, Array<AlternateSet | null>>();
     for (const cn of groupChains) {
@@ -1005,6 +1018,7 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
         setHeld.add(cn);
         const cArr = cClamp.get(cn)!;
         for (let i = sw.frames[0]; i <= sw.frames[1]; i++) {
+          if (blocked[i]) continue;
           cArr[i] = prevSet;
           for (const [s, sc] of layer.slotChain) {
             if (sc === cn && shown.has(s)) shown.get(s)![i] = prevSet.slots[s] ?? null;
@@ -1166,6 +1180,7 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
             }).some(Boolean);
             if (Math.abs(totalTurn) > 180 && Math.abs(totalTurn - shortTurn) > 1e-6 && invertsBetween && Math.abs(shortTurn) <= 150) {
               for (let i = g0; i <= g1; i++) {
+                if (blocked[i]) continue;
                 const p = (unwrapped[i - i0]! - startA) / totalTurn;
                 const localA = wrap(startA + p * shortTurn);
                 tg[i] = parentTg !== undefined ? wrap(parentTg[i]! + localA) : localA;
@@ -1301,6 +1316,7 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
         }
       }
       for (let i = g0; i <= g1; i++) {
+        if (blocked[i]) continue;
         for (const [s, cn] of layer.slotChain) {
           const a = cPick.get(cn)?.[i] ?? null;
           if (a !== null) shown.get(s)![i] = a.slots[s] ?? null;
@@ -1311,17 +1327,10 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
         }
       }
     }
-    // rig-c/pose#360: a bound span wins its slots and chains outright on its frames.
-    for (const sw of switches) {
-      if (sw.bound !== true || !names.has(sw.set)) continue;
-      for (let i = sw.frames[0]; i <= sw.frames[1]; i++) {
-        for (const [sl, v] of Object.entries(sw.slots)) shown.get(sl)![i] = v;
-        for (const h of sw.hides) shown.get(h)![i] = null;
-        for (const cn of sw.chains) {
-          const arr = cClamp.get(cn);
-          if (arr !== undefined) arr[i] = null;
-        }
-      }
+    // rig-c/pose#360: no hold reaches a bound frame.
+    for (const cn of groupChains) {
+      const arr = cClamp.get(cn)!;
+      for (let i = 0; i < n; i++) if (blocked[i]) arr[i] = null;
     }
     for (const cn of groupChains) {
       const arr = cClamp.get(cn)!;
@@ -1332,6 +1341,14 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
         if (a !== null) chainHolds.push({ set: a.name, chain: cn, frames: [i, j] });
         i = j + 1;
       }
+    }
+  }
+  // rig-c/pose#360: a bound span wins its slots outright on its frames.
+  for (const sw of switches) {
+    if (sw.bound !== true) continue;
+    for (let i = sw.frames[0]; i <= sw.frames[1]; i++) {
+      for (const [sl, v] of Object.entries(sw.slots)) shown.get(sl)![i] = v;
+      for (const h of sw.hides) shown.get(h)![i] = null;
     }
   }
   const slotTracks: SlotTrack[] = [];

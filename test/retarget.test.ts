@@ -2308,7 +2308,10 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
       let src = readFileSync(path, 'utf8');
       for (const [from, to] of [
         ['        if (a.bind !== undefined) continue;\n        if (a.frames', '        if (a.bind !== undefined && !bound.get(a.name)![i]) continue;\n        if (a.frames'],
-        ['      if (m !== undefined) for (let i = 0; i < n; i++) if (m[i]) pick[i] = a;\n', ''],
+        ['      for (let i = 0; i < n; i++) if (m[i]) pick[i] = a;\n', ''],
+        ['  const groups = competing(map.alternates.filter((a) => a.bind === undefined));', '  const groups = competing(map.alternates);'],
+        ["  for (const b of boundSets) spans(bound.get(b.name)!.map((v) => (v ? b : null)), { ...opts, switchAt: 'first' }, true);\n", ''],
+        ['(a.bind !== undefined && !own)', 'own'],
         ['      if (a.bind !== undefined) continue;\n      nearestOn.set', '      nearestOn.set'],
         ['      if (a.bind !== undefined) continue;\n      const dropped = droppedOn', '      const dropped = droppedOn'],
       ] as Array<[string, string]>) {
