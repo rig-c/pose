@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.1](https://github.com/rig-c/pose/compare/v0.37.0...v0.37.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* **retarget:** an in-place loop's planted heights stay periodic under --plant-feet and --leg-scale ([#285](https://github.com/rig-c/pose/issues/285)) ([#289](https://github.com/rig-c/pose/issues/289)) ([131d54c](https://github.com/rig-c/pose/commit/131d54c8a88ab069ff66d3475213b4c9f47bfb4c))
+
 ## [0.37.0](https://github.com/rig-c/pose/compare/v0.36.0...v0.37.0) (2026-10-20)
 
 
