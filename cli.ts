@@ -188,6 +188,12 @@ retarget
                         holds the upper arm the forearm is re-aimed at the wrist. ART-RANGE: a forearm still past
                         its turn, or a held arm leaving the wrist > 0.01 eye distances short of its placed point
                         (the shortfall listed). RAISED lines (default: off; rig-c/pose#62)
+  --draw-order depth    key the legs' draw order from the sequence's depth (clean --depth; rig-c/pose#304): on
+                        each frame the leg whose depth reads farther from the camera is drawn behind the other,
+                        a tie (equal depths) holding the order before, in rig-c's drawOrder timeline. The legs'
+                        slots must fill one unbroken run of the setup draw order (else the pair is not keyed and
+                        the line names the slot between); a set's slot goes with the leg it depicts. Refused on
+                        a sequence without depth (DRAWORDER_NO_DEPTH). DRAWORDER lines (default: off)
   --idle <name>         the rig's animation read as its idle (default: idle). Every idle track the new
                         animation does not key, on any channel, is listed as IDLE-DROPPED (a blink, a
                         breath); one it keys is IDLE-KEPT-OUT, naming the track that keys it, and so is a
@@ -372,7 +378,7 @@ function legScaleOf(f: Map<string, string>): [number, number] | 'off' {
 const RETARGET_ALIASES = { sequence: 'pose', animation: 'name' } as const;
 
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'reference', 'render', 'parts', 'report', 'camera', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head', 'reduce-keep-planted', 'verbose', 'summary'], RETARGET_ALIASES);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'reference', 'render', 'parts', 'report', 'camera', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor', 'draw-order'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head', 'reduce-keep-planted', 'verbose', 'summary'], RETARGET_ALIASES);
   if (f.has('verbose') && f.has('summary')) throw new Usage('--verbose and --summary are both given; --verbose prints every line in full and --summary one line per measure, so give one');
   if (f.has('reference') && !f.has('build')) throw new Usage(`--reference needs --build: the record it goes in is written beside the build (${PROVENANCE_FILE})`);
   const bends = f.get('bends') ?? 'refuse';
@@ -381,6 +387,8 @@ function retargetArgs(argv: string[]): RetargetArgs {
   if (switchAt !== 'peak' && switchAt !== 'first') throw new Usage(`--switch-at is "${switchAt}"; it must be peak or first`);
   const profile = f.get('profile') ?? 'spine';
   if (profile !== 'spine' && profile !== 'spine-html') throw new Usage(`--profile is "${profile}"; it must be spine or spine-html`);
+  const drawOrder = f.get('draw-order');
+  if (drawOrder !== undefined && drawOrder !== 'depth') throw new Usage(`--draw-order is "${drawOrder}"; it must be depth (the order is keyed from the sequence's depth, rig-c/pose#304)`);
   const name = f.get('name') ?? 'dance';
   if (!/^[A-Za-z0-9_.-]+$/.test(name)) throw new Usage(`${argv.includes('--name') || !argv.includes('--animation') ? '--name' : '--animation'} is "${name}"; an animation name here is letters, digits, _ . -`);
   return {
@@ -419,6 +427,7 @@ function retargetArgs(argv: string[]): RetargetArgs {
     merge: f.get('merge'),
     ...reduceOf(f),
     output: f.has('verbose') ? 'verbose' : f.has('summary') ? 'summary' : 'default',
+    ...(drawOrder !== undefined ? { drawOrder: 'depth' as const } : {}),
   };
 }
 
