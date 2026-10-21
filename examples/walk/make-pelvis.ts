@@ -46,10 +46,26 @@
  *   the strip's top line in some columns and the cloth under its lower line in
  *   the others.
  *
+ * And one with a cover over the waistband (rig-c/pose#342):
+ *
+ * - `sweater`: shorts turned with the pelvis (their top `BAND_TOP` above the hip
+ *   line and their hem `SHORTS_HEM` below it, both carrying the pelvis tilt), and
+ *   over them a sweater whose hem hangs level `SWEATER_HEM` above mid_hip — below
+ *   the shorts' top at every tilt, so the waistband is hidden and the edge under
+ *   the sweater is level; then dithered as `dithered`. The pelvis shows only below
+ *   the cover: the shorts' hem and where the legs leave them.
+ *
+ * - `sweater-thigh`: `sweater` with, on frames 3, 9, 15 and 21 (`hasThigh`), the left thigh
+ *   raised and drawn in front of the shorts — a filled skin quad coming out from under the sweater
+ *   through the left hip toward a foreshortened knee `RAISED_KNEE` from it (the l_knee keypoint
+ *   moved there) — so the
+ *   shorts' boundary beside it runs along the thigh, not across it (rig-c/pose#342). The planted
+ *   case rig-c/pose#349 will read: `below-cover` reads such a thigh's outline as the hem today.
+ *
  * Every frame is drawn from formulae (no randomness, no clock): the same call
  * writes the same bytes.
  *
- *   bun examples/walk/make-pelvis.ts <out-dir> [drawn|covered|masked|dithered|dithered-edge|dithered-fold]
+ *   bun examples/walk/make-pelvis.ts <out-dir> [drawn|covered|masked|dithered|dithered-edge|dithered-fold|dithered-strip|sweater|sweater-thigh]
  *
  * writes <out-dir>/frames/f00.png … f23.png and <out-dir>/pose.json (before
  * clean); the test (test/pelvis.test.ts) writes them into a temporary folder.
@@ -59,7 +75,7 @@ import { join } from 'node:path';
 import { Plate, type RGBA } from 'rig-c/plate';
 import { walkCycle, walkDoc, type WalkFrame } from './make-walk.ts';
 
-export const VARIANTS = ['drawn', 'covered', 'masked', 'dithered', 'dithered-edge', 'dithered-fold', 'dithered-strip'] as const;
+export const VARIANTS = ['drawn', 'covered', 'masked', 'dithered', 'dithered-edge', 'dithered-fold', 'dithered-strip', 'sweater', 'sweater-thigh'] as const;
 export type Variant = (typeof VARIANTS)[number];
 /** The drawn pelvis tilt, degrees (Spine sense), at the phase φ. */
 export const pelvisTilt = (phi: number): number => -15 * Math.sin(phi);
@@ -85,6 +101,20 @@ const FOLD: RGBA = [20, 50, 120, 255];
 const FOLD_AT = 20;
 /** `dithered-strip`'s second line lies this many px below the band's top edge (two cloth rows between the lines: rig-c's 1 px line covers three to four rows). */
 const STRIP_GAP = 7;
+/** `sweater`: the shorts' hem below the hip line, px (along the pelvis), and the sweater's level hem above mid_hip, px. */
+const SHORTS_HEM = 14;
+const SWEATER_HEM = 6;
+/** `sweater`'s knit: more than the reader's garment tolerance (40) from `CLOTH`, and from the paper. */
+const KNIT: RGBA = [200, 170, 110, 255];
+/** `sweater`'s legs: skin, filled `LEG_HALF` px either side of each segment's line. */
+const SKIN: RGBA = [240, 200, 170, 255];
+const LEG_HALF = 6;
+/** `sweater-thigh`: the raised left knee, px from the left hip (toward the figure's centre, down): a thigh foreshortened toward the camera. */
+const RAISED_KNEE: Pt = [-18, 34];
+/** ... drawn from this far above the hip along the thigh, so its top end is under the sweater. */
+const THIGH_UNDER = 20;
+/** The frames of `sweater-thigh` that carry the raised thigh in front: every sixth, from frame 3. */
+export const hasThigh = (phi: number): boolean => Math.round((phi / (2 * Math.PI)) * 24) % 6 === 3;
 /** The 4×4 ordered-dither (Bayer) thresholds, 0–15. */
 const BAYER = [
   [0, 8, 2, 10],
@@ -141,6 +171,8 @@ export function drawFrame(f: WalkFrame, variant: Variant): Plate {
   if (variant === 'dithered' || variant === 'dithered-edge') return dither216(drawFrame(f, 'covered'));
   if (variant === 'dithered-strip') return dither216(drawStrip(f));
   if (variant === 'dithered-fold') return dither216(hasFold(f.phi) ? drawFold(f) : drawFrame(f, 'covered'));
+  if (variant === 'sweater') return dither216(drawSweater(f));
+  if (variant === 'sweater-thigh') return dither216(drawSweater(f, hasThigh(f.phi)));
   const plate = new Plate(400, 600);
   plate.rect(0, 0, 400, 600, PAPER);
   const j = f.joints;
@@ -201,6 +233,52 @@ function drawStrip(f: WalkFrame): Plate {
   return plate;
 }
 
+/**
+ * `sweater` before the dither: the figure with filled legs, shorts turned with the pelvis (top `BAND_TOP` above the hip line, hem
+ * `SHORTS_HEM` below it), and a sweater over them from the shoulders down to a level hem `SWEATER_HEM` above mid_hip, as
+ * wide as the shorts' top at any tilt; the arms in front.
+ */
+function drawSweater(f: WalkFrame, raised = false): Plate {
+  const plate = new Plate(400, 600);
+  plate.rect(0, 0, 400, 600, PAPER);
+  const j = f.joints;
+  const { midHip, rHip, lHip, tilt } = f.drawn;
+  const at = (u: number, v: number): Pt => add(midHip, dir(tilt, u), dir(tilt + 90, v));
+  plate.ring(j.nose![0], j.nose![1] - 4, 16, 1, INK);
+  // Filled legs (skin, outlined), each segment a quad `LEG_HALF` either side of its line: thighs leave the shorts' hem as skin.
+  const limb = (p: Pt, q: Pt) => {
+    const len = Math.hypot(q[0] - p[0], q[1] - p[1]);
+    const n: Pt = [(-(q[1] - p[1]) / len) * LEG_HALF, ((q[0] - p[0]) / len) * LEG_HALF];
+    const quad: Pt[] = [add(p, n), add(q, n), [q[0] - n[0], q[1] - n[1]], [p[0] - n[0], p[1] - n[1]]];
+    fill(plate, quad, SKIN);
+    polyline(plate, quad, true);
+  };
+  for (const [a, b, k] of [[rHip, j.r_knee!, j.r_ankle!], [lHip, j.l_knee!, j.l_ankle!]] as Array<[Pt, Pt, Pt]>) {
+    if (raised && a === lHip) continue;
+    limb(a, b);
+    limb(b, k);
+  }
+  const shorts: Pt[] = [at(-30, BAND_TOP), at(30, BAND_TOP), at(30, -SHORTS_HEM), at(-30, -SHORTS_HEM)];
+  fill(plate, shorts, CLOTH);
+  polyline(plate, shorts, true);
+  // The raised left thigh, in front of the shorts (its shin hangs from the raised knee). It comes out from under the
+  // sweater: drawn from `THIGH_UNDER` px back along it above the hip, so its top end lies under the sweater drawn next
+  // and the shorts meet it only along its sides.
+  if (raised) {
+    const k = add(lHip, RAISED_KNEE);
+    const len = Math.hypot(RAISED_KNEE[0], RAISED_KNEE[1]);
+    limb(add(lHip, [(-RAISED_KNEE[0] / len) * THIGH_UNDER, (-RAISED_KNEE[1] / len) * THIGH_UNDER]), k);
+    limb(k, add(k, [0, 60]));
+  }
+  const hemY = midHip[1] - SWEATER_HEM;
+  const sweater: Pt[] = [[j.r_shoulder![0] - 4, j.r_shoulder![1]], [j.l_shoulder![0] + 4, j.l_shoulder![1]], [midHip[0] + 36, hemY], [midHip[0] - 36, hemY]];
+  fill(plate, sweater, KNIT);
+  polyline(plate, sweater, true);
+  polyline(plate, [j.r_shoulder!, j.r_elbow!, j.r_wrist!]);
+  polyline(plate, [j.l_shoulder!, j.l_elbow!, j.l_wrist!]);
+  return plate;
+}
+
 /** The fold's edge in `dithered-fold` (Spine degrees), or null on a frame without the fold. */
 export const foldTilt = (f: WalkFrame): number | null => (hasFold(f.phi) ? bandTilt(f.phi) + FOLD_TURN : null);
 
@@ -213,6 +291,10 @@ export const bandEdgeMid = (f: WalkFrame): Pt => add(f.drawn.midHip, dir(bandTil
 /** The cycle a variant's sequence is written from: for `dithered-edge`, the hip keypoints moved so their midpoint lies on the band's top edge. */
 export function variantCycle(variant: Variant): WalkFrame[] {
   const cycle = tiltedCycle();
+  if (variant === 'sweater-thigh') {
+    // The l_knee keypoint at the raised knee drawn (from the drawn left hip), as a detector places it.
+    return cycle.map((f) => (hasThigh(f.phi) ? { ...f, joints: { ...f.joints, l_knee: add(f.drawn.lHip, RAISED_KNEE) } } : f));
+  }
   if (variant !== 'dithered-edge') return cycle;
   return cycle.map((f) => {
     const [ex, ey] = bandEdgeMid(f);

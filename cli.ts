@@ -22,7 +22,7 @@ import { runRetarget, type RetargetArgs } from './src/run.ts';
 const HELP = `rig-pose ${pkg.version} — motion from a pose sequence onto a rig-c rig
 
 Usage:
-  rig-pose pelvis --pose <pose.json> --out <pose.pelvis.json> (--frames <dir> [--mode silhouette|waistband] | --pelvis-keys <keys.json>) [--person <id>]
+  rig-pose pelvis --pose <pose.json> --out <pose.pelvis.json> (--frames <dir> [--mode silhouette|waistband|below-cover] | --pelvis-keys <keys.json>) [--person <id>]
   rig-pose clean --pose <pose.json> --out <pose.clean.json> [--loop] [--legs 5] [--rest 7] [--hold off] [--depth walk|run] [--coco] [--person <id>]
   rig-pose retarget --rig <rig> --map <map.json> --sequence <pose.json> --out <motion.json> [--animation dance] [flags]
   rig-pose convert --coco <coco17.json> --out <pose.json>
@@ -38,11 +38,15 @@ pelvis (before clean; rig-c/pose#288)
                         r_hip → l_hip, about 0 facing the camera — or null on a frame the reading declined
   --frames <dir>        the picture: one PNG per sequence frame, in file-name order, the sequence's size (no video;
                         extract the frames first). The hip keypoints place the reading; their angle is not read
-  --mode silhouette|waistband
+  --mode silhouette|waistband|below-cover
                         silhouette (default): the straightest edge of the drawn figure across the hip span (between
                         the two hip keypoints), within 40° of level and one hip width of the hips' height — a drawn
                         pelvis line or the edge of a drawn hip. waistband: the top edge of a garment covering the hips
                         (skirt, shorts) — the colour at the hips' midpoint, its first row in each column of the span.
+                        below-cover: for a garment whose top is hidden under another (a sweater's hem over a skirt)
+                        — the bottomwear's lower hem across the span, where each thigh leaves it, and the band's top
+                        only where nothing covers it; the mean of those cues, declined when they differ by more
+                        than 8° (a CUES line per frame; the hip keypoints are printed there, not fitted).
                         Forearms (elbow → wrist) and hands are masked. A frame either cannot read (the pelvis blank,
                         no garment, no straight edge over 60% of the span) is declined, named on a DECLINED line,
                         and written null: marked, not guessed
