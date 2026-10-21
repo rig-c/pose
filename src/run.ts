@@ -13,7 +13,7 @@ import { cleanLine, cleanSummaryLine, inferredSource } from './clean.ts';
 import { convertCoco17, personTrack, readPoseSequence, TRAVEL_IN_PLACE, type CameraFrame } from './pose.ts';
 import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './problems.ts';
 import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, readIdle, targetOf, trackLabel, type IdleReading, type RigcTrack, type Target } from './idle.ts';
-import { bendGroupLine, bendGroups, bendLine, endOnLine, flipLine, holdLine, nodLine, rangeLine, reachCostLine, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions, type ScaleBand, type ScaleFit } from './retarget.ts';
+import { bendGroupLine, bendGroups, bendLine, endOnLine, flipLine, holdLine, nodLine, pelvisLine, rangeLine, reachCostLine, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions, type ScaleBand, type ScaleFit } from './retarget.ts';
 import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, readBuild, resolveRig, restOf, seamRender, slotsOf } from './rigc.ts';
 import { partsPath, projectSeams, readSeamDoc, readSeamPairs, seamLines, type SeamPair } from './seams.ts';
 import { artRangeLine, chainsMoving, raisedLine, RAISED_WITHIN, reachLine, switchLine, uncoveredFolds } from './switch.ts';
@@ -151,7 +151,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     const slots = slotsOf(doc0);
     resolveMap(map, rest, a.map, slots, input.sets);
 
-    const r = retarget(rest, map, frames, times, { ...a, ...(seq.travel !== undefined ? { travel: seq.travel } : {}), ...(seq.cleaned!.params.loop ? { loop: true } : {}) }, slots, input.sets);
+    const r = retarget(rest, map, frames, times, { ...a, ...(seq.travel !== undefined ? { travel: seq.travel } : {}), ...(seq.cleaned!.params.loop ? { loop: true } : {}), ...(seq.pelvisSource !== undefined ? { pelvis: { source: seq.pelvisSource, tilt: seq.frames.map((f) => f.pelvisTilt ?? null) } } : {}) }, slots, input.sets);
     if (fragment.length > 0 && ((r.face?.sets?.length ?? 0) > 0 || (r.body?.sets?.length ?? 0) > 0)) {
       const known = knownSetsOf(map, input.sets);
       for (const s of [...(r.face?.sets ?? []), ...(r.body?.sets ?? [])]) {
@@ -208,6 +208,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     for (const e of r.artRange) say(`  ART-RANGE ${artRangeLine(e, r.times)}`);
     for (const l of r.legScale) say(`  LEG-SCALE ${legScaleLine(l, r.times, r.feet?.legLength ?? null, r.rigLeg)}`);
     for (const l of r.legScale) for (const s of l.support ?? []) say(`  LEG-SCALE ${supportScaleLine(l, s, r.times)}`);
+    if (r.pelvis !== null) say(`  ${pelvisLine(r.pelvis, seq.frames.length)}`);
     if (r.pivot !== null) say(`  PIVOT  bone "${r.pivot.bone}"'s origin is ${r.pivot.distance.toFixed(2)} units (${r.pivot.hipWidths.toFixed(3)} hip widths) from its thigh roots' midpoint (${r.pivot.roots.join(' + ')}): dx ${r.pivot.offset[0].toFixed(2)}, dy ${r.pivot.offset[1].toFixed(2)}, at setup — the pivot every hip turn swings the legs about`);
     if (r.feet !== null) {
       const f = r.feet;
@@ -442,6 +443,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
             },
         legScale: r.legScale.map(({ scale: _scale, asked: _asked, picture: _picture, ...rest }) => rest),
         pivot: r.pivot,
+        pelvis: r.pelvis,
         stance: r.stance === null ? null : { tolerance: r.stance.tolerance, release: r.stance.release, minSeconds: r.stance.minSeconds, bounds: r.stance.bounds, ...(r.stance.range === undefined ? {} : { range: r.stance.range }), runs: r.stance.runs, over: r.stance.over },
         feet: r.feet === null ? null : { planted: r.planted, legLength: r.feet.legLength, straight: r.legStraight, rigLeg: r.rigLeg, segments: r.segments, supports: r.feet.supports, jumps: r.feet.jumps, steps: r.feet.steps, changes: r.feet.changes, ...(r.feet.lowered === undefined ? {} : { lowered: r.feet.lowered }), ...(r.feet.tracked === undefined ? {} : { tracked: r.feet.tracked }), floor: r.floor?.y ?? null, shifts: r.floor?.shifts ?? [], blend: r.blendHold === null ? null : { bounds: r.blendHold.bounds, ...(r.blendHold.range === undefined ? {} : { range: r.blendHold.range }), runs: r.blendHold.runs, over: r.blendHold.over }, reading: feetReading, closure: r.closure },
         shear,

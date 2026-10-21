@@ -37,6 +37,12 @@
  * legs 5, rest 7 and the stillness hold off, as every sequence must before
  * `retarget` (rig-c/pose#67), and the cleaned file is what is written.
  *
+ * `walkCycle` takes an opt-in pelvis tilt (rig-c/pose#288, `make-pelvis.ts`): the
+ * hips drawn turned by tilt(φ) about mid_hip and the legs hanging from them,
+ * while the hip keypoints keep only `hipGain` of it — what a pose detector
+ * keeps of a drawn pelvis. Without it the cycle above is unchanged, and so is
+ * pose.json.
+ *
  *   bun examples/walk/make-walk.ts
  */
 import { writeFileSync } from 'node:fs';
@@ -71,56 +77,85 @@ const r2 = (p: Pt): Pt => [Math.round(p[0] * 100) / 100, Math.round(p[1] * 100) 
 /** A leg's swing weight: sin² φ on its swing half, 0 on its supporting half. */
 const swingOf = (sinPhi: number): number => Math.max(0, sinPhi) ** 2;
 
-const frames = Array.from({ length: P }, (_, i) => {
-  const phi = (2 * Math.PI * i) / P;
-  const s = Math.sin(phi);
-  const midHip: Pt = [200, 400 + BOB * Math.cos(2 * phi)];
-  const neck = add(midHip, dir(90 + LEAN * s, 150));
-  const rSh = add(neck, [-30, 10]);
-  const lSh = add(neck, [30, 10]);
-  const rEl = add(rSh, dir(-100 - ARM * s, 70));
-  const lEl = add(lSh, dir(-80 - ARM * s, 70));
-  const rHip = add(midHip, [-15, 0]);
-  const lHip = add(midHip, [15, 0]);
-  const thigh = -90 + THIGH * s;
-  const wr = swingOf(-s);
-  const wl = swingOf(s);
-  const rKnee = add(rHip, dir(thigh, 80 * (1 - THIGH_SHORT * wr)));
-  const lKnee = add(lHip, dir(thigh, 80 * (1 - THIGH_SHORT * wl)));
-  const nose = add(neck, [0, -30]);
-  const j: Record<string, Pt> = {
-    nose,
-    neck,
-    r_shoulder: rSh,
-    r_elbow: rEl,
-    r_wrist: add(rEl, dir(-80 - ARM * Math.sin(phi - TRAIL), 60)),
-    l_shoulder: lSh,
-    l_elbow: lEl,
-    l_wrist: add(lEl, dir(-100 - ARM * Math.sin(phi - TRAIL), 60)),
-    r_hip: rHip,
-    r_knee: rKnee,
-    r_ankle: add(rKnee, dir(thigh - KNEE * wr, 70 * (1 - SHIN_SHORT * wr))),
-    l_hip: lHip,
-    l_knee: lKnee,
-    l_ankle: add(lKnee, dir(thigh + KNEE * wl, 70 * (1 - SHIN_SHORT * wl))),
-    r_eye: add(nose, [-6, -5]),
-    l_eye: add(nose, [6, -5]),
-    r_ear: add(nose, [-14, -2]),
-    l_ear: add(nose, [14, -2]),
-  };
-  const joints = Object.fromEntries(Object.entries(j).map(([n, p]) => [n, { state: 'observed', at: r2(p), score: 1 }]));
-  return { t: Math.round((i / FPS) * 1e6) / 1e6, people: [{ id: 'a', joints }] };
-});
+/** rig-c/pose#288: a drawn pelvis tilt, degrees (Spine sense) at the phase φ, and the share of it the hip keypoints keep. */
+export interface WalkTilt {
+  tilt: (phi: number) => number;
+  hipGain: number;
+}
+/** One frame: the joints as written, and the hips as drawn (with a tilt, where the legs hang from). */
+export interface WalkFrame {
+  phi: number;
+  joints: Record<string, Pt>;
+  drawn: { midHip: Pt; rHip: Pt; lHip: Pt; tilt: number };
+}
 
-const doc = {
-  spec: 'rig-pose-sequence/1',
-  space: { units: 'picture-px', origin: 'top-left', y: 'down' },
-  width: 400,
-  height: 600,
-  source: 'examples/walk/make-walk.ts: one 1 s walk cycle in place made from joint angles, no picture',
-  frames,
-};
-const c = clean(readPoseSequence(JSON.stringify(doc), 'make-walk.ts'), { loop: true, legs: 5, rest: 7, hold: 'off' }, undefined, 'make-walk.ts');
-// The writer's key order and rounding, on one line.
-writeFileSync(join(import.meta.dir, 'pose.json'), `${JSON.stringify(JSON.parse(writePoseSequence(c.seq)))}\n`);
-process.stdout.write(`wrote ${frames.length} frames, cleaned: ${cleanLine(c.record)}\n`);
+/** The cycle, frame by frame; with `o` the pelvis is drawn tilted and the hip keypoints damped. */
+export function walkCycle(o?: WalkTilt): WalkFrame[] {
+  return Array.from({ length: P }, (_, i) => {
+    const phi = (2 * Math.PI * i) / P;
+    const s = Math.sin(phi);
+    const midHip: Pt = [200, 400 + BOB * Math.cos(2 * phi)];
+    const tilt = o === undefined ? 0 : o.tilt(phi);
+    const neck = add(midHip, dir(90 + LEAN * s, 150));
+    const rSh = add(neck, [-30, 10]);
+    const lSh = add(neck, [30, 10]);
+    const rEl = add(rSh, dir(-100 - ARM * s, 70));
+    const lEl = add(lSh, dir(-80 - ARM * s, 70));
+    // The hips as drawn: 15 px either side of mid_hip along the pelvis line (level without a tilt).
+    const half: Pt = o === undefined ? [15, 0] : dir(tilt, 15);
+    const rHip = add(midHip, [-half[0], -half[1]]);
+    const lHip = add(midHip, half);
+    const kept: Pt = o === undefined ? half : dir(o.hipGain * tilt, 15);
+    const thigh = -90 + THIGH * s;
+    const wr = swingOf(-s);
+    const wl = swingOf(s);
+    const rKnee = add(rHip, dir(thigh, 80 * (1 - THIGH_SHORT * wr)));
+    const lKnee = add(lHip, dir(thigh, 80 * (1 - THIGH_SHORT * wl)));
+    const nose = add(neck, [0, -30]);
+    const j: Record<string, Pt> = {
+      nose,
+      neck,
+      r_shoulder: rSh,
+      r_elbow: rEl,
+      r_wrist: add(rEl, dir(-80 - ARM * Math.sin(phi - TRAIL), 60)),
+      l_shoulder: lSh,
+      l_elbow: lEl,
+      l_wrist: add(lEl, dir(-100 - ARM * Math.sin(phi - TRAIL), 60)),
+      r_hip: add(midHip, [-kept[0], -kept[1]]),
+      r_knee: rKnee,
+      r_ankle: add(rKnee, dir(thigh - KNEE * wr, 70 * (1 - SHIN_SHORT * wr))),
+      l_hip: add(midHip, kept),
+      l_knee: lKnee,
+      l_ankle: add(lKnee, dir(thigh + KNEE * wl, 70 * (1 - SHIN_SHORT * wl))),
+      r_eye: add(nose, [-6, -5]),
+      l_eye: add(nose, [6, -5]),
+      r_ear: add(nose, [-14, -2]),
+      l_ear: add(nose, [14, -2]),
+    };
+    return { phi, joints: j, drawn: { midHip, rHip, lHip, tilt } };
+  });
+}
+
+/** The cycle as a rig-pose-sequence/1 document, before clean. */
+export function walkDoc(cycle: WalkFrame[], source = 'examples/walk/make-walk.ts: one 1 s walk cycle in place made from joint angles, no picture'): Record<string, unknown> {
+  const frames = cycle.map((f, i) => {
+    const joints = Object.fromEntries(Object.entries(f.joints).map(([n, p]) => [n, { state: 'observed', at: r2(p), score: 1 }]));
+    return { t: Math.round((i / FPS) * 1e6) / 1e6, people: [{ id: 'a', joints }] };
+  });
+  return {
+    spec: 'rig-pose-sequence/1',
+    space: { units: 'picture-px', origin: 'top-left', y: 'down' },
+    width: 400,
+    height: 600,
+    source,
+    frames,
+  };
+}
+
+if (import.meta.main) {
+  const doc = walkDoc(walkCycle());
+  const c = clean(readPoseSequence(JSON.stringify(doc), 'make-walk.ts'), { loop: true, legs: 5, rest: 7, hold: 'off' }, undefined, 'make-walk.ts');
+  // The writer's key order and rounding, on one line.
+  writeFileSync(join(import.meta.dir, 'pose.json'), `${JSON.stringify(JSON.parse(writePoseSequence(c.seq)))}\n`);
+  process.stdout.write(`wrote ${(doc.frames as unknown[]).length} frames, cleaned: ${cleanLine(c.record)}\n`);
+}

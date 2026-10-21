@@ -59,10 +59,13 @@ export function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-/** Refuse the keys of `obj` a reader does not know, by name, listing the ones it does. */
-export function refuseUnknownKeys(problems: Problems, code: string, where: string, obj: Record<string, unknown>, known: readonly string[]): void {
+/**
+ * Refuse the keys of `obj` a reader does not know, by name, listing the ones it does. `note`, when
+ * given, ends each line: a sequence written by a newer minor of its format says which (rig-c/pose#288).
+ */
+export function refuseUnknownKeys(problems: Problems, code: string, where: string, obj: Record<string, unknown>, known: readonly string[], note = ''): void {
   for (const k of Object.keys(obj)) {
-    if (!known.includes(k)) problems.add(code, `${where} has a key this reader does not know: ${JSON.stringify(k)}; the keys it reads are ${known.join(', ')}`);
+    if (!known.includes(k)) problems.add(code, `${where} has a key this reader does not know: ${JSON.stringify(k)}; the keys it reads are ${known.join(', ')}${note}`);
   }
 }
 

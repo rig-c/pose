@@ -65,7 +65,7 @@
  * Pure: no clock, no randomness, no disk.
  */
 import { BODY18, type Body18 } from './joints.ts';
-import type { CleanRecord, CleanSeam, CleanSpike, CleanUnheld, Joint, PoseSequence } from './pose.ts';
+import type { CleanRecord, CleanSeam, CleanSpike, CleanUnheld, Joint, PoseFrame, PoseSequence } from './pose.ts';
 
 /** A joint not held inside a region where others are (#91): the test it fails there and its figure. */
 export type Unheld = CleanUnheld;
@@ -185,6 +185,33 @@ export interface Cleaned {
   unheld: Unheld[];
   /** Back-to-back holds of one joint, cross-faded, in frame then body-18 order. */
   seams: Seam[];
+  /**
+   * rig-c/pose#288: the sequence's pelvis track, smoothed as its own track over the
+   * legs' window (wrapped with loop): its source, how many frames carry a reading,
+   * and the largest change smoothing made, degrees; null without a track.
+   */
+  pelvis: { source: string; window: number; read: number; frames: number; moved: number } | null;
+}
+
+/**
+ * rig-c/pose#288: a pelvis track smoothed as its own track — the quadratic
+ * Savitzky–Golay over `window` frames (circular with loop), on the frames that
+ * carry a reading; a declined frame (null) stays null and is not read. The angles
+ * are taken about the first reading (each brought within ±180° of it) so a track
+ * near ±180° (a figure facing away) is smoothed without the wrap, and wrapped
+ * back into (-180, 180] after.
+ */
+export function smoothPelvis(tilt: ReadonlyArray<number | null>, window: number, loop: boolean): Array<number | null> {
+  const first = tilt.find((v): v is number => v !== null);
+  if (first === undefined) return tilt.map(() => null);
+  const wrap = (d: number) => {
+    let x = d % 360;
+    if (x > 180) x -= 360;
+    if (x <= -180) x += 360;
+    return x;
+  };
+  const about: Series = tilt.map((v) => (v === null ? null : [first + wrap(v - first), 0]));
+  return savitzkyGolay(about, window, loop).map((q) => (q === null ? null : wrap(q[0])));
 }
 
 /**
@@ -765,7 +792,7 @@ export function clean(seq: PoseSequence, params: CleanParams, wanted: string | u
     }),
   };
   const inferred = params.hipsInferred === true ? { r_hip: 0, l_hip: 0 } : null;
-  const frames = seq.frames.map((f, i) => {
+  const frames: PoseFrame[] = seq.frames.map((f, i) => {
     const q = f.people.find((x) => x.id === person);
     if (q === undefined) return { t: f.t, people: [] };
     const joints: Partial<Record<Body18, Joint>> = {};
@@ -780,6 +807,24 @@ export function clean(seq: PoseSequence, params: CleanParams, wanted: string | u
     }
     return { t: f.t, people: [{ id: person, joints: sortedJoints(joints) }] };
   });
+  // rig-c/pose#288: the pelvis track, its own track over the legs' window (the hips' window), not re-read from the hips.
+  let pelvis: Cleaned['pelvis'] = null;
+  if (seq.pelvisSource !== undefined) {
+    const tilt = seq.frames.map((f) => f.pelvisTilt ?? null);
+    const smooth = smoothPelvis(tilt, params.legs, params.loop);
+    let moved = 0;
+    tilt.forEach((v, i) => {
+      const w = smooth[i];
+      if (v !== null && w !== null && w !== undefined) {
+        let d = Math.abs(w - v) % 360;
+        if (d > 180) d = 360 - d;
+        moved = Math.max(moved, d);
+      }
+    });
+    smooth.forEach((v, i) => (frames[i]!.pelvisTilt = v));
+    record.params.pelvis = { window: params.legs };
+    pelvis = { source: seq.pelvisSource, window: params.legs, read: tilt.filter((v) => v !== null).length, frames: n, moved };
+  }
   const { cleaned: _was, ...rest } = seq;
   return {
     // #92: a loop is one cycle of a gait repeated in place, so it carries no travel of its own.
@@ -797,6 +842,7 @@ export function clean(seq: PoseSequence, params: CleanParams, wanted: string | u
     holds,
     unheld,
     seams,
+    pelvis,
   };
 }
 
@@ -815,7 +861,8 @@ export function cleanLine(r: CleanRecord, hold: (r: CleanRecord) => string = hol
   const spikes = `${found.length === 0 ? 'no spike' : `${found.length} spike(s) replaced (${shown}${found.length > 8 ? `, … ${found.length - 8} more` : ''})`}, ${untestedText(r.spikes.untested)}`;
   const jit = (v: number | null) => (v === null ? 'not measured' : v.toFixed(2));
   const hips = r.params.hipsInferred === undefined ? '' : `; hips inferred (${inferredSource(r)})`;
-  return `${r.spec}: ${windows}, ${loop ? 'loop' : 'no loop'}; ${spikes}; jitter (mean |second difference| of y) ${jit(r.jitter.before)} → ${jit(r.jitter.after)} px/f²${hold(r)}${hips}`;
+  const pelvis = r.params.pelvis === undefined ? '' : `; pelvisTilt smoothed as its own track over ${r.params.pelvis.window === 1 ? '1 frame (none)' : `${r.params.pelvis.window} frames`}`;
+  return `${r.spec}: ${windows}, ${loop ? 'loop' : 'no loop'}; ${spikes}; jitter (mean |second difference| of y) ${jit(r.jitter.before)} → ${jit(r.jitter.after)} px/f²${hold(r)}${hips}${pelvis}`;
 }
 
 /**
