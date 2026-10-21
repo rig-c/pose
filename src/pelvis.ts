@@ -38,7 +38,8 @@
  * marked, not guessed; `retarget` keys the hip line there and says so.
  *
  * `--pelvis-keys` is the hand override, `rig-pose-pelvis-keys/1`: tilts at
- * frames, linear between them (the short way round) and held outside them.
+ * frames (fractional ones too, #294), linear between them (the short way round)
+ * and held outside them.
  */
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -332,9 +333,18 @@ function waistband(f: Frame, c: Pt, span: number, x0: number, x1: number, cols: 
 
 /**
  * `rig-pose-pelvis-keys/1`: `{ spec, keys: [{ frame, deg }], note? }` — frames of the
- * sequence, integers strictly increasing; `deg` the tilt in the track's sense
- * (Spine degrees of r_hip → l_hip, about 0 for a figure facing the camera). The
- * tilt on every frame: linear between keys, the short way round, held outside.
+ * sequence, strictly increasing, within its span [0, frames − 1]; `deg` the tilt in
+ * the track's sense (Spine degrees of r_hip → l_hip, about 0 for a figure facing
+ * the camera). The tilt on every frame: linear between keys, the short way round,
+ * held outside.
+ *
+ * A frame may be fractional (rig-c/pose#294): a scan interpolated from drawn keys
+ * puts them between its frames (k × 4.75 for 8 keys over 38 frames), and a key
+ * rounded onto the grid moves up to half a frame and bends the tilt between. A
+ * fractional frame is a value of the same key, so the format stays /1; a reader
+ * from before #294 refuses it by name (`"frame" is number 4.75; it must be a frame
+ * index in [0, N]`) rather than misreading it. An integer frame interpolates
+ * exactly as before.
  */
 export function readPelvisKeys(text: string, where: string, frames: number): number[] {
   const doc = parseJson(text, where, 'PELVIS_KEYS');
@@ -357,7 +367,8 @@ export function readPelvisKeys(text: string, where: string, frames: number): num
       return;
     }
     refuseUnknownKeys(p, 'PELVIS_KEYS', kw, k, ['frame', 'deg']);
-    const okF = Number.isInteger(k.frame) && (k.frame as number) >= 0 && (k.frame as number) < frames;
+    // rig-c/pose#294: any finite frame within the span, fractional or not; one outside it is refused naming the key and the span.
+    const okF = typeof k.frame === 'number' && Number.isFinite(k.frame) && k.frame >= 0 && k.frame <= frames - 1;
     const okD = typeof k.deg === 'number' && Number.isFinite(k.deg) && k.deg > -180 && k.deg <= 180;
     if (!okF) p.add('PELVIS_KEYS', `${kw} "frame" is ${typeName(k.frame)}; it must be a frame index in [0, ${frames - 1}]`);
     if (!okD) p.add('PELVIS_KEYS', `${kw} "deg" is ${typeName(k.deg)}; it must be Spine degrees in (-180, 180] (r_hip → l_hip, counter-clockwise, y up)`);

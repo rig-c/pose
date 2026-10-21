@@ -23,6 +23,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { poseRawAnimation, readModel, type RawBone } from 'rig-c/core';
 import { bandTilt, drawFrame, PALETTE_STEP, pelvisTilt, tiltedCycle, variantCycle, writePelvisFixture, type Variant } from '../examples/walk/make-pelvis.ts';
+import { walkDoc } from '../examples/walk/make-walk.ts';
 import { clean } from '../src/clean.ts';
 import { readPelvis, readPelvisKeys } from '../src/pelvis.ts';
 import { readPoseSequence, writePoseSequence } from '../src/pose.ts';
@@ -196,6 +197,93 @@ describe('the readers, frame by frame', () => {
       'PELVIS_KEYS: k.json keys[2] "frame" is number 9; it must be a frame index in [0, 7]',
       'PELVIS_KEYS: k.json keys[3] "deg" is number 400; it must be Spine degrees in (-180, 180] (r_hip → l_hip, counter-clockwise, y up)',
     ]);
+  });
+});
+
+/**
+ * rig-c/pose#294: hand keys at fractional frames. The fixture is synthetic: a
+ * 38-frame, 24 fps sequence (the walk's frames repeated, t = i/24) and 8 drawn
+ * keys at frames k × 4.75 — off the integer grid but k = 0, 4 — carrying a known
+ * tilt sampled at those times. The bar (the card): the tilt written on every
+ * sequence frame equals the linear interpolation between the keys, in seconds
+ * from the frames' own times, to ≤ 0.01°; held after the last key. The control:
+ * the same keys rounded onto the grid miss it by more, so the bar can fail.
+ */
+describe('hand keys at fractional frames (rig-c/pose#294)', () => {
+  const FRAMES = 38;
+  const STEP = 4.75;
+  const PERIOD = FRAMES / 24;
+  /** The known tilt, degrees, at t seconds. */
+  const known = (t: number) => 18 * Math.sin((2 * Math.PI * t) / PERIOD) + 6 * Math.cos((4 * Math.PI * t) / PERIOD);
+  const drawn = Array.from({ length: 8 }, (_, k) => ({ frame: k * STEP, deg: Math.round(known((k * STEP) / 24) * 1e6) / 1e6 }));
+  /** The linear interpolation between keys at t seconds, keys placed at frame / 24 s; held outside them. */
+  const lerp = (keys: Array<{ frame: number; deg: number }>, t: number) => {
+    const at = keys.map((k) => ({ t: k.frame / 24, deg: k.deg }));
+    if (t <= at[0]!.t) return at[0]!.deg;
+    if (t >= at[at.length - 1]!.t) return at[at.length - 1]!.deg;
+    const j = at.findIndex((k) => k.t >= t);
+    const a = at[j - 1]!;
+    const b = at[j]!;
+    return a.deg + ((t - a.t) / (b.t - a.t)) * (b.deg - a.deg);
+  };
+  /** The 38-frame sequence, written to dir. */
+  function sequence(dir: string): string {
+    const cycle = tiltedCycle();
+    const path = join(dir, 'pose.json');
+    writeFileSync(path, `${JSON.stringify(walkDoc(Array.from({ length: FRAMES }, (_, i) => cycle[i % cycle.length]!), 'the walk repeated to 38 frames at 24 fps (rig-c/pose#294)'), null, 2)}\n`);
+    return path;
+  }
+  const keysFile = (dir: string, name: string, keys: unknown) => {
+    const path = join(dir, name);
+    writeFileSync(path, JSON.stringify({ spec: 'rig-pose-pelvis-keys/1', keys }));
+    return path;
+  };
+
+  test('8 keys at k × 4.75 over 38 frames: the written tilt is the keys\' linear interpolation to ≤ 0.01° on every frame; the keys rounded onto the grid are not', () => {
+    const dir = tempDir();
+    const pose = sequence(dir);
+    const out = join(dir, 'pose.pelvis.json');
+    const r = cli(['pelvis', '--pose', pose, '--pelvis-keys', keysFile(dir, 'keys.json', drawn), '--out', out]);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    const doc = JSON.parse(readFileSync(out, 'utf8')) as { spec: string; pelvisSource: string; frames: Array<{ t: number; pelvisTilt: number }> };
+    expect(doc.spec).toBe('rig-pose-sequence/1.1');
+    expect(doc.pelvisSource).toBe('keys');
+    expect(doc.frames).toHaveLength(FRAMES);
+    const err = doc.frames.map((f) => Math.abs(f.pelvisTilt - lerp(drawn, f.t)));
+    expect(Math.max(...err)).toBeLessThanOrEqual(0.01);
+    // On a key's own frame (0, 19) the tilt is the key's; after the last key (33.25) it is held.
+    expect(doc.frames[19]!.pelvisTilt).toBeCloseTo(drawn[4]!.deg, 3);
+    for (const i of [34, 35, 36, 37]) expect(doc.frames[i]!.pelvisTilt).toBeCloseTo(drawn[7]!.deg, 3);
+
+    const rounded = drawn.map((k) => ({ frame: Math.round(k.frame), deg: k.deg }));
+    const outR = join(dir, 'pose.rounded.json');
+    expect(cli(['pelvis', '--pose', pose, '--pelvis-keys', keysFile(dir, 'rounded.json', rounded), '--out', outR]).status).toBe(0);
+    const docR = JSON.parse(readFileSync(outR, 'utf8')) as { frames: Array<{ t: number; pelvisTilt: number }> };
+    expect(Math.max(...docR.frames.map((f) => Math.abs(f.pelvisTilt - lerp(drawn, f.t))))).toBeGreaterThan(0.5);
+  });
+
+  test('a fractional key interpolates the short way round; a key outside the span [0, frames − 1] is refused by name, nothing written', () => {
+    const doc = (keys: unknown) => JSON.stringify({ spec: 'rig-pose-pelvis-keys/1', keys });
+    expect(readPelvisKeys(doc([{ frame: 0.5, deg: 170 }, { frame: 2.5, deg: -170 }]), 'k.json', 4)).toEqual([170, 175, -175, -170]);
+    let err = '';
+    try {
+      readPelvisKeys(doc([{ frame: -0.25, deg: 0 }, { frame: 2.5, deg: 1 }, { frame: 7.5, deg: 2 }, { frame: '3', deg: 0 }]), 'k.json', 8);
+    } catch (e) {
+      err = (e as Error).message;
+    }
+    expect(err.split('\n')).toEqual([
+      'PELVIS_KEYS: k.json keys[0] "frame" is number -0.25; it must be a frame index in [0, 7]',
+      'PELVIS_KEYS: k.json keys[2] "frame" is number 7.5; it must be a frame index in [0, 7]',
+      'PELVIS_KEYS: k.json keys[3] "frame" is the string "3"; it must be a frame index in [0, 7]',
+    ]);
+    const dir = tempDir();
+    const out = join(dir, 'never.json');
+    const r = cli(['pelvis', '--pose', sequence(dir), '--pelvis-keys', keysFile(dir, 'late.json', [...drawn, { frame: 37.25, deg: 0 }]), '--out', out]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain(`FAIL  PELVIS_KEYS: ${join(dir, 'late.json')} keys[8] "frame" is number 37.25; it must be a frame index in [0, 37]`);
+    expect(r.stderr).toContain('nothing written');
+    expect(() => readFileSync(out)).toThrow();
   });
 });
 
