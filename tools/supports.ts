@@ -12,13 +12,16 @@
  * them, with the key times and `secondsOf` the retarget uses. Prints JSON:
  *
  *   { "legLength": { "r", "l" }, "leg": number, "support": ("r" | "l" | null)[],
+ *     "contact": ("r" | "l" | "both" | null)[], "frontal": boolean,
  *     "jumps": [[a, b], …], "jump": boolean[], "stillSpeed": number,
  *     "speed": { "r": number[], "l": number[] },
  *     "planted": { "r": boolean[], "l": boolean[] },
  *     "ankle": { "r": [[x, y], …], "l": [[x, y], …] } }
  *
  * `support[i]` is null on jump frames and on a step with no other foot planted
- * (`supportsOf`'s own reading). `leg` is one picture leg length, the clip
+ * (`supportsOf`'s own reading). `contact[i]` is the feet the ankle's vertical
+ * speed reads down (rig-c/pose#280, `speedSignalOf`), and `frontal` whether
+ * that reading decided `support` (a frontal view). `leg` is one picture leg length, the clip
  * median of hip → ankle over both sides (#82's ruling). `speed` is each ankle's
  * movement from the frame before in `leg` (0 on the first frame); `planted` is
  * still both ways — the speed from the previous frame and to the next each
@@ -122,7 +125,7 @@ function main(): void {
     // ankle cannot hold still over three frames. scan.py names a frame that falls inside one.
     planted[s] = speed[s].map((v, i) => i > 0 && i + 1 < n && v < STILL_SPEED && speed[s][i + 1]! < STILL_SPEED);
   }
-  const out = { legLength: feet.legLength, leg, support: feet.support, jumps: feet.jumps, jump, stillSpeed: STILL_SPEED, speed, planted, ankle: { r: ankle.r, l: ankle.l } };
+  const out = { legLength: feet.legLength, leg, support: feet.support, contact: feet.signal!.contact, frontal: feet.signal!.frontal, jumps: feet.jumps, jump, stillSpeed: STILL_SPEED, speed, planted, ankle: { r: ankle.r, l: ankle.l } };
   process.stdout.write(`${JSON.stringify(out)}\n`);
 }
 
