@@ -121,7 +121,7 @@ No other repository in the org (core, parts, play, adapters, parts-examples, tra
 | `rig-pose-sequence/1` (the pose) | promised | S, R, D |
 | `rig-pose-sequence/1.1` (the pose with the pelvis track, `pelvisTilt` and `pelvisSource`, rig-c/pose#288) | courtesy | — |
 | `rig-pose-sequence/1.2` (the pose with per-segment `depth`, `clean --depth`, rig-c/pose#281) | courtesy | — |
-| `rig-pose-pelvis-keys/1` (`pelvis --pelvis-keys`) | courtesy | — |
+| `rig-pose-pelvis-keys/1` (`pelvis --pelvis-keys`; fractional frames, rig-c/pose#294) | courtesy | — |
 | `rig-pose-map/1` (the map) | promised | S, X, D |
 | `rig-pose-report/1` (the report) | promised, as below | S, R |
 | `rig-pose-camera/1` (`--camera`) | promised | S |

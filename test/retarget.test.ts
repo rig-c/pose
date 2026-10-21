@@ -9569,6 +9569,197 @@ describe('#242: "in-place" is the sequence\'s property — its supports and its 
   }, SLOW);
 });
 
+describe('#286: a set with a "phase" switches on the support hand-over — exactly the frames of its side\'s support spans', () => {
+  /** #242's gait cycle: frames a cycle, cycles, 24 fps. */
+  const C = 24;
+  const CYCLES = 7;
+  const NN = C * CYCLES;
+  const DT = 1 / 24;
+  const phase = (i: number): number => (2 * Math.PI * (i % C)) / C;
+  /** #242's walk in place (the thighs swinging ±20° in opposition, the swinging foot lifted up to 10 px), `clean --loop`ed. */
+  const motion: Motion = {
+    ...BASE,
+    n: NN,
+    dt: DT,
+    trunk: () => 90,
+    ru: () => -100,
+    rf: () => -95,
+    lu: () => -80,
+    lf: () => -85,
+    rt: (i) => -90 + 20 * Math.sin(phase(i)),
+    rs: (i) => -95 + 20 * Math.sin(phase(i)),
+    lt: (i) => -90 - 20 * Math.sin(phase(i)),
+    ls: (i) => -90 - 20 * Math.sin(phase(i)),
+    hip: () => [0, 0],
+  };
+  function walk(): Record<string, unknown> {
+    const doc = poseDoc(motion, (i, j) => {
+      const lift = { r: 10 * Math.max(0, Math.cos(phase(i))), l: 10 * Math.max(0, -Math.cos(phase(i))) };
+      for (const s of ['r', 'l'] as const) {
+        const a = j[`${s}_ankle`]!.at as Pt;
+        j[`${s}_ankle`] = { ...j[`${s}_ankle`], at: [a[0], a[1] - lift[s]] };
+      }
+    });
+    const seq = readPoseSequence(JSON.stringify(doc), 'fixture');
+    const c = clean(seq, { loop: true, legs: 1, rest: 1 }, undefined, 'fixture');
+    expect(c.seq.travel).toBe('in-place');
+    return JSON.parse(writePoseSequence(c.seq)) as Record<string, unknown>;
+  }
+  const LEG_SLOTS = ['leg_r0', 'leg_r1', 'leg_l0', 'leg_l1'];
+  const att = { image: 'seg.png', x: 30, y: 0, rotation: 90 };
+  /** Each leg slot carries a left-step and a right-step drawing beside its setup one. */
+  const RIG: RigOpts = { extra: Object.fromEntries(LEG_SLOTS.map((s) => [s, { step_l: att, step_r: att }])) };
+  const legJoints = ['r_hip', 'r_knee', 'r_ankle', 'l_hip', 'l_knee', 'l_ankle'];
+  /** A gait set drawing both legs: its key skeleton is the walk's own legs on frame `at`. */
+  const stepSet = (name: string, at: number, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+    name,
+    slots: Object.fromEntries(LEG_SLOTS.map((s) => [s, name])),
+    chains: ['leg_r', 'leg_l'],
+    pose: Object.fromEntries(Object.entries(positions(motion, at)).filter(([j]) => legJoints.includes(j))),
+    ...extra,
+  });
+  const mapOf = (...sets: Array<Record<string, unknown>>): Record<string, unknown> => ({ ...baseMap(), alternates: sets });
+  interface Rep {
+    feet: { supports: Array<{ side: 'r' | 'l'; frames: [number, number] }> };
+    switches: Array<{ set: string; frames: [number, number]; phase?: Record<string, unknown> }>;
+  }
+  /** What rig-c's own poser shows in a slot on every frame of the gated build. */
+  const shows = (build: string, slot: string): Array<string | null> =>
+    poseRawAnimation(loadBuild(build), 'dance', Array.from({ length: NN - 1 }, () => DT)).map((p) => p.slots.find((row) => row[0] === slot)![1]);
+  /**
+   * The bar, read off the gated build: per frame, the drawing the leg slots show (all four must agree) against the side
+   * the report's `feet.supports` names. `wrong`: a frame showing a step drawing other than its support side's (or one
+   * where no foot supports, or none where one does); `flicker`: a frame whose drawing differs from the frame before
+   * while the support side does not.
+   */
+  function bar(c: Case, rep: Rep, sideOf: Record<string, 'r' | 'l'>): { wrong: number; flicker: number; shown: Record<string, number> } {
+    const rows = LEG_SLOTS.map((s) => shows(c.build, s));
+    const support: Array<'r' | 'l' | null> = Array.from({ length: NN }, () => null);
+    for (const sp of rep.feet.supports) for (let i = sp.frames[0]; i <= sp.frames[1]; i++) support[i] = sp.side;
+    let wrong = 0;
+    let flicker = 0;
+    const shown: Record<string, number> = {};
+    for (let i = 0; i < NN; i++) {
+      const v = rows[0]![i]!;
+      for (const r of rows) expect(r[i]).toBe(v);
+      const want = support[i] === null ? 'seg' : (Object.keys(sideOf).find((k) => sideOf[k] === support[i]) ?? 'seg');
+      if (v !== want) wrong++;
+      if (i > 0 && v !== rows[0]![i - 1] && support[i] === support[i - 1]) flicker++;
+      shown[v] = (shown[v] ?? 0) + 1;
+    }
+    return { wrong, flicker, shown };
+  }
+  function run(c: Case, extra: string[]): { ran: Ran; rep: Rep } {
+    const report = join(c.dir, `report${extra.length}.json`);
+    const ran = retarget(c, ['--report', report, ...extra]);
+    expect(ran.stderr).toBe('');
+    expect(ran.status).toBe(0);
+    return { ran, rep: JSON.parse(readFileSync(report, 'utf8')) as Rep };
+  }
+  /** The supporting foot each set shows on: left-step — the left foot is stepping — while the right foot supports. */
+  const SIDES_OF = { step_l: 'r', step_r: 'l' } as const;
+
+  test('two phase sets show exactly on their side\'s support spans (0 wrong-side frames, 0 flicker), with and without --plant-feet; PHASE names every span and its hand-overs; control: the same sets without "phase" go by angle', () => {
+    // The key skeletons are deliberately off-phase (a quarter cycle from either support's middle): a phase set does not read them.
+    const phased = mapOf(stepSet('step_l', 0, { phase: 'left-step' }), stepSet('step_r', 12, { phase: 'right-step' }));
+    const c = setup({ rig: RIG, map: phased, pose: walk() });
+    for (const extra of [[], ['--plant-feet']]) {
+      const { ran, rep } = run(c, extra);
+      const b = bar(c, rep, SIDES_OF);
+      const lines = linesOf(ran, 'PHASE');
+      console.log(`  #286 phase sets${extra.length > 0 ? ' --plant-feet' : ''}: ${rep.feet.supports.length} support span(s); wrong-side ${b.wrong}, flicker ${b.flicker}; shown ${JSON.stringify(b.shown)}`);
+      for (const l of lines) console.log(`    ${l}`);
+      expect(rep.feet.supports.length).toBe(2 * CYCLES + 1);
+      expect(b.wrong).toBe(0);
+      expect(b.flicker).toBe(0);
+      // Every support span is one switch of its side's set, frame for frame, and the report carries the hand-overs.
+      expect(rep.switches.map((s) => [s.set, s.frames])).toEqual(rep.feet.supports.map((sp) => [sp.side === 'r' ? 'step_l' : 'step_r', sp.frames]));
+      rep.switches.forEach((s, k) => {
+        const prev = rep.feet.supports[k - 1];
+        const next = rep.feet.supports[k + 1];
+        expect(s.phase).toMatchObject({
+          step: s.set === 'step_l' ? 'left-step' : 'right-step',
+          side: SIDES_OF[s.set as keyof typeof SIDES_OF],
+          on: s.frames[0] === 0 ? null : { frame: s.frames[0], from: prev!.side },
+          off: s.frames[1] === NN - 1 ? null : { frame: s.frames[1] + 1, to: next!.side },
+        });
+      });
+      // One PHASE line per set: its spans, each with the hand-over it was switched on and off at.
+      expect(lines).toHaveLength(2);
+      for (const [name, step, side] of [['step_l', 'left-step', 'r'], ['step_r', 'right-step', 'l']] as const) {
+        const own = rep.feet.supports.filter((sp) => sp.side === side);
+        const other = side === 'l' ? 'r' : 'l';
+        const text = own.map((sp) => `${sp.frames[0]}–${sp.frames[1]} (${sp.frames[0] === 0 ? 'on the first frame' : `on frame ${sp.frames[0]} ${other} → ${side}`}, ${sp.frames[1] === NN - 1 ? 'off at the end' : `off frame ${sp.frames[1] + 1} ${side} → ${other}`})`);
+        const count = own.reduce((t, sp) => t + sp.frames[1] - sp.frames[0] + 1, 0);
+        const word = (x: 'r' | 'l') => (x === 'l' ? 'left' : 'right');
+        expect(lines).toContain(`PHASE  set "${name}" "${step}" — the ${word(other)} foot is stepping; shown while the ${word(side)} foot supports (feet.supports): ${own.length} span(s), ${count} frame(s): ${text.join(', ')}`);
+      }
+    }
+    // Control: the same two sets without "phase", their key skeletons on the middle of each side's support, go by the
+    // angle rule (#279, #180) — measured and printed, not held to the bar.
+    const { rep: first } = run(c, []);
+    const mid = (side: 'r' | 'l') => {
+      const sp = first.feet.supports.slice(1, -1).find((x) => x.side === side)!;
+      return (sp.frames[0] + sp.frames[1]) >> 1;
+    };
+    const angle = setup({ rig: RIG, map: mapOf(stepSet('step_l', mid('r')), stepSet('step_r', mid('l'))), pose: walk() });
+    const a = run(angle, []);
+    const ab = bar(angle, a.rep, SIDES_OF);
+    console.log(`  #286 control, the same sets by angle (keys on frames ${mid('r')} and ${mid('l')}): wrong-side ${ab.wrong}, flicker ${ab.flicker}; shown ${JSON.stringify(ab.shown)}`);
+    expect(linesOf(a.ran, 'PHASE')).toEqual([]);
+  }, SLOW);
+
+  test('refusals by name: a phase that is not a step side, "phase" with "frames", a phase set competing with an angle set or with another of its side, and a run that reads no feet; controls run', () => {
+    const pose = walk();
+    const refused = (map: Record<string, unknown>, extra: string[] = []): string[] => {
+      const c = setup({ rig: RIG, map, pose });
+      const r = retarget(c, extra);
+      expect(r.status).not.toBe(0);
+      return fails(r);
+    };
+    expect(refused(mapOf(stepSet('step_l', 0, { phase: 'left' })))).toEqual(['FAIL  MAP_ALT_PHASE: set "step_l" "phase" is "left"; it is the stepping foot the set is drawn for, one of "left-step", "right-step" (left-step: the left foot is stepping; shown while the right foot supports)']);
+    expect(refused(mapOf(stepSet('step_l', 0, { phase: 'left-step', frames: [[0, 10]] })))).toEqual(['FAIL  MAP_ALT_PHASE: set "step_l" names both "phase" and "frames"; a phase set shows on its supporting foot\'s spans, and a window would cut them — drop one']);
+    expect(refused(mapOf(stepSet('step_l', 0, { phase: 'left-step' }), stepSet('step_r', 12)))).toEqual(['FAIL  PHASE_GROUP: set(s) "step_l" declare "phase" and compete with set(s) "step_r", which declare none (they switch a common slot or offset bone); a phase set shows on its supporting foot\'s spans and an angle set on its distance, and nothing decides between them — give every set of the group a "phase", or none']);
+    expect(refused(mapOf(stepSet('step_l', 0, { phase: 'left-step' }), stepSet('step_r', 12, { phase: 'left-step' })))).toEqual(['FAIL  PHASE_GROUP: set(s) "step_l", "step_r" all declare "phase": "left-step" and compete (they switch a common slot or offset bone); one drawing shows per support span — keep one "left-step" set per group']);
+    // No feet: a map whose chains end at no ankle reads no supports. The set draws an arm here (a leg chain would read the feet).
+    const armSet = { name: 'arms', slots: { sleeve_r0: 'seg' }, chains: ['arm_r'], pose: { r_shoulder: [0, 0], r_elbow: [0, 10], r_wrist: [0, 20] }, phase: 'right-step' };
+    const noLegs = { ...baseMap(), chains: baseChains().filter((x) => !x.name.startsWith('leg_')), alternates: [armSet] };
+    const f = refused(noLegs);
+    expect(f).toHaveLength(1);
+    expect(f[0]).toStartWith('FAIL  PHASE_FEET: set(s) "arms" ("phase": "right-step") show by the supporting foot (left-step while the right foot supports), and this run reads no supports: reading the feet needs one chain ending at "r_ankle"');
+    // Control: a phase pair beside an angle set that shares nothing with it runs.
+    const c = setup({ rig: { ...RIG, extra: { ...RIG.extra, sleeve_r0: { up: att } } }, map: mapOf(stepSet('step_l', 0, { phase: 'left-step' }), stepSet('step_r', 12, { phase: 'right-step' }), { name: 'up', slots: { sleeve_r0: 'up' }, chains: ['arm_r'], pose: { r_shoulder: [0, 0], r_elbow: [0, -10], r_wrist: [0, -20] } }), pose });
+    const ok = retarget(c);
+    expect(ok.stderr).toBe('');
+    expect(ok.status).toBe(0);
+  }, SLOW);
+
+  test('mutant: phase sets sent through the angle rule (the phase group\'s branch cut) miss the bar, and the first test is red', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm286-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'switch.ts');
+      const src = readFileSync(path, 'utf8');
+      const from = '    if (group.some((a) => a.phase !== undefined)) {\n      const pick =';
+      expect(src.split(from)).toHaveLength(2);
+      writeFileSync(path, src.replace(from, '    if (group.length < 0) {\n      const pick ='));
+      const c = setup({ rig: RIG, map: mapOf(stepSet('step_l', 0, { phase: 'left-step' }), stepSet('step_r', 12, { phase: 'right-step' })), pose: walk() });
+      const report = join(c.dir, 'report.json');
+      const ran = retarget(c, ['--report', report], join(d, 'cli.ts'));
+      expect(ran.status).toBe(0);
+      const b = bar(c, JSON.parse(readFileSync(report, 'utf8')) as Rep, SIDES_OF);
+      console.log(`  #286 mutant "no phase branch": wrong-side ${b.wrong}, flicker ${b.flicker}; shown ${JSON.stringify(b.shown)}`);
+      if (b.wrong === 0 && b.flicker === 0) throw new Error('mutant "no phase branch" survived: the angle rule met the phase bar');
+      expect(b.wrong + b.flicker).toBeGreaterThan(0);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
 describe('#241: the head nod — a NOD line, a map switch, and a loop\'s nod read wrapped', () => {
   /** One gait cycle, frames; the sequence repeats it CYCLES times, at 24 fps (#242's walk in place). */
   const C = 24;
