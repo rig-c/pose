@@ -318,14 +318,14 @@ describe('the sequence format: minor 1.1 carries the track', () => {
 
   test('a file of a newer minor is read, and each key it adds is refused naming the minor the file says wrote it', () => {
     const doc = base();
-    doc.spec = 'rig-pose-sequence/1.2';
+    doc.spec = 'rig-pose-sequence/1.3';
     expect(refusal(doc)).toEqual([]);
     doc.lens = 'front';
     doc.frames[2]!.blur = 0.3;
-    const note = '; the file says it was written as "rig-pose-sequence/1.2", a newer minor than this reader\'s "rig-pose-sequence/1.1" — read it with a rig-pose that reads that minor';
+    const note = '; the file says it was written as "rig-pose-sequence/1.3", a newer minor than this reader\'s "rig-pose-sequence/1.2" — read it with a rig-pose that reads that minor';
     expect(refusal(doc)).toEqual([
       `POSE_KEYS: p.json has a key this reader does not know: "lens"; the keys it reads are spec, space, width, height, source, frames, cameraSource, camera, cleaned, travel, pelvisSource${note}`,
-      `POSE_KEYS: p.json frames[2] has a key this reader does not know: "blur"; the keys it reads are t, people, pelvisTilt${note}`,
+      `POSE_KEYS: p.json frames[2] has a key this reader does not know: "blur"; the keys it reads are t, people, pelvisTilt, depth${note}`,
     ]);
     // Control: the same unknown key in a file of a minor this reader reads names no newer minor — the key is simply not in the format.
     doc.spec = 'rig-pose-sequence/1';

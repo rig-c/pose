@@ -65,7 +65,8 @@
  * Pure: no clock, no randomness, no disk.
  */
 import { BODY18, type Body18 } from './joints.ts';
-import type { CleanRecord, CleanSeam, CleanSpike, CleanUnheld, Joint, PoseFrame, PoseSequence } from './pose.ts';
+import { deriveDepth, depthSourceOf, type DerivedDepth } from './depth.ts';
+import type { CleanRecord, CleanSeam, CleanSpike, CleanUnheld, DepthGait, Joint, PoseFrame, PoseSequence } from './pose.ts';
 
 /** A joint not held inside a region where others are (#91): the test it fails there and its figure. */
 export type Unheld = CleanUnheld;
@@ -114,6 +115,12 @@ export interface CleanParams {
    * always passes one.
    */
   hold?: { speed: number; reach: number } | 'off';
+  /**
+   * rig-c/pose#281: derive each frame's depth (`src/depth.ts`) for this gait, on
+   * the cleaned positions. Absent, no depth is derived and the output is what it
+   * was before #281.
+   */
+  depth?: DepthGait;
 }
 
 /** The joints `--hips-inferred` marks. */
@@ -191,6 +198,8 @@ export interface Cleaned {
    * and the largest change smoothing made, degrees; null without a track.
    */
   pelvis: { source: string; window: number; read: number; frames: number; moved: number } | null;
+  /** rig-c/pose#281: the depth derived with `depth` (its rest lengths and counts); null without it. */
+  depth: DerivedDepth | null;
 }
 
 /**
@@ -668,6 +677,10 @@ export function clean(seq: PoseSequence, params: CleanParams, wanted: string | u
   }
   const track = personTrack(seq, wanted, where);
   const n = track.length;
+  // rig-c/pose#281: depth a sequence already carries — a 3D detector's is carried through, clean's own is read again or refused.
+  const carried = depthSourceOf(seq.frames);
+  if (carried === 'measured' && params.depth !== undefined) p.add('CLEAN_DEPTH', `${where} carries measured depth (a 3D detector's) and --depth ${params.depth} asks to derive it; a derived reading would replace a measurement — clean without --depth, which carries the measured depth through`);
+  if (carried === 'derived' && params.depth === undefined) p.add('CLEAN_DEPTH', `${where} carries derived depth (clean --depth), read off positions this clean moves; give --depth walk|run to read it again on the cleaned positions`);
   const person = wanted ?? [...new Set(seq.frames.flatMap((f) => f.people.map((q) => q.id)))].sort()[0]!;
   if (params.loop) {
     const widest = Math.max(SPIKE_WINDOW, params.legs, params.rest);
@@ -825,6 +838,13 @@ export function clean(seq: PoseSequence, params: CleanParams, wanted: string | u
     record.params.pelvis = { window: params.legs };
     pelvis = { source: seq.pelvisSource, window: params.legs, read: tilt.filter((v) => v !== null).length, frames: n, moved };
   }
+  // rig-c/pose#281: derived on the cleaned positions, or a measured depth carried through as read.
+  let depth: DerivedDepth | null = null;
+  if (params.depth !== undefined) {
+    depth = deriveDepth(frames.map((f) => f.people[0]?.joints ?? {}), params.depth);
+    depth.frames.forEach((d, i) => (frames[i]!.depth = d));
+    record.params.depth = { gait: params.depth };
+  } else if (carried === 'measured') seq.frames.forEach((f, i) => (frames[i]!.depth = f.depth ?? {}));
   const { cleaned: _was, ...rest } = seq;
   return {
     // #92: a loop is one cycle of a gait repeated in place, so it carries no travel of its own.
@@ -843,6 +863,7 @@ export function clean(seq: PoseSequence, params: CleanParams, wanted: string | u
     unheld,
     seams,
     pelvis,
+    depth,
   };
 }
 
@@ -862,7 +883,8 @@ export function cleanLine(r: CleanRecord, hold: (r: CleanRecord) => string = hol
   const jit = (v: number | null) => (v === null ? 'not measured' : v.toFixed(2));
   const hips = r.params.hipsInferred === undefined ? '' : `; hips inferred (${inferredSource(r)})`;
   const pelvis = r.params.pelvis === undefined ? '' : `; pelvisTilt smoothed as its own track over ${r.params.pelvis.window === 1 ? '1 frame (none)' : `${r.params.pelvis.window} frames`}`;
-  return `${r.spec}: ${windows}, ${loop ? 'loop' : 'no loop'}; ${spikes}; jitter (mean |second difference| of y) ${jit(r.jitter.before)} → ${jit(r.jitter.after)} px/f²${hold(r)}${hips}${pelvis}`;
+  const depth = r.params.depth === undefined ? '' : `; depth derived per segment (gait ${r.params.depth.gait})`;
+  return `${r.spec}: ${windows}, ${loop ? 'loop' : 'no loop'}; ${spikes}; jitter (mean |second difference| of y) ${jit(r.jitter.before)} → ${jit(r.jitter.after)} px/f²${hold(r)}${hips}${pelvis}${depth}`;
 }
 
 /**
