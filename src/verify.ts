@@ -10,7 +10,7 @@
  */
 import { poseRawAnimation, poseRawSetup, type CompiledDocument, type RawBone } from 'rig-c/core';
 import type { Body18 } from './joints.ts';
-import { aimAngle, aimEnds, pointAt, type Chain, type JointMap } from './map.ts';
+import { aimAngle, aimEnds, partBone, pointAt, pointParts, type Chain, type JointMap } from './map.ts';
 import type { HipsInferred, Joint, PelvisFit, Run } from './pose.ts';
 import type { Retarget } from './retarget.ts';
 import { meanSecondDiff, pictureAngle, pointOn, wrap } from './retarget.ts';
@@ -312,6 +312,12 @@ export interface Posture {
   /** Present only when `tilt` is null: why it was not read. */
   tiltWhy?: string;
   /**
+   * rig-c/pose#295: present only when the retarget keyed the pelvis bone from the
+   * sequence's pelvis track: the reference tilt is the track's on every frame it
+   * read (`frames`), and the hip line's on the frames it declined (`declined`).
+   */
+  tiltTrack?: { source: string; frames: number; declined: Run[] };
+  /**
    * Present only when some frame with both hips good has an `inferred` hip:
    * how many such frames the tilt left out, and where the state came from.
    */
@@ -345,6 +351,15 @@ export interface Posture {
     rig: (Range & { shoulderWidth: number | null; rangeSw: number | null }) | null;
     ratio: number | null;
     ratioSw: number | null;
+    /**
+     * rig-c/pose#295: present only when the pelvis bone keyed from the track
+     * (`bone`, `source`) is above the rig's mid-shoulder: the bones it carries
+     * (`origins`, its children on the way to the mid-shoulder), the x-range of
+     * their origin about the pelvis bone's (`carry`, units), and the sway with
+     * that carry taken out — mid_shoulder about the carried origin (`trunk`),
+     * against the reference (`ratio`).
+     */
+    carried?: { bone: string; source: string; origins: string[]; carry: number; trunk: Range; ratio: number | null };
   } | null;
   /**
    * Present with `--plant-feet` when there is at least one support span (#107):
@@ -461,8 +476,14 @@ const medianOf = (xs: number[]): number => {
  * held from the earlier read. Those four are the measurement, so the tilt is
  * read on them; any `unmeasured` frame (`fit.corr < 0.9`) or other frame with
  * an inferred hip is left out and counted.
+ *
+ * The pelvis track (#295, `track`): when the retarget keyed the pelvis bone from
+ * it, the reference tilt is the track's on every frame it read and the hip
+ * line's (as above) on the frames it declined. The sway is read as before, and
+ * beside it what the track's turn carries: the x-range of the carried bones'
+ * origin about the pelvis bone's, and the sway with it taken out.
  */
-export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: ReadonlyMap<string, number>, map: JointMap, r: Retarget, frames: ReadonlyArray<Partial<Record<Body18, Joint>>>, minScore: number, inferredSource = 'source not stated', measured: Extract<HipsInferred, { by: 'measured' }> | null = null): Posture | null {
+export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: ReadonlyMap<string, number>, map: JointMap, r: Retarget, frames: ReadonlyArray<Partial<Record<Body18, Joint>>>, minScore: number, inferredSource = 'source not stated', measured: Extract<HipsInferred, { by: 'measured' }> | null = null, track: { source: string; tilt: ReadonlyArray<number | null> } | null = null): Posture | null {
   const pelvis = map.chains.find((c) => c.joints.length === 2 && c.joints[0] === 'r_hip' && c.joints[1] === 'l_hip');
   if (pelvis === undefined || map.translate === null || r.origin === null || r.scale === null) return null;
   const s = r.scale.factor;
@@ -476,10 +497,31 @@ export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: Read
   let inferred = 0;
   const inClass = (rs: Run[], i: number) => rs.some(([a, b]) => a <= i && i <= b);
   const counts = { read: 0, interpolated: 0, held: 0, scaled: 0, unmeasured: 0 };
+  // rig-c/pose#295: the track the retarget keyed the pelvis bone from (its PELVIS line names it), null otherwise.
+  const keyed = track !== null && r.pelvis !== null && r.pelvis.source !== 'hip line' && r.pelvis.bone === pelvis.bones[0] && track.tilt.length === frames.length ? track : null;
+  const declined: Run[] = [];
+  let onTrack = 0;
   frames.forEach((f, i) => {
+    const tv = keyed === null ? null : (keyed.tilt[i] ?? null);
+    if (tv !== null) {
+      onTrack++;
+      refTilt.push(tv);
+    } else if (keyed !== null) {
+      const last = declined[declined.length - 1];
+      if (last !== undefined && last[1] === i - 1) last[1] = i;
+      else declined.push([i, i]);
+    }
     const rh = at(i, 'r_hip');
     const lh = at(i, 'l_hip');
     if (rh === null || lh === null) return;
+    if (tv === null) readHipLine(f, i, rh, lh);
+    const rs = at(i, 'r_shoulder');
+    const ls = at(i, 'l_shoulder');
+    if (rs === null || ls === null) return;
+    refSway.push(((rh[0] + lh[0]) / 2 - (rs[0] + ls[0]) / 2) * s);
+    refSw.push(Math.hypot(ls[0] - rs[0], ls[1] - rs[1]) * s);
+  });
+  function readHipLine(f: Partial<Record<Body18, Joint>>, i: number, rh: [number, number], lh: [number, number]): void {
     const isInferred = f.r_hip?.state === 'inferred' || f.l_hip?.state === 'inferred';
     const cls = measured === null ? undefined : (['read', 'interpolated', 'held'] as const).find((c) => inClass(measured[c], i));
     const isScaled = measured !== null && measured.scaled !== undefined && inClass(measured.scaled, i);
@@ -494,12 +536,7 @@ export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: Read
       counts.unmeasured++;
     } else if (isInferred) inferred++;
     else refTilt.push(pictureAngle(rh, lh));
-    const rs = at(i, 'r_shoulder');
-    const ls = at(i, 'l_shoulder');
-    if (rs === null || ls === null) return;
-    refSway.push(((rh[0] + lh[0]) / 2 - (rs[0] + ls[0]) / 2) * s);
-    refSw.push(Math.hypot(ls[0] - rs[0], ls[1] - rs[1]) * s);
-  });
+  }
   const bone = pelvis.bones[0]!;
   const aim = pelvis.aim[0]!;
   let tilt: Posture['tilt'] = null;
@@ -538,6 +575,36 @@ export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: Read
       ratio: rig === null ? null : rig.range / reference.range,
       ratioSw: rig === null || rig.rangeSw === null ? null : rig.rangeSw / reference.rangeSw,
     };
+    // rig-c/pose#295: a pelvis bone keyed from the track turns the bones it carries about its own origin, and the
+    // rig's mid-shoulder with them; the trunk's own sway is the mid-shoulder about the origin it carries.
+    if (keyed !== null && rigShoulder !== null && rig !== null) {
+      const h = pelvis.bones[0]!;
+      const b0 = posed[0]!;
+      /** The child of `h` on the way up from `name`, or null when `h` is not above it. */
+      const childOf = (name: string): string | null => {
+        let at: string | null = name;
+        while (at !== null) {
+          const up: string | null = b0.get(at)?.parent ?? null;
+          if (up === h) return at;
+          at = up;
+        }
+        return null;
+      };
+      const carriers = pointParts(rigShoulder).map((part) => childOf(partBone(part)));
+      if (carriers.some((c) => c !== null)) {
+        const carryX = (b: Map<string, RawBone>) => carriers.reduce((sum, c) => sum + (c === null ? 0 : b.get(c)!.worldX - b.get(h)!.worldX), 0) / carriers.length;
+        const xs = posed.map((b) => b.get(r.origin!.bone)!.worldX - pointAt(b, lengths, rigShoulder)![0] + carryX(b));
+        const trunk = rangeOf(xs);
+        sway.carried = {
+          bone: h,
+          source: keyed.source,
+          origins: [...new Set(carriers.filter((c): c is string => c !== null))],
+          carry: rangeOf(posed.map(carryX)).range,
+          trunk,
+          ratio: reference.range > 0 ? trunk.range / reference.range : null,
+        };
+      }
+    }
   }
   const bounce: BounceSpan[] = [];
   if (r.planted && r.feet !== null && r.feet.supports.length > 0) {
@@ -648,6 +715,7 @@ export function measurePosture(posed: Array<Map<string, RawBone>>, lengths: Read
     frames: { tilt: refTilt.length, sway: refSway.length, of: frames.length },
     tilt,
     ...(tilt === null ? { tiltWhy: why } : {}),
+    ...(keyed !== null ? { tiltTrack: { source: keyed.source, frames: onTrack, declined } } : {}),
     ...(inferred > 0 ? { hipsInferred: { frames: inferred, source: inferredSource } } : {}),
     ...(measured !== null
       ? {
@@ -696,10 +764,18 @@ export function postureLines(q: Posture): string[] {
       : '';
   const measured = m === undefined ? '' : `; tilt measured (${m.method}) on ${m.frames} frame(s): ${m.read} read, ${m.interpolated} interpolated${scaledPart}, ${m.held} held (held: ${heldSpans})${unmeasuredPart}`;
   const left = q.hipsInferred === undefined ? '' : `; ${q.hipsInferred.frames} frame(s) with an inferred hip not read (${q.hipsInferred.source})`;
+  // rig-c/pose#295: the reference read off the pelvis track, named as the PELVIS line names it.
+  const tr = q.tiltTrack;
+  const fromTrack =
+    tr === undefined
+      ? ''
+      : tr.declined.length === 0
+        ? `; all ${q.frames.of} frames from the track`
+        : `; ${tr.frames} of ${q.frames.of} frames from the track, the hip line on the ${q.frames.of - tr.frames} it declined (frames ${spansText(tr.declined)})`;
   const out = [
     t === null
       ? `hip tilt not read: ${q.tiltWhy}`
-      : `hip tilt range (chain "${q.pelvis}", r_hip → l_hip, Spine degrees): reference ${f1(t.reference.range)}° (${sg(t.reference.min)}° … ${sg(t.reference.max)}°${over(q.frames.tilt)}), rig ${f1(t.rig.range)}° (${sg(t.rig.min)}° … ${sg(t.rig.max)}°) — rig/reference ${f3(t.ratio)}${measured}${left}`,
+      : `hip tilt range (chain "${q.pelvis}", r_hip → l_hip, Spine degrees): reference ${f1(t.reference.range)}°${tr === undefined ? '' : ` from ${tr.source}`} (${sg(t.reference.min)}° … ${sg(t.reference.max)}°${over(q.frames.tilt)}${fromTrack}), rig ${f1(t.rig.range)}° (${sg(t.rig.min)}° … ${sg(t.rig.max)}°) — rig/reference ${f3(t.ratio)}${measured}${left}`,
   ];
   const w = q.sway;
   if (w === null) out.push('sway: the reference has no frame with both hips and both shoulders good; not measured');
@@ -710,6 +786,11 @@ export function postureLines(q: Posture): string[] {
       const sw = w.rig.rangeSw === null ? 'no shoulder width' : `${f3(w.rig.rangeSw)} shoulder widths`;
       const ratioSw = w.ratioSw === null ? '' : `, ${f3(w.ratioSw)} in shoulder widths`;
       out.push(`sway, x-range of mid_hip − mid_shoulder: ${ref}, rig ${f1(w.rig.range)} units (${sw}; mid_hip = "${q.rigHip}", mid_shoulder = "${q.rigShoulder}") — rig/reference ${f3(w.ratio!)} in units${ratioSw}`);
+      const c = w.carried;
+      if (c !== undefined) {
+        const origins = c.origins.map((o) => `"${o}"`).join(', ');
+        out.push(`sway: the rig's ${f1(w.rig.range)} units include the pelvis track's turn — bone "${c.bone}" (keyed from ${c.source}) carries ${origins} over ${f1(c.carry)} units of x; the trunk alone (mid_shoulder about that origin) ${f1(c.trunk.range)} units — rig/reference ${c.ratio === null ? 'n/a' : f3(c.ratio)} in units`);
+      }
     }
   }
   if (q.bounce !== undefined) {
