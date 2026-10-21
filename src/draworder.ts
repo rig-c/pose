@@ -30,7 +30,10 @@
  *   ordered, holds the order before; before the first decided frame, the setup
  *   order — or, on a looped sequence, the order the clip ends in, held across
  *   the seam. A key is written where the order changes, and none while it is the
- *   setup order from the start.
+ *   setup order from the start. Its time is half a frame before the frame it
+ *   shows on (0 on frame 0), the rule the switches' attachment keys follow
+ *   (`keyAtFrame` in `switch.ts`): a key exactly on a frame time is a tie the
+ *   render breaks a frame late about half the time (rig-c/pose#325).
  *
  * Pure: no clock, no randomness, no disk.
  */
@@ -38,6 +41,7 @@ import type { Body18 } from './joints.ts';
 import { FLAT_BAND, LIMBS, type FrameLayers, type Limb } from './depth.ts';
 import { knownSetsOf, type JointMap, type Rest, type RigSets } from './map.ts';
 import { DEPTH_SEGMENTS, type DepthSegment, type FrameDepth, type Joint } from './pose.ts';
+import { keyAtFrame } from './switch.ts';
 
 /** The limb pairs `--draw-order depth` keys. */
 export const DRAW_ORDER_PAIRS: ReadonlyArray<readonly [Limb, Limb]> = [['r_leg', 'l_leg']];
@@ -50,7 +54,7 @@ export interface DrawOrderOffset {
   slot: string;
   offset: number;
 }
-/** One key as written into the animation (`t` the frame's time). */
+/** One key as written into the animation (`t` half a frame before the frame it shows on, 0 on frame 0: rig-c/pose#325). */
 export interface DrawOrderKey {
   t: number;
   offsets?: DrawOrderOffset[];
@@ -78,7 +82,7 @@ export interface DrawOrderSpan {
 }
 export interface DrawOrderReading {
   pairs: DrawOrderPair[];
-  /** The `drawOrder` timeline, with the frame each key sits on. */
+  /** The `drawOrder` timeline as written, with the frame each key first shows on. */
   keys: Array<DrawOrderKey & { frame: number }>;
   /** Every span of one decided order, setup or keyed, in frame order per pair. */
   spans: DrawOrderSpan[];
@@ -236,7 +240,9 @@ export function drawOrderFromDepth(layers: readonly FrameLayers[], track: readon
     const text = JSON.stringify(offs);
     if (text === last) continue;
     last = text;
-    keys.push(offs.length === 0 ? { frame: f, t: times[f]! } : { frame: f, t: times[f]!, offsets: offs });
+    // Half a frame before the frame it shows on, as the switches' keys (`keyAtFrame`, rig-c/pose#325).
+    const t = keyAtFrame(times, f);
+    keys.push(offs.length === 0 ? { frame: f, t } : { frame: f, t, offsets: offs });
   }
   const spans: DrawOrderSpan[] = [];
   resolved.forEach((r, k) => {
