@@ -18,6 +18,22 @@ rig-pose retarget --rig examples/wave/rig --map examples/wave/map.json --sequenc
 
 `pose.json` is already cleaned (`make-pose.ts` passes it through `clean`). It prints the gate's verdict and where every mapped bone landed, then writes `wave.motion.json`, its report `wave.motion.report.json` and the gated build, with its record `retarget.json` beside it ([below](#the-builds-record-retargetjson)). `rigc preview --candidate wave-build` plays it in the Spine Web Player. A rig with no art shows only its bones.
 
+## Choosing the approach
+
+How far a retarget can carry a figure depends on the figure and on how intense the motion is ([#361](https://github.com/rig-c/pose/issues/361)):
+
+| Figure | Mild motion (walk, idle, gesture) | Intense motion (run, dance) |
+| --- | --- | --- |
+| A designed character | retarget, plus frame parts where a frame reads wrong | part animation: replacement parts or frame parts swapped in on the frames that need them, sprite-like, placed with [`bind`](#alternate-drawings-alternates) ([#360](https://github.com/rig-c/pose/issues/360)) and alternates; not one drawing bent through large angles |
+| A mannequin or a super-deformed (SD) figure | retarget | full retarget, end to end: its proportions survive large rotations |
+
+The exams use the mannequin. Expecting film-smooth intense motion from a designed character's single set of drawings is the wrong goal. The measured reason is that no procedural lever produced what the drawing lacked:
+
+- **Back-kick** ([#357](https://github.com/rig-c/pose/issues/357)): on a run's back-kick frames only a drawn fold reads as the leg leaning back. The thigh's foreshortening and an end-on hold do not.
+- **Knee up** ([#359](https://github.com/rig-c/pose/issues/359)): a thigh swinging toward the camera keeps its screen direction, so selection by direction alone can never pick a knee-up drawing. The card was parked in favour of drawing that frame part.
+- **Pelvis below the cover** ([#342](https://github.com/rig-c/pose/issues/342)): a garment hides the tilt. The reader had to move below the cover, to the hem and the thigh roots, and a thigh drawn in front of the garment reads as its hem.
+- **Draw order** ([#358](https://github.com/rig-c/pose/issues/358), closed without a change): on the run reference the crossing back foot is a near-end-on shin drawn at full length, not a shin drawn in the wrong order. No draw-order rule fixes a missing drawing.
+
 ## What the rig needs
 
 The map names **chains**: each limb as bones that descend from one another, parent to child. That means a thigh with its shin below it, and an upper arm with its forearm below it, and likewise for the trunk and the head. A rig whose arm is one bone, or that has no leg bones, cannot take a pose: the map is refused by name (`MAP_*`). [@rig-c/parts](https://github.com/rig-c/parts) builds such a rig from a painting's keypoints with `propose --keypoints`. A rig drawn by hand needs the same chains.
