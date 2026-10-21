@@ -40,19 +40,34 @@
  *   shows on (0 on frame 0), the rule the switches' attachment keys follow
  *   (`keyAtFrame` in `switch.ts`): a key exactly on a frame time is a tie the
  *   render breaks a frame late about half the time (rig-c/pose#325).
+ * - **By the joint the gait names** (rig-c/pose#336, the owner's two
+ *   statements). On a sequence cleaned with `--depth walk` the pair is ordered
+ *   by each leg's ankle depth (the hip at 0, plus the thigh's, plus the shin's:
+ *   `limbJointDepths`' end) — in a walk the lifted foot is behind the supporting
+ *   leg; with `--depth run` by the knee depth (the thigh's: its middle) — in a
+ *   run the lifted leg is in front, its knee protruding. The limb mean cannot
+ *   say either: a lifted leg's thigh forward and shin back cancel in it, and a
+ *   walk's flat thigh leaves it at most half a shin (35 px on the fixtures),
+ *   under the limb tie. The tie is scaled to the joint, what a flat chain can
+ *   hold there: √(1 − 0.95²) × thigh at the knee, × (thigh + shin) at the
+ *   ankle, the smaller leg's. Measured depth names no gait and keeps the limb
+ *   mean and its tie (#304).
  *
  * Pure: no clock, no randomness, no disk.
  */
 import type { Body18 } from './joints.ts';
-import { FLAT_BAND, LIMBS, type FrameLayers, type Limb } from './depth.ts';
+import { FLAT_BAND, LIMBS, limbJointDepths, type FrameLayers, type Limb } from './depth.ts';
 import { knownSetsOf, type JointMap, type Rest, type RigSets } from './map.ts';
-import { DEPTH_SEGMENTS, type DepthSegment, type FrameDepth, type Joint } from './pose.ts';
+import { DEPTH_SEGMENTS, type DepthGait, type DepthSegment, type FrameDepth, type Joint } from './pose.ts';
 import { keyAtFrame } from './switch.ts';
 
 /** The limb pairs `--draw-order depth` keys. */
 export const DRAW_ORDER_PAIRS: ReadonlyArray<readonly [Limb, Limb]> = [['r_leg', 'l_leg']];
 /** What one segment inside the flat band can hide out of the picture, per unit of its rest length: √(1 − 0.95²). */
 export const TIE_PER_LENGTH = Math.sqrt(1 - FLAT_BAND[0] * FLAT_BAND[0]);
+/** The joint a gait's legs are ordered by (rig-c/pose#336): a walk's lifted foot is behind, a run's lifted knee in front. */
+export const ORDER_JOINT: Record<DepthGait, LegJoint> = { walk: 'ankle', run: 'knee' };
+export type LegJoint = 'knee' | 'ankle';
 /** The DRAWORDER line's cap, characters (the span list is cut to it; the report carries every span). */
 export const DRAW_ORDER_LINE_MAX = 260;
 
@@ -75,6 +90,8 @@ export interface DrawOrderPair {
   keyed: boolean;
   /** #281's tie for the pair, px: depths closer than this hold the order before (null where a rest length is unread: no tie, equal depths only). */
   tie: number | null;
+  /** #336: the joint the pair is ordered by, from the gait clean recorded (the tie then the joint's); absent, the limb mean (#304). */
+  by?: LegJoint;
   /** Why the pair is not keyed. */
   why?: string;
   /** The slots of anything else drawn between the pair's slots, in setup order (#324: the line counts them first and cuts this list). */
@@ -84,7 +101,7 @@ export interface DrawOrderPair {
 export interface DrawOrderGap {
   a: string;
   b: string;
-  /** |depth a − depth b| over the frames both limbs read, px: the median and the largest. */
+  /** |depth a − depth b| over the frames both limbs read, px: the median and the largest (at the pair's joint, when it has one). */
   median: number | null;
   max: number | null;
   /** The same as a fraction of the leg (upper + lower rest length of the limb the tie is read from); null where a rest length is unread. */
@@ -229,12 +246,13 @@ function restOf(track: readonly Joints[], depth: ReadonlyArray<FrameDepth | unde
 
 /**
  * #281's tie for two limbs, px: √(1 − 0.95²) × (upper + lower ÷ 2), the smaller limb's; null where a rest length is unread.
+ * By a joint (#336): √(1 − 0.95²) × upper at the knee, × (upper + lower) at the ankle — what a flat chain can hold there.
  * `leg` is that limb's upper + lower rest length (#324's unit for the gap).
  */
-function tieOf(track: readonly Joints[], depth: ReadonlyArray<FrameDepth | undefined>, limbs: readonly [Limb, Limb]): { tie: number | null; leg: number | null } {
+function tieOf(track: readonly Joints[], depth: ReadonlyArray<FrameDepth | undefined>, limbs: readonly [Limb, Limb], by: LegJoint | undefined): { tie: number | null; leg: number | null } {
   const rests = limbs.map((l) => {
     const [u, w] = LIMBS[l].map((s) => restOf(track, depth, s));
-    return u === null || u === undefined || w === null || w === undefined ? null : { hidden: u + w / 2, leg: u + w };
+    return u === null || u === undefined || w === null || w === undefined ? null : { hidden: by === 'knee' ? u : by === 'ankle' ? u + w : u + w / 2, leg: u + w };
   });
   if (rests[0] == null || rests[1] == null) return { tie: null, leg: null };
   const r = rests[1].hidden < rests[0].hidden ? rests[1] : rests[0];
@@ -244,13 +262,13 @@ function tieOf(track: readonly Joints[], depth: ReadonlyArray<FrameDepth | undef
 const round = (x: number, k: number): number => Math.round(x * 10 ** k) / 10 ** k;
 
 /** One pair's leg depth gap against its tie over the frames (the rule's own test: unequal and at least the tie). */
-function gapOf(pair: DrawOrderPair, layers: readonly FrameLayers[], leg: number | null): DrawOrderGap {
+function gapOf(pair: DrawOrderPair, zs: ReadonlyArray<Partial<Record<Limb, number>>>, leg: number | null): DrawOrderGap {
   const tie = pair.tie ?? 0;
   const gaps: number[] = [];
   let passed = 0;
-  for (const l of layers) {
-    const za = l.depth[pair.limbs[0]];
-    const zb = l.depth[pair.limbs[1]];
+  for (const z of zs) {
+    const za = z[pair.limbs[0]];
+    const zb = z[pair.limbs[1]];
     if (za === undefined || zb === undefined) continue;
     gaps.push(Math.abs(za - zb));
     if (za !== zb && Math.abs(za - zb) >= tie) passed++;
@@ -266,25 +284,41 @@ function gapOf(pair: DrawOrderPair, layers: readonly FrameLayers[], leg: number 
 /**
  * The draw-order keys from the frames' layers. `track` and `depth` are the sequence's
  * joints and depth per frame (the rest lengths the tie reads); `order` is the rig's
- * setup draw order (the compiled model's slots); `times` the frames' times.
+ * setup draw order (the compiled model's slots); `times` the frames' times. `gait` is
+ * the gait clean recorded for its derived depth: a walk orders by the ankle, a run by
+ * the knee (#336); none (measured depth) by the limb mean (#304).
  */
-export function drawOrderFromDepth(layers: readonly FrameLayers[], track: readonly Joints[], depth: ReadonlyArray<FrameDepth | undefined>, times: readonly number[], map: JointMap, rest: Rest, order: ReadonlyArray<{ name: string; bone: string }>, sets?: RigSets, loop = false): DrawOrderReading {
+export function drawOrderFromDepth(layers: readonly FrameLayers[], track: readonly Joints[], depth: ReadonlyArray<FrameDepth | undefined>, times: readonly number[], map: JointMap, rest: Rest, order: ReadonlyArray<{ name: string; bone: string }>, sets?: RigSets, loop = false, gait: DepthGait | null = null): DrawOrderReading {
+  const by = gait === null ? undefined : ORDER_JOINT[gait];
   const resolved = DRAW_ORDER_PAIRS.map((p) => resolvePair(p, map, rest, order, sets));
   const legs = resolved.map((r) => {
-    const t = tieOf(track, depth, r.pair.limbs);
+    const t = tieOf(track, depth, r.pair.limbs, by);
     r.pair.tie = t.tie;
+    if (by !== undefined) r.pair.by = by;
     return t.leg;
   });
+  // #336: per frame, each limb's depth at the gait's joint (rounded as the layers are); without a gait, the layers' limb means.
+  const zs: ReadonlyArray<Partial<Record<Limb, number>>> =
+    by === undefined
+      ? layers.map((l) => l.depth)
+      : track.map((j, i) => {
+          const z: Partial<Record<Limb, number>> = {};
+          for (const limb of new Set(DRAW_ORDER_PAIRS.flat())) {
+            const d = depth[i] === undefined ? null : limbJointDepths(j, depth[i]!, limb);
+            if (d !== null) z[limb] = Math.round((by === 'knee' ? d.mid : d.end) * 100) / 100;
+          }
+          return z;
+        });
   const names = order.map((s) => s.name);
   // Per pair, per frame: who is behind ('a' | 'b'), or null for the setup order before any decision.
   const states = resolved.map((r) => {
     const tie = r.pair.tie ?? 0;
     const pass = (start: 'a' | 'b' | null): Array<'a' | 'b' | null> => {
       let state = start;
-      return layers.map((l) => {
+      return zs.map((z) => {
         if (!r.pair.keyed) return null;
-        const za = l.depth[r.pair.limbs[0]];
-        const zb = l.depth[r.pair.limbs[1]];
+        const za = z[r.pair.limbs[0]];
+        const zb = z[r.pair.limbs[1]];
         if (za !== undefined && zb !== undefined && za !== zb && Math.abs(za - zb) >= tie) state = za < zb ? 'a' : 'b';
         return state;
       });
@@ -302,7 +336,7 @@ export function drawOrderFromDepth(layers: readonly FrameLayers[], track: readon
       .sort((x, y) => names.indexOf(x.slot) - names.indexOf(y.slot));
   const keys: DrawOrderReading['keys'] = [];
   let last = '[]';
-  for (let f = 0; f < layers.length; f++) {
+  for (let f = 0; f < zs.length; f++) {
     const offs = offsetsAt(f);
     const text = JSON.stringify(offs);
     if (text === last) continue;
@@ -320,7 +354,7 @@ export function drawOrderFromDepth(layers: readonly FrameLayers[], track: readon
       else spans.push({ behind: s === 'a' ? r.pair.a : r.pair.b, front: s === 'a' ? r.pair.b : r.pair.a, frames: [f, f], keyed: (s === 'a' ? r.aBehind : r.bBehind).length > 0 });
     });
   });
-  return { pairs: resolved.map((r) => r.pair), keys, spans, gaps: resolved.map((r, k) => gapOf(r.pair, layers, legs[k]!)) };
+  return { pairs: resolved.map((r) => r.pair), keys, spans, gaps: resolved.map((r, k) => gapOf(r.pair, zs, legs[k]!)) };
 }
 
 /** The animation's `drawOrder` value: the keys without their frames. */
@@ -336,7 +370,9 @@ const span = (f: [number, number]): string => (f[0] === f[1] ? `${f[0]}` : `${f[
  */
 export function drawOrderLines(d: DrawOrderReading, prefix = 'DRAWORDER '): string[] {
   const keyed = d.spans.filter((s) => s.keyed);
-  const head = `${prefix}from depth, ${d.keys.length} key(s) over ${keyed.length} span(s)`;
+  // #336: a keyed pair ordered by a joint names it and its joint-scaled tie.
+  const joint = d.pairs.find((p) => p.by !== undefined && p.keyed);
+  const head = `${prefix}from depth${joint === undefined ? '' : ` by the ${joint.by} (${joint.by === 'ankle' ? 'walk' : 'run'}; tie ${joint.tie === null ? 'none' : `${joint.tie} px`})`}, ${d.keys.length} key(s) over ${keyed.length} span(s)`;
   const groups = new Map<string, string[]>();
   for (const s of keyed) {
     const g = `${s.behind} behind ${s.front}`;
@@ -372,12 +408,18 @@ export function drawOrderLines(d: DrawOrderReading, prefix = 'DRAWORDER '): stri
 /** px with its fraction of the leg: "12.3 px (0.084 leg)". */
 const pxLeg = (px: number | null, legs: number | null): string => (px === null ? 'unread' : `${px} px${legs === null ? '' : ` (${legs} leg)`}`);
 
+/** " at the knee" / " at the ankle" for a pair ordered by a joint (#336), else nothing. */
+const gapAt = (d: DrawOrderReading, g: DrawOrderGap): string => {
+  const j = d.pairs.find((p) => p.a === g.a && p.b === g.b)?.by;
+  return j === undefined ? '' : ` at the ${j}`;
+};
+
 /**
  * The DRAWGAP lines (rig-c/pose#324): one per pair, keyed or not — the leg depth gap's median and
  * max against the tie, and how many frames passed it. Cut to `DRAW_ORDER_LINE_MAX` characters.
  */
 export function drawGapLines(d: DrawOrderReading, prefix = 'DRAWGAP '): string[] {
   return (d.gaps ?? []).map((g) =>
-    `${prefix}${g.a} / ${g.b}: leg depth gap median ${pxLeg(g.median, g.medianLegs)}, max ${pxLeg(g.max, g.maxLegs)}, against the tie of ${g.tie === null ? 'none (a rest length is unread; equal depths only)' : pxLeg(g.tie, g.tieLegs)}; ${g.passed} of ${g.frames} frame(s) passed it`.slice(0, DRAW_ORDER_LINE_MAX),
+    `${prefix}${g.a} / ${g.b}: leg depth gap${gapAt(d, g)} median ${pxLeg(g.median, g.medianLegs)}, max ${pxLeg(g.max, g.maxLegs)}, against the tie of ${g.tie === null ? 'none (a rest length is unread; equal depths only)' : pxLeg(g.tie, g.tieLegs)}; ${g.passed} of ${g.frames} frame(s) passed it`.slice(0, DRAW_ORDER_LINE_MAX),
   );
 }

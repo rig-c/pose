@@ -116,9 +116,10 @@ export interface CleanParams {
    */
   hold?: { speed: number; reach: number } | 'off';
   /**
-   * rig-c/pose#281: derive each frame's depth (`src/depth.ts`) for this gait, on
-   * the cleaned positions. Absent, no depth is derived and the output is what it
-   * was before #281.
+   * rig-c/pose#281: derive each frame's depth (`src/depth.ts`) on the cleaned
+   * positions, and record this gait (rig-c/pose#336: it decides the joint the
+   * draw order reads, not a sign). Absent, no depth is derived and the output is
+   * what it was before #281.
    */
   depth?: DepthGait;
 }
@@ -841,7 +842,7 @@ export function clean(seq: PoseSequence, params: CleanParams, wanted: string | u
   // rig-c/pose#281: derived on the cleaned positions, or a measured depth carried through as read.
   let depth: DerivedDepth | null = null;
   if (params.depth !== undefined) {
-    depth = deriveDepth(frames.map((f) => f.people[0]?.joints ?? {}), params.depth);
+    depth = deriveDepth(frames.map((f) => f.people[0]?.joints ?? {}));
     depth.frames.forEach((d, i) => (frames[i]!.depth = d));
     record.params.depth = { gait: params.depth };
   } else if (carried === 'measured') seq.frames.forEach((f, i) => (frames[i]!.depth = f.depth ?? {}));

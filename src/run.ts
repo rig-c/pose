@@ -227,8 +227,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     // rig-c/pose#281: the limbs' front-to-back order from the sequence's depth, only when it carries depth.
     const layers: FrameLayers[] | null = seq.frames.some((x) => x.depth !== undefined) ? frames.map((j, i) => layersOf(j, seq.frames[i]!.depth ?? {})) : null;
     if (layers !== null) say(`  ${depthLine(layers, seq.frames, seq.cleaned!.params.depth?.gait ?? null)}`);
-    // rig-c/pose#304: with --draw-order depth, the legs' draw order keyed from those layers.
-    const drawOrder: DrawOrderReading | null = a.drawOrder === 'depth' && layers !== null ? drawOrderFromDepth(layers, frames, seq.frames.map((x) => x.depth), r.times, map, rest, doc0.slots, input.sets, seq.cleaned!.params.loop) : null;
+    // rig-c/pose#304: with --draw-order depth, the legs' draw order keyed from the depth (#336: at the joint the recorded gait names).
+    const drawOrder: DrawOrderReading | null = a.drawOrder === 'depth' && layers !== null ? drawOrderFromDepth(layers, frames, seq.frames.map((x) => x.depth), r.times, map, rest, doc0.slots, input.sets, seq.cleaned!.params.loop, seq.cleaned!.params.depth?.gait ?? null) : null;
     if (drawOrder !== null) for (const l of [...drawOrderLines(drawOrder), ...drawGapLines(drawOrder)]) say(`  ${l}`);
     if (r.pivot !== null) say(`  PIVOT  bone "${r.pivot.bone}"'s origin is ${r.pivot.distance.toFixed(2)} units (${r.pivot.hipWidths.toFixed(3)} hip widths) from its thigh roots' midpoint (${r.pivot.roots.join(' + ')}): dx ${r.pivot.offset[0].toFixed(2)}, dy ${r.pivot.offset[1].toFixed(2)}, at setup — the pivot every hip turn swings the legs about`);
     if (r.feet !== null) {

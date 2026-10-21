@@ -18,14 +18,19 @@
  * Each leg runs one stride in P frames, the left half a stride after the right;
  * u is the leg's phase in [0, 1):
  *
- * - walk (P = 24): stance for u < 0.6 — the thigh from +40° to −15°, the knee
- *   straight; swing after — the thigh from −15° back to +40° (sin² ease) with
- *   the knee bent 12·sin(πv)°, so the lifted foot comes forward of the knee,
- *   foreshortened toward the camera: shin down to 0.77 of its length;
+ * - walk (P = 24), in place: stance for u < 0.6 — the thigh from +10° to −10°,
+ *   the knee straight, so the supporting leg stays inside the flat band; swing
+ *   after — the thigh from −10° up to +14.2° and back to +10°, never past the band,
+ *   and the knee folding `WALK_KNEE`·sin(π√v)°, early in the swing, so the
+ *   lifted foot goes behind, its shin tilted back away from the camera: down to
+ *   0.42 of its length. The owner's walk statement (rig-c/pose#336): the lifted
+ *   foot is behind the supporting leg;
  * - run (P = 20): stance for u < 0.35 — the thigh from +15° to −15°, the knee
  *   bent 25·sin°; swing after — the thigh from −15° through +33.5° to +15°, the
  *   knee folding `RUN_KNEE`·sin(πv)°, so the shin is kicked back away from the
- *   camera through the whole swing: down to 0.41 of its length;
+ *   camera through the whole swing (down to 0.41 of its length) while the
+ *   raised thigh brings the knee forward. The owner's run statement
+ *   (rig-c/pose#336): the lifted leg is in front, its knee protruding;
  * - arms: each upper arm swings against its own side's thigh (with the opposite
  *   leg), −0.6× (walk) or −0.9× (run) its angle from the thigh's mid-swing, the
  *   elbow bent 20° (walk) or 70° (run) forward;
@@ -45,6 +50,11 @@
  * segments read flat — `TIE` (√(1 − 0.95²), what one segment within the flat
  * band can hide per unit length) × (upper + lower / 2), the smaller limb's of
  * the two — and tied otherwise: closer than that, the band cannot tell them.
+ * Per joint (rig-c/pose#336), the two legs' knees are in a true order when
+ * their depths differ by at least `TIE` × thigh, and their ankles by `TIE` ×
+ * (thigh + shin): what a flat thigh, and a flat leg, can hide. A leg is lifted
+ * on a frame when it is in its swing (its foot off the floor); the run's
+ * flight frames have both lifted.
  *
  *   bun examples/walk/make-depth.ts <out-dir>   (writes run.json, walk.json, side.json before clean)
  */
@@ -62,6 +72,10 @@ const FPS = 24;
 export const STRIDE: Record<Gait, number> = { walk: 24, run: 20 };
 /** The run's largest knee fold, degrees: the kicked-back shin at 0.41 of its length. */
 export const RUN_KNEE = 95;
+/** The walk's largest knee fold, degrees: the lifted foot behind, its shin at 0.42 of its length. */
+export const WALK_KNEE = 65;
+/** Where each gait's swing starts in the stride (the foot leaves the floor). */
+export const SWING: Record<Gait, number> = { walk: 0.6, run: 0.35 };
 /** The flat band's low edge and the depth a segment within it can hide, per unit length. */
 export const FLAT = 0.95;
 export const TIE = Math.sqrt(1 - FLAT * FLAT);
@@ -95,6 +109,8 @@ export interface DepthFrame {
   truth: Record<Segment, { ratio: number; sign: -1 | 0 | 1 }>;
   /** Each limb's true depth (mean of its middle and end joints). */
   limb: Record<Limb, number>;
+  /** The legs in their swing on this frame (the foot off the floor): one, or both in a run's flight, or none in a walk's double support. */
+  lifted: Array<'r' | 'l'>;
 }
 
 const add = (a: V3, b: V3): V3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
@@ -104,16 +120,17 @@ const ease = (v: number) => (1 - Math.cos(Math.PI * v)) / 2;
 
 /** One leg at phase u: thigh angle and knee bend, degrees. */
 function leg(gait: Gait, u: number): { thigh: number; knee: number } {
+  const s = SWING[gait];
   if (gait === 'walk') {
-    if (u < 0.6) return { thigh: 40 - 55 * (u / 0.6), knee: 0 };
-    const v = (u - 0.6) / 0.4;
-    return { thigh: -15 + 55 * ease(v), knee: 12 * Math.sin(Math.PI * v) };
+    if (u < s) return { thigh: 10 - 20 * (u / s), knee: 0 };
+    const v = (u - s) / (1 - s);
+    return { thigh: -10 + 20 * ease(v) + 10 * Math.sin(Math.PI * v), knee: WALK_KNEE * Math.sin(Math.PI * Math.sqrt(v)) };
   }
-  if (u < 0.35) {
-    const v = u / 0.35;
+  if (u < s) {
+    const v = u / s;
     return { thigh: 15 - 30 * v, knee: 25 * Math.sin(Math.PI * v) };
   }
-  const v = (u - 0.35) / 0.65;
+  const v = (u - s) / (1 - s);
   return { thigh: -15 + 30 * ease(v) + 30 * Math.sin(Math.PI * v), knee: RUN_KNEE * Math.sin(Math.PI * v) };
 }
 
@@ -122,14 +139,16 @@ export function depthCycle(gait: Gait, view: View, cycles = 1): DepthFrame[] {
   const P = STRIDE[gait];
   const armGain = gait === 'walk' ? -0.6 : -0.9;
   const elbow = gait === 'walk' ? 20 : 70;
-  const mid = gait === 'walk' ? 12.5 : 7.5;
+  const mid = gait === 'walk' ? 0 : 7.5;
   return Array.from({ length: P * cycles }, (_, i) => {
     const phi = (2 * Math.PI * (i % P)) / P;
     const midHip: V3 = [0, 0, 0];
     const neck: V3 = [0, 150, 0];
     const j3: Record<string, V3> = { neck };
+    const lifted: Array<'r' | 'l'> = [];
     for (const [side, s, du] of [['r', -1, 0], ['l', 1, 0.5]] as const) {
       const u = ((i % P) / P + du) % 1;
+      if (u >= SWING[gait]) lifted.push(side);
       const { thigh, knee } = leg(gait, u);
       const legB = 6 * Math.sin(phi);
       const armB = 4 * Math.cos(phi);
@@ -159,7 +178,7 @@ export function depthCycle(gait: Gait, view: View, cycles = 1): DepthFrame[] {
       truth[name] = { ratio, sign: ratio >= FLAT ? 0 : dz > 0 ? 1 : -1 };
     }
     const limb = Object.fromEntries((Object.entries(LIMBS) as Array<[Limb, readonly [string, string]]>).map(([l, [m, e]]) => [l, (z[m]! + z[e]!) / 2])) as Record<Limb, number>;
-    return { joints, z, truth, limb };
+    return { joints, z, truth, limb, lifted };
   });
 }
 
@@ -167,6 +186,18 @@ export function depthCycle(gait: Gait, view: View, cycles = 1): DepthFrame[] {
 export function trueOrder(f: DepthFrame, a: Limb, b: Limb): -1 | 0 | 1 {
   const d = f.limb[a] - f.limb[b];
   return Math.abs(d) < TIE * Math.min(HIDDEN[a], HIDDEN[b]) ? 0 : d > 0 ? 1 : -1;
+}
+
+/** What a flat segment chain can hide at each leg joint, per unit of `TIE`: the knee the thigh's, the ankle the whole leg's. */
+const JOINT_HIDDEN = { knee: LEN.thigh, ankle: LEN.thigh + LEN.shin } as const;
+
+/**
+ * The true order of the two legs at one joint (rig-c/pose#336): +1 the right leg's joint in front, −1 the left's, 0 tied
+ * (closer than `TIE` × what a flat chain can hide there: 24.98 px at the knee, 46.84 at the ankle).
+ */
+export function trueJointOrder(f: DepthFrame, joint: 'knee' | 'ankle'): -1 | 0 | 1 {
+  const d = f.z[`r_${joint}`]! - f.z[`l_${joint}`]!;
+  return Math.abs(d) < TIE * JOINT_HIDDEN[joint] ? 0 : d > 0 ? 1 : -1;
 }
 
 /** The cycle as a rig-pose-sequence/1 document, before clean. */
