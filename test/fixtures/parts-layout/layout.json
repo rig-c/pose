@@ -1,0 +1,37 @@
+{
+ "spec": "rig-parts-layout/1",
+ "rig": {
+  "file": "rig.json",
+  "sha256": "79cdf148d72663be5dea196d4ea86eb0d6f4464eeb65e6fd7134df2ccad33fc7"
+ },
+ "setup_slots": [
+  "foot_r",
+  "shin_r",
+  "thigh_r",
+  "crest_r",
+  "foot_l",
+  "shin_l",
+  "thigh_l",
+  "crest_l",
+  "upperarm_r",
+  "forearm_r",
+  "screen"
+ ],
+ "placements": [
+  {
+   "limb": "arm_r",
+   "parts": [
+    "forearm_r"
+   ],
+   "before": {
+    "part": "screen"
+   },
+   "slots": [
+    "forearm_r"
+   ],
+   "target_slots": [
+    "screen"
+   ]
+  }
+ ]
+}

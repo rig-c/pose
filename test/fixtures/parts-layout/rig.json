@@ -1,0 +1,230 @@
+{
+ "spec": "rigc-rig/1",
+ "name": "assemble-fixture_painting",
+ "images": "images",
+ "skeleton": {
+  "x": -32,
+  "y": 0,
+  "width": 64,
+  "height": 64
+ },
+ "bones": [
+  {
+   "name": "root",
+   "x": 0,
+   "y": 0
+  },
+  {
+   "name": "hip",
+   "parent": "root",
+   "x": 0,
+   "y": 56
+  },
+  {
+   "name": "sleeve_r0",
+   "parent": "hip",
+   "length": 20,
+   "rotation": -90,
+   "x": -17,
+   "y": -2
+  },
+  {
+   "name": "sleeve_r1",
+   "parent": "sleeve_r0",
+   "length": 20,
+   "rotation": 0,
+   "x": 20,
+   "y": 0
+  },
+  {
+   "name": "leg_r0",
+   "parent": "hip",
+   "length": 20,
+   "rotation": -90,
+   "x": 2,
+   "y": -2
+  },
+  {
+   "name": "leg_r1",
+   "parent": "leg_r0",
+   "length": 20,
+   "rotation": 0,
+   "x": 20,
+   "y": 0
+  },
+  {
+   "name": "leg_l0",
+   "parent": "hip",
+   "length": 20,
+   "rotation": -90,
+   "x": 16,
+   "y": -2
+  },
+  {
+   "name": "leg_l1",
+   "parent": "leg_l0",
+   "length": 20,
+   "rotation": 0,
+   "x": 20,
+   "y": 0
+  },
+  {
+   "name": "foot_r",
+   "parent": "leg_r1",
+   "x": 20,
+   "y": 0,
+   "inherit": "noRotationOrReflection"
+  },
+  {
+   "name": "foot_l",
+   "parent": "leg_l1",
+   "x": 20,
+   "y": 0,
+   "inherit": "noRotationOrReflection"
+  }
+ ],
+ "slots": [
+  {
+   "name": "foot_r",
+   "bone": "foot_r",
+   "attachment": "foot_r"
+  },
+  {
+   "name": "shin_r",
+   "bone": "leg_r1",
+   "attachment": "shin_r"
+  },
+  {
+   "name": "thigh_r",
+   "bone": "leg_r0",
+   "attachment": "thigh_r"
+  },
+  {
+   "name": "crest_r",
+   "bone": "foot_r",
+   "attachment": "crest_r"
+  },
+  {
+   "name": "foot_l",
+   "bone": "foot_l",
+   "attachment": "foot_l"
+  },
+  {
+   "name": "shin_l",
+   "bone": "leg_l1",
+   "attachment": "shin_l"
+  },
+  {
+   "name": "thigh_l",
+   "bone": "leg_l0",
+   "attachment": "thigh_l"
+  },
+  {
+   "name": "crest_l",
+   "bone": "foot_l",
+   "attachment": "crest_l"
+  },
+  {
+   "name": "upperarm_r",
+   "bone": "sleeve_r0",
+   "attachment": "upperarm_r"
+  },
+  {
+   "name": "forearm_r",
+   "bone": "sleeve_r1",
+   "attachment": "forearm_r"
+  },
+  {
+   "name": "screen",
+   "bone": "hip",
+   "attachment": "screen"
+  }
+ ],
+ "skins": {
+  "default": {
+   "foot_r": {
+    "foot_r": {
+     "image": "foot_r.png",
+     "x": 0,
+     "y": 0
+    }
+   },
+   "shin_r": {
+    "shin_r": {
+     "image": "shin_r.png",
+     "x": 8,
+     "y": 0,
+     "rotation": 90
+    }
+   },
+   "thigh_r": {
+    "thigh_r": {
+     "image": "thigh_r.png",
+     "x": 10,
+     "y": 0,
+     "rotation": 90
+    }
+   },
+   "foot_l": {
+    "foot_l": {
+     "image": "foot_l.png",
+     "x": 0,
+     "y": 0
+    }
+   },
+   "shin_l": {
+    "shin_l": {
+     "image": "shin_l.png",
+     "x": 8,
+     "y": 0,
+     "rotation": 90
+    }
+   },
+   "thigh_l": {
+    "thigh_l": {
+     "image": "thigh_l.png",
+     "x": 10,
+     "y": 0,
+     "rotation": 90
+    }
+   },
+   "forearm_r": {
+    "forearm_r": {
+     "image": "forearm_r.png",
+     "x": 7.5,
+     "y": 0,
+     "rotation": 90
+    }
+   },
+   "upperarm_r": {
+    "upperarm_r": {
+     "image": "upperarm_r.png",
+     "x": 10,
+     "y": 0,
+     "rotation": 90
+    }
+   },
+   "screen": {
+    "screen": {
+     "image": "screen.png",
+     "x": 28,
+     "y": -6
+    }
+   },
+   "crest_r": {
+    "crest_r": {
+     "image": "crest_r.png",
+     "x": 0,
+     "y": -2.5
+    }
+   },
+   "crest_l": {
+    "crest_l": {
+     "image": "crest_l.png",
+     "x": 0,
+     "y": -2.5
+    }
+   }
+  }
+ }
+}

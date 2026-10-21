@@ -186,6 +186,8 @@ No other repository in the org (core, parts, play, adapters, parts-examples, tra
 | `rig-pose-pelvis-keys/1` (`pelvis --pelvis-keys`; fractional frames, rig-c/pose#294) | courtesy | — |
 | `rig-pose-contact-keys/1` (`retarget --contact-keys`; fractional frames, rig-c/pose#303) | courtesy | — |
 | `rig-pose-map/1` (the map) | promised | S, X, D |
+| the map's `layout` (each limb-layout group's depth source, read with `--draw-order depth`, rig-c/pose#346) | courtesy | — |
+| `rig-parts-layout/1` (`layout.json` beside `rig.json`, from @rig-c/parts; read with `--draw-order depth`, rig-c/pose#346) | courtesy | — |
 | `rig-pose-report/1` (the report) | promised, as below | S, R |
 | `rig-pose-camera/1` (`--camera`) | promised | S |
 | `rig-pose-tracks/1` (`--merge`), `rig-pose-compare/1` (`compare --report`) | courtesy | — |
@@ -314,7 +316,7 @@ Every key `rig-pose-report/1` can carry, once: the keys `src/run.ts` writes, and
 | `seams` | courtesy | — | |
 | `seamPairs` | courtesy | — | |
 | `switchRuns` | courtesy | — | (rig-c/pose#279; `turned`, rig-c/pose#355) |
-| `drawOrder` | courtesy | — | (rig-c/pose#304) |
+| `drawOrder` | courtesy | — | (rig-c/pose#304; `layout` and `groups`, the forearms against the trunk, rig-c/pose#346) |
 | `contactKeys` | courtesy | — | only with `--contact-keys` (rig-c/pose#303) |
 | `reach` | courtesy | — | |
 | `reachOrigin` | courtesy | — | only when the map has a `reach` chain (rig-c/pose#282) |
@@ -340,7 +342,7 @@ Promised codes, with their use:
 - D: `RIG_GATE_BASE`, `POSE_NOT_CLEANED`, `POSE_BEND_ONE_WAY`, `POSE_POINT_NEVER_GOOD`, `STANCE`.
 - X: `ARG_PATH`, `MAP_BEND_SIDE`, `MAP_CHAIN_JOINTS`, `MAP_TRANSLATE_SCALE`, `RIGC`.
 
-Every other code is courtesy (`SET_KEY_DRAWN`, rig-c/pose#355, among them). That a refusal always carries some code is promised; which code it carries is promised only for the codes above.
+Every other code is courtesy (`SET_KEY_DRAWN`, rig-c/pose#355, among them; and rig-c/pose#346's `MAP_LAYOUT`, `LAYOUT_JSON`, `LAYOUT_SPEC`, `LAYOUT_SHAPE`, `LAYOUT_RIG_SHA`, `LAYOUT_SETS_SHA`, `LAYOUT_SETUP`, `LAYOUT_ADJACENCY`, `LAYOUT_MISSING`, `LAYOUT_UNBOUND`, `LAYOUT_BINDING_UNKNOWN` and `LAYOUT_BINDING_BONES`). That a refusal always carries some code is promised; which code it carries is promised only for the codes above.
 
 Promised line tags, with their use:
 
