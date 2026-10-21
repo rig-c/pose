@@ -120,6 +120,7 @@ No other repository in the org (core, parts, play, adapters, parts-examples, tra
 | `rig-pose --version`, `--help` | promised | S, X |
 | `rig-pose-sequence/1` (the pose) | promised | S, R, D |
 | `rig-pose-sequence/1.1` (the pose with the pelvis track, `pelvisTilt` and `pelvisSource`, rig-c/pose#288) | courtesy | — |
+| `rig-pose-sequence/1.2` (the pose with per-segment `depth`, `clean --depth`, rig-c/pose#281) | courtesy | — |
 | `rig-pose-pelvis-keys/1` (`pelvis --pelvis-keys`; fractional frames, rig-c/pose#294) | courtesy | — |
 | `rig-pose-map/1` (the map) | promised | S, X, D |
 | `rig-pose-report/1` (the report) | promised, as below | S, R |
@@ -150,6 +151,7 @@ Every flag `parseFlags` reads in `cli.ts`, once. `test/promise.test.ts` holds th
 | `clean` | `--loop` | promised | D | |
 | `clean` | `--coco` | courtesy | — | |
 | `clean` | `--hips-inferred` | courtesy | — | |
+| `clean` | `--depth` | courtesy | — | |
 | `retarget` | `--rig` | promised | X 14, D | |
 | `retarget` | `--map` | promised | S, X 14, D | |
 | `retarget` | `--pose` | promised | X 13, D | |
@@ -252,6 +254,7 @@ Every key `rig-pose-report/1` can carry, once: the keys `src/run.ts` writes, and
 | `legScale` | courtesy | — | |
 | `pivot` | courtesy | — | |
 | `pelvis` | courtesy | — | |
+| `layers` | courtesy | — | only when the sequence carries depth (rig-c/pose#281) |
 | `stance` | courtesy | — | |
 | `idleDropped` | courtesy | — | |
 | `idleKeptOut` | courtesy | — | |

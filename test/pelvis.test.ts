@@ -11,6 +11,10 @@
  * ≥ 0.7 with the band's edge; on the masked variant the PELVIS line names the
  * hip line and the keys are the hip line's. The control — the same frames with
  * no track — must fail the first two, so the track is what carries the tilt.
+ * rig-c/pose#293: the covered variant reduced to the 216-colour palette by an
+ * ordered dither, and the same with the hip keypoints on the band's top edge —
+ * the waistband reads ≥ 90% of frames on the same bars, and two mutants (no
+ * window mean, no patch below the hips) read none.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
@@ -18,7 +22,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { poseRawAnimation, readModel, type RawBone } from 'rig-c/core';
-import { bandTilt, drawFrame, pelvisTilt, tiltedCycle, writePelvisFixture, type Variant } from '../examples/walk/make-pelvis.ts';
+import { bandTilt, drawFrame, PALETTE_STEP, pelvisTilt, tiltedCycle, variantCycle, writePelvisFixture, type Variant } from '../examples/walk/make-pelvis.ts';
 import { walkDoc } from '../examples/walk/make-walk.ts';
 import { clean } from '../src/clean.ts';
 import { readPelvis, readPelvisKeys } from '../src/pelvis.ts';
@@ -157,6 +161,24 @@ describe('the readers, frame by frame', () => {
     const seq = readPoseSequence(readFileSync(writePelvisFixture(d, 'masked').pose, 'utf8'), 'fixture');
     for (const mode of ['silhouette', 'waistband'] as const) {
       cycle.forEach((f, i) => expect('why' in readPelvis(drawFrame(f, 'masked'), seq.frames[i]!.people[0]!.joints, mode)).toBe(true));
+    }
+  });
+
+  test('rig-c/pose#293: on the 216-colour dithered band, and with the hips on its edge, waistband reads every frame within 1.5° of the band', () => {
+    for (const v of ['dithered', 'dithered-edge'] as const) {
+      const cycle = variantCycle(v);
+      const seq = readPoseSequence(readFileSync(writePelvisFixture(tempDir(), v).pose, 'utf8'), 'fixture');
+      const errs = cycle.map((f, i) => {
+        const plate = drawFrame(f, v);
+        // The fixture is paletted: every channel a multiple of the palette's step.
+        if (i === 0) expect(plate.data.every((x, k) => k % 4 === 3 || x % PALETTE_STEP === 0)).toBe(true);
+        const r = readPelvis(plate, seq.frames[i]!.people[0]!.joints, 'waistband');
+        if (!('tilt' in r)) throw new Error(`${v} frame ${i} declined: ${r.why}`);
+        expect(r.mean).toBe(true);
+        expect(r.below !== undefined).toBe(v === 'dithered-edge');
+        return Math.abs(r.tilt - bandTilt(f.phi));
+      });
+      expect(Math.max(...errs)).toBeLessThan(1.5);
     }
   });
 
@@ -318,14 +340,14 @@ describe('the sequence format: minor 1.1 carries the track', () => {
 
   test('a file of a newer minor is read, and each key it adds is refused naming the minor the file says wrote it', () => {
     const doc = base();
-    doc.spec = 'rig-pose-sequence/1.2';
+    doc.spec = 'rig-pose-sequence/1.3';
     expect(refusal(doc)).toEqual([]);
     doc.lens = 'front';
     doc.frames[2]!.blur = 0.3;
-    const note = '; the file says it was written as "rig-pose-sequence/1.2", a newer minor than this reader\'s "rig-pose-sequence/1.1" — read it with a rig-pose that reads that minor';
+    const note = '; the file says it was written as "rig-pose-sequence/1.3", a newer minor than this reader\'s "rig-pose-sequence/1.2" — read it with a rig-pose that reads that minor';
     expect(refusal(doc)).toEqual([
       `POSE_KEYS: p.json has a key this reader does not know: "lens"; the keys it reads are spec, space, width, height, source, frames, cameraSource, camera, cleaned, travel, pelvisSource${note}`,
-      `POSE_KEYS: p.json frames[2] has a key this reader does not know: "blur"; the keys it reads are t, people, pelvisTilt${note}`,
+      `POSE_KEYS: p.json frames[2] has a key this reader does not know: "blur"; the keys it reads are t, people, pelvisTilt, depth${note}`,
     ]);
     // Control: the same unknown key in a file of a minor this reader reads names no newer minor — the key is simply not in the format.
     doc.spec = 'rig-pose-sequence/1';
@@ -384,6 +406,48 @@ describe('rig-pose pelvis → clean → retarget on the walk with a drawn pelvis
     const b = bars(run.build, band());
     expect(b.r).toBeGreaterThanOrEqual(0.7);
     expect(b.ratio).toBeGreaterThanOrEqual(0.5);
+  }, SLOW);
+
+  for (const v of ['dithered', 'dithered-edge'] as const) {
+    test(`rig-c/pose#293 ${v}: the waistband reads ≥ 90% of the frames and the posed pelvis swings ≥ 0.5× the band's edge and correlates ≥ 0.7 with it`, () => {
+      const run = pipeline(v, 'waistband');
+      expect(run.read!.stderr).toBe('');
+      expect(run.read!.status).toBe(0);
+      const tilt = (JSON.parse(readFileSync(run.pelvisSeq!, 'utf8')) as { frames: Array<{ pelvisTilt: number | null }> }).frames.map((f) => f.pelvisTilt);
+      expect(tilt.filter((t) => t !== null).length).toBeGreaterThanOrEqual(0.9 * N);
+      expect(linesOf(run.read!, 'PELVIS')[0]).toContain('of the frames read, 24 through the 5×5 window mean');
+      if (v === 'dithered-edge') expect(linesOf(run.read!, 'PELVIS')[0]).toContain('24 with the colour found below the hips');
+      expect(run.retarget.status).toBe(0);
+      expect(linesOf(run.retarget, 'PELVIS:')[0]).toStartWith('PELVIS: from waistband, swing ');
+      const b = bars(run.build, band());
+      expect(b.ratio).toBeGreaterThanOrEqual(0.5);
+      expect(b.r).toBeGreaterThanOrEqual(0.7);
+    }, SLOW);
+  }
+
+  test('mutants (rig-c/pose#293): without the window mean the dithered band reads no frame; without the patches below the hips the band under hips on its edge reads none', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      const cases = [
+        { name: 'no-mean', from: 'for (const isMean of [false, true])', to: 'for (const isMean of [false])', variant: 'dithered' as const },
+        { name: 'no-below', from: 'for (const below of [0, r, 2 * r])', to: 'for (const below of [0])', variant: 'dithered-edge' as const },
+      ];
+      for (const m of cases) {
+        const src = readFileSync(join(ROOT, 'src', 'pelvis.ts'), 'utf8');
+        expect(src.split(m.from)).toHaveLength(2);
+        const dir = join(d, m.name);
+        cpSync(join(ROOT, 'src'), join(dir, 'src'), { recursive: true });
+        writeFileSync(join(dir, 'src', 'pelvis.ts'), src.replace(m.from, m.to));
+        cpSync(join(ROOT, 'cli.ts'), join(dir, 'cli.ts'));
+        cpSync(join(ROOT, 'package.json'), join(dir, 'package.json'));
+        const run = pipeline(m.variant, 'waistband', tempDir(), join(dir, 'cli.ts'));
+        expect(run.read!.status).toBe(0);
+        expect(linesOf(run.read!, 'PELVIS')[0]).toStartWith('PELVIS waistband read none of the 24 frame(s)');
+      }
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
   }, SLOW);
 
   test('masked: no frame is read, the PELVIS line names the hip line, and the motion is the no-track run\'s byte for byte', () => {
