@@ -23,6 +23,7 @@ import { M2_IDENTITY, mulM2, reduceKeys, reduceScale, reduceUnderScale, SCALE_RE
 import type { BlendHold, Closure, Floor, FreeAnkleShift, LegScale, LegSegmentRatio, Lowered, Side, Stance, SupportScaleRun } from './legs.ts';
 import { reportRenderDomain, writeReport, type ReportInput } from './report.ts';
 import { PROVENANCE_FILE, provenanceText } from './provenance.ts';
+import { madeLine, planOutDirs } from './outdir.ts';
 import { bodyLine, faceLine } from './face.ts';
 
 export interface RetargetArgs extends RetargetOptions {
@@ -104,15 +105,9 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
   const report = a.report ?? defaultReportPath(a.out);
   // A file this run writes goes into a directory the user named: one that is not there yet is made
   // after the run is green (one line says so), as --build and --render make theirs; a file in the way is refused.
-  const makeDirs = new Map<string, string[]>();
-  for (const [flag, path] of [['--out', a.out], ['--report', report], ['--camera', a.camera]] as const) {
-    if (path === undefined) continue;
-    const dir = dirname(path);
-    let up = dir;
-    while (!existsSync(up) && dirname(up) !== up) up = dirname(up);
-    if (!statSync(up).isDirectory()) args.add('ARG_PATH', up === dir ? `${flag} ${path} — ${dir} is not a directory` : `${flag} ${path} — ${up} is a file, so directory ${dir} cannot be made under it`);
-    else if (up !== dir) makeDirs.set(dir, [...(makeDirs.get(dir) ?? []), `${flag} ${path}`]);
-  }
+  const makeDirs = planOutDirs([['--out', a.out], ['--report', report], ['--camera', a.camera]], args);
+  // #284: --build and --render make their own directories (rigc, the copy); a file in the way is refused here, up front.
+  planOutDirs([['--build', a.build], ['--render', a.render]], args);
   if (a.reference !== undefined && a.build === undefined) args.add('ARG_REFERENCE', `--reference ${a.reference} needs --build: the record it goes in is written beside the build (${PROVENANCE_FILE})`);
   args.throwIfAny();
   const input = resolveRig(a.rig, a.baseMotion);
@@ -1133,11 +1128,6 @@ function readSeams(decl: { path: string; pairs: SeamPair[] } | null, rig: string
 /** rig-c/pose#239: the report's path when --report is not given — `<out>.report.json`, beside the motion (a trailing `.json` of --out is replaced). */
 export function defaultReportPath(out: string): string {
   return `${out.endsWith('.json') ? out.slice(0, -'.json'.length) : out}.report.json`;
-}
-
-/** rig-c/pose#239: the line a directory this run made prints — the directory, and the paths that named it. */
-export function madeLine(dir: string, flags: readonly string[]): string {
-  return `  made directory ${dir} — it did not exist; ${flags.join(' and ')} ${flags.length === 1 ? 'is' : 'are'} written into it`;
 }
 
 /** rig-c/pose#239: the report's `wrote` line — whether it was the default, and the mtime of the report it replaced. */

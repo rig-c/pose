@@ -11,7 +11,8 @@ import pkg from './package.json' with { type: 'json' };
 import { clean, cleanLine, holdRegions, unheldText, untestedText, HOLD_BLEND, HOLD_MIN_SECONDS, HOLD_REACH, HOLD_SPEED, HOLD_SPEED_WINDOW, LEGS, OCCLUSION_SCORE, OCCLUSION_WINDOW, SPIKE_TRUNKS, SPIKE_WINDOW, windowProblem } from './src/clean.ts';
 import { convertCoco17, readPoseSequence, writePoseSequence } from './src/pose.ts';
 import { parseWindows } from './src/compare.ts';
-import { lineOf, Refusal } from './src/problems.ts';
+import { lineOf, Problems, Refusal } from './src/problems.ts';
+import { makeOutDirs, planOutDirs } from './src/outdir.ts';
 import { runCompare, type CompareArgs } from './src/runcompare.ts';
 import { PELVIS_MODES, runPelvis, type PelvisMode } from './src/pelvis.ts';
 import { PROVENANCE_FILE } from './src/provenance.ts';
@@ -517,6 +518,9 @@ function runClean(argv: string[], say: (l: string) => void): void {
   const f = parseFlags(argv, ['pose', 'out', 'legs', 'rest', 'person', 'hold', 'hold-speed', 'hold-reach'], ['loop', 'coco', 'hips-inferred']);
   const input = need(f, 'pose');
   const out = need(f, 'out');
+  const outPath = new Problems();
+  const outDirs = planOutDirs([['--out', out]], outPath);
+  outPath.throwIfAny();
   const params = { loop: f.has('loop'), legs: windowOf(f, 'legs', 5), rest: windowOf(f, 'rest', 7), hipsInferred: f.has('hips-inferred'), hold: holdOf(f) };
   const text = readFileSync(input, 'utf8');
   const seq = f.has('coco') ? convertCoco17(text, input) : readPoseSequence(text, input);
@@ -555,6 +559,7 @@ function runClean(argv: string[], say: (l: string) => void): void {
     say(`  HOLDS  ${c.holds.length} found over ${new Set(c.holds.map((x) => x.joint)).size} joint(s) (per joint: a span ≥ ${HOLD_MIN_SECONDS} s still by speed < ${h.speed} trunk/frame and reach ≤ ${h.reach} trunk; ${HOLD_BLEND}-frame blend in and out)`);
   }
   if (c.inferred !== null) say(`  INFERRED r_hip on ${c.inferred.r_hip} frame(s), l_hip on ${c.inferred.l_hip} frame(s) of ${n} marked "inferred" (every frame where it has a position): declared at clean (--hips-inferred); positions and scores unchanged`);
+  makeOutDirs(outDirs, say);
   writeFileSync(out, writePoseSequence(c.seq));
   say(`  CLEAN  ${cleanLine(c.record)}`);
   say(`  wrote ${out}`);
@@ -604,7 +609,11 @@ export function main(argv: string[]): number {
       const f = parseFlags(rest, ['coco', 'out'], []);
       const input = need(f, 'coco');
       const out = need(f, 'out');
+      const p = new Problems();
+      const outDirs = planOutDirs([['--out', out]], p);
+      p.throwIfAny();
       const seq = convertCoco17(readFileSync(input, 'utf8'), input);
+      makeOutDirs(outDirs, (l) => process.stdout.write(`${l}\n`));
       writeFileSync(out, writePoseSequence(seq));
       process.stdout.write(`rig-pose convert: ${seq.frames.length} frame(s) of COCO-17 → body-18; wrote ${out}\n`);
       return 0;
