@@ -19,7 +19,7 @@ import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, re
 import { bendGroupLine, bendGroups, bendLine, endOnLine, flipLine, holdLine, nodLine, pelvisLine, rangeLine, reachCostLine, reachOriginLine, reachOriginWarn, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions, type ScaleBand, type ScaleFit } from './retarget.ts';
 import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, readBuild, resolveRig, restOf, seamRender, slotsOf } from './rigc.ts';
 import { partsPath, projectSeams, readSeamDoc, readSeamPairs, seamLines, type SeamPair } from './seams.ts';
-import { artRangeLine, chainsMoving, phaseLines, raisedLine, RAISED_WITHIN, reachLine, switchLine, switchMinLines, switchTurnLines, uncoveredFolds } from './switch.ts';
+import { artRangeLine, chainsMoving, phaseLines, raisedLine, RAISED_WITHIN, reachLine, switchBindLines, switchLine, switchMinLines, switchTurnLines, uncoveredFolds } from './switch.ts';
 import { jitterLine, landed, type FeetReading, type JitterRow, type Landing, measureFeet, measureJitter, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
 import { FRONTAL_DISAGREE, legsOf, PLANT_SWITCH, STANCE_BOUNDS } from './legs.ts';
 import { M2_IDENTITY, mulM2, reduceKeys, reduceScale, reduceUnderScale, SCALE_REDUCE, setupLocal, smoothTrunk, type M2, type ReduceBone, type Reduced, type ReduceRow, type UnderBone } from './reduce.ts';
@@ -220,6 +220,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       for (const l of switchMinLines(r.switchRuns, a.switchMin)) say(`  SWITCH-MIN ${l}`);
       // #355: only for a set whose art turn kept it off some frames.
       for (const l of switchTurnLines(r.switchRuns, a.switchTolerance)) say(`  SWITCH-TURN ${l}`);
+      // #360: only for a set with a `bind`.
+      for (const l of switchBindLines(map, r.switchBinds, r.switches)) say(`  SWITCH-BIND ${l}`);
       for (const l of windowLines(map, r.switches, r.distances, r.times, a.switchTolerance)) say(`  FRAMES ${l}`);
       for (const l of phaseLines(map, r.switches)) say(`  PHASE  ${l}`);
     }
@@ -485,6 +487,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         seamPairs: seamRead.seamPairs,
         switches: r.switches,
         switchRuns: r.switchRuns,
+        // Only when the map binds a set (#360): a map without one writes the report it always has.
+        ...(r.switchBinds.length > 0 ? { switchBinds: r.switchBinds } : {}),
         uncovered,
         turns: r.turns,
         reach: r.reach,

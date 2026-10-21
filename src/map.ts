@@ -114,6 +114,8 @@ export interface AlternateSet {
   turn: Record<string, [number, number]>;
   /** A stopgap: the only frames the set may show on, a list of [first, last] windows; on them it is chosen over any set without windows. Null: any frame. */
   frames: Array<[number, number]> | null;
+  /** `bind` (rig-c/pose#360): the frames the set shows on, exactly — no key distance, no art-turn gate, no minimum span, no bridging, no hysteresis — and only there. Absent: the angle rule. */
+  bind?: SetBind;
   /** `place: "by-hip"` (rig-c/pose#93): the chains whose wrist `pose` puts within one hip width of the mid-hip, their wrists placed by the offset from the hip while the set shows. Absent or null: the pose's angles. */
   place?: { by: 'hip'; chains: string[] } | null;
   /** `symmetric: true` (rig-c/pose#188): normalise the set's two two-bone arm chains to the drawn symmetry centre and keep their wrists inside the head silhouette while the set shows. */
@@ -124,6 +126,14 @@ export interface AlternateSet {
   anchor?: string[];
   /** `phase` (rig-c/pose#286): the stepping foot the set is drawn for (left-step: the left foot is stepping; shown while the right foot supports); it shows exactly on that supporting foot's `feet.supports` spans, switched on the hand-over. Absent: the angle rule. */
   phase?: Phase;
+}
+/**
+ * A set's `bind` (rig-c/pose#360), as the map states it: inclusive pose-frame ranges, either explicit (`cycle` null) or
+ * relative to a cycle of `cycle` frames from frame 0, repeated over the sequence (`bindFrames` in `switch.ts` expands it).
+ */
+export interface SetBind {
+  cycle: number | null;
+  at: Array<[number, number]>;
 }
 export interface YawSet {
   set: string;
@@ -437,7 +447,7 @@ function readBodyMap(p: Problems, where: string, raw: unknown): BodyMap | undefi
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-const SET_SHAPE = '{ name, slots: { "<slot>": "<attachment>" }, hides?: [slot], chains: [chain], pose: { "<joint>": [x, y] }, drawn?: { "<bone>": deg }, offsets?: { "<bone>": [dx, dy] }, turn?: { "<bone>": [min, max] }, frames?: [[first, last], …], place?: "by-hip", phase?: "left-step" | "right-step" }';
+const SET_SHAPE = '{ name, slots: { "<slot>": "<attachment>" }, hides?: [slot], chains: [chain], pose: { "<joint>": [x, y] }, drawn?: { "<bone>": deg }, offsets?: { "<bone>": [dx, dy] }, turn?: { "<bone>": [min, max] }, frames?: [[first, last], …], bind?: [[first, last], …] | { cycle, at: [[first, last], …] }, place?: "by-hip", phase?: "left-step" | "right-step" }';
 
 /** The joints a wrist is, for `place: "by-hip"`: a chain whose last joint is one of them carries a wrist. */
 export const WRISTS: readonly string[] = ['r_wrist', 'l_wrist'];
@@ -486,7 +496,7 @@ function readAlternates(p: Problems, where: string, raw: unknown, chains: readon
       p.add('MAP_ALT_SHAPE', `${aw} is ${typeName(a)}; a set is ${SET_SHAPE}`);
       return;
     }
-    refuseUnknownKeys(p, 'MAP_KEYS', aw, a, ['name', 'note', 'slots', 'hides', 'chains', 'pose', 'drawn', 'offsets', 'turn', 'frames', 'place', 'symmetric', 'support', 'anchor', 'phase']);
+    refuseUnknownKeys(p, 'MAP_KEYS', aw, a, ['name', 'note', 'slots', 'hides', 'chains', 'pose', 'drawn', 'offsets', 'turn', 'frames', 'bind', 'place', 'symmetric', 'support', 'anchor', 'phase']);
     const name = typeof a.name === 'string' && a.name !== '' ? a.name : null;
     if (name === null) p.add('MAP_ALT_NAME', `${aw} "name" is ${typeName(a.name)}; it must be a non-empty string`);
     else if (names.has(name)) p.add('MAP_ALT_NAME', `${aw} "name" "${name}" names two sets`);
@@ -595,6 +605,35 @@ function readAlternates(p: Problems, where: string, raw: unknown, chains: readon
         p.add('MAP_ALT_FRAMES', `${label} "frames" is ${JSON.stringify(f)}; it must be a non-empty list of windows [[first, last], …], whole frame numbers ≥ 0 with first ≤ last`);
       } else frames = (f as Array<[number, number]>).map((w) => [w[0], w[1]]);
     }
+    // rig-c/pose#360: the frames a set is bound to. Inside the sequence is read against the pose (`bindProblems`).
+    let bind: SetBind | undefined;
+    if ('bind' in a) {
+      const b = a.bind;
+      const whole = (x: unknown): x is number => Number.isInteger(x) && (x as number) >= 0;
+      const pair = (w: unknown): w is [number, number] => Array.isArray(w) && w.length === 2 && whole(w[0]) && whole(w[1]) && (w[0] as number) <= (w[1] as number);
+      const SHAPE = 'it is a non-empty list of inclusive pose-frame ranges [[first, last], …], or { "cycle": N, "at": [[first, last], …] } with the ranges counted from the start of each N-frame cycle; whole frame numbers ≥ 0 with first ≤ last';
+      if (Array.isArray(b)) {
+        if (b.length === 0 || !b.every(pair)) p.add('MAP_ALT_BIND', `${label} "bind" is ${JSON.stringify(b)}; ${SHAPE}`);
+        else bind = { cycle: null, at: (b as Array<[number, number]>).map((w) => [w[0], w[1]]) };
+      } else if (isObject(b)) {
+        const extra = Object.keys(b).filter((k) => k !== 'cycle' && k !== 'at');
+        const cycle = b.cycle;
+        const at = b.at;
+        if (extra.length > 0) p.add('MAP_ALT_BIND', `${label} "bind" names ${extra.map((k) => `"${k}"`).join(', ')}; a cycle-relative bind is { "cycle": N, "at": [[first, last], …] }`);
+        else if (!Number.isInteger(cycle) || (cycle as number) < 1) p.add('MAP_ALT_BIND', `${label} "bind" "cycle" is ${JSON.stringify(cycle)}; it must be the cycle's length in frames, a whole number ≥ 1`);
+        else if (!Array.isArray(at) || at.length === 0 || !at.every(pair)) p.add('MAP_ALT_BIND', `${label} "bind" "at" is ${JSON.stringify(at)}; ${SHAPE}`);
+        else {
+          const n = cycle as number;
+          const bad = (at as Array<[number, number]>).filter(([f, l]) => f >= n || l - f + 1 > n);
+          if (bad.length > 0) p.add('MAP_ALT_BIND', `${label} "bind" "at" range(s) ${bad.map((w) => JSON.stringify(w)).join(', ')} with "cycle" ${n}: a cycle-relative range starts inside the cycle (first ≤ ${n - 1}) and spans at most one cycle (last − first + 1 ≤ ${n}); a last past ${n - 1} runs into the next cycle`);
+          else bind = { cycle: n, at: (at as Array<[number, number]>).map((w) => [w[0], w[1]]) };
+        }
+      } else p.add('MAP_ALT_BIND', `${label} "bind" is ${typeName(b)}; ${SHAPE}`);
+      if ('frames' in a) p.add('MAP_ALT_BIND', `${label} names both "bind" and "frames"; a bound set shows exactly on its bound frames and nowhere else, so a window would mean nothing — drop one`);
+      if ('phase' in a) p.add('MAP_ALT_BIND', `${label} names both "bind" and "phase"; a bound set shows on its bound frames and a phase set on its supporting foot's spans — drop one`);
+      if ('frames' in a || 'phase' in a) bind = undefined;
+      if (bind === undefined) ok = false;
+    }
     let place: AlternateSet['place'] = null;
     if ('place' in a) {
       if (a.place !== 'by-hip') p.add('MAP_ALT_PLACE', `${label} "place" is ${JSON.stringify(a.place)}; the one placement a set may ask for is "by-hip"`);
@@ -696,12 +735,14 @@ function readAlternates(p: Problems, where: string, raw: unknown, chains: readon
       if (typeof a.phase !== 'string' || !phases.includes(a.phase)) {
         p.add('MAP_ALT_PHASE', `${label} "phase" is ${JSON.stringify(a.phase)}; it is the stepping foot the set is drawn for, one of ${phases.map((x) => `"${x}"`).join(', ')} (left-step: the left foot is stepping; shown while the right foot supports)`);
         ok = false;
+      } else if ('bind' in a) {
+        ok = false;
       } else if ('frames' in a) {
         p.add('MAP_ALT_PHASE', `${label} names both "phase" and "frames"; a phase set shows on its supporting foot's spans, and a window would cut them — drop one`);
         ok = false;
       } else phase = a.phase as Phase;
     }
-    if (ok && name !== null && cs !== null) out.push({ name, slots, hides, chains: cs, pose, drawn, offsets, turn, frames, ...(place === null ? {} : { place }), ...(symmetric === undefined ? {} : { symmetric }), ...(support === undefined ? {} : { support }), ...(anchor === undefined ? {} : { anchor }), ...(phase === undefined ? {} : { phase }) });
+    if (ok && name !== null && cs !== null) out.push({ name, slots, hides, chains: cs, pose, drawn, offsets, turn, frames, ...(bind === undefined ? {} : { bind }), ...(place === null ? {} : { place }), ...(symmetric === undefined ? {} : { symmetric }), ...(support === undefined ? {} : { support }), ...(anchor === undefined ? {} : { anchor }), ...(phase === undefined ? {} : { phase }) });
   });
   return out;
 }
