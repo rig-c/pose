@@ -34,6 +34,8 @@ The exams use the mannequin. Expecting film-smooth intense motion from a designe
 - **Pelvis below the cover** ([#342](https://github.com/rig-c/pose/issues/342)): a garment hides the tilt. The reader had to move below the cover, to the hem and the thigh roots, and a thigh drawn in front of the garment reads as its hem.
 - **Draw order** ([#358](https://github.com/rig-c/pose/issues/358), closed without a change): on the run reference the crossing back foot is a near-end-on shin drawn at full length, not a shin drawn in the wrong order. No draw-order rule fixes a missing drawing.
 
+The record of every lever tried on the way to this table, with its measurement, is [docs/JOURNEY-gait.md](https://github.com/rig-c/pose/blob/main/docs/JOURNEY-gait.md).
+
 ## What the rig needs
 
 The map names **chains**: each limb as bones that descend from one another, parent to child. That means a thigh with its shin below it, and an upper arm with its forearm below it, and likewise for the trunk and the head. A rig whose arm is one bone, or that has no leg bones, cannot take a pose: the map is refused by name (`MAP_*`). [@rig-c/parts](https://github.com/rig-c/parts) builds such a rig from a painting's keypoints with `propose --keypoints`. A rig drawn by hand needs the same chains.
