@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.42.0](https://github.com/rig-c/pose/compare/v0.41.0...v0.42.0) (2026-10-21)
+
+
+### Features
+
+* **retarget:** --contact-keys sets which foot supports from a hand contact table, for drawn walks no signal reads ([#303](https://github.com/rig-c/pose/issues/303)) ([#338](https://github.com/rig-c/pose/issues/338)) ([baee439](https://github.com/rig-c/pose/commit/baee439db3d5fd8e1ef41302a1d631ec1881abb2))
+
+
+### Bug Fixes
+
+* **depth:** a walk's lifted foot reads behind and a run's lifted leg in front — the shin leans back in both gaits; --draw-order reads the ankle on a walk and the knee on a run ([#336](https://github.com/rig-c/pose/issues/336)) ([#340](https://github.com/rig-c/pose/issues/340)) ([a965cd7](https://github.com/rig-c/pose/commit/a965cd79424f9ca0e5e84a0a7ae1fdc532ec39ec))
+* **retarget:** draw-order keys go on the half frame before the frame they show on, as attachment keys already do ([#325](https://github.com/rig-c/pose/issues/325)) ([#337](https://github.com/rig-c/pose/issues/337)) ([76e4b28](https://github.com/rig-c/pose/commit/76e4b282ef5800d3c9faef26b683cf46e7d8d263))
+* **retarget:** face and body yaw attachment keys go on the half frame through keyAtFrame, and a guard fails on any discrete key at an exact frame time ([#334](https://github.com/rig-c/pose/issues/334)) ([#341](https://github.com/rig-c/pose/issues/341)) ([f66dfec](https://github.com/rig-c/pose/commit/f66dfecdc50bb0da5fbd6ad029697d8be655f8d3))
+
 ## [0.41.0](https://github.com/rig-c/pose/compare/v0.40.0...v0.41.0) (2026-10-21)
 
 
