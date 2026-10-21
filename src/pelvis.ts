@@ -31,6 +31,11 @@
  *   scan runs down to where the colour was found. The first patch that holds
  *   and is not the background is the garment; with none, the midpoint's median
  *   is read as it is.
+ *   The line is fitted through the band's top edge (rig-c/pose#318): where a
+ *   strip of the garment is too thin for the colour test (a waistband drawn as
+ *   two ink lines), the tops step between the strip's lines, and each column
+ *   is followed up to its topmost garment pixel; an edge that cuts across the
+ *   band under it (a fold) is declined.
  *
  * The forearms are not read: pixels near the segments elbow → wrist (and the
  * hands) are masked, since a hanging arm passes the hips in a walk. A frame
@@ -76,13 +81,15 @@ export const MAX_RMS = 2.5;
 export const ARM_RADIUS = 0.15;
 /** Hips closer than this in the picture, px, have no span to read across (a figure seen side-on). */
 export const MIN_SPAN = 6;
+/** The band's top is taken above the scan's tops only when their climbs to it differ by more than this many rows (rig-c/pose#318): each end of a clean edge's climb is found to a row. */
+export const CLIMB_SPREAD = 2;
 
 /**
  * One frame's reading: the tilt (Spine degrees, r_hip → l_hip), or why it was declined. A waistband
  * read through the window mean says so (`mean`), and one whose colour was found below the hips says
- * how far (`below`, px).
+ * how far (`below`, px); one whose band top lay above the colour's edge in some columns says how many (`raised`, #318).
  */
-export type Reading = { tilt: number; cover: number; rms: number; mean?: true; below?: number } | { kind: string; why: string };
+export type Reading = { tilt: number; cover: number; rms: number; mean?: true; below?: number; raised?: number } | { kind: string; why: string };
 
 /** The frame as RGB over white, its background colour, and which pixels are masked (forearms, hands). */
 interface Frame {
@@ -321,6 +328,7 @@ function waistband(f: Frame, c: Pt, span: number, x0: number, x1: number, cols: 
       }
     }
   }
+  const raised = toBandTop(f, tops, g, top, colourAt);
   const share = tops.length / cols;
   if (share < MIN_COVER) {
     return above > cols / 2 ? { kind: 'garment above the band', why: `the garment runs above the band read (${above} of ${cols} columns carry its colour ${(1.5 * span).toFixed(0)} px above the hips); no waistband edge` } : { kind: 'waistband edge too short', why: `the garment's top edge is found in ${tops.length} of the ${cols} columns between the hips (${(100 * share).toFixed(0)}% < ${100 * MIN_COVER}%)` };
@@ -329,7 +337,134 @@ function waistband(f: Frame, c: Pt, span: number, x0: number, x1: number, cols: 
   if (fit === null) return { kind: 'no line', why: 'the garment\'s top edge does not fit a line (fewer than three columns)' };
   if (fit.rms > MAX_RMS) return { kind: 'not a straight waistband', why: `the garment's top edge lies ${fit.rms.toFixed(2)} px from its line (root mean square > ${MAX_RMS}); not a straight waistband` };
   if (Math.abs(Math.atan(fit.m)) * (180 / Math.PI) > 45) return { kind: 'waistband too steep', why: `the garment's top edge runs ${(Math.atan(fit.m) * (180 / Math.PI)).toFixed(1)}° from level; a waistband is within 45°` };
-  return { tilt: tiltOf(fit.m, rHip, lHip), cover: share, rms: fit.rms, ...(isMean ? { mean: true as const } : {}), ...(below > 0 ? { below } : {}) };
+  const off = notTheBand(f, fit, tops, top, colourAt);
+  if (off !== null) return off;
+  return { tilt: tiltOf(fit.m, rHip, lHip), cover: share, rms: fit.rms, ...(isMean ? { mean: true as const } : {}), ...(below > 0 ? { below } : {}), ...(raised > 0 ? { raised } : {}) };
+}
+
+/**
+ * rig-c/pose#318: the band's top edge, the topmost garment boundary in each column. The three-row test misses garment
+ * above the row it finds when a strip of it is too thin to carry the colour three rows deep (through the window mean,
+ * a strip between two ink lines never does), so the tops step between a strip's top line and the cloth under its lower
+ * line. The garment's colours are the picture's own: the pixels of three rows in each column `DITHER_RADIUS + 1` below
+ * the row the scan found, clear of the edge's blend (an outline there would lend the colour above to the garment). The
+ * thing above has one colour, `a`: the median, over the columns read, of the rows from the scan's top down to
+ * `3 · (DITHER_RADIUS + 1)` above the topmost top — clear of the edge's blend, an outline and a window, and by area, so
+ * a line crossing it or a tilted band's outline in a few of its rows does not move it. From each top
+ * the column is followed up, pixel by pixel, while a pixel is no nearer to `a` than to the nearest garment pixel (cloth
+ * of any shade, and the ink lines on it, are); a climb that reaches the scan's top or a forearm does not see the top.
+ * The band's top is the topmost cloth pixel on the path (within `GARMENT_DIFF` of a garment pixel), from where the climb
+ * stopped down to the scan's three rows: an outline above it, or a line leaving the band upward, is ink, not garment;
+ * a thin strip's cloth between its two lines is garment. A clean edge climbs
+ * about the same rows in every column — the distance between two boundaries each found to a row — so only when the
+ * climbs differ by more than `CLIMB_SPREAD` rows (90th less 10th percentile) do the columns take their topmost garment
+ * row — and a column whose top was not seen is then not read, since its scan top is the lower level; otherwise the
+ * tops stay exactly as read. Nothing is done when the colour above is the garment's (its median
+ * within `GARMENT_DIFF`). Rewrites `tops` in place; returns how many moved.
+ */
+function toBandTop(f: Frame, tops: Pt[], g: RGB, top: number, colourAt: (x: number, y: number) => RGB | null): number {
+  if (tops.length === 0) return 0;
+  const lift = DITHER_RADIUS + 1;
+  const ya = Math.min(...tops.map((p) => p[1])) - 3 * lift;
+  if (ya < top) return 0;
+  const set = (pts: Pt[]) => {
+    const m = new Map<string, RGB>();
+    for (const [x, y] of pts) {
+      if (y < 0 || y >= f.h || f.masked(x, y)) continue;
+      const p = f.rgb(x, y);
+      m.set(p.join(','), p);
+    }
+    return [...m.values()];
+  };
+  const cloth = set(tops.flatMap(([x, y]) => [0, 1, 2].map((k): Pt => [x, y + lift + k])));
+  if (cloth.length === 0) return 0;
+  const seen = tops.flatMap(([x]) => {
+    const out: RGB[] = [];
+    for (let y = top; y <= ya; y++) {
+      const p = f.masked(x, y) ? null : colourAt(x, y);
+      if (p !== null) out.push(p);
+    }
+    return out;
+  });
+  if (seen.length === 0) return 0;
+  const a: RGB = [0, 1, 2].map((k) => median(seen.map((p) => p[k]!))) as RGB;
+  if (diff(a, g) <= GARMENT_DIFF) return 0;
+  const nearest = (p: RGB, cs: RGB[]) => Math.min(...cs.map((q) => diff(p, q)));
+  const climbs = tops.map(([x, y0]) => {
+    let y = y0;
+    while (true) {
+      if (y - 1 < top || f.masked(x, y - 1)) return null;
+      const p = f.rgb(x, y - 1);
+      if (diff(p, a) < nearest(p, cloth)) break;
+      y--;
+    }
+    // The band's top: the topmost cloth pixel on the path, from where the climb stopped down to the scan's three rows.
+    for (let v = y; v <= y0 + 2; v++) if (v < f.h && nearest(f.rgb(x, v), cloth) <= GARMENT_DIFF) return y0 - v;
+    return null;
+  });
+  const ks = climbs.filter((k): k is number => k !== null).sort((p, q) => p - q);
+  if (ks.length === 0) return 0;
+  const rank = (q: number) => ks[Math.min(ks.length - 1, Math.max(0, Math.ceil(q * ks.length) - 1))]!;
+  if (rank(0.9) - rank(0.1) <= CLIMB_SPREAD) return 0;
+  let moved = 0;
+  const read = tops.flatMap((t, i): Pt[] => {
+    const k = climbs[i];
+    if (k === null || k === undefined) return [];
+    if (k !== 0) moved++;
+    return [[t[0], t[1] - k]];
+  });
+  tops.splice(0, tops.length, ...read);
+  return moved;
+}
+
+/**
+ * rig-c/pose#318: the edge the waistband reader fitted is declined when it cuts across the band instead of running
+ * along it — a fold's edge under a band the colour test passed over. Above the edge, in each column read, the colour
+ * `DITHER_RADIUS + 1` rows up (past the outline and the window's blend) is followed up while it holds within
+ * `GARMENT_DIFF`; where it stops is the band's top. When at least `MIN_COVER` of the columns read show such a band (not
+ * the ground, not open up to the scan's top), its top is fitted as a line. The two lines bound a strip of thickness
+ * `ta` and `tb` at the read columns' ends. A line inside a band of thickness t across a width W departs from the band's
+ * direction by at most atan(t / W); an edge whose strip more than doubles across the hips (|ta − tb| > min(ta, tb)), or
+ * crosses the band's top, cuts across the garment instead of running along the band.
+ *
+ * Null when the edge is the band's (or nothing above it is a band to hold it to).
+ */
+function notTheBand(f: Frame, fit: { m: number; q: number }, tops: Pt[], top: number, colourAt: (x: number, y: number) => RGB | null): Reading | null {
+  const edgeAt = (x: number) => fit.m * x + fit.q;
+  const bandTops: Pt[] = [];
+  for (const [x, y] of tops) {
+    const s = y - (DITHER_RADIUS + 1);
+    if (s < top || f.masked(x, s)) continue;
+    const c0 = colourAt(x, s);
+    if (c0 === null || diff(c0, f.bg) <= FIGURE_DIFF) continue;
+    let v = s;
+    let closed = false;
+    while (v - 1 >= top) {
+      if (f.masked(x, v - 1)) break;
+      const p = colourAt(x, v - 1);
+      if (p === null) break;
+      if (diff(p, c0) > GARMENT_DIFF) {
+        closed = true;
+        break;
+      }
+      v--;
+    }
+    if (closed) bandTops.push([x, v]);
+  }
+  if (bandTops.length < MIN_COVER * tops.length) return null;
+  const band = fitLine(bandTops);
+  if (band === null || band.rms > MAX_RMS) return null;
+  const xa = Math.min(...tops.map((p) => p[0]));
+  const xb = Math.max(...tops.map((p) => p[0]));
+  const ta = edgeAt(xa) - (band.m * xa + band.q);
+  const tb = edgeAt(xb) - (band.m * xb + band.q);
+  if (Math.abs(ta - tb) <= Math.min(ta, tb)) return null;
+  const deg = (m: number) => Math.atan(m) * (180 / Math.PI);
+  const allow = Math.max(0, Math.min(ta, tb));
+  return {
+    kind: 'edge leaves the band',
+    why: `the garment's edge fitted across the hips runs ${Math.abs(deg(fit.m) - deg(band.m)).toFixed(1)}° from the top of the band above it (${bandTops.length} of ${tops.length} columns; the band ${ta.toFixed(1)} px thick at x ${xa} and ${tb.toFixed(1)} px at x ${xb}); an edge inside a band ${allow.toFixed(1)} px thick at its thinnest departs from it by at most ${deg(allow / (xb - xa)).toFixed(1)}° across the ${xb - xa} px read, so this edge cuts across the garment (a fold), not along the band`,
+  };
 }
 
 /**
@@ -420,6 +555,8 @@ function viaNote(readings: Reading[]): string {
   const parts: string[] = [];
   if (mean > 0) parts.push(`${mean} through the ${2 * DITHER_RADIUS + 1}×${2 * DITHER_RADIUS + 1} window mean (the garment's colour does not hold pixel by pixel: a dithered or paletted picture)`);
   if (below > 0) parts.push(`${below} with the colour found below the hips (up to ${Math.max(...ok.map((r) => r.below ?? 0)).toFixed(1)} px; the hips on the band's edge)`);
+  const raised = ok.filter((r) => r.raised !== undefined);
+  if (raised.length > 0) parts.push(`${raised.length} with the band's top read above the colour's edge in some columns (up to ${Math.max(...raised.map((r) => r.raised ?? 0))} columns: a strip too thin to carry the colour, read as its top line)`);
   return parts.length === 0 ? '' : `; of the frames read, ${parts.join(', ')}`;
 }
 

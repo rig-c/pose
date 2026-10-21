@@ -568,3 +568,89 @@ describe('rig-pose pelvis → clean → retarget on the walk with a drawn pelvis
     }
   }, SLOW);
 });
+
+/**
+ * rig-c/pose#318: the waistband is read at its top edge. Two variants of #293's dithered band: `dithered-fold`, a fold
+ * of darker cloth below a line turned 15° from the band on every fourth frame, and `dithered-strip`, a thin two-line
+ * strip at the band's top (a second ink line under the top edge across half the hips). The bars (the card): every frame
+ * read is within 3° of the band's edge, or declined by name, and the retargeted swing is within 1.5× of the band's.
+ * Two mutants: without the climb to the band's top the strip reads the stair between its lines; without the test for an
+ * edge cutting across the band the fold frame it declines reads the fold.
+ */
+describe('the band\'s top edge (rig-c/pose#318)', () => {
+  /** The waistband's reading of each frame of a variant against the band's edge: errors of the frames read, declines by kind. */
+  function readAll(v: 'dithered-fold' | 'dithered-strip') {
+    const cycle = variantCycle(v);
+    const seq = readPoseSequence(readFileSync(writePelvisFixture(tempDir(), v).pose, 'utf8'), 'fixture');
+    const errs: number[] = [];
+    const declined: Array<[number, string]> = [];
+    let raised = 0;
+    cycle.forEach((f, i) => {
+      const r = readPelvis(drawFrame(f, v), seq.frames[i]!.people[0]!.joints, 'waistband');
+      if ('tilt' in r) {
+        errs.push(Math.abs(r.tilt - bandTilt(f.phi)));
+        if (r.raised !== undefined) raised++;
+      } else declined.push([i, r.kind]);
+    });
+    return { errs, declined, raised };
+  }
+
+  test('the fold: every frame read within 3° of the band; the one whose edge cuts across the band is declined by name', () => {
+    const { errs, declined } = readAll('dithered-fold');
+    expect(errs).toHaveLength(23);
+    expect(Math.max(...errs)).toBeLessThan(3);
+    expect(declined).toEqual([[18, 'edge leaves the band']]);
+  });
+
+  test('the thin strip: every frame read within 3° of the band, read at the strip\'s top line; the rest declined by name', () => {
+    const { errs, declined, raised } = readAll('dithered-strip');
+    expect(errs.length).toBeGreaterThanOrEqual(12);
+    expect(Math.max(...errs)).toBeLessThan(3);
+    expect(raised).toBeGreaterThanOrEqual(10);
+    for (const [, kind] of declined) expect(kind).toBe('waistband edge too short');
+  });
+
+  for (const v of ['dithered-fold', 'dithered-strip'] as const) {
+    test(`${v}: the posed pelvis swings within 1.5× of the band's edge and correlates ≥ 0.7 with it; the PELVIS line names the band's top read above the colour's edge`, () => {
+      const run = pipeline(v, 'waistband');
+      expect(run.read!.stderr).toBe('');
+      expect(run.read!.status).toBe(0);
+      expect(linesOf(run.read!, 'PELVIS')[0]).toContain('with the band\'s top read above the colour\'s edge in some columns');
+      expect(run.retarget.status).toBe(0);
+      const b = bars(run.build, band());
+      expect(b.ratio).toBeGreaterThanOrEqual(1 / 1.5);
+      expect(b.ratio).toBeLessThanOrEqual(1.5);
+      expect(b.r).toBeGreaterThanOrEqual(0.7);
+    }, SLOW);
+  }
+
+  test('mutants: without the climb to the band\'s top the strip reads a frame > 3° off; without the across-the-band test the fold does', () => {
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm318-'));
+    try {
+      const cases = [
+        { name: 'no-top', from: 'const raised = toBandTop(f, tops, g, top, colourAt);', to: 'const raised = 0;', variant: 'dithered-strip' as const },
+        { name: 'no-across', from: 'const off = notTheBand(f, fit, tops, top, colourAt);', to: 'const off = null;', variant: 'dithered-fold' as const },
+      ];
+      for (const m of cases) {
+        const src = readFileSync(join(ROOT, 'src', 'pelvis.ts'), 'utf8');
+        expect(src.split(m.from)).toHaveLength(2);
+        const dir = join(d, m.name);
+        cpSync(join(ROOT, 'src'), join(dir, 'src'), { recursive: true });
+        writeFileSync(join(dir, 'src', 'pelvis.ts'), src.replace(m.from, m.to));
+        cpSync(join(ROOT, 'cli.ts'), join(dir, 'cli.ts'));
+        cpSync(join(ROOT, 'package.json'), join(dir, 'package.json'));
+        const out = tempDir();
+        const fx = writePelvisFixture(join(out, 'fixture'), m.variant);
+        const seq = join(out, 'pose.pelvis.json');
+        const r = cli(['pelvis', '--pose', fx.pose, '--frames', fx.frames, '--mode', 'waistband', '--out', seq], join(dir, 'cli.ts'));
+        expect(r.status).toBe(0);
+        const tilt = (JSON.parse(readFileSync(seq, 'utf8')) as { frames: Array<{ pelvisTilt: number | null }> }).frames.map((f) => f.pelvisTilt);
+        const errs = tilt.flatMap((t, i) => (t === null ? [] : [Math.abs(t - band()[i]!)]));
+        expect(Math.max(...errs)).toBeGreaterThan(3);
+      }
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
