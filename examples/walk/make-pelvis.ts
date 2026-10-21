@@ -30,10 +30,26 @@
  *   band's top edge (their midpoint on the edge, their damped tilt kept), as a
  *   detector places them under a high waistband.
  *
+ * And one with a fold below the band (rig-c/pose#318):
+ *
+ * - `dithered-fold`: `dithered` with, on every fourth frame (2, 6, …, 22 — away
+ *   from the band's extremes at frames 0 and 12), a fold of the garment in a
+ *   darker cloth below a line turned `FOLD_TURN` (15°) from the band about the
+ *   band's top above the left hip's side: it meets the band's top there and runs
+ *   below it across the hips, as a bunched fold starts at a skirt's top. The
+ *   garment's colour at the hips is the fold's, so a reader that follows it
+ *   reads the fold's edge, not the band's.
+ * - `dithered-strip`: `dithered` with a thin two-line strip at the band's top —
+ *   a second ink line `STRIP_GAP` (7) px below the top edge, parallel to it,
+ *   from the band's left end to just past mid_hip — too thin for the 5×5 window
+ *   to carry the garment's colour, so a reader of the colour's first rows reads
+ *   the strip's top line in some columns and the cloth under its lower line in
+ *   the others.
+ *
  * Every frame is drawn from formulae (no randomness, no clock): the same call
  * writes the same bytes.
  *
- *   bun examples/walk/make-pelvis.ts <out-dir> [drawn|covered|masked]
+ *   bun examples/walk/make-pelvis.ts <out-dir> [drawn|covered|masked|dithered|dithered-edge|dithered-fold]
  *
  * writes <out-dir>/frames/f00.png … f23.png and <out-dir>/pose.json (before
  * clean); the test (test/pelvis.test.ts) writes them into a temporary folder.
@@ -43,7 +59,7 @@ import { join } from 'node:path';
 import { Plate, type RGBA } from 'rig-c/plate';
 import { walkCycle, walkDoc, type WalkFrame } from './make-walk.ts';
 
-export const VARIANTS = ['drawn', 'covered', 'masked', 'dithered', 'dithered-edge'] as const;
+export const VARIANTS = ['drawn', 'covered', 'masked', 'dithered', 'dithered-edge', 'dithered-fold', 'dithered-strip'] as const;
 export type Variant = (typeof VARIANTS)[number];
 /** The drawn pelvis tilt, degrees (Spine sense), at the phase φ. */
 export const pelvisTilt = (phi: number): number => -15 * Math.sin(phi);
@@ -51,6 +67,10 @@ export const pelvisTilt = (phi: number): number => -15 * Math.sin(phi);
 export const bandTilt = (phi: number): number => 12 * Math.cos(phi);
 /** The share of the drawn tilt the hip keypoints keep: a detector's damped hip line. */
 export const HIP_GAIN = 0.15;
+/** `dithered-fold`'s fold edge is turned this many degrees from the band's top (Spine sense: counter-clockwise). */
+export const FOLD_TURN = 15;
+/** The frames of `dithered-fold` that carry the fold: every fourth, from frame 2. */
+export const hasFold = (phi: number): boolean => Math.round((phi / (2 * Math.PI)) * 24) % 4 === 2;
 
 type Pt = [number, number];
 const RAD = Math.PI / 180;
@@ -59,6 +79,12 @@ const BAND_TOP = 24;
 const INK: RGBA = [20, 20, 20, 255];
 const PAPER: RGBA = [255, 255, 255, 255];
 const CLOTH: RGBA = [70, 110, 190, 255];
+/** The fold's darker cloth: more than the reader's garment tolerance (40) from `CLOTH` in every channel. */
+const FOLD: RGBA = [20, 50, 120, 255];
+/** Where on the band's top the fold's edge leaves it: this many px along the band from mid_hip, toward the left hip. */
+const FOLD_AT = 20;
+/** `dithered-strip`'s second line lies this many px below the band's top edge (two cloth rows between the lines: rig-c's 1 px line covers three to four rows). */
+const STRIP_GAP = 7;
 /** The 4×4 ordered-dither (Bayer) thresholds, 0–15. */
 const BAYER = [
   [0, 8, 2, 10],
@@ -113,6 +139,8 @@ export function dither216(plate: Plate): Plate {
 /** One frame of a variant, as a plate. */
 export function drawFrame(f: WalkFrame, variant: Variant): Plate {
   if (variant === 'dithered' || variant === 'dithered-edge') return dither216(drawFrame(f, 'covered'));
+  if (variant === 'dithered-strip') return dither216(drawStrip(f));
+  if (variant === 'dithered-fold') return dither216(hasFold(f.phi) ? drawFold(f) : drawFrame(f, 'covered'));
   const plate = new Plate(400, 600);
   plate.rect(0, 0, 400, 600, PAPER);
   const j = f.joints;
@@ -140,6 +168,41 @@ export function drawFrame(f: WalkFrame, variant: Variant): Plate {
   if (variant === 'masked') plate.rect(Math.round(midHip[0] - 40), Math.round(midHip[1] - 22), 80, 44, PAPER);
   return plate;
 }
+
+/**
+ * The covered frame with the fold: the garment's pixels below the fold's edge (the band's top line turned `FOLD_TURN`
+ * about its point `FOLD_AT` px toward the left hip) recoloured; the outline and the arms, not cloth, are kept.
+ */
+function drawFold(f: WalkFrame): Plate {
+  const plate = drawFrame(f, 'covered');
+  const { midHip } = f.drawn;
+  const b = bandTilt(f.phi);
+  const p = add(midHip, dir(b, FOLD_AT), dir(b + 90, BAND_TOP));
+  const a = (b + FOLD_TURN) * RAD;
+  // Below the fold's edge: y (down) beyond the line through p at the Spine angle a.
+  const below = (x: number, y: number) => y > p[1] - (x - p[0]) * Math.tan(a);
+  for (let y = Math.round(midHip[1] - 60); y <= Math.round(midHip[1] + 40); y++) {
+    for (let x = Math.round(midHip[0] - 50); x <= Math.round(midHip[0] + 50); x++) {
+      const [r, g, bl] = plate.get(x, y);
+      if (r === CLOTH[0] && g === CLOTH[1] && bl === CLOTH[2] && below(x, y)) plate.set(x, y, FOLD);
+    }
+  }
+  return plate;
+}
+
+/** The covered frame with the strip's second line, from the band's left end to 5 px past mid_hip, under the top edge. */
+function drawStrip(f: WalkFrame): Plate {
+  const plate = drawFrame(f, 'covered');
+  const { midHip } = f.drawn;
+  const b = bandTilt(f.phi);
+  const at = (u: number): Pt => add(midHip, dir(b, u), dir(b + 90, BAND_TOP - STRIP_GAP));
+  const [p, q] = [at(-30), at(5)];
+  plate.line(p[0], p[1], q[0], q[1], 1, INK);
+  return plate;
+}
+
+/** The fold's edge in `dithered-fold` (Spine degrees), or null on a frame without the fold. */
+export const foldTilt = (f: WalkFrame): number | null => (hasFold(f.phi) ? bandTilt(f.phi) + FOLD_TURN : null);
 
 /** The cycle with the tilt drawn and the hips damped. */
 export const tiltedCycle = (): WalkFrame[] => walkCycle({ tilt: pelvisTilt, hipGain: HIP_GAIN });
