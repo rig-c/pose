@@ -58,6 +58,7 @@
  * frames (`closeLoop`), so the loop carries no net travel.
  */
 import type { Chain, JointMap, Rest } from './map.ts';
+import type { ContactKeysReading } from './contacts.ts';
 
 type Pt = [number, number];
 /** A world 2×2: columns (a, c) — the x axis — and (b, d) — the y axis. */
@@ -522,6 +523,12 @@ export interface Feet {
    * `supportsOf` on every reading.
    */
   signal?: SupportSignal;
+  /**
+   * rig-c/pose#303: what `--contact-keys` did — the keys, the frames they cover,
+   * the support without them and the runs they changed. Set by `contactKeysOf`,
+   * applied last; absent without the flag.
+   */
+  contactKeys?: ContactKeysReading;
 }
 
 /** A run of frames whose support the lower-ankle rule (rig-c/pose#113) reads differently from the reading before it. */

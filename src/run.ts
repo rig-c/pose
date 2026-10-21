@@ -27,6 +27,7 @@ import { reportRenderDomain, writeReport, type ReportInput } from './report.ts';
 import { PROVENANCE_FILE, provenanceText } from './provenance.ts';
 import { madeLine, planOutDirs } from './outdir.ts';
 import { bodyLine, faceLine } from './face.ts';
+import { contactKeysLines, readContactKeys } from './contacts.ts';
 
 export interface RetargetArgs extends RetargetOptions {
   rig: string;
@@ -81,6 +82,8 @@ export interface RetargetArgs extends RetargetOptions {
   output?: 'default' | 'verbose' | 'summary';
   /** `--draw-order depth` (rig-c/pose#304): key the animation's draw order from the sequence's depth. Absent: no draw-order key, the output as before. */
   drawOrder?: 'depth';
+  /** `--contact-keys` (rig-c/pose#303): the hand contact keys' file, `rig-pose-contact-keys/1`. Absent: the support as read, the output as before. */
+  contactKeysFile?: string;
 }
 
 export interface RunResult {
@@ -104,7 +107,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     throw new Refusal(problems);
   };
   const args = new Problems();
-  for (const [flag, path] of [['--map', a.map], ['--pose', a.pose], ['--merge', a.merge]] as const) {
+  for (const [flag, path] of [['--map', a.map], ['--pose', a.pose], ['--merge', a.merge], ['--contact-keys', a.contactKeysFile]] as const) {
     if (path !== undefined && !existsSync(path)) args.add('ARG_PATH', `${flag} ${path} does not exist`);
   }
   // rig-c/pose#239: the report is written unless asked elsewhere — beside the motion, as <out>.report.json.
@@ -141,6 +144,9 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
   // #304: the draw order is read off the sequence's depth; asked for on a sequence without it, refused by name.
   if (a.drawOrder === 'depth' && !seq.frames.some((x) => x.depth !== undefined)) refuse([{ code: 'DRAWORDER_NO_DEPTH', text: `--draw-order depth keys the draw order from the sequence's depth, and ${a.pose} carries none (rig-pose-sequence/${seq.cleaned!.params.depth === undefined ? '1 or 1.1, no "depth" on any frame' : '1.2 with no frame naming a segment'}); clean it with --depth walk|run, or retarget without --draw-order` }]);
   const frames = personTrack(seq, a.person, a.pose);
+  // rig-c/pose#303: the contact keys, read against the sequence's frames before any gate runs.
+  const contactKeysSnapshot = a.contactKeysFile === undefined ? null : readFileSync(a.contactKeysFile);
+  const contactKeys = contactKeysSnapshot === null ? null : readContactKeys(contactKeysSnapshot.toString('utf8'), a.contactKeysFile!, seq.frames.length);
   const times = seq.frames.map((f) => f.t);
 
   const scratch = mkdtempSync(join(tmpdir(), 'rig-pose-'));
@@ -156,7 +162,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     const slots = slotsOf(doc0);
     resolveMap(map, rest, a.map, slots, input.sets);
 
-    const r = retarget(rest, map, frames, times, { ...a, ...(seq.travel !== undefined ? { travel: seq.travel } : {}), ...(seq.cleaned!.params.loop ? { loop: true } : {}), ...(seq.pelvisSource !== undefined ? { pelvis: { source: seq.pelvisSource, tilt: seq.frames.map((f) => f.pelvisTilt ?? null) } } : {}) }, slots, input.sets);
+    const r = retarget(rest, map, frames, times, { ...a, ...(seq.travel !== undefined ? { travel: seq.travel } : {}), ...(seq.cleaned!.params.loop ? { loop: true } : {}), ...(seq.pelvisSource !== undefined ? { pelvis: { source: seq.pelvisSource, tilt: seq.frames.map((f) => f.pelvisTilt ?? null) } } : {}), ...(contactKeys !== null ? { contactKeys } : {}) }, slots, input.sets);
     if (fragment.length > 0 && ((r.face?.sets?.length ?? 0) > 0 || (r.body?.sets?.length ?? 0) > 0)) {
       const known = knownSetsOf(map, input.sets);
       for (const s of [...(r.face?.sets ?? []), ...(r.body?.sets ?? [])]) {
@@ -237,7 +243,9 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       say(`  FEET   ${r.planted ? 'planted' : 'read, not planted (no --plant-feet)'}: leg length (median hip → ankle) r ${f.legLength.r.toFixed(1)}px, l ${f.legLength.l.toFixed(1)}px; ${f.supports.length} support span(s), ${f.changes.filter((c) => c.from !== null).length} change(s) of support, ${f.jumps.length} jump(s), ${f.steps.length} step(s)`);
       for (const sg of r.segments) say(`  FEET   ${segmentLine(sg)}`);
       say(`  FEET   supports: ${f.supports.map((x) => `${x.side} ${span(x.frames)}`).join(', ') || 'none'}`);
-      if (f.signal !== undefined) for (const l of signalLines(f.signal, f.supports)) say(`  FEET   ${l}`);
+      // rig-c/pose#303: with contact keys, their stride lines stand in for #280's (the keys decide the frames they cover).
+      const signal = f.signal === undefined ? [] : signalLines(f.signal, f.supports);
+      for (const l of f.contactKeys === undefined ? signal : [...signal.filter((x) => !x.startsWith('stride ')), ...contactKeysLines(f)]) say(`  FEET   ${l}`);
       say(`  FEET   jumps (both ankles and mid_hip > 0.05 leg lengths above their rolling floor, ≥ 2 frames): ${f.jumps.map(span).join(', ') || 'none'}`);
       if (f.lowered !== undefined) say(`  FEET   ${loweredLine(f.lowered)}`);
       if (f.tracked !== undefined) say(`  FEET   tracked (the lower foot supports on the floor, following its scaled ankle track until still, rig-c/pose#119): ${f.tracked.map((x) => `${x.side} ${span(x.frames)}`).join(', ')}`);
@@ -423,7 +431,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
 
     assertReportInputs([rigSnapshot,mapSnapshot,poseSnapshot]);
     // Every retarget option as resolved: the report's `options`, and with the name the build record's `flags` (#270).
-    const options = { minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', floor: a.floor ?? null, raisedByHead: a.raisedByHead === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', ...(a.reduceChains === undefined ? {} : { reduceChains: a.reduceChains }), reduceHip: a.reduceHip ?? 'off', ...(a.reduceKeepPlanted === true ? { reduceKeepPlanted: true } : {}), ...(a.drawOrder !== undefined ? { drawOrder: a.drawOrder } : {}) };
+    const options = { minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', floor: a.floor ?? null, raisedByHead: a.raisedByHead === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', ...(a.reduceChains === undefined ? {} : { reduceChains: a.reduceChains }), reduceHip: a.reduceHip ?? 'off', ...(a.reduceKeepPlanted === true ? { reduceKeepPlanted: true } : {}), ...(a.drawOrder !== undefined ? { drawOrder: a.drawOrder } : {}), ...(a.contactKeysFile !== undefined ? { contactKeys: a.contactKeysFile } : {}) };
     const reportText = writeReport({
         spec: 'rig-pose-report/1',
         rigc,
@@ -488,6 +496,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         // Only with --draw-order depth (#304). A key's `t` here is its frame's time, the report's clock (#214); the
         // motion's key is written half a frame before it (#325).
         ...(drawOrder !== null ? { drawOrder: { source: 'depth', pairs: drawOrder.pairs, keys: drawOrder.keys.map((k) => ({ ...k, t: r.times[k.frame]! })), spans: drawOrder.spans, gaps: drawOrder.gaps ?? [] } } : {}),
+        // Only with --contact-keys (#303).
+        ...(r.feet?.contactKeys !== undefined && contactKeysSnapshot !== null ? { contactKeys: { path: a.contactKeysFile, sha256: createHash('sha256').update(contactKeysSnapshot).digest('hex'), keys: r.feet.contactKeys.keys.length, from: r.feet.contactKeys.from, changed: r.feet.contactKeys.changed, kept: r.feet.contactKeys.kept, unreached: r.feet.contactKeys.unreached } } : {}),
         stance: r.stance === null ? null : { tolerance: r.stance.tolerance, release: r.stance.release, minSeconds: r.stance.minSeconds, bounds: r.stance.bounds, ...(r.stance.range === undefined ? {} : { range: r.stance.range }), runs: r.stance.runs, over: r.stance.over },
         feet: r.feet === null ? null : { planted: r.planted, legLength: r.feet.legLength, straight: r.legStraight, rigLeg: r.rigLeg, segments: r.segments, supports: r.feet.supports, jumps: r.feet.jumps, steps: r.feet.steps, changes: r.feet.changes, ...(r.feet.lowered === undefined ? {} : { lowered: r.feet.lowered }), ...(r.feet.tracked === undefined ? {} : { tracked: r.feet.tracked }), floor: r.floor?.y ?? null, shifts: r.floor?.shifts ?? [], blend: r.blendHold === null ? null : { bounds: r.blendHold.bounds, ...(r.blendHold.range === undefined ? {} : { range: r.blendHold.range }), runs: r.blendHold.runs, over: r.blendHold.over }, reading: feetReading, closure: r.closure },
         shear,
