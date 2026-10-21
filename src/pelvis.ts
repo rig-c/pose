@@ -48,6 +48,7 @@ import type { Body18 } from './joints.ts';
 import { personTrack, readPoseSequence, writePoseSequence, type Joint, type PelvisSource, type PoseSequence } from './pose.ts';
 import { isObject, parseJson, Problems, refuseUnknownKeys, typeName } from './problems.ts';
 import { pictureAngle, wrap } from './retarget.ts';
+import { makeOutDirs, planOutDirs } from './outdir.ts';
 
 type Pt = [number, number];
 type RGB = [number, number, number];
@@ -436,6 +437,7 @@ export function runPelvis(a: PelvisArgs, say: (l: string) => void): void {
   const seq = readPoseSequence(readFileSync(a.pose, 'utf8'), a.pose);
   const p = new Problems();
   if (seq.cleaned !== undefined) p.add('PELVIS_AFTER_CLEAN', `${a.pose} carries a "cleaned" record; rig-pose pelvis reads a sequence before clean, so that clean smooths the track it writes — run it on the sequence clean read`);
+  const outDirs = planOutDirs([['--out', a.out]], p);
   if (seq.pelvisSource !== undefined) p.add('PELVIS_TRACK', `${a.pose} already carries a pelvis track (pelvisSource "${seq.pelvisSource}"); a sequence is read once — run rig-pose pelvis on the sequence without it`);
   p.throwIfAny();
   const track = personTrack(seq, a.person, a.pose);
@@ -451,6 +453,7 @@ export function runPelvis(a: PelvisArgs, say: (l: string) => void): void {
     const tilt = readPelvisKeys(readFileSync(a.keys, 'utf8'), a.keys, n);
     say(`rig-pose pelvis: ${n} frame(s) of person "${person}" from ${a.pose}, from the hand keys in ${a.keys}`);
     say(`  PELVIS keys: linear between the keys (the short way round) and held outside them, on all ${n} frame(s); swing ${swingOf(tilt).toFixed(2)}° (Spine degrees, r_hip → l_hip)`);
+    makeOutDirs(outDirs, say);
     writeFileSync(a.out, writePoseSequence(withPelvis(seq, person, tilt, 'keys')));
     say(`  wrote ${a.out} (pelvisSource "keys", rig-pose-sequence/1.1)`);
     return;
@@ -489,6 +492,7 @@ export function runPelvis(a: PelvisArgs, say: (l: string) => void): void {
   } else {
     say(`  PELVIS ${a.mode} read none of the ${n} frame(s) (every frame null: marked, not guessed); retarget keys the hip line and its PELVIS line says so`);
   }
+  makeOutDirs(outDirs, say);
   writeFileSync(a.out, writePoseSequence(withPelvis(seq, person, tilt, a.mode)));
   say(`  wrote ${a.out} (pelvisSource "${a.mode}", rig-pose-sequence/1.1)`);
 }

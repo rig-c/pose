@@ -12,7 +12,8 @@ import { clean, cleanLine, holdRegions, unheldText, untestedText, HOLD_BLEND, HO
 import { convertCoco17, DEPTH_GAITS, readPoseSequence, writePoseSequence, type DepthGait } from './src/pose.ts';
 import { FLAT_BAND, SIDE_ON } from './src/depth.ts';
 import { parseWindows } from './src/compare.ts';
-import { lineOf, Refusal } from './src/problems.ts';
+import { lineOf, Problems, Refusal } from './src/problems.ts';
+import { makeOutDirs, planOutDirs } from './src/outdir.ts';
 import { runCompare, type CompareArgs } from './src/runcompare.ts';
 import { PELVIS_MODES, runPelvis, type PelvisMode } from './src/pelvis.ts';
 import { PROVENANCE_FILE } from './src/provenance.ts';
@@ -541,6 +542,9 @@ function runClean(argv: string[], say: (l: string) => void): void {
   const out = need(f, 'out');
   const gait = f.get('depth');
   if (gait !== undefined && !(DEPTH_GAITS as readonly string[]).includes(gait)) throw new Usage(`--depth is "${gait}"; it must be ${DEPTH_GAITS.join(' or ')} (the gait decides which way a foreshortened shin leans: forward in a walk, back in a run)`);
+  const outPath = new Problems();
+  const outDirs = planOutDirs([['--out', out]], outPath);
+  outPath.throwIfAny();
   const params = { loop: f.has('loop'), legs: windowOf(f, 'legs', 5), rest: windowOf(f, 'rest', 7), hipsInferred: f.has('hips-inferred'), hold: holdOf(f), ...(gait !== undefined ? { depth: gait as DepthGait } : {}) };
   const text = readFileSync(input, 'utf8');
   const seq = f.has('coco') ? convertCoco17(text, input) : readPoseSequence(text, input);
@@ -584,6 +588,7 @@ function runClean(argv: string[], say: (l: string) => void): void {
     say(`  DEPTH  derived per segment for a ${params.depth} (rig-c/pose#281): ratio = drawn ÷ rest, rest the larger side's 95th-percentile length (${rest} px); flat within ${FLAT_BAND[0]}–${FLAT_BAND[1]}; toward ${d.signs.toward}, away ${d.signs.away}, flat or undecided ${d.signs.flat} segment-frame(s); the trunk faced the camera on ${d.facing.toward}, away on ${d.facing.away}, side-on (under ${SIDE_ON} trunk wide, sign 0) on ${d.facing.side} frame(s)`);
   } else if (c.seq.frames.some((x) => x.depth !== undefined)) say('  DEPTH  measured depth (a 3D detector\'s) carried through as read');
   if (c.inferred !== null) say(`  INFERRED r_hip on ${c.inferred.r_hip} frame(s), l_hip on ${c.inferred.l_hip} frame(s) of ${n} marked "inferred" (every frame where it has a position): declared at clean (--hips-inferred); positions and scores unchanged`);
+  makeOutDirs(outDirs, say);
   writeFileSync(out, writePoseSequence(c.seq));
   say(`  CLEAN  ${cleanLine(c.record)}`);
   say(`  wrote ${out}`);
@@ -633,7 +638,11 @@ export function main(argv: string[]): number {
       const f = parseFlags(rest, ['coco', 'out'], []);
       const input = need(f, 'coco');
       const out = need(f, 'out');
+      const p = new Problems();
+      const outDirs = planOutDirs([['--out', out]], p);
+      p.throwIfAny();
       const seq = convertCoco17(readFileSync(input, 'utf8'), input);
+      makeOutDirs(outDirs, (l) => process.stdout.write(`${l}\n`));
       writeFileSync(out, writePoseSequence(seq));
       process.stdout.write(`rig-pose convert: ${seq.frames.length} frame(s) of COCO-17 → body-18; wrote ${out}\n`);
       return 0;
