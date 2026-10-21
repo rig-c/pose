@@ -2296,6 +2296,126 @@ describe('alternates (#6): sets of attachments switched beside the bone keys', (
     }, SLOW);
   });
 
+  describe('#360: a set bound to frames shows on exactly them — no key, no tolerance, no switch-min', () => {
+    /** A copy of the package without the bind path: the bind read as a window the angle rule picks inside, and nothing overlaid. */
+    function withoutBind(): { cli: string; done: () => void } {
+      mkdirSync(MUTANTS, { recursive: true });
+      const d = mkdtempSync(join(MUTANTS, 'm-'));
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'switch.ts');
+      let src = readFileSync(path, 'utf8');
+      for (const [from, to] of [
+        ['        if (a.bind !== undefined) continue;\n        if (a.frames', '        if (a.bind !== undefined && !bound.get(a.name)![i]) continue;\n        if (a.frames'],
+        ['      if (m !== undefined) for (let i = 0; i < n; i++) if (m[i]) pick[i] = a;\n', ''],
+        ['      if (a.bind !== undefined) continue;\n      nearestOn.set', '      nearestOn.set'],
+        ['      if (a.bind !== undefined) continue;\n      const dropped = droppedOn', '      const dropped = droppedOn'],
+      ] as Array<[string, string]>) {
+        expect(src.split(from)).toHaveLength(2);
+        src = src.replace(from, to);
+      }
+      writeFileSync(path, src);
+      return { cli: join(d, 'cli.ts'), done: () => rmSync(d, { recursive: true, force: true }) };
+    }
+    /** The pose never near the key skeleton (the right arm at 30°/50°, the key at 150°/170°: 120° apart, past the 25° tolerance), and the drawing 120° from its key. */
+    const FAR = armed(() => false);
+    const farSet = (bind: unknown) => up({ bind, drawn: { sleeve_r0: KEY_RU - 120, sleeve_r1: KEY_RF - 120 } });
+    // One one-frame bind (frame 3, 0.125 s, under the 0.25 s --switch-min) and one run (7–10).
+    const BOUND = [3, 7, 8, 9, 10];
+    const hash = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
+
+    test('N/N bound frames with the key 120° off, a one-frame bind kept, keyed half a frame before each change, read back by rig-c\'s poser', () => {
+      const c = setup({ rig: ALT_RIG, map: altMap(farSet([[3, 3], [7, 10]])), pose: poseDoc(FAR) });
+      const report = join(c.dir, 'report.json');
+      const r = retarget(c, ['--report', report]);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      const shown = shows(c.build, 'sleeve_r0').flatMap((v, i) => (v === 'seg_up' ? [i] : []));
+      console.log(`  #360: bound set shown on ${shown.filter((i) => BOUND.includes(i)).length}/${BOUND.length} bound frames by rig-c's poser, ${shown.filter((i) => !BOUND.includes(i)).length} outside`);
+      expect(shown).toEqual(BOUND);
+      expect(shows(c.build, 'cap_r')).toEqual(each((i) => (BOUND.includes(i) ? 'cap_up' : null)));
+      expect(shows(c.build, 'sleeve_r1')).toEqual(each((i) => (BOUND.includes(i) ? null : 'seg')));
+      // Each change keyed at the midpoint of the frame before and the frame it shows on (0.125 s frames).
+      expect(slotTracks(c.out)[0]).toEqual({ slot: 'sleeve_r0', property: 'attachment', keys: [{ t: 0.3125, v: 'seg_up' }, { t: 0.4375, v: 'seg' }, { t: 0.8125, v: 'seg_up' }, { t: 1.3125, v: 'seg' }] });
+      expect(linesOf(r, 'SWITCH-BIND')).toEqual(['SWITCH-BIND set "up": bound on 5 frame(s) in 2 run(s), 3, 7–10 (from "bind" [[3,3],[7,10]]); shown on 5/5 — no key distance, art-turn gate, --switch-min, bridging or hysteresis, and nowhere else']);
+      expect(linesOf(r, 'SWITCH').map((l) => l.split('; moved')[0])).toEqual([
+        'SWITCH set "up" — shows "sleeve_r0" = "seg_up", "cap_r" = "cap_up", hides "sleeve_r1"; chains arm_r; frame 3 (t=0.375s until 0.500s) — bound (its key not used); art turn "sleeve_r0" max 0.0°, median 0.0°; "sleeve_r1" max 0.0°, median 0.0°',
+        'SWITCH set "up" — shows "sleeve_r0" = "seg_up", "cap_r" = "cap_up", hides "sleeve_r1"; chains arm_r; frames 7–10 (t=0.875s until 1.375s) — bound (its key not used); art turn "sleeve_r0" max 0.0°, median 0.0°; "sleeve_r1" max 0.0°, median 0.0°',
+      ]);
+      const rep = JSON.parse(readFileSync(report, 'utf8')) as { switchBinds: unknown; switchRuns: unknown[]; switches: Array<{ bound?: boolean; frames: number[] }> };
+      expect(rep.switchBinds).toEqual([{ set: 'up', frames: [[3, 3], [7, 10]] }]);
+      expect(rep.switchRuns).toEqual([]);
+      expect(rep.switches.map((x) => [x.frames, x.bound])).toEqual([[[3, 3], true], [[7, 10], true]]);
+      // A switch adds tracks; it moves no key.
+      expect(misses(c.build, FAR)).toEqual([]);
+    }, SLOW);
+
+    test('the cycle form writes the bytes of the explicit list it expands to', () => {
+      // A 6-frame cycle, [3, 4] over 16 frames: 3–4, 9–10, 15 (cut at the end).
+      const a = setup({ rig: ALT_RIG, map: altMap(farSet({ cycle: 6, at: [[3, 4]] })), pose: poseDoc(FAR) });
+      const b = setup({ rig: ALT_RIG, map: altMap(farSet([[3, 4], [9, 10], [15, 15]])), pose: poseDoc(FAR) });
+      const ra = retarget(a, ['--report', join(a.dir, 'report.json')]);
+      const rb = retarget(b, ['--report', join(b.dir, 'report.json')]);
+      expect(ra.status).toBe(0);
+      expect(rb.status).toBe(0);
+      const ha = hash(a.out);
+      const hb = hash(b.out);
+      console.log(`  #360 cycle ${ha.slice(0, 12)} / explicit ${hb.slice(0, 12)}`);
+      expect(ha).toBe(hb);
+      const binds = (p: string) => (JSON.parse(readFileSync(p, 'utf8')) as { switchBinds: unknown }).switchBinds;
+      expect(binds(join(a.dir, 'report.json'))).toEqual(binds(join(b.dir, 'report.json')));
+      expect(shows(a.build, 'sleeve_r0').flatMap((v, i) => (v === 'seg_up' ? [i] : []))).toEqual([3, 4, 9, 10, 15]);
+    }, SLOW);
+
+    test('refused by name: overlapping binds, a range past the end, a malformed bind; nothing written', () => {
+      const c = setup({ rig: ALT_RIG, map: altMap(farSet([[2, 5]]), out({ bind: { cycle: 8, at: [[5, 6]] } })), pose: poseDoc(FAR) });
+      const r = retarget(c);
+      expect(r.status).toBe(1);
+      expect(fails(r)).toEqual(['FAIL  SET_BIND_OVERLAP: sets "up" and "out" are both bound on 1 frame(s), 5, and both draw bone "sleeve_r0"; one drawing shows per bone and slot on a frame, and nothing decides between two bound sets — bind them on different frames']);
+      expect(existsSync(c.out)).toBe(false);
+      const end = setup({ rig: ALT_RIG, map: altMap(farSet([[14, 16]])), pose: poseDoc(FAR) });
+      const re = retarget(end);
+      expect(re.status).toBe(1);
+      expect(fails(re)).toEqual(['FAIL  SET_BIND_FRAMES: set "up" "bind" range(s) [14,16] end(s) past the sequence\'s last frame 15 (16 frames); an explicit bound range lies inside the sequence — a cycle-relative bind { "cycle", "at" } is clipped at its end instead']);
+      const bad = setup({ rig: ALT_RIG, map: altMap(farSet([[5, 3]])), pose: poseDoc(FAR) });
+      const rbad = retarget(bad);
+      expect(rbad.status).toBe(1);
+      expect(fails(rbad).some((l) => l.startsWith('FAIL  MAP_ALT_BIND: set "up" "bind" is [[5,3]]'))).toBe(true);
+      // Control: the same two sets on disjoint frames.
+      const ok = setup({ rig: ALT_RIG, map: altMap(farSet([[2, 4]]), out({ bind: { cycle: 8, at: [[5, 6]] } })), pose: poseDoc(FAR) });
+      expect(retarget(ok).status).toBe(0);
+      expect(shows(ok.build, 'sleeve_r0')).toEqual(each((i) => ([2, 3, 4].includes(i) ? 'seg_up' : [5, 6, 13, 14].includes(i) ? 'seg_out' : 'seg')));
+    }, SLOW);
+
+    test('mutant: without the bind path, the far-key bind and the one-frame bind do not show', () => {
+      const old = withoutBind();
+      try {
+        const far = setup({ rig: ALT_RIG, map: altMap(farSet([[3, 3], [7, 10]])), pose: poseDoc(FAR) });
+        expect(retarget(far, [], old.cli).status).toBe(0);
+        const farShown = shows(far.build, 'sleeve_r0').filter((v) => v === 'seg_up').length;
+        // The key on the pose (frames 2–4, three frames so clean keeps them), bound on frame 3 alone: one frame, under --switch-min.
+        const near = armed((i) => i >= 2 && i <= 4);
+        const one = setup({ rig: ALT_RIG, map: altMap(up({ bind: [[3, 3]] })), pose: poseDoc(near) });
+        const ro = retarget(one, [], old.cli);
+        expect(ro.stderr).toBe('');
+        expect(ro.status).toBe(0);
+        // Read as a window, frame 3 is picked and then dropped by the minimum span.
+        expect(linesOf(ro, 'SWITCH-MIN')).toEqual(['SWITCH-MIN set "up": 1 run(s) shorter than --switch-min 0.25s not shown: frame 3 (1 frame, 0.125s); nearest on 1 run(s), the longest frame 3 (1 frame, 0.125s)']);
+        const oneShown = shows(one.build, 'sleeve_r0').filter((v) => v === 'seg_up').length;
+        console.log(`  #360 mutant: far-key bind shown on ${farShown}/${BOUND.length}, one-frame bind on ${oneShown}/1`);
+        expect(farShown).toBe(0);
+        expect(oneShown).toBe(0);
+        // The same under the bind path.
+        const real = setup({ rig: ALT_RIG, map: altMap(up({ bind: [[3, 3]] })), pose: poseDoc(near) });
+        expect(retarget(real).status).toBe(0);
+        expect(shows(real.build, 'sleeve_r0').flatMap((v, i) => (v === 'seg_up' ? [i] : []))).toEqual([3]);
+      } finally {
+        old.done();
+      }
+    }, SLOW);
+  });
+
   test('set → set directly: the second set\'s frame puts the first set\'s slots back to setup (its extra slot empty)', () => {
     const pose = poseDoc({ ...BASE, ru: (i) => (i <= 7 ? KEY_RU : 60), rf: (i) => (i <= 7 ? KEY_RF : 80) });
     const c = setup({ rig: ALT_RIG, map: altMap(up(), out()), pose });

@@ -79,8 +79,8 @@ import { aimAngle, aimEnds, bodyYawSets, descends, faceYawSets, knownSetsOf, par
 import type { DepthGait, Joint, Travel } from './pose.ts';
 import { TRAVEL_IN_PLACE } from './pose.ts';
 import { Problems, Refusal } from './problems.ts';
-import type { ArtRange, AttachmentKey, ByHip, Raised, ReachShort, SetRuns, SlotTrack, Switch, SwitchOptions } from './switch.ts';
-import { clampArt, coveredChains, isRaised, keyAtFrame, keyDrawnProblems, measureArt, overflow, phaseGroupProblems, RAISED_WRIST_EYES, RANGE_SLACK, reachLimit, runsOf, selectSwitches, twoBone } from './switch.ts';
+import type { ArtRange, AttachmentKey, ByHip, Raised, ReachShort, SetRuns, SlotTrack, Switch, SwitchBind, SwitchOptions } from './switch.ts';
+import { bindProblems, clampArt, coveredChains, isRaised, keyAtFrame, keyDrawnProblems, measureArt, overflow, phaseGroupProblems, RAISED_WRIST_EYES, RANGE_SLACK, reachLimit, runsOf, selectSwitches, switchBinds, twoBone } from './switch.ts';
 import type { BlendHold, Closure, Feet, Floor, LegScale, LegSegmentRatio, PathPose, Posing, Side, Stance } from './legs.ts';
 import { contactKeysOf, type ContactKeys } from './contacts.ts';
 import { figureScaleOf, freeAnkleShiftOf, holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, percentile, plantHip, posePath, rootOf, scaleSupport, shiftOver, SIDES, stanceOf, stanceRangeOf, STRAIGHT_PERCENTILE, supportsOf, tipOf, unshortenStanceShin } from './legs.ts';
@@ -487,6 +487,8 @@ export interface Retarget {
   switches: Switch[];
   /** rig-c/pose#279: per set without a `phase`, the runs it was nearest on and the runs the minimum span suppressed. */
   switchRuns: SetRuns[];
+  /** rig-c/pose#360: per set with a `bind`, its bound frames. */
+  switchBinds: SwitchBind[];
   /** Per switched or hidden slot, what it shows on each frame (null: nothing). */
   shown: Map<string, Array<string | null>>;
   /** Per set, its distance to the pose on each frame, degrees. */
@@ -1366,6 +1368,12 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   // rig-c/pose#355: an angle set is chosen by its key skeleton and shown at its drawn angles; a key that disagrees with
   // its drawing by more than the tolerance would show the drawing turned that far from the pose.
   for (const x of keyDrawnProblems(map, opts.switchTolerance, opts.raisedByHead === true)) p.add('SET_KEY_DRAWN', x);
+  // rig-c/pose#360: a bound set's ranges lie inside the sequence, and two bound sets never share a bone or slot on a frame.
+  {
+    const bp = bindProblems(map, n);
+    for (const x of bp.frames) p.add('SET_BIND_FRAMES', x);
+    for (const x of bp.overlap) p.add('SET_BIND_OVERLAP', x);
+  }
   p.throwIfAny();
   const askedScales = new Map<string, number[]>();
   for (const ls of legScale) askedScales.set(ls.bone, ls.asked);
@@ -3300,7 +3308,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   return {
     animation: { duration: keyTimes[n - 1]!, tracks },
     times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale, scaleFit,
-    switches: sw.switches, switchRuns: sw.runs, shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
+    switches: sw.switches, switchRuns: sw.runs, switchBinds: switchBinds(map, n), shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
     legScale, segments, legStraight, rigLeg, scales, feet, planted: plantOn, stance, floor, blendHold, closure, openDrift, ankles, pivot, raised, byHip, face, body, figureScale, headNod: headNodReading, nodSkipped, reach, reachOrigin, pelvis,
   };
 }

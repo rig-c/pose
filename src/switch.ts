@@ -12,6 +12,12 @@
  * span is dropped, and the base art shows there; a gap shorter than the minimum
  * span between two runs of one set is bridged by that set. No other hysteresis.
  *
+ * A set with a `bind` (rig-c/pose#360) is not selected by distance either: it shows exactly on its bound frames
+ * (`bindFrames`) and nowhere else — no key-distance test, no art-turn gate, no minimum span, no bridging, no
+ * hysteresis, and its boundaries are not moved by `switchAt: 'peak'`. The rest of its group is selected as if the
+ * bound sets were absent, then each bound set takes its frames outright (two bound sets never share a frame in one
+ * group or on one bone: `bindProblems`). Its keys sit half a frame before each change like any other's.
+ *
  * A set with a `phase` (rig-c/pose#286) is not selected by distance: it shows
  * exactly on its supporting foot's spans (`phaseSupports`, the
  * report's `feet.supports`) and switches on the hand-over, with none of the
@@ -76,7 +82,7 @@
  * peak still raised the sets' ART-RANGE runs from 24 to 31 (#31, round 2).
  */
 import type { Side } from './legs.ts';
-import type { AlternateSet, JointMap, Phase, Rest, RigSlots } from './map.ts';
+import type { AlternateSet, JointMap, Phase, Rest, RigSlots, SetBind } from './map.ts';
 import { descends, PHASE_SIDE } from './map.ts';
 import type { MotionKey, MotionTrack } from './retarget.ts';
 import { pictureAngle, wrap } from './retarget.ts';
@@ -158,6 +164,8 @@ export interface Switch {
   moved: { on: Move | null; off: Move | null };
   /** Only on a set with a `phase` (rig-c/pose#286): the step side and the hand-overs the span was switched on. */
   phase?: PhaseSpan;
+  /** Only on a span of a set with a `bind` (rig-c/pose#360): shown because its frames are bound, not by distance. */
+  bound?: true;
 }
 
 export interface AttachmentKey {
@@ -224,7 +232,7 @@ export interface SetRuns {
 
 export interface Switches {
   switches: Switch[];
-  /** rig-c/pose#279: one per set without a `phase`, in the map's order. */
+  /** rig-c/pose#279: one per set without a `phase` or a `bind` (rig-c/pose#360), in the map's order. */
   runs: SetRuns[];
   /** The `attachment` tracks, one per slot whose picture changes. */
   slotTracks: SlotTrack[];
@@ -323,7 +331,8 @@ export function keyDrawnProblems(map: JointMap, tolerance: number, raisedByHead 
   const out: string[] = [];
   const sg1 = (v: number) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(2)}°`;
   for (const a of map.alternates) {
-    if (a.phase !== undefined) continue;
+    // rig-c/pose#360: a bound set is not chosen by its key; its drawing is its own.
+    if (a.phase !== undefined || a.bind !== undefined) continue;
     for (const cn of a.chains) {
       const c = map.chains.find((x) => x.name === cn)!;
       c.bones.forEach((b, k) => {
@@ -381,7 +390,8 @@ export function phaseGroupProblems(sets: readonly AlternateSet[]): string[] {
   for (const group of competing(sets)) {
     const phased = group.filter((a) => a.phase !== undefined);
     if (phased.length === 0) continue;
-    const angle = group.filter((a) => a.phase === undefined);
+    // rig-c/pose#360: a bound set takes its frames outright, over a phase set too; it is no angle set to decide against.
+    const angle = group.filter((a) => a.phase === undefined && a.bind === undefined);
     const named = (xs: readonly AlternateSet[]) => xs.map((a) => `"${a.name}"`).join(', ');
     if (angle.length > 0) out.push(`set(s) ${named(phased)} declare "phase" and compete with set(s) ${named(angle)}, which declare none (they switch a common slot or offset bone); a phase set shows on its supporting foot's spans and an angle set on its distance, and nothing decides between them — give every set of the group a "phase", or none`);
     for (const step of Object.keys(PHASE_SIDE) as Phase[]) {
@@ -411,6 +421,86 @@ function competing(sets: readonly AlternateSet[]): AlternateSet[][] {
     groups.get(g)!.push(a);
   });
   return [...groups.values()];
+}
+
+/**
+ * rig-c/pose#360: the frames a `bind` binds in an n-frame sequence, as inclusive [first, last] runs, increasing and
+ * disjoint (overlapping or touching ranges merged). Explicit ranges are taken as they are, clipped to the sequence
+ * (`bindProblems` refuses one that leaves it). A cycle-relative range [a, b] of an N-frame cycle binds a + kN … b + kN for
+ * every whole k (negative too) whose repetition meets the sequence, clipped to it: a range with b ≥ N runs into the next
+ * cycle, so its tail binds frames 0 … b − N at the start (the previous cycle's), and the last repetition is cut at the
+ * sequence's last frame.
+ */
+export function bindFrames(bind: SetBind, n: number): Array<[number, number]> {
+  const flag = Array.from({ length: n }, () => false);
+  const mark = (f: number, l: number) => {
+    for (let i = Math.max(0, f); i <= Math.min(n - 1, l); i++) flag[i] = true;
+  };
+  if (bind.cycle === null) for (const [f, l] of bind.at) mark(f, l);
+  else {
+    const c = bind.cycle;
+    for (const [f, l] of bind.at) for (let k = -Math.ceil(l / c); f + k * c <= n - 1; k++) mark(f + k * c, l + k * c);
+  }
+  return runsOf(flag, 0);
+}
+
+/** rig-c/pose#360: per bound set, on each frame of an n-frame sequence, whether it is bound there. */
+export function boundMasks(sets: readonly AlternateSet[], n: number): Map<string, boolean[]> {
+  const out = new Map<string, boolean[]>();
+  for (const a of sets) {
+    if (a.bind === undefined) continue;
+    const flag = Array.from({ length: n }, () => false);
+    for (const [f, l] of bindFrames(a.bind, n)) for (let i = f; i <= l; i++) flag[i] = true;
+    out.set(a.name, flag);
+  }
+  return out;
+}
+
+const runsText = (rs: ReadonlyArray<[number, number]>): string => rs.map(([f, l]) => (f === l ? `${f}` : `${f}–${l}`)).join(', ');
+const bindText = (b: SetBind): string => (b.cycle === null ? JSON.stringify(b.at) : `{ "cycle": ${b.cycle}, "at": ${JSON.stringify(b.at)} }`);
+
+/**
+ * rig-c/pose#360: what the retarget refuses about the map's bound sets against an n-frame sequence, one text each.
+ * `frames`: an explicit range that leaves the sequence (its last frame is n − 1), or a cycle-relative bind that binds no
+ * frame of it. `overlap`: two bound sets bound on a common frame that draw a common bone (a bone of a chain, or an
+ * offset bone), switch a common slot, or compete in one group (transitively): one drawing shows per bone and slot on a
+ * frame, and nothing would decide between two bound ones.
+ */
+export function bindProblems(map: JointMap, n: number): { frames: string[]; overlap: string[] } {
+  const frames: string[] = [];
+  const overlap: string[] = [];
+  const bound = map.alternates.filter((a) => a.bind !== undefined);
+  for (const a of bound) {
+    const b = a.bind!;
+    if (b.cycle === null) {
+      const out = b.at.filter(([, l]) => l > n - 1);
+      if (out.length > 0) frames.push(`set "${a.name}" "bind" range(s) ${out.map((w) => JSON.stringify(w)).join(', ')} end(s) past the sequence's last frame ${n - 1} (${n} frames); an explicit bound range lies inside the sequence — a cycle-relative bind { "cycle", "at" } is clipped at its end instead`);
+    } else if (bindFrames(b, n).length === 0) frames.push(`set "${a.name}" "bind" ${bindText(b)} binds no frame of the ${n}-frame sequence (its last frame is ${n - 1})`);
+  }
+  const masks = boundMasks(bound, n);
+  const groupOf = new Map<string, number>();
+  competing(map.alternates).forEach((g, k) => {
+    for (const a of g) groupOf.set(a.name, k);
+  });
+  const bonesOf = (a: AlternateSet) => [...a.chains.flatMap((cn) => map.chains.find((c) => c.name === cn)?.bones ?? []), ...Object.keys(a.offsets)];
+  const slotsOf = (a: AlternateSet) => [...Object.keys(a.slots), ...a.hides];
+  for (let x = 0; x < bound.length; x++) {
+    for (let y = x + 1; y < bound.length; y++) {
+      const a = bound[x]!;
+      const b = bound[y]!;
+      const ma = masks.get(a.name)!;
+      const mb = masks.get(b.name)!;
+      const both = runsOf(ma.map((v, i) => v && mb[i]!), 0);
+      if (both.length === 0) continue;
+      const bone = bonesOf(a).find((v) => bonesOf(b).includes(v));
+      const slot = slotsOf(a).find((v) => slotsOf(b).includes(v));
+      const why = bone !== undefined ? `both draw bone "${bone}"` : slot !== undefined ? `both switch slot "${slot}"` : groupOf.get(a.name) === groupOf.get(b.name) ? 'they compete (a common slot or offset bone with another set, transitively)' : null;
+      if (why === null) continue;
+      const count = both.reduce((t, [f, l]) => t + l - f + 1, 0);
+      overlap.push(`sets "${a.name}" and "${b.name}" are both bound on ${count} frame(s), ${runsText(both)}, and ${why}; one drawing shows per bone and slot on a frame, and nothing decides between two bound sets — bind them on different frames`);
+    }
+  }
+  return { frames, overlap };
 }
 
 /**
@@ -531,11 +621,13 @@ function moveBoundaries(vals: ReadonlyArray<AlternateSet | null>, pos: readonly 
     // The pose's times are read to the microsecond, so a frame exactly half a minimum span away may read a hair past it.
     const half = opts.switchMin / 2 + 1e-6;
     // Earlier: frames b' … b−1 show the arriving segment.
+    // rig-c/pose#360: a boundary of a bound set's span stays on its bound frame.
+    const pinned = leaving?.bind !== undefined || arriving?.bind !== undefined;
     let lo = b;
-    while (lo - 1 > prev && times[b]! - times[lo - 1]! <= half && len(prev, lo - 1) >= needPrev - 1e-9 && allowed(arriving, lo - 1)) lo--;
+    while (!pinned && lo - 1 > prev && times[b]! - times[lo - 1]! <= half && len(prev, lo - 1) >= needPrev - 1e-9 && allowed(arriving, lo - 1)) lo--;
     // Later: frames b … b'−1 show the leaving one.
     let hi = b;
-    while (hi + 1 < next && times[hi + 1]! - times[b]! <= half && len(hi + 1, next) >= needNext - 1e-9 && allowed(leaving, hi)) hi++;
+    while (!pinned && hi + 1 < next && times[hi + 1]! - times[b]! <= half && len(hi + 1, next) >= needNext - 1e-9 && allowed(leaving, hi)) hi++;
     const sp = speeds([...new Set([...bonesOf(leaving), ...bonesOf(arriving)])], targets, n);
     // A frame qualifies only if the set it newly shows is within twice the tolerance of its key skeleton on every
     // frame it newly shows it on (round 1 on the dancer: speed alone showed a set up to 135° from its pose).
@@ -548,7 +640,7 @@ function moveBoundaries(vals: ReadonlyArray<AlternateSet | null>, pos: readonly 
     };
     const qualifies = (k: number) => (k < b ? near(arriving, k, b) : near(leaving, b, k));
     let best = b;
-    if (opts.switchAt === 'peak') {
+    if (opts.switchAt === 'peak' && !pinned) {
       for (let k = lo; k <= hi; k++) {
         if (!qualifies(k)) continue;
         const d = sp[k]! - sp[best]!;
@@ -610,9 +702,17 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
   const turnedOn = new Map<string, boolean[]>();
   for (const a of map.alternates) {
     turnedOn.set(a.name, Array.from({ length: n }, () => false));
-    if (a.phase !== undefined) continue;
+    if (a.phase !== undefined || a.bind !== undefined) continue;
     art.set(a.name, Array.from({ length: n }, (_, i) => artShows(a, targets, i, opts.switchTolerance, opts.shortInfo, map, opts.raisedByHead === true)));
   }
+  // rig-c/pose#360: per bound set, its bound frames; each takes them over the group's pick (`overlay`).
+  const bound = boundMasks(map.alternates, n);
+  const overlay = (group: readonly AlternateSet[], pick: Array<AlternateSet | null>): void => {
+    for (const a of group) {
+      const m = bound.get(a.name);
+      if (m !== undefined) for (let i = 0; i < n; i++) if (m[i]) pick[i] = a;
+    }
+  };
   const runOf = (i: number, j: number): FrameRun => ({ frames: [i, j], count: j - i + 1, seconds: r3((j + 1 < n ? times[j + 1]! : duration) - times[i]!) });
   const runsOfFlags = (flag: readonly boolean[]): FrameRun[] => runsOf(flag, 0).map(([i, j]) => runOf(i, j));
   // rig-c/pose#286: the supporting side on each frame, from the report's support spans (null: no foot, or no set declares a phase).
@@ -637,7 +737,7 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
       const to = j + 1 < n ? times[j + 1]! : duration;
       const ds = distances.get(a.name)!.slice(i, j + 1);
       const phase: PhaseSpan | undefined = a.phase === undefined ? undefined : { step: a.phase, side: PHASE_SIDE[a.phase], on: i === 0 ? null : { frame: i, from: supportAt[i - 1] ?? null }, off: j + 1 < n ? { frame: j + 1, to: supportAt[j + 1] ?? null } : null };
-      switches.push({ set: a.name, chains: a.chains, slots: a.slots, hides: a.hides, offsets: a.offsets, from, to, frames: [i, j], distance: { max: r3(Math.max(...ds)), median: r3(median(ds)) }, artTurn: {}, moved: { on: s === 0 ? null : moves[s - 1]!, off: s < pos.length ? moves[s]! : null }, ...(phase === undefined ? {} : { phase }) });
+      switches.push({ set: a.name, chains: a.chains, slots: a.slots, hides: a.hides, offsets: a.offsets, from, to, frames: [i, j], distance: { max: r3(Math.max(...ds)), median: r3(median(ds)) }, artTurn: {}, moved: { on: s === 0 ? null : moves[s - 1]!, off: s < pos.length ? moves[s]! : null }, ...(phase === undefined ? {} : { phase }), ...(a.bind === undefined ? {} : { bound: true as const }) });
     }
   };
   const groups = competing(map.alternates);
@@ -647,6 +747,7 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
     // a group mixing phase and angle sets, or two sets of one side (`phaseGroupProblems`), before it gets here.
     if (group.some((a) => a.phase !== undefined)) {
       const pick = supportAt.map((side) => (side === null ? null : group.find((a) => a.phase !== undefined && PHASE_SIDE[a.phase] === side) ?? null));
+      overlay(group, pick);
       spans(pick, { ...opts, switchAt: 'first' });
       continue;
     }
@@ -659,6 +760,8 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
       let bestD = Infinity;
       let bestWindowed = false;
       for (const a of group) {
+        // rig-c/pose#360: a bound set is never picked by distance; it takes its bound frames below.
+        if (a.bind !== undefined) continue;
         if (a.frames !== null && !a.frames.some(([f, l]) => i >= f && i <= l)) continue;
         const d = distances.get(a.name)![i]!;
         if (d > opts.switchTolerance) continue;
@@ -677,6 +780,7 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
       pick.push(best);
     }
     for (const a of group) {
+      if (a.bind !== undefined) continue;
       nearestOn.set(a.name, pick.map((p) => p === a));
       droppedOn.set(a.name, Array.from({ length: n }, () => false));
     }
@@ -800,11 +904,13 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
     }
     // rig-c/pose#279: a dropped frame the set came back to (hysteresis, bridging) was not suppressed.
     for (const a of group) {
+      if (a.bind !== undefined) continue;
       const dropped = droppedOn.get(a.name)!;
       for (let k = 0; k < n; k++) if (pick[k] === a) dropped[k] = false;
       const turned = turnedOn.get(a.name)!;
       for (let k = 0; k < n; k++) if (pick[k] === a) turned[k] = false;
     }
+    overlay(group, pick);
     spans(pick, opts);
   }
   const runs: SetRuns[] = map.alternates.filter((a) => nearestOn.has(a.name)).map((a) => ({ set: a.name, nearest: runsOfFlags(nearestOn.get(a.name)!), suppressed: runsOfFlags(droppedOn.get(a.name)!), turned: runsOfFlags(turnedOn.get(a.name)!) }));
@@ -842,7 +948,8 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
     const layer = groupLayering(group, map, slots);
     if (!layer.baseInFront) continue;
     const names = new Set(group.map((a) => a.name));
-    const gSwitches = switches.filter((s) => names.has(s.set));
+    // rig-c/pose#360: a bound span takes no part in the behind/front holds and bridges; it is put back over them below.
+    const gSwitches = switches.filter((s) => names.has(s.set) && s.bound !== true);
     const groupChains = [...new Set(group.flatMap((a) => a.chains))];
     const cClamp = new Map<string, Array<AlternateSet | null>>();
     for (const cn of groupChains) {
@@ -1204,6 +1311,18 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
         }
       }
     }
+    // rig-c/pose#360: a bound span wins its slots and chains outright on its frames.
+    for (const sw of switches) {
+      if (sw.bound !== true || !names.has(sw.set)) continue;
+      for (let i = sw.frames[0]; i <= sw.frames[1]; i++) {
+        for (const [sl, v] of Object.entries(sw.slots)) shown.get(sl)![i] = v;
+        for (const h of sw.hides) shown.get(h)![i] = null;
+        for (const cn of sw.chains) {
+          const arr = cClamp.get(cn);
+          if (arr !== undefined) arr[i] = null;
+        }
+      }
+    }
     for (const cn of groupChains) {
       const arr = cClamp.get(cn)!;
       for (let i = 0; i < n;) {
@@ -1389,7 +1508,8 @@ export function switchLine(s: Switch, times: readonly number[]): string {
   const parts = [
     `set "${s.set}" — ${shows.length === 0 ? 'shows no slot' : `shows ${shows.join(', ')}`}${s.hides.length > 0 ? `, hides ${s.hides.map((h) => `"${h}"`).join(', ')}` : ''}`,
     `chains ${s.chains.join(', ')}`,
-    `${span} (t=${times[s.frames[0]]!.toFixed(3)}s until ${s.to.toFixed(3)}s) — distance max ${deg(s.distance.max)}, median ${deg(s.distance.median)}`,
+    // rig-c/pose#360: a bound span is not shown by its key, so its distance says nothing.
+    `${span} (t=${times[s.frames[0]]!.toFixed(3)}s until ${s.to.toFixed(3)}s) — ${s.bound === true ? 'bound (its key not used)' : `distance max ${deg(s.distance.max)}, median ${deg(s.distance.median)}`}`,
   ];
   const offs = Object.entries(s.offsets);
   if (offs.length > 0) parts.push(`offsets ${offs.map(([b, o]) => `"${b}" (${o[0]}, ${o[1]})`).join(', ')}`);
@@ -1429,6 +1549,33 @@ export function phaseLines(map: JointMap, switches: readonly Switch[]): string[]
     out.push(`${head}: ${own.length} span(s), ${count} frame(s): ${spansText.join(', ')}`);
   }
   return out;
+}
+
+/** rig-c/pose#360: the report's `switchBinds` row — a bound set and its bound frames, as inclusive [first, last] runs. */
+export interface SwitchBind {
+  set: string;
+  frames: Array<[number, number]>;
+}
+
+/** rig-c/pose#360: one row per set with a `bind`, in the map's order: its bound frames in an n-frame sequence. */
+export function switchBinds(map: JointMap, n: number): SwitchBind[] {
+  return map.alternates.filter((a) => a.bind !== undefined).map((a) => ({ set: a.name, frames: bindFrames(a.bind!, n) }));
+}
+
+/**
+ * rig-c/pose#360: one `SWITCH-BIND` line per bound set — the frames it is bound on (and the bind they came from), and on
+ * how many of them it shows, which is all of them unless something this line exists to catch went wrong.
+ */
+export function switchBindLines(map: JointMap, binds: readonly SwitchBind[], switches: readonly Switch[]): string[] {
+  return binds.map((b) => {
+    const set = map.alternates.find((a) => a.name === b.set)!;
+    const count = b.frames.reduce((t, [f, l]) => t + l - f + 1, 0);
+    const bound = new Set<number>();
+    for (const [f, l] of b.frames) for (let i = f; i <= l; i++) bound.add(i);
+    let shown = 0;
+    for (const sw of switches) if (sw.set === b.set) for (let i = sw.frames[0]; i <= sw.frames[1]; i++) if (bound.has(i)) shown++;
+    return `set "${b.set}": bound on ${count} frame(s) in ${b.frames.length} run(s), ${runsText(b.frames)} (from "bind" ${bindText(set.bind!)}); shown on ${shown}/${count} — no key distance, art-turn gate, --switch-min, bridging or hysteresis, and nowhere else`;
+  });
 }
 
 /** How many runs a `SWITCH-MIN` line lists before it points at the report for the rest. */
