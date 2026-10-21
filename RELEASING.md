@@ -324,7 +324,7 @@ Every key `rig-pose-report/1` can carry, once: the keys `src/run.ts` writes, and
 | `idleDropped` | courtesy | — | |
 | `idleKeptOut` | courtesy | — | |
 | `merged` | courtesy | — | |
-| `reduce` | courtesy | — | |
+| `reduce` | courtesy | — | `held` only when a parent was held, `unsmoothed` only when a trunk smoothing was not kept (rig-c/pose#320) |
 
 An **event row**, as review reads it under #209, carries: `frame` or `frames` (an inclusive pair below `frames`), or `t`/`times` in seconds; `seconds`/`spanSeconds`; and the names `bone`, `slot`, `bones`, `joint`, `point`, `chain`, `chains`, `joints`, `side`, `set`, `attachment`, `line`. Those row fields are promised wherever a promised key carries event rows. A new key, or a new field in a row, is not a change: readers ignore what they do not read.
 
