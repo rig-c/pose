@@ -26,11 +26,15 @@
  *   0.42 of its length. The owner's walk statement (rig-c/pose#336): the lifted
  *   foot is behind the supporting leg;
  * - run (P = 20): stance for u < 0.35 — the thigh from +15° to −15°, the knee
- *   bent 25·sin°; swing after — the thigh from −15° through +33.5° to +15°, the
- *   knee folding `RUN_KNEE`·sin(πv)°, so the shin is kicked back away from the
- *   camera through the whole swing (down to 0.41 of its length) while the
- *   raised thigh brings the knee forward. The owner's run statement
- *   (rig-c/pose#336): the lifted leg is in front, its knee protruding;
+ *   bent 25·sin°; swing after — the thigh flexing forward from toe-off,
+ *   −15° + 30·ease(v) + `RUN_LIFT`·sin(π·v^0.6), so it passes the band within
+ *   the flight and is near its +35° top by the time the other foot lands, then
+ *   settles to +15°; the knee folding `RUN_KNEE`·sin(πv)°, so the shin is kicked
+ *   back away from the camera through the whole swing (down to 0.41 of its
+ *   length), the foot following under the leading knee. On every frame with
+ *   one leg lifted the lifted knee is in front of the supporting one
+ *   (rig-c/pose#343). The owner's run statement (rig-c/pose#336, #343): the
+ *   lifted leg is in front, its knee protruding, from toe-off;
  * - arms: each upper arm swings against its own side's thigh (with the opposite
  *   leg), −0.6× (walk) or −0.9× (run) its angle from the thigh's mid-swing, the
  *   elbow bent 20° (walk) or 70° (run) forward;
@@ -71,7 +75,9 @@ const FPS = 24;
 /** Frames per stride. */
 export const STRIDE: Record<Gait, number> = { walk: 24, run: 20 };
 /** The run's largest knee fold, degrees: the kicked-back shin at 0.41 of its length. */
-export const RUN_KNEE = 95;
+export const RUN_KNEE = 102;
+/** The run's hip flexion over its swing, degrees, on top of its −15° → +15° travel: the knee forward from toe-off (rig-c/pose#343). */
+export const RUN_LIFT = 40;
 /** The walk's largest knee fold, degrees: the lifted foot behind, its shin at 0.42 of its length. */
 export const WALK_KNEE = 65;
 /** Where each gait's swing starts in the stride (the foot leaves the floor). */
@@ -131,7 +137,7 @@ function leg(gait: Gait, u: number): { thigh: number; knee: number } {
     return { thigh: 15 - 30 * v, knee: 25 * Math.sin(Math.PI * v) };
   }
   const v = (u - s) / (1 - s);
-  return { thigh: -15 + 30 * ease(v) + 30 * Math.sin(Math.PI * v), knee: RUN_KNEE * Math.sin(Math.PI * v) };
+  return { thigh: -15 + 30 * ease(v) + RUN_LIFT * Math.sin(Math.PI * v ** 0.6), knee: RUN_KNEE * Math.sin(Math.PI * v) };
 }
 
 /** The cycle, `cycles` strides of the gait, drawn by `view`'s camera. */
