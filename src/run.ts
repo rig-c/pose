@@ -21,7 +21,7 @@ import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, rea
 import { partsPath, projectSeams, readSeamDoc, readSeamPairs, seamLines, type SeamPair } from './seams.ts';
 import { artRangeLine, chainsMoving, phaseLines, raisedLine, RAISED_WITHIN, reachLine, switchBindLines, switchLine, switchMinLines, switchTurnLines, uncoveredFolds } from './switch.ts';
 import { jitterLine, landed, type FeetReading, type JitterRow, type Landing, measureFeet, measureJitter, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
-import { FRONTAL_DISAGREE, legsOf, PLANT_SWITCH, STANCE_BOUNDS } from './legs.ts';
+import { FRONTAL_DISAGREE, legsOf, PLANT_SWITCH, STANCE_BOUNDS, STILL_SPEED } from './legs.ts';
 import { M2_IDENTITY, mulM2, reduceKeys, reduceScale, reduceUnderScale, SCALE_REDUCE, setupLocal, smoothTrunk, type M2, type ReduceBone, type Reduced, type ReduceRow, type UnderBone } from './reduce.ts';
 import type { BlendHold, Closure, Feet, Floor, FreeAnkleShift, LegScale, LegSegmentRatio, Lowered, Side, Stance, SupportScaleRun, SupportSignal } from './legs.ts';
 import { reportRenderDomain, writeReport, type ReportInput } from './report.ts';
@@ -1019,9 +1019,15 @@ export function signalLines(sig: SupportSignal, supports: Feet['supports']): str
   const span = (x: [number, number]) => (x[0] === x[1] ? `${x[0]}` : `${x[0]}–${x[1]}`);
   const n = Math.round(FRONTAL_DISAGREE * 100);
   const pct = sig.read === 0 ? 0 : (100 * sig.contradict.length) / sig.read;
-  if (!sig.frontal) return [];
   const ranges = `x · y against the hips: r ${sig.range.r.x.toFixed(1)} · ${sig.range.r.y.toFixed(1)} px, l ${sig.range.l.x.toFixed(1)} · ${sig.range.l.y.toFixed(1)} px`;
   const contra = `${sig.contradict.length} of ${sig.read} frame(s) (${pct.toFixed(1)} %`;
+  if (!sig.frontal) {
+    // rig-c/pose#379: the one case named — the clip contradicts past the share and strides in depth, but its ground does not move enough for the speed to tell a still ankle from it.
+    const inDepth = (['r', 'l'] as const).every((s) => sig.range[s].y > sig.range[s].x);
+    if (sig.groundResolved || !inDepth || sig.read === 0 || !(sig.contradict.length > FRONTAL_DISAGREE * sig.read)) return [];
+    const ground = `feet ${sig.ground.r.toFixed(2)} · ${sig.ground.l.toFixed(2)} px, hips ${sig.hipStep.toFixed(2)}`;
+    return [`support: ankle height — vertical speed contradicts it on ${contra}, past ${n} %) but the ground moves under ${STILL_SPEED} leg lengths a frame (${ground}): a still ankle reads as ground, so it cannot decide (rig-c/pose#379)`];
+  }
   const out = [
     `support: ankle vertical speed (rig-c/pose#280) — it contradicts ankle height on ${contra}, past ${n} %): the lower ankle moving while the higher moves with the ground`,
     `support: read as a frontal view — ankles move more in y than x (${ranges}); ankle height only where neither foot moves with the ground`,

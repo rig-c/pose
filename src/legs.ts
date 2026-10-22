@@ -856,8 +856,22 @@ export interface SupportSignal {
   read: number;
   /** Each side's ankle range in the picture, relative to its hip (5th to 95th percentile), px: the stride shows in y on a frontal view and in x on a side view. */
   range: Record<Side, { x: number; y: number }>;
-  /** The stride shows in depth (y range over x range on both sides) and the signals contradict on more than `FRONTAL_DISAGREE` of the frames: the support comes from the vertical speed. */
+  /** The stride shows in depth (y range over x range on both sides), the signals contradict on more than `FRONTAL_DISAGREE` of the frames, and the ground's motion is resolved (`groundResolved`): the support comes from the vertical speed. */
   frontal: boolean;
+  /** Each side's ground speed (`speedSignalOf`): the median vertical step of its ankle, picture px a frame, y down. */
+  ground: Record<Side, number>;
+  /** The hips' ground speed: the median vertical step of mid_hip outside every jump, picture px a frame, y down (the body approaching a fixed camera, rig-c/pose#379). */
+  hipStep: number;
+  /**
+   * rig-c/pose#379: the ground moves in the picture by at least `STILL_SPEED` a
+   * frame — each side's planted feet slide that fast (a gait in place), or the
+   * hips do (a gait travelling toward a fixed camera). Only then can the vertical
+   * speed tell a still ankle (a heel held on its toe, a swing foot at its apex
+   * or hovering before it lands) from one moving with the ground, and only then
+   * does it decide. False: the clip is read by ankle height whatever the
+   * contradictions, which the `support:` line then says.
+   */
+  groundResolved: boolean;
   /** Per frame, the vertical speed's reading: the side down, both, or null (a jump, or neither foot moving with the ground). */
   contact: Contact[];
   /** Per frame, ankle height's reading (the support before #280). */
@@ -872,6 +886,19 @@ function rangeOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly 
   const out = {} as Record<Side, { x: number; y: number }>;
   for (const s of SIDES) out[s] = { x: span(ankle[s].map((a, i) => a[0] - hip[s][i]![0])), y: span(ankle[s].map((a, i) => a[1] - hip[s][i]![1])) };
   return out;
+}
+
+/** rig-c/pose#379: the hips' ground speed — the median vertical step of mid_hip over the steps outside every jump, picture px a frame (0 with none). */
+function hipStepOf(hip: Record<Side, readonly Pt[]>, jumps: readonly (readonly [number, number])[]): number {
+  const n = hip.r.length;
+  const jump = new Array<boolean>(n).fill(false);
+  for (const [a, b] of jumps) for (let i = a; i <= b; i++) jump[i] = true;
+  const steps: number[] = [];
+  for (let i = 1; i < n; i++) {
+    if (jump[i] || jump[i - 1]) continue;
+    steps.push((hip.r[i]![1] + hip.l[i]![1]) / 2 - (hip.r[i - 1]![1] + hip.l[i - 1]![1]) / 2);
+  }
+  return steps.length === 0 ? 0 : percentile(steps, 0.5);
 }
 
 /**
@@ -889,15 +916,41 @@ function rangeOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly 
  * foot moves with the ground. A plant ends where the other foot lands, so no
  * step releases one and none is tracked (#113's `lowered` and #119's `tracked`
  * are not read). Otherwise the feet are ankle height's, unchanged.
+ *
+ * rig-c/pose#379: a third condition, the ground's motion. The speed reads a
+ * foot down on a step within `STILL_SPEED` of its ground speed, and a still
+ * ankle steps by 0 — so where the ground itself moves by less than
+ * `STILL_SPEED` a frame, "with the ground" and "still" are one reading, and the
+ * signal plants every still ankle: the outgoing heel held on its toe while the
+ * other foot lands, the swing foot paused at its apex or hovering before it
+ * lands. On a level-camera walk read that way, support fragmented from one span
+ * a step to three, and the landing foot was drawn through the floor. Depth drawn
+ * as height is exactly a ground that moves: a foot on the floor slides in y as
+ * it goes back (a gait in place), or the hips come down the picture as the body
+ * approaches (a gait travelling toward a fixed camera). So the speed decides
+ * only when each side's ground speed, or the hips' median vertical step, is at
+ * least `STILL_SPEED` of the leg — the same bound that defines its reading, not
+ * a new one. The tests' frontal walk slides at 0.0121 and 0.0167 leg lengths a
+ * frame, and read travelling its hips come down at 0.0144; the level-camera walk
+ * the tests draw with a held heel and a held apex at 0 (`test/ground.test.ts`).
+ * A frontal clip whose ground moves less than that is read by ankle height, and
+ * the `support:` line says so.
  */
 function frontalOf(ankle: Record<Side, readonly Pt[]>, hip: Record<Side, readonly Pt[]>, feet: Feet): Feet {
   const sig = speedSignalOf(ankle, feet);
   const range = rangeOf(ankle, hip);
   const strideInDepth = SIDES.every((s) => range[s].y > range[s].x);
+  const mean = (feet.legLength.r + feet.legLength.l) / 2;
+  const hipStep = hipStepOf(hip, feet.jumps);
+  const feetResolved = SIDES.every((s) => !(Math.abs(sig.ground[s]) < STILL_SPEED * feet.legLength[s]));
+  const hipResolved = !(Math.abs(hipStep) < STILL_SPEED * mean);
+  const groundResolved = feetResolved || hipResolved;
   const frontal = strideInDepth && sig.read > 0 && sig.contradict.length > FRONTAL_DISAGREE * sig.read;
+  // rig-c/pose#379: the speed decides only where the ground's motion is resolved (header).
+  const decides = frontal && groundResolved;
   const height = feet.support.map((s) => s ?? null);
-  const signal = (by: SupportSignal['by']): SupportSignal => ({ contradict: sig.contradict, read: sig.read, range, frontal, contact: sig.contact, height, by });
-  if (!frontal) return { ...feet, signal: signal(height.map((s) => (s === null ? null : 'height'))) };
+  const signal = (by: SupportSignal['by']): SupportSignal => ({ contradict: sig.contradict, read: sig.read, range, frontal: decides, ground: sig.ground, hipStep, groundResolved, contact: sig.contact, height, by });
+  if (!decides) return { ...feet, signal: signal(height.map((s) => (s === null ? null : 'height'))) };
   const n = height.length;
   const other = (s: Side): Side => (s === 'r' ? 'l' : 'r');
   const support: Array<Side | null> = new Array<Side | null>(n).fill(null);
