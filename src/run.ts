@@ -29,6 +29,7 @@ import { PROVENANCE_FILE, provenanceText } from './provenance.ts';
 import { madeLine, planOutDirs } from './outdir.ts';
 import { bodyLine, faceLine } from './face.ts';
 import { contactKeysLines, readContactKeys } from './contacts.ts';
+import { scalePairWarning } from './scalepair.ts';
 
 export interface RetargetArgs extends RetargetOptions {
   rig: string;
@@ -202,6 +203,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       const fit = r.scaleFit === null ? [] : scaleFitLines(r.scale.factor, r.scaleFit);
       say(`  SCALE  ${r.scale.factor.toFixed(5)} rig units per picture px (rig ${r.scale.rig.toFixed(2)} / pose median ${r.scale.pose.toFixed(2)})${r.scaleFit === null ? '' : `; ${segmentClause(r.scaleFit)}`}`);
       for (const l of fit) say(`  SCALE  ${l}`);
+      const pairWarning = scalePairWarning(rest, map, frames, a.minScore);
+      if (pairWarning !== null) tell(`  ${pairWarning}`);
     }
     for (const h of r.holds) say(`  HOLD   ${holdLine(h, r.times)}`);
     for (const s of r.short) say(`  ${s.across === true ? 'HOLD  ' : 'SHORT '} ${shortLine(s, r.times, a.short)}`);
