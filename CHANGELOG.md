@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.45.4](https://github.com/rig-c/pose/compare/v0.45.3...v0.45.4) (2026-10-22)
+
+
+### Bug Fixes
+
+* **retarget:** warn on varying translate-scale pairs ([#385](https://github.com/rig-c/pose/issues/385)) ([c45760d](https://github.com/rig-c/pose/commit/c45760de57c42067aa6fbdcb4459a2b8688670cf))
+
 ## [0.45.3](https://github.com/rig-c/pose/compare/v0.45.2...v0.45.3) (2026-10-22)
 
 
