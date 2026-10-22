@@ -1,4 +1,4 @@
-/** #384: scale-pair advice must not change the retarget's outputs. */
+/** #384/#387: scale-pair advice must not change the retarget's outputs. */
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -17,6 +17,13 @@ const ROOT = join(import.meta.dir, '..');
 const hash = (text: string) => createHash('sha256').update(text).digest('hex');
 type Frame = Partial<Record<Body18, Joint>>;
 const observed = (x: number, y: number): Joint => ({ state: 'observed', at: [x, y], score: 1 });
+function noRecommendation(line: string | null): void {
+  expect(line).not.toBeNull();
+  expect(line).toContain('see README "The map: rig-pose-map/1", translate.scale rule');
+  expect(line).not.toContain('steadier mapped pair:');
+  expect(line).not.toContain('no steadier viable pair');
+}
+
 const framesOf = (lengths: number[]): Frame[] => lengths.map((l) => ({
   r_hip: observed(-10, 0), l_hip: observed(10, 0), neck: observed(0, -l),
   r_shoulder: observed(-30, -l), l_shoulder: observed(30, -l),
@@ -55,8 +62,7 @@ test('#384: inverse-length derivation, exact bound, below/above controls and no 
   const line = scalePairWarning(REST, m, framesOf([100, 116]), 0.3)!;
   expect(line).toContain('mid_hip → neck (rig hip → neck)');
   expect(line).toContain('variation (max-min)/max 13.793103% > 13.043478%');
-  expect(line).toContain('steadier mapped pair: r_shoulder → l_shoulder (rig sleeve_r0 → sleeve_l0), variation 0.000000%');
-  expect(line).toContain('2/2 good frames including all 2 chosen-pair observations');
+  noRecommendation(line);
   expect(line).toContain('advisory only, scale unchanged');
   m.translate = null;
   expect(scalePairWarning(REST, m, framesOf([100, 150]), 0.3)).toBeNull();
@@ -71,29 +77,31 @@ test('#384: lengths are Euclidean; in-plane lean is silent; collapse is measured
   m.chains = m.chains.slice(0, 1);
   const line = scalePairWarning(REST, m, framesOf([0, 100]), 0.3)!;
   expect(line).toContain('100.000000%');
-  expect(line).toContain('no steadier viable pair from the map');
+  noRecommendation(line);
   expect(line).not.toContain('steadier mapped pair:');
   expect(scalePairWarning(REST, m, framesOf([0, 0]), 0.3)).toBeNull();
 });
 
-test('#384: missing/low-score/virtual points are not held into measured stability; partial candidates are excluded', () => {
+test('#384: missing/low-score/virtual points are not held into measured stability; other pairs cannot supply missing observations', () => {
   const frames = framesOf([100, 150, 120]);
   frames[1]!.neck = { state: 'missing' };
   frames[2]!.r_hip!.score = 0.1;
   expect(scalePairWarning(REST, mapOf(), frames, 0.3)).toBeNull();
   const partial = framesOf([100, 150, 120]);
   partial[1]!.r_shoulder = { state: 'missing' };
-  expect(scalePairWarning(REST, mapOf(), partial, 0.3)).toContain('no steadier viable pair');
+  noRecommendation(scalePairWarning(REST, mapOf(), partial, 0.3));
   partial[1]!.r_shoulder = { ...observed(-30, -150), score: 0.1 };
-  expect(scalePairWarning(REST, mapOf(), partial, 0.3)).toContain('no steadier viable pair');
+  noRecommendation(scalePairWarning(REST, mapOf(), partial, 0.3));
   const chosenMissing = framesOf([100, 150, 120, 140]);
   chosenMissing[3]!.neck = { state: 'missing' };
   chosenMissing[3]!.l_shoulder = observed(300, -140);
-  // All candidate observations count, including a bad extra frame omitted by the chosen pair.
-  expect(scalePairWarning(REST, mapOf(), chosenMissing, 0.3)).toContain('no steadier viable pair');
+  // Other pairs cannot change which chosen-pair frames are observed.
+  const missing = scalePairWarning(REST, mapOf(), chosenMissing, 0.3);
+  noRecommendation(missing);
+  expect(missing).toContain('3/4 good frames');
 });
 
-test('#384: candidates need unambiguous map correspondences and noncollapsed rig/picture spans; order is deterministic', () => {
+test('#384/#387: other map correspondences and collapsed alternative spans cannot change the warning; order is deterministic', () => {
   const frames = framesOf([100, 150, 120]);
   const m = mapOf();
   const line = scalePairWarning(REST, m, frames, 0.3);
@@ -101,12 +109,40 @@ test('#384: candidates need unambiguous map correspondences and noncollapsed rig
   expect(scalePairWarning(REST, m, frames, 0.3)).toBe(line);
   const conflict = mapOf();
   conflict.chains.push({ ...conflict.chains[1]!, name: 'conflict', bones: ['chest'] });
-  expect(scalePairWarning(REST, conflict, frames, 0.3)).toContain('no steadier viable pair');
+  expect(scalePairWarning(REST, conflict, frames, 0.3)).toBe(line);
   const collapsed = new Map(REST);
   collapsed.set('sleeve_l0', bone('sleeve_l0', -30, 140));
-  expect(scalePairWarning(collapsed, mapOf(), frames, 0.3)).toContain('no steadier viable pair');
+  expect(scalePairWarning(collapsed, mapOf(), frames, 0.3)).toBe(line);
   for (const f of frames) f.l_shoulder = f.r_shoulder;
-  expect(scalePairWarning(REST, mapOf(), frames, 0.3)).toContain('no steadier viable pair');
+  expect(scalePairWarning(REST, mapOf(), frames, 0.3)).toBe(line);
+});
+
+test('#387 option (b): neither a steadier mismatched correspondence nor a genuinely better pair is recommended', () => {
+  const frames = framesOf([150, 150, 150]);
+  for (const [i, width] of [60, 40, 50].entries()) {
+    frames[i]!.r_shoulder = observed(-width / 2, -150);
+    frames[i]!.l_shoulder = observed(width / 2, -150);
+  }
+  const map = mapOf();
+  map.translate!.scale = { pose: ['r_shoulder', 'l_shoulder'], rig: ['sleeve_r0', 'sleeve_l0'] };
+  const mismatch = new Map(REST);
+  mismatch.set('chest', bone('chest', 0, 75));
+  // The explicit trunk chain is perfectly steady but implies 75/150 = 0.5,
+  // while hip-to-neck implies 150/150 = 1 and shoulders imply 60/50 = 1.2.
+  const trunkScale = (mismatch.get('neck')!.worldY - mismatch.get('chest')!.worldY) / 150;
+  const bodyScale = (mismatch.get('neck')!.worldY - mismatch.get('hip')!.worldY) / 150;
+  expect(bodyScale / trunkScale).toBeGreaterThan(SCALE_PAIR_GAIN);
+  const wrong = scalePairWarning(mismatch, map, frames, 0.3);
+  noRecommendation(wrong);
+  expect(wrong).toContain('r_shoulder → l_shoulder (rig sleeve_r0 → sleeve_l0)');
+  expect(wrong).toContain('33.333333% > 13.043478%');
+  expect(wrong).not.toContain('mid_hip → neck');
+  // Matching shoulders are genuinely steadier than this chosen variable trunk;
+  // option (b) still offers no replacement.
+  const better = scalePairWarning(REST, mapOf(), framesOf([100, 150, 120]), 0.3);
+  noRecommendation(better);
+  expect(better).not.toContain('r_shoulder → l_shoulder');
+  console.log(`SCALE_PAIR_387 generated mismatch: trunk variation 0%, implied ${trunkScale}; body ${bodyScale}; shoulders 40..60px, implied 1.2; recommends none; matching steady shoulders with variable trunk also recommends none`);
 });
 
 /** Check the actual JSON example's pair against its adjacent safety condition. */
@@ -122,7 +158,8 @@ function exampleAgrees(text: string): boolean {
     && adjacent.includes('and the trunk is not foreshortened')
     && section.includes('Choose a long span whose picture length stays steady through the clip')
     && section.includes('mostly frontal') && section.includes('1-1/1.15 = 3/23')
-    && section.includes('Conflicting point correspondences exclude an inferred bilateral pair; each explicit chain segment keeps its declared endpoints.');
+    && section.includes('recommends no alternative pair')
+    && section.includes('Steadiness alone cannot validate pose-to-rig proportions');
 }
 
 test('#384 docs: the example pair and adjacent rule agree; unqualified trunk or contradictory example goes red', () => {
@@ -130,7 +167,7 @@ test('#384 docs: the example pair and adjacent rule agree; unqualified trunk or 
   expect(exampleAgrees(text)).toBe(true);
   expect(exampleAgrees(text.replace("This example's trunk scale pair is safe only when its picture length stays steady", 'The trunk pair is always safe'))).toBe(false);
   expect(exampleAgrees(text.replace('and the trunk is not foreshortened', 'even if the trunk is foreshortened'))).toBe(false);
-  expect(exampleAgrees(text.replace('Conflicting point correspondences exclude an inferred bilateral pair; each explicit chain segment keeps its declared endpoints.', 'Conflicting point correspondences are excluded.'))).toBe(false);
+  expect(exampleAgrees(text.replace('recommends no alternative pair', 'recommends the steadiest pair'))).toBe(false);
   expect(exampleAgrees(text.replace('"pose": ["mid_hip", "neck"], "rig": ["hip", "neck"]', '"pose": ["r_hip", "neck"], "rig": ["hip", "neck"]'))).toBe(false);
 });
 
@@ -141,6 +178,18 @@ function variableRun(): string {
     const joints = frame.people[0]!.joints;
     const dy = 25 * (1 - Math.cos(2 * Math.PI * i / 20));
     for (const joint of ['neck', 'nose', 'r_eye', 'l_eye', 'r_ear', 'l_ear', 'r_shoulder', 'l_shoulder', 'r_elbow', 'l_elbow', 'r_wrist', 'l_wrist'] as const) joints[joint]!.at![1] += dy;
+  });
+  return writePoseSequence(clean(seq, { loop: true, legs: 1, rest: 1 }, undefined, 'fixture').seq);
+}
+
+/** Turning shoulder width on a derivative only; trunk and lower body stay exact. */
+function turningRun(): string {
+  const seq = readPoseSequence(sequence(), 'fixture');
+  seq.frames.forEach((frame, i) => {
+    const joints = frame.people[0]!.joints;
+    const dx = 5 * (1 - Math.cos(2 * Math.PI * i / 20));
+    for (const joint of ['r_shoulder', 'r_elbow', 'r_wrist'] as const) joints[joint]!.at![0] += dx;
+    for (const joint of ['l_shoulder', 'l_elbow', 'l_wrist'] as const) joints[joint]!.at![0] -= dx;
   });
   return writePoseSequence(clean(seq, { loop: true, legs: 1, rest: 1 }, undefined, 'fixture').seq);
 }
@@ -196,7 +245,7 @@ test('#384 CLI control: generated run variable trunk warns in summary; original 
     expect(current.stdout).toContain('mid_hip → neck');
     expect(current.stdout).toContain('picture length 100.00–150.00px');
     expect(current.stdout).toContain('33.333333% > 13.043478%');
-    expect(current.stdout).toContain('steadier mapped pair: r_shoulder → l_shoulder');
+    noRecommendation(warn(current.stdout)[0]!);
     const motion = readFileSync(out, 'utf8'), reportText = readFileSync(report, 'utf8');
     const copy = join(dir, 'copy');
     mkdirSync(copy);
@@ -221,7 +270,38 @@ test('#384 CLI control: generated run variable trunk warns in summary; original 
     const steady = run(join(ROOT, 'cli.ts'));
     expect(steady.status, steady.stderr).toBe(0);
     expect(warn(steady.stdout)).toEqual([]);
+    // #387: the same public run, now with varying shoulders and a steady trunk.
+    // The trunk chain's chest-to-neck rig span is not hip-to-neck: steadiness
+    // alone must not promote that different correspondence.
+    const turning = turningRun();
+    writeFileSync(pose, turning);
+    const mismatch = run(join(ROOT, 'cli.ts'));
+    expect(mismatch.status, mismatch.stderr).toBe(0);
+    const lines = warn(mismatch.stdout);
+    expect(lines).toHaveLength(1);
+    noRecommendation(lines[0]!);
+    expect(lines[0]).toContain('r_shoulder → l_shoulder (rig sleeve_r0 → sleeve_l0)');
+    expect(lines[0]).toContain('picture length 40.00–60.00px');
+    expect(lines[0]).toContain('33.333333% > 13.043478%');
+    expect(lines[0]).not.toContain('mid_hip → neck');
+    const turningFrames = personTrack(readPoseSequence(turning, 'fixture'), undefined, 'fixture');
+    const originalFrames = personTrack(readPoseSequence(sequence(), 'fixture'), undefined, 'fixture');
+    for (let i = 0; i < turningFrames.length; i++) {
+      for (const joint of ['neck', 'r_hip', 'l_hip', 'r_knee', 'l_knee', 'r_ankle', 'l_ankle'] as const) {
+        expect(turningFrames[i]![joint]).toEqual(originalFrames[i]![joint]);
+      }
+    }
+    const mismatchMotion = readFileSync(out, 'utf8'), mismatchReport = readFileSync(report, 'utf8');
+    writeFileSync(join(copy, 'src', 'run.ts'), original.replace(needle, 'const pairWarning: string | null = null;'));
+    const mismatchDisabled = run(join(copy, 'cli.ts'));
+    expect(mismatchDisabled.status, mismatchDisabled.stderr).toBe(0);
+    expect(warn(mismatchDisabled.stdout)).toEqual([]);
+    expect(readFileSync(out, 'utf8')).toBe(mismatchMotion);
+    expect(JSON.parse(readFileSync(report, 'utf8'))).toEqual(JSON.parse(mismatchReport));
+    writeFileSync(join(copy, 'src', 'run.ts'), original);
+    expect(hash(readFileSync(join(copy, 'src', 'run.ts'), 'utf8'))).toBe(before);
     console.log('SCALE_PAIR_CONTROL run: original trunk 150..150px silent; planted trunk 100..150px variation 33.333333% warns; shoulder 60..60px silent; disabled control exact motion bytes and report semantics; restored warning identical');
+    console.log('SCALE_PAIR_387_CLI turning derivative shoulders 40..60px variation 33.333333% warns without alternatives; all 200 trunk/lower-body frames exact; disabled control exact motion bytes and report semantics');
   } finally {
     expect(hash(readFileSync(join(ROOT, 'src', 'run.ts'), 'utf8'))).toBe(before);
     rmSync(dir, { recursive: true, force: true });
