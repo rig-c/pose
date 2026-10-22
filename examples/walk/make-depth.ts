@@ -50,6 +50,12 @@
  * x = 200 − X, the near side −Z; the side camera, on the figure's right, draws
  * x = 200 + Z, y = 400 − Y, the near side −X.
  *
+ * `elevation` (rig-c/pose#379, the front camera only, degrees, default 0): the
+ * front camera tilted down by e, still orthographic. It draws
+ * y = 400 − (Y·cos e − Z·sin e) and reads depth as Y·sin e + Z·cos e, so a
+ * nearer foot is drawn lower, which is how a frontal view draws depth as height
+ * (rig-c/pose#280). At 0 every output is what it was without the parameter.
+ *
  * The truth: a segment's sign is +1 when its distal joint is nearer the camera
  * than its proximal one, −1 farther, and 0 when the segment is drawn within the
  * flat band (cos of its tilt out of the picture ≥ 0.95). A limb's depth is the
@@ -128,9 +134,38 @@ const add = (a: V3, b: V3): V3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const seg = (L: number, a: number, b: number, s: number): V3 => [s * L * Math.sin(b * RAD), -L * Math.cos(a * RAD) * Math.cos(b * RAD), L * Math.sin(a * RAD) * Math.cos(b * RAD)];
 const ease = (v: number) => (1 - Math.cos(Math.PI * v)) / 2;
 
+/**
+ * rig-c/pose#379: a walk's push-off, in fractions of the leg's cycle u (textbook gait phases) and of its length. The
+ * stance lasts until `toeOff` (the swing, and truth's `lifted`, start there instead of at `SWING.walk`); from `heelOff`
+ * the heel rises, the knee folding so the ankle is `height` × (u − heelOff) / (toeOff − heelOff) leg lengths (world Y)
+ * above the straight leg's; the swing after toe-off is the walk's own over what remains, the toe-off fold released
+ * linearly. The other leg still lands half a cycle later.
+ */
+export interface PushOff {
+  heelOff: number;
+  toeOff: number;
+  height: number;
+}
+
+/** The knee fold, degrees, that puts the ankle `height` leg lengths (world Y) above the straight leg's, the thigh at `thigh`° and the shin behind it. */
+function foldFor(thigh: number, height: number): number {
+  const c = Math.cos(thigh * RAD) - (height * (LEN.thigh + LEN.shin)) / LEN.shin;
+  return thigh + Math.acos(c) / RAD;
+}
+
 /** One leg at phase u: thigh angle and knee bend, degrees. */
-function leg(gait: Gait, u: number, s = SWING[gait]): { thigh: number; knee: number } {
+function leg(gait: Gait, u: number, s = SWING[gait], push?: PushOff): { thigh: number; knee: number } {
   if (gait === 'walk') {
+    if (push !== undefined) {
+      const t = push.toeOff;
+      const fold = foldFor(-10, push.height);
+      if (u < t) {
+        const thigh = 10 - 20 * (u / t);
+        return { thigh, knee: u < push.heelOff ? 0 : foldFor(thigh, (push.height * (u - push.heelOff)) / (t - push.heelOff)) };
+      }
+      const v = (u - t) / (1 - t);
+      return { thigh: -10 + 20 * ease(v) + 10 * Math.sin(Math.PI * v), knee: WALK_KNEE * Math.sin(Math.PI * Math.sqrt(v)) + fold * (1 - v) };
+    }
     if (u < s) return { thigh: 10 - 20 * (u / s), knee: 0 };
     const v = (u - s) / (1 - s);
     return { thigh: -10 + 20 * ease(v) + 10 * Math.sin(Math.PI * v), knee: WALK_KNEE * Math.sin(Math.PI * Math.sqrt(v)) };
@@ -181,9 +216,14 @@ function heightOf(gait: Gait, x: number): number {
  * The cycle, `cycles` strides of the gait, drawn by `view`'s camera. `ground` (rig-c/pose#369, the run only): the
  * figure is carried on a floor instead of hung from a fixed mid_hip — every joint moved up by `heightOf`, so the
  * stance ankle stays on the floor and the two flights of each stride lift both feet and the hips; the joints'
- * relations, depths and truth are the same as without it.
+ * relations, depths and truth are the same as without it. `elevation`: the front camera tilted down (header).
+ * `pushOff` (the walk only, rig-c/pose#379): the heel rises from heel-off to toe-off (`PushOff`).
  */
-export function depthCycle(gait: Gait, view: View, cycles = 1, ground = false): DepthFrame[] {
+export function depthCycle(gait: Gait, view: View, cycles = 1, ground = false, elevation = 0, pushOff?: PushOff): DepthFrame[] {
+  if (pushOff !== undefined && gait !== 'walk') throw new Error(`depthCycle: pushOff is the walk's; gait "${gait}" takes none`);
+  if (elevation !== 0 && view !== 'front') throw new Error(`depthCycle: elevation ${elevation}° is the front camera's; view "${view}" takes 0`);
+  const ce = Math.cos(elevation * RAD);
+  const se = Math.sin(elevation * RAD);
   const P = STRIDE[gait];
   const armGain = gait === 'walk' ? -0.6 : -0.9;
   const elbow = gait === 'walk' ? 20 : 70;
@@ -196,9 +236,9 @@ export function depthCycle(gait: Gait, view: View, cycles = 1, ground = false): 
     const lifted: Array<'r' | 'l'> = [];
     for (const [side, s, du] of [['r', -1, 0], ['l', 1, 0.5]] as const) {
       const u = ((i % P) / P + du) % 1;
-      const swing = ground ? GROUND_SWING : SWING[gait];
+      const swing = ground ? GROUND_SWING : pushOff !== undefined ? pushOff.toeOff : SWING[gait];
       if (u >= swing - (ground ? 1e-9 : 0)) lifted.push(side);
-      const { thigh, knee } = leg(gait, u, swing);
+      const { thigh, knee } = leg(gait, u, swing, pushOff);
       const legB = 6 * Math.sin(phi);
       const armB = 4 * Math.cos(phi);
       const hip = add(midHip, [s * 15, 0, 0]);
@@ -217,8 +257,9 @@ export function depthCycle(gait: Gait, view: View, cycles = 1, ground = false): 
       const h = heightOf(gait, (i % P) / P);
       for (const k of Object.keys(j3)) j3[k] = add(j3[k]!, [0, h, 0]);
     }
-    const draw = (p: V3): Pt => (view === 'front' ? [200 + p[0], 400 - p[1]] : view === 'back' ? [200 - p[0], 400 - p[1]] : [200 + p[2], 400 - p[1]]);
-    const near = (p: V3): number => (view === 'front' ? p[2] : view === 'back' ? -p[2] : -p[0]);
+    const tilted = view === 'front' && elevation !== 0;
+    const draw = (p: V3): Pt => (tilted ? [200 + p[0], 400 - (p[1] * ce - p[2] * se)] : view === 'front' ? [200 + p[0], 400 - p[1]] : view === 'back' ? [200 - p[0], 400 - p[1]] : [200 + p[2], 400 - p[1]]);
+    const near = (p: V3): number => (tilted ? p[1] * se + p[2] * ce : view === 'front' ? p[2] : view === 'back' ? -p[2] : -p[0]);
     const joints = Object.fromEntries(Object.entries(j3).map(([n, p]) => [n, draw(p)]));
     const z = Object.fromEntries(Object.entries(j3).map(([n, p]) => [n, near(p)]));
     const truth = {} as DepthFrame['truth'];
