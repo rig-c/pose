@@ -1,5 +1,7 @@
 /**
  * #208: Two-reference regression gate and standing continuity assertions.
+ * #375 adds the generated grounded run shared with #369, with support-foot
+ * height held to generator truth, never to the report's selected supports.
  *
  * Every PR retargets both synthetic public reference scans (`dancer` — multi-set
  * gesture switching, symmetric hands-behind-head diamond, hands-on-hips short runs,
@@ -37,11 +39,15 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { poseRawAnimation, poseRawSetup, readModel, type CompiledDocument, type RawBone } from 'rig-c/core';
 import { Plate } from 'rig-c/plate';
 import { clean } from '../src/clean.ts';
 import { readPoseSequence, writePoseSequence } from '../src/pose.ts';
+import { pointAt } from '../src/map.ts';
+import { poseFrames } from '../src/verify.ts';
+import { RUN_FLOOR } from '../examples/walk/make-depth.ts';
+import { FPS, run as groundedRun, sequence as groundedSequence } from './flight-fixture.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const CLI = join(ROOT, 'cli.ts');
@@ -223,7 +229,7 @@ function poseDoc(m: Motion, edit?: (i: number, joints: JointsDoc) => void): stri
 }
 
 interface RefCase {
-  name: 'dancer' | 'second';
+  name: 'dancer' | 'second' | 'run';
   dir: string;
   rigDir: string;
   posePath: string;
@@ -577,6 +583,25 @@ function setupSecondRef(rootDir: string): RefCase {
   };
 }
 
+/** #375: reuse #369's generated floor-carried run, not an exam solve. */
+function setupRunRef(rootDir: string): RefCase {
+  const dir = join(rootDir, 'run');
+  mkdirSync(dir, { recursive: true });
+  const posePath = join(dir, 'pose.json');
+  writeFileSync(posePath, groundedSequence());
+  return {
+    name: 'run', dir,
+    rigDir: join(ROOT, 'examples', 'wave', 'rig'),
+    mapPath: join(ROOT, 'examples', 'walk', 'map.json'),
+    posePath, outPath: join(dir, 'motion.json'), buildDir: join(dir, 'build'),
+    reportPath: join(dir, 'report.json'),
+    // The frontal arm foreshortening needs the existing flip guard to satisfy
+    // the standing 45°/frame continuity ceiling; no ceiling is relaxed.
+    args: ['--plant-feet', '--stance', '0.07', '--leg-scale', '0.5,1.05', '--floor', '0', '--flip', '45'],
+    n: groundedRun().length, dt: 1 / FPS,
+  };
+}
+
 interface TrackSpec {
   bone?: string;
   slot?: string;
@@ -629,6 +654,59 @@ function runReference(ref: RefCase, cliPath = CLI): RefRunOutput {
     report,
     buildDoc,
   };
+}
+
+interface SupportHeightVerdict {
+  grounded: number;
+  airborne: number;
+  worst: number;
+  frame: number;
+  bone: string;
+  failures: string[];
+}
+
+/**
+ * #375: the generator's true supporting foot against the declared world floor.
+ * RUN_FLOOR = -150 in the generator's y-up space (picture y = 400 - Y).
+ * --floor 0 translates that plane to world y = 0; it does not estimate a floor
+ * from output. L is mean setup thigh-root -> shin-tip distance. Neither the
+ * grounded frame set nor the floor depends on report.jumps/supports/floor.
+ */
+function checkRunSupport(out: RefRunOutput, posed = poseFrames(
+  out.buildDoc, 'dance', readPoseSequence(readFileSync(out.ref.posePath, 'utf8'), 'fixture').frames.map((f) => f.t),
+)): SupportHeightVerdict {
+  const truth = groundedRun();
+  const lengths = new Map(out.buildDoc.bones.map((b) => [b.name, b.length ?? 0]));
+  const setup = new Map(poseRawSetup(out.buildDoc).bones.map((b) => [b.name, b]));
+  const legLength = ['r', 'l'].map((side) => {
+    const root = setup.get(`leg_${side}0`)!;
+    const tip = pointAt(setup, lengths, `leg_${side}1:tip`)!;
+    return Math.hypot(root.worldX - tip[0], root.worldY - tip[1]);
+  }).reduce((a, b) => a + b) / 2;
+  const verdict: SupportHeightVerdict = { grounded: 0, airborne: 0, worst: 0, frame: 0, bone: 'none', failures: [] };
+  if (posed.length !== truth.length || !(legLength > 0 && Number.isFinite(legLength))) {
+    throw new Error(`GATE_SUPPORT_FOOT_HEIGHT: run has ${posed.length} posed frames for ${truth.length} truth frames, setup leg length ${legLength}; require matching frames and a positive finite length`);
+  }
+  for (let i = 0; i < truth.length; i++) {
+    const frame = truth[i]!;
+    if (frame.lifted.length === 2) { verdict.airborne++; continue; }
+    if (frame.lifted.length !== 1) throw new Error(`GATE_SUPPORT_FOOT_HEIGHT: run truth frame ${i} requires one support or flight`);
+    const side = frame.lifted[0] === 'r' ? 'l' : 'r';
+    // Guard the fixture's ground truth too: picture y = 400 - RUN_FLOOR.
+    if (Math.abs(frame.joints[`${side}_ankle`]![1] - (400 - RUN_FLOOR)) > 1e-9) {
+      throw new Error(`GATE_SUPPORT_FOOT_HEIGHT: run truth frame ${i} ankle ${side} is not on generator floor ${RUN_FLOOR}`);
+    }
+    verdict.grounded++;
+    const bone = `leg_${side}1:tip`;
+    const tip = pointAt(posed[i]!, lengths, bone);
+    const y = tip?.[1] ?? NaN;
+    const error = Math.abs(y) / legLength;
+    if (error > verdict.worst) { verdict.worst = error; verdict.frame = i; verdict.bone = bone; }
+    if (!(error <= 0.01)) verdict.failures.push(
+      `GATE_SUPPORT_FOOT_HEIGHT: run bone "${bone}" frame ${i} (generator support ${side}) height ${y.toFixed(6)}, required world floor 0 ± 0.01 L; error ${error.toFixed(6)} L`,
+    );
+  }
+  return verdict;
 }
 
 function trackId(t: TrackSpec): string {
@@ -1043,12 +1121,15 @@ export function diffReferenceTracks(base: RefRunOutput, candidate: RefRunOutput,
   };
 }
 
-export function formatGateTable(rows: ReadonlyArray<{ diff: RefDiffVerdict; cont: ContinuityVerdict }>): string {
+export function formatGateTable(rows: ReadonlyArray<{ diff?: RefDiffVerdict; cont: ContinuityVerdict }>): string {
   const header =
     'ref      | tracks | moved | claimed | unclaimed | max |Δ| (°/f)              | max bridge |elbow| | max switch |Δ| | clamp sat | folds';
   const sep =
     '---------+--------+-------+---------+-----------+----------------------------+--------------------+----------------+-----------+---------';
   const body = rows.map(({ diff, cont }) => {
+    if (diff === undefined) {
+      return `${cont.ref.padEnd(8)} |   SKIP |  SKIP |    SKIP |      SKIP | ${`${cont.maxDelta.toFixed(2)}° (${cont.maxDeltaWhere})`.padEnd(26)} | ${cont.maxBridgeElbow.toFixed(2)}° | ${cont.maxSwitchDelta.toFixed(2)}° | ${cont.clampSaturations} | ${cont.foldsStatus}`;
+    }
     const cRef = diff.ref.padEnd(8);
     const cTr = String(diff.totalTracks).padStart(6);
     const cMv = String(diff.movedTracks.length).padStart(5);
@@ -1064,68 +1145,120 @@ export function formatGateTable(rows: ReadonlyArray<{ diff: RefDiffVerdict; cont
   return [header, sep, ...body].join('\n');
 }
 
-describe('#208: two-reference regression gate and standing continuity assertions with mutants', () => {
-  test('Bar 1 & Bar 3: on main after 0.29.1 both references are green, print the per-reference table, and when GATE_BASE_SHA is set diff every track against the PR base', () => {
-    const work = tempDir();
-    const dancer = setupDancerRef(work);
-    const second = setupSecondRef(work);
+interface GateBaseInput { cli?: string; baseSha?: string; headSha?: string; body?: string }
 
-    const outDancer = runReference(dancer);
-    const outSecond = runReference(second);
-
-    const contDancer = checkContinuity(outDancer);
-    const contSecond = checkContinuity(outSecond);
-
-    let baseDancer = outDancer;
-    let baseSecond = outSecond;
-    const baseSha = process.env.GATE_BASE_SHA?.trim() ?? '';
-    const headSha = process.env.GATE_HEAD_SHA?.trim() ?? 'HEAD';
-    let claimSource = process.env.GATE_PR_BODY ?? '';
-
-    if (baseSha.length > 0) {
-      const mb = spawnSync('git', ['merge-base', baseSha, headSha], { cwd: ROOT, encoding: 'utf8' });
-      const mergeBase = mb.status === 0 ? mb.stdout.trim() : baseSha;
-      const logRes = spawnSync('git', ['log', '--format=%B', `${mergeBase}..${headSha}`], { cwd: ROOT, encoding: 'utf8' });
-      if (logRes.status === 0) claimSource += `\n${logRes.stdout}`;
-
-      mkdirSync(MUTANTS, { recursive: true });
-      const baseTree = mkdtempSync(join(MUTANTS, 'gate-base-'));
-      try {
-        const arch = spawnSync('sh', ['-c', `git archive "${mergeBase}" | tar -x -C "${baseTree}"`], {
-          cwd: ROOT,
-          encoding: 'utf8',
-        });
-        if (arch.status === 0 && existsSync(join(baseTree, 'cli.ts'))) {
-          const baseWork = tempDir();
-          baseDancer = runReference(setupDancerRef(baseWork), join(baseTree, 'cli.ts'));
-          baseSecond = runReference(setupSecondRef(baseWork), join(baseTree, 'cli.ts'));
-        }
-      } finally {
-        rmSync(baseTree, { recursive: true, force: true });
-      }
+/** A missing optional base is SKIP; a requested base that cannot be read is red. */
+function withGateBase<T>(read: (cli: string | undefined, claims: string) => T, input: GateBaseInput = {
+  cli: process.env.GATE_BASE_CLI, baseSha: process.env.GATE_BASE_SHA,
+  headSha: process.env.GATE_HEAD_SHA, body: process.env.GATE_PR_BODY,
+}): T {
+  const body = input.body ?? '';
+  const cli = input.cli?.trim() ?? '';
+  if (cli.length > 0) {
+    // An explicit source snapshot is the adapter for runners without .git.
+    // Supply commit-message claims via GATE_PR_BODY when using that adapter.
+    if (!existsSync(cli) || resolve(cli) === resolve(CLI)) {
+      throw new Error('GATE_BASE_UNAVAILABLE: GATE_BASE_CLI must name an existing, separate base CLI; no self-comparison');
     }
+    console.log('GATE_BASE: comparing all references against the explicit GATE_BASE_CLI snapshot');
+    return read(cli, body);
+  }
+  const baseSha = input.baseSha?.trim() ?? '';
+  if (baseSha.length === 0) {
+    console.log('GATE_BASE_UNAVAILABLE: track comparison SKIP (no GATE_BASE_SHA or GATE_BASE_CLI); continuity and support height are still measured');
+    return read(undefined, body);
+  }
+  const headSha = input.headSha?.trim() || 'HEAD';
+  const mb = spawnSync('git', ['merge-base', baseSha, headSha], { cwd: ROOT, encoding: 'utf8' });
+  if (mb.status !== 0 || !/^[a-f0-9]{40,64}$/.test(mb.stdout.trim())) {
+    throw new Error(`GATE_BASE_UNAVAILABLE: cannot resolve merge base of ${baseSha} and ${headSha}; no track comparison: ${mb.stderr}`);
+  }
+  const mergeBase = mb.stdout.trim();
+  const log = spawnSync('git', ['log', '--format=%B', `${mergeBase}..${headSha}`], { cwd: ROOT, encoding: 'utf8' });
+  if (log.status !== 0) throw new Error(`GATE_BASE_UNAVAILABLE: cannot read claims for ${mergeBase}..${headSha}: ${log.stderr}`);
+  mkdirSync(MUTANTS, { recursive: true });
+  const tree = mkdtempSync(join(MUTANTS, 'gate-base-'));
+  try {
+    const archive = spawnSync('git', ['archive', '--format=tar', mergeBase], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024 });
+    if (archive.status !== 0) throw new Error(`GATE_BASE_UNAVAILABLE: cannot archive base ${mergeBase}: ${archive.stderr.toString()}`);
+    const tar = spawnSync('tar', ['-x', '-C', tree], { input: archive.stdout, encoding: 'utf8' });
+    const baseCLI = join(tree, 'cli.ts');
+    if (tar.status !== 0 || !existsSync(baseCLI)) throw new Error(`GATE_BASE_UNAVAILABLE: base ${mergeBase} extraction has no usable CLI: ${tar.stderr}`);
+    return read(baseCLI, `${body}\n${log.stdout}`);
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
+}
 
-    const claims = parseTrackClaims(claimSource);
-    const diffDancer = diffReferenceTracks(baseDancer, outDancer, claims);
-    const diffSecond = diffReferenceTracks(baseSecond, outSecond, claims);
+describe('#208: two-reference regression gate and standing continuity assertions with mutants', () => {
+  test('Bar 1 & Bar 3 and #375: both references and the generated run are green; compare every track to an available PR base', () => {
+    const work = tempDir();
+    const outputs = [setupDancerRef(work), setupSecondRef(work), setupRunRef(work)].map((ref) => runReference(ref));
+    const continuity = outputs.map((out) => checkContinuity(out));
+    const support = checkRunSupport(outputs[2]!);
+    console.log(`GATE_SUPPORT_FOOT_HEIGHT: run ${support.grounded} generator-grounded / ${support.airborne} airborne frames, floor 0; max ${support.worst.toFixed(8)} L at ${support.bone} frame ${support.frame} (bar ≤ 0.01 L)`);
+    expect(support.grounded).toBe(80);
+    expect(support.airborne).toBe(120);
+    expect(support.failures).toEqual([]);
 
-    const table = formatGateTable([
-      { diff: diffDancer, cont: contDancer },
-      { diff: diffSecond, cont: contSecond },
-    ]);
-    console.log(`\n=== GATE (#208): two-reference regression & continuity ===\n${table}\n`);
+    withGateBase((baseCLI, claimSource) => {
+      const claims = parseTrackClaims(claimSource);
+      const baseWork = tempDir();
+      const base = baseCLI === undefined ? undefined
+        : [setupDancerRef(baseWork), setupSecondRef(baseWork), setupRunRef(baseWork)].map((ref) => runReference(ref, baseCLI));
+      const rows = outputs.map((out, i) => ({
+        cont: continuity[i]!, diff: base === undefined ? undefined : diffReferenceTracks(base[i]!, out, claims),
+      }));
+      console.log(`\n=== GATE (#208, #375): reference regression & continuity ===\n${formatGateTable(rows)}\n`);
+      for (const row of rows) {
+        expect(row.cont.failures).toEqual([]);
+        if (row.diff !== undefined) expect(row.diff.failures).toEqual([]);
+      }
+    });
+    expect(continuity[0]!.foldsStatus).toBe('PASS');
+    expect(continuity[0]!.foldedFrames).toBe(0);
+    expect(continuity[0]!.meshCount).toBe(1);
+    for (const cont of continuity.slice(1)) {
+      expect(cont.foldsStatus).toBe('SKIP');
+      expect(cont.foldedFrames).toBeNull();
+      expect(cont.meshCount).toBe(0);
+    }
+  }, SLOW);
 
-    expect(contDancer.foldsStatus).toBe('PASS');
-    expect(contDancer.foldedFrames).toBe(0);
-    expect(contDancer.meshCount).toBe(1);
-    expect(contSecond.foldsStatus).toBe('SKIP');
-    expect(contSecond.foldedFrames).toBeNull();
-    expect(contSecond.meshCount).toBe(0);
+  test('#375: optional base absence is SKIP; an explicitly unavailable or self base fails by name', () => {
+    withGateBase((cli) => expect(cli).toBeUndefined(), {});
+    expect(() => withGateBase(() => {}, { cli: join(tempDir(), 'missing.ts') })).toThrow('GATE_BASE_UNAVAILABLE');
+    expect(() => withGateBase(() => {}, { cli: CLI })).toThrow('no self-comparison');
+  });
 
-    expect(contDancer.failures).toEqual([]);
-    expect(contSecond.failures).toEqual([]);
-    expect(diffDancer.failures).toEqual([]);
-    expect(diffSecond.failures).toEqual([]);
+  test('#375 controls: generator ground survives false jump labels, a common vertical shift fails, and run track changes still require claims', () => {
+    const out = runReference(setupRunRef(tempDir()));
+    const truth = checkRunSupport(out);
+    // Plant a report that declares every frame airborne and invents a floor.
+    const mislabeled = { ...out, report: { ...out.report, feet: { jumps: [[0, out.ref.n - 1]], supports: [], floor: { y: 999 } } } };
+    expect(checkRunSupport(mislabeled)).toEqual(truth);
+    expect(truth.failures).toEqual([]);
+    const times = readPoseSequence(readFileSync(out.ref.posePath, 'utf8'), 'fixture').frames.map((f) => f.t);
+    const shifted = poseFrames(out.buildDoc, 'dance', times).map((frame) => new Map(
+      [...frame].map(([name, bone]) => [name, { ...bone, worldY: bone.worldY + 10 }]),
+    ));
+    const bad = checkRunSupport(mislabeled, shifted);
+    expect(bad.grounded).toBe(80);
+    expect(bad.failures).toHaveLength(80);
+    expect(bad.failures[0]).toContain('GATE_SUPPORT_FOOT_HEIGHT: run bone "leg_r1:tip" frame 0');
+    console.log(`GATE_SUPPORT_FOOT_HEIGHT control: all feet shifted +10 world units with false all-air report; ${bad.failures.length}/80 grounded frames refused, max ${bad.worst.toFixed(6)} L`);
+    const candidate: RefRunOutput = { ...out, tracks: structuredClone(out.tracks) };
+    const track = candidate.tracks.find((t) => t.bone === 'hip' && t.property === 'translate')!;
+    (track.keys[3]!.v as number[])[1]! += 1;
+    const noClaim = diffReferenceTracks(out, candidate, []);
+    expect(noClaim.failures.some((f) => f.includes('GATE_UNCLAIMED_TRACK: run track "hip.translate"'))).toBe(true);
+    const claim = parseTrackClaims('Claim-Track: run hip.translate 3 #375');
+    expect(diffReferenceTracks(out, candidate, claim).failures).toEqual([]);
+    expect(diffReferenceTracks(out, candidate, parseTrackClaims('Claim-Track: run hip.translate 4 #375')).failures).toHaveLength(1);
+    const spike: RefRunOutput = { ...out, tracks: structuredClone(out.tracks) };
+    const rotate = spike.tracks.find((t) => t.bone === 'head' && t.property === 'rotate')!;
+    (rotate.keys[3]!.v as number[])[0]! += 90;
+    expect(checkContinuity(spike).failures.some((f) => f.includes('GATE_DELTA_CEILING: run track "head.rotate"'))).toBe(true);
   }, SLOW);
 
   test('Bar 1 mutants: reapplying #205 is red by name on BOTH references; reapplying #206 is red by name; each continuity assertion has a mutant that makes it fire', () => {
