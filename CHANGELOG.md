@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.45.3](https://github.com/rig-c/pose/compare/v0.45.2...v0.45.3) (2026-10-22)
+
+
+### Bug Fixes
+
+* **legs:** the frontal speed signal decides only where the ground moves ([#379](https://github.com/rig-c/pose/issues/379)) ([#381](https://github.com/rig-c/pose/issues/381)) ([fbb44cb](https://github.com/rig-c/pose/commit/fbb44cba0abfbd89308bba1ada226aee32b1c0fc))
+* **readme:** known limits name every open parked limit of the package, held by CI ([#377](https://github.com/rig-c/pose/issues/377)) ([#383](https://github.com/rig-c/pose/issues/383)) ([e83a577](https://github.com/rig-c/pose/commit/e83a57784aa04c41451950236eeef11f016657c2))
+
 ## [0.45.2](https://github.com/rig-c/pose/compare/v0.45.1...v0.45.2) (2026-10-21)
 
 
