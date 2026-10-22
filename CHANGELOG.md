@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0](https://github.com/rig-c/pose/compare/v0.45.5...v1.0.0) (2026-10-22)
+
+
+### Bug Fixes
+
+* **readme:** state the 1.x compatibility promise ([#390](https://github.com/rig-c/pose/issues/390)) ([1ac23dc](https://github.com/rig-c/pose/commit/1ac23dc9ec0e3125c7cf895a93c0a7cc4e167ada))
+
 ## [0.45.5](https://github.com/rig-c/pose/compare/v0.45.4...v0.45.5) (2026-10-22)
 
 
