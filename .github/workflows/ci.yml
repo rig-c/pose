@@ -39,6 +39,26 @@ jobs:
           GATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GATE_PR_BODY: ${{ github.event.pull_request.body }}
 
+  # rig-c/pose#377 (1.0 gate ⑤ of #217): every issue the README's known-limits
+  # list names is open and labelled `parked`. It reads the network, so it is a
+  # step here and not a test: `bun run test` stays offline, and test/scope.test.ts
+  # holds the list's shape and this step's judgement on planted states. #46 is
+  # closed (#261) and is judged first by the same code; it must come back
+  # refused, or the green verdict after it means nothing.
+  scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Every known limit rests on an open parked issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bun scripts/scope_issues.ts --closed-control 46
+
   # rig-c/pose#260: the package as npm would pack it, installed into an empty
   # directory and used there — --version, then a retarget of the public wave to
   # its pinned bytes — beside two planted failures that must each go red at the

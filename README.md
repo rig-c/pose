@@ -696,14 +696,27 @@ The answer, since 0.2, is a second drawing of the arm for each of those poses, s
 
 ## What it does not do
 
-What 1.0 leaves out ([#217](https://github.com/rig-c/pose/issues/217)). Where an open issue carries the work, it is named; where none does, the line says what to do instead.
+What 1.0 leaves out ([#217](https://github.com/rig-c/pose/issues/217)), in two lists.
+
+**Known limits.** Each is held by an open issue labelled `parked`, and the line says what the limit is, not when it goes. `test/scope.test.ts` reads this list, and CI checks that every issue it names is still open and parked (`scripts/scope_issues.ts`), so a line cannot outlive its issue.
+
+<!-- parked-limits: one bullet per limit, one issue link each, until the closing comment -->
+- **Front and behind, per segment.** Which limb passes in front of the torso, the skirt or the head is not read, so the keys carry no front/back slot switch ([#33](https://github.com/rig-c/pose/issues/33)).
+- **Front and behind where limbs cross.** Depth is read from foreshortening alone (`clean --depth`). On drawn gait references that signal is 2–4× weaker than on generated motion, so a draw order from it rarely swaps; where two limbs cross, which one the drawing puts in front is not read ([#326](https://github.com/rig-c/pose/issues/326)).
+- **A hand hidden under the torso.** `compare` does not find a hand drawn under the torso in the render where the reference shows it, or the reverse. The detector still half-sees a hidden hand, so the hand's score cannot tell ([#45](https://github.com/rig-c/pose/issues/45)).
+- **Fit cloth physics to the reference.** A skirt's physics is the rig's own. It is not fitted to how the cloth moved in the video ([#34](https://github.com/rig-c/pose/issues/34)).
+- **Clean detector errors by limb length.** `clean` reads spikes, occlusion and jitter, joint by joint. A run of 2–4 frames the detector placed wrong is not found from the limb lengths around it ([#75](https://github.com/rig-c/pose/issues/75)).
+- **A short run of pelvis misreads.** `pelvis` declines a frame on that frame's own evidence. A few consecutive frames misread alike, between frames either side that agree with each other, are kept as motion ([#98](https://github.com/rig-c/pose/issues/98)).
+- **A drawn knee-up thigh.** A set is selected by the direction of its segments only. A thigh coming toward the camera keeps its screen direction and only shortens, so a set drawn knee-up is never chosen for it ([#359](https://github.com/rig-c/pose/issues/359)).
+- **A walk and a run in one map.** Alternate sets that compete for the same slots are either all `phase` sets or all angle sets, and a `phase` group holds one drawing per step side; anything else is refused (`PHASE_GROUP`). So one map cannot carry a walk pair and a run pair on the same slots, or a gesture set competing with gait slots: a clip that walks and then runs is retargeted in two parts, each with its own map ([#297](https://github.com/rig-c/pose/issues/297)).
+- **The walk's pelvis and waist.** On a walk held in place, the pelvis swing read off the drawing was found too steep by eye, and with the torso held still the whole turn is taken between the trunk and the hips, where the waist can open. Neither has a measured fix ([#351](https://github.com/rig-c/pose/issues/351)).
+<!-- /parked-limits -->
+
+**Not carried by an issue here.** Where another issue holds the work it is named; where none does, the line says what to do instead.
 
 - **Extract poses from video.** The input is joint positions. How you get them is up to you: a pose model, a dataset, or by hand.
 - **Turn the body.** It works in 2D only. A segment pointing at the camera foreshortens, and the rig cannot: the direction is matched, the length is not. With `--leg-scale`, the leg segments and the trunk ([#172](https://github.com/rig-c/pose/issues/172)) are the exception. A body turned past what a stretch can show is drawn by switching to a set the map declares (`body.sets`, [#173](https://github.com/rig-c/pose/issues/173)), not by turning.
-- **Front and behind, per segment.** Which limb passes in front of which is not read. The keys carry no front/back slot order ([#33](https://github.com/rig-c/pose/issues/33)).
-- **Blinks and mouth shapes.** No eyelid or mouth key is written. The face points read the head's yaw and pitch (`face` in [the map](#the-map-rig-pose-map1)) and nothing more. No issue carries this.
-- **Fit cloth physics to the reference.** A skirt's physics is the rig's own. It is not fitted to how the cloth moved in the video ([#34](https://github.com/rig-c/pose/issues/34)).
-- **Clean detector errors by limb length.** `clean` reads spikes, occlusion and jitter. It does not find a joint the detector placed wrong from the limb lengths around it ([#75](https://github.com/rig-c/pose/issues/75)).
+- **Blinks and mouth shapes.** No eyelid or mouth key is written. The face points read the head's yaw and pitch (`face` in [the map](#the-map-rig-pose-map1)) and nothing more.
 - **Track the camera from the video.** A zoom or a pan is read from the sequence's `camera` ([above](#the-pose-rig-pose-sequence1)). Fitting it from pixels is the repository's `tools/` scripts, which are not shipped. Without a `camera`, the picture is read as a fixed camera.
 - **Hands and fingers.** There are no bones for them yet (rig-c/parts#171).
 
