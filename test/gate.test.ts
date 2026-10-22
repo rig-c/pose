@@ -43,6 +43,7 @@ import { join, resolve } from 'node:path';
 import { poseRawAnimation, poseRawSetup, readModel, type CompiledDocument, type RawBone } from 'rig-c/core';
 import { Plate } from 'rig-c/plate';
 import { clean } from '../src/clean.ts';
+import { assertReportSurfaces } from './surface.ts';
 import { readPoseSequence, writePoseSequence } from '../src/pose.ts';
 import { pointAt } from '../src/map.ts';
 import { poseFrames } from '../src/verify.ts';
@@ -1194,6 +1195,7 @@ describe('#208: two-reference regression gate and standing continuity assertions
   test('Bar 1 & Bar 3 and #375: both references and the generated run are green; compare every track to an available PR base', () => {
     const work = tempDir();
     const outputs = [setupDancerRef(work), setupSecondRef(work), setupRunRef(work)].map((ref) => runReference(ref));
+    assertReportSurfaces(outputs.map((out) => [out.ref.name, out.report] as const));
     const continuity = outputs.map((out) => checkContinuity(out));
     const support = checkRunSupport(outputs[2]!);
     console.log(`GATE_SUPPORT_FOOT_HEIGHT: run ${support.grounded} generator-grounded / ${support.airborne} airborne frames, floor 0; max ${support.worst.toFixed(8)} L at ${support.bone} frame ${support.frame} (bar ≤ 0.01 L)`);
