@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.45.5](https://github.com/rig-c/pose/compare/v0.45.4...v0.45.5) (2026-10-22)
+
+
+### Bug Fixes
+
+* **retarget:** remove unvalidated scale-pair suggestions ([#388](https://github.com/rig-c/pose/issues/388)) ([fbd1dda](https://github.com/rig-c/pose/commit/fbd1dda7f7dde2d122d8be42a1a8e12713f299fc))
+
 ## [0.45.4](https://github.com/rig-c/pose/compare/v0.45.3...v0.45.4) (2026-10-22)
 
 
