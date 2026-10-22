@@ -3,9 +3,9 @@
  * #280's vertical-speed reading took support from the ankle that moves with the
  * ground; on a run's short stances the lifted foot near the top of its swing is
  * nearly still and read as down while the landed foot still settles, so the
- * lifted foot was planted and the body hoisted onto it. The rule since: the
- * vertical speed decides only on a grounded span (between two jumps) that holds
- * a double support; a single stance's support is the lower ankle.
+ * lifted foot was planted and the body hoisted onto it. Since #371 an ankle at least
+ * DEPTH_BAND above the other cannot read as down by speed; within that band
+ * the existing speed reading is unchanged.
  *
  * Held by the run of examples/walk/make-depth.ts carried on a floor (`ground`):
  * its reading frame by frame against the generator's truth, the card's four
@@ -18,33 +18,18 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { clean } from '../src/clean.ts';
 import { supportsOf, type Side } from '../src/legs.ts';
 import { pointAt } from '../src/map.ts';
-import { readPoseSequence, writePoseSequence } from '../src/pose.ts';
 import { readBuild } from '../src/rigc.ts';
 import { poseFrames } from '../src/verify.ts';
-import { depthCycle, depthDoc, STRIDE, type DepthFrame } from '../examples/walk/make-depth.ts';
+import { FPS, STRIDES, CYCLE, run, series, sequence } from './flight-fixture.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const MUTANTS = join(ROOT, 'node_modules', '.cache', 'rig-pose-mutants');
 const RIG = join(ROOT, 'examples', 'wave', 'rig');
 const MAP = join(ROOT, 'examples', 'walk', 'map.json');
 const SLOW = 120_000;
-const FPS = 24;
-const STRIDES = 10;
-const CYCLE = STRIDE.run;
 type Pt = [number, number];
-
-const run = (): DepthFrame[] => depthCycle('run', 'front', STRIDES, true);
-const series = (c: DepthFrame[], j: string): Pt[] => c.map((f) => f.joints[j]!);
-
-/** The fixture as a cleaned, in-place sequence, the form retarget reads. */
-function sequence(): string {
-  const doc = { ...depthDoc(run(), 'test/flight.test.ts: the frontal run of make-depth.ts carried on a floor, no picture'), travel: 'in-place' };
-  const seq = readPoseSequence(JSON.stringify(doc), 'fixture');
-  return writePoseSequence(clean(seq, { loop: true, legs: 1, rest: 1 }, undefined, 'fixture').seq);
-}
 
 interface Rows {
   support: number;
