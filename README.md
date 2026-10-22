@@ -2,7 +2,7 @@
 
 Puts motion from a pose onto a rig. The motion is joint positions over time: from a video, a dataset, or points placed by hand. The rig is one [rig-c](https://github.com/rig-c/core) built. A body-18 pose sequence becomes bone keys in rig-c's motion format, and the keys are checked before anything is written.
 
-**0.x is the prototype.** The format, the command and the output can change in any release until 1.0.
+**1.x keeps its promises.** The surfaces marked **promised** in [What 1.x promises](RELEASING.md#what-1x-promises) are kept through 1.x. Surfaces marked **courtesy**, including default figures, can change in minor releases, with changes disclosed in the CHANGELOG.
 
 Part of the rig-c toolchain: [core](https://github.com/rig-c/core) compiles and gates a rig, [parts](https://github.com/rig-c/parts) builds one from a painting, [play](https://github.com/rig-c/play) plays it, and pose moves it.
 
