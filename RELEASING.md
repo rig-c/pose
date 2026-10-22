@@ -196,7 +196,7 @@ No other repository in the org (core, parts, play, adapters, parts-examples, tra
 
 ### Flags
 
-Every flag `parseFlags` reads in `cli.ts`, once. `test/promise.test.ts` holds this table against `cli.ts`.
+Every flag `parseFlags` reads in `cli.ts`, once. `test/promise.test.ts` holds this table against `cli.ts`. The runtime control in `test/surface.test.ts` also runs root `--help` and every command's `--help`, reads Usage and flag declarations (including paired declarations), and requires a classification by command and name. Global `--help` and `--version` use the promised row above.
 
 | command | flag | status | use | note |
 | --- | --- | --- | --- | --- |
@@ -335,6 +335,143 @@ Every key `rig-pose-report/1` can carry, once: the keys `src/run.ts` writes, and
 | `reduce` | courtesy | — | `held` only when a parent was held, `unsmoothed` only when a trunk smoothing was not kept (rig-c/pose#320) |
 
 An **event row**, as review reads it under #209, carries: `frame` or `frames` (an inclusive pair below `frames`), or `t`/`times` in seconds; `seconds`/`spanSeconds`; and the names `bone`, `slot`, `bones`, `joint`, `point`, `chain`, `chains`, `joints`, `side`, `set`, `attachment`, `line`. Those row fields are promised wherever a promised key carries event rows. A new key, or a new field in a row, is not a change: readers ignore what they do not read.
+
+### The report's nested fields
+
+The runtime control in `test/surface.ts` reads every object field in all reports
+emitted by the regression test (#208's two references and #375's generated run).
+Paths use `.` for an object
+field and `[]` for every array row (including later rows, not just the first).
+Array indices and scalar array entries are data, not field names. A `*` below
+means one record key, such as a slot name; it never covers an undocumented child.
+A null value or empty array still declares its containing field, but exposes no
+children to this run. A help-only unlisted flag makes the help control exit 1,
+and an unlisted nested field planted in emitted reports makes the regression
+control exit 1; each names the item, beside the restored green control.
+The static audit in `test/promise.test.ts` remains the
+coverage for top-level optional keys absent from these fixtures.
+
+The classification follows #262, not the runtime value: previously promised
+reader fields and event coordinates stay promised. The other nested fields are
+courtesy because no promised reader was recorded for them. Listing a parent as
+promised does not promote its entire subtree. New fields still require an
+explicit classification; readers continue to ignore fields they do not read.
+The generated run exercises leg scaling, stance, and foot blending: their
+internal readings remain courtesy, while the existing event targets and frame/time
+coordinates on flips and shear remain promised.
+
+| field | status | use |
+| --- | --- | --- |
+| `artRange[].bone`, `artRange[].chain`, `artRange[].frames`, `artRange[].seconds` | promised | R |
+| `artRange[].set`, `artRange[].spanSeconds`, `artRange[].times` | promised | R |
+| `artRange[].clamped`, `artRange[].limits`, `artRange[].maxOverflow`, `artRange[].turn` | courtesy | No recorded promised reader |
+| `body.framesOver45`, `body.over45`, `body.read`, `body.read.opening` | courtesy | No recorded promised reader |
+| `body.read.opening.max`, `body.read.opening.min`, `body.read.opening.range`, `body.read.yaw` | courtesy | No recorded promised reader |
+| `body.read.yaw.max`, `body.read.yaw.min`, `body.read.yaw.range`, `body.standing` | courtesy | No recorded promised reader |
+| `body.standing.hip`, `body.standing.shoulder` | courtesy | No recorded promised reader |
+| `cleaned.jitter`, `cleaned.jitter.after`, `cleaned.jitter.before`, `cleaned.params` | courtesy | No recorded promised reader |
+| `cleaned.params.legs`, `cleaned.params.loop`, `cleaned.params.rest`, `cleaned.spec` | courtesy | No recorded promised reader |
+| `cleaned.spikes`, `cleaned.spikes.found`, `cleaned.spikes.found[].bone`, `cleaned.spikes.found[].bones` | courtesy | No recorded promised reader |
+| `cleaned.spikes.found[].frame`, `cleaned.spikes.found[].joint`, `cleaned.spikes.found[].t`, `cleaned.spikes.untested` | courtesy | No recorded promised reader |
+| `face.pitch`, `face.pitch.bone` | promised | S |
+| `face.ears`, `face.pitch.corr`, `face.pitch.knee`, `face.pitch.limits` | courtesy | No recorded promised reader |
+| `face.pitch.mapped`, `face.pitch.mapped.max`, `face.pitch.mapped.min`, `face.pitch.mapped.range` | courtesy | No recorded promised reader |
+| `face.pitch.read`, `face.pitch.read.max`, `face.pitch.read.min`, `face.pitch.read.range` | courtesy | No recorded promised reader |
+| `face.pitch.scale`, `face.read`, `face.read.pitch`, `face.read.pitch.max` | courtesy | No recorded promised reader |
+| `face.read.pitch.min`, `face.read.pitch.range`, `face.read.yaw`, `face.read.yaw.max` | courtesy | No recorded promised reader |
+| `face.read.yaw.min`, `face.read.yaw.range` | courtesy | No recorded promised reader |
+| `feet.closure`, `feet.closure.drift`, `feet.closure.frames`, `feet.jumps` | promised | S, R |
+| `feet.supports`, `feet.supports[].frames`, `feet.supports[].side`, `feet.supports[].times` | promised | S, R |
+| `feet.blend`, `feet.changes`, `feet.changes[].frame`, `feet.changes[].from` | courtesy | No recorded promised reader |
+| `feet.changes[].t`, `feet.changes[].to`, `feet.floor`, `feet.jumpEvents` | courtesy | No recorded promised reader |
+| `feet.legLength`, `feet.legLength.l`, `feet.legLength.r`, `feet.planted` | courtesy | No recorded promised reader |
+| `feet.reading`, `feet.reading.legLength`, `feet.reading.legLength.l`, `feet.reading.legLength.r` | courtesy | No recorded promised reader |
+| `feet.reading.lowest`, `feet.reading.lowest.frames`, `feet.reading.lowest.legs`, `feet.reading.lowest.range` | courtesy | No recorded promised reader |
+| `feet.reading.plants`, `feet.reading.plants[].frames`, `feet.reading.plants[].horizontal`, `feet.reading.plants[].horizontalLegs` | courtesy | No recorded promised reader |
+| `feet.reading.plants[].side`, `feet.reading.plants[].times`, `feet.reading.plants[].vertical`, `feet.reading.plants[].verticalLegs` | courtesy | No recorded promised reader |
+| `feet.rigLeg`, `feet.rigLeg.l`, `feet.rigLeg.r`, `feet.segments` | courtesy | No recorded promised reader |
+| `feet.segments[].bone`, `feet.segments[].chain`, `feet.segments[].joints`, `feet.segments[].ratio` | courtesy | No recorded promised reader |
+| `feet.segments[].ratio.max`, `feet.segments[].ratio.median`, `feet.segments[].ratio.min`, `feet.segments[].straight` | courtesy | No recorded promised reader |
+| `feet.shifts`, `feet.steps`, `feet.straight`, `feet.straight.l` | courtesy | No recorded promised reader |
+| `feet.straight.r` | courtesy | No recorded promised reader |
+| `inputs.map.path` | promised | C |
+| `inputs.map`, `inputs.map.sha256`, `inputs.pose`, `inputs.pose.path` | promised | C |
+| `inputs.pose.sha256`, `inputs.rig`, `inputs.rig.path`, `inputs.rig.sha256` | promised | C |
+| `jitter[].against`, `jitter[].bone`, `jitter[].chain`, `jitter[].joints` | courtesy | No recorded promised reader |
+| `jitter[].pair`, `jitter[].ratio`, `jitter[].reach`, `jitter[].rig` | courtesy | No recorded promised reader |
+| `jitter[].triples` | courtesy | No recorded promised reader |
+| `landings[].bone`, `landings[].frame`, `landings[].kind`, `landings[].t` | promised | S, R |
+| `landings[].tolerance`, `landings[].worst` | promised | S, R |
+| `options.bendTolerance`, `options.bends`, `options.carryIdle`, `options.flip` | courtesy | No recorded promised reader |
+| `options.floor`, `options.idle`, `options.legScale`, `options.merge` | courtesy | No recorded promised reader |
+| `options.minScore`, `options.plantFeet`, `options.profile`, `options.raisedByHead` | courtesy | No recorded promised reader |
+| `options.reduce`, `options.reduceHip`, `options.short`, `options.stance` | courtesy | No recorded promised reader |
+| `options.switchAt`, `options.switchMin`, `options.switchTolerance` | courtesy | No recorded promised reader |
+| `pivot.bone`, `pivot.distance`, `pivot.hipWidths`, `pivot.offset` | courtesy | No recorded promised reader |
+| `pivot.roots` | courtesy | No recorded promised reader |
+| `raised[].bones`, `raised[].chain`, `raised[].frames`, `raised[].seconds` | promised | R |
+| `raised[].set`, `raised[].spanSeconds`, `raised[].times` | promised | R |
+| `raised[].after`, `raised[].before`, `raised[].eyes`, `raised[].eyes.reference` | courtesy | No recorded promised reader |
+| `raised[].eyes.rig`, `raised[].placed`, `raised[].reach`, `raised[].reach.farthest` | courtesy | No recorded promised reader |
+| `raised[].reach.max`, `raised[].reach.min`, `raised[].reference`, `raised[].short` | courtesy | No recorded promised reader |
+| `raised[].short[].frames`, `raised[].short[].how`, `raised[].short[].shortfall`, `raised[].short[].shortfall.max` | courtesy | No recorded promised reader |
+| `raised[].short[].shortfall.median`, `raised[].short[].times`, `raised[].upperHeld`, `raised[].worst` | courtesy | No recorded promised reader |
+| `raised[].worst.after`, `raised[].worst.before`, `raised[].worst.placed` | courtesy | No recorded promised reader |
+| `range[].bone`, `range[].chain`, `range[].frames`, `range[].seconds` | promised | R |
+| `range[].spanSeconds`, `range[].times` | promised | R |
+| `range[].key`, `range[].limits`, `range[].maxOverflow` | courtesy | No recorded promised reader |
+| `render.fps`, `render.frames` | promised | C |
+| `rigc.entry`, `rigc.version` | courtesy | No recorded promised reader |
+| `scale.factor` | promised | S |
+| `scale.pose`, `scale.rig` | courtesy | No recorded promised reader |
+| `scaleFit.hip`, `scaleFit.hip.band`, `scaleFit.hip.band.hi`, `scaleFit.hip.band.lo` | courtesy | No recorded promised reader |
+| `scaleFit.hip.median`, `scaleFit.hip.rig`, `scaleFit.hip.straight`, `scaleFit.hip.within` | courtesy | No recorded promised reader |
+| `scaleFit.leg`, `scaleFit.leg.band`, `scaleFit.leg.band.hi`, `scaleFit.leg.band.lo` | courtesy | No recorded promised reader |
+| `scaleFit.leg.median`, `scaleFit.leg.median.l`, `scaleFit.leg.median.r`, `scaleFit.leg.rig` | courtesy | No recorded promised reader |
+| `scaleFit.leg.rig.l`, `scaleFit.leg.rig.r`, `scaleFit.leg.straight`, `scaleFit.leg.straight.l` | courtesy | No recorded promised reader |
+| `scaleFit.leg.straight.r`, `scaleFit.leg.within`, `scaleFit.outside`, `scaleFit.segment` | courtesy | No recorded promised reader |
+| `scaleFit.segment.joints`, `scaleFit.segment.median`, `scaleFit.segment.ratio`, `scaleFit.segment.straight` | courtesy | No recorded promised reader |
+| `scaleFit.travel`, `scaleFit.travel.bone`, `scaleFit.travel.joint`, `scaleFit.travel.pose` | courtesy | No recorded promised reader |
+| `scaleFit.travel.pose.hips`, `scaleFit.travel.pose.legs`, `scaleFit.travel.pose.x`, `scaleFit.travel.pose.y` | courtesy | No recorded promised reader |
+| `scaleFit.travel.rig`, `scaleFit.travel.rig.hips`, `scaleFit.travel.rig.legs`, `scaleFit.travel.rig.x` | courtesy | No recorded promised reader |
+| `scaleFit.travel.rig.y` | courtesy | No recorded promised reader |
+| `short[].bone`, `short[].chain`, `short[].frames`, `short[].joints` | promised | R |
+| `short[].times` | promised | R |
+| `short[].asked`, `short[].minFraction`, `short[].step` | courtesy | No recorded promised reader |
+| `switchRuns[].nearest`, `switchRuns[].nearest[].count`, `switchRuns[].nearest[].frames`, `switchRuns[].nearest[].seconds` | courtesy | No recorded promised reader |
+| `switchRuns[].nearest[].spanSeconds`, `switchRuns[].nearest[].times`, `switchRuns[].set`, `switchRuns[].suppressed` | courtesy | No recorded promised reader |
+| `switchRuns[].turned` | courtesy | No recorded promised reader |
+| `switches[].chains`, `switches[].frames`, `switches[].from`, `switches[].set` | promised | R |
+| `switches[].slots`, `switches[].slots.*`, `switches[].times`, `switches[].to` | promised | R |
+| `switches[].artTurn`, `switches[].artTurn.*`, `switches[].artTurn.*.max`, `switches[].artTurn.*.median` | courtesy | No recorded promised reader |
+| `switches[].distance`, `switches[].distance.max`, `switches[].distance.median`, `switches[].hides` | courtesy | No recorded promised reader |
+| `switches[].moved`, `switches[].moved.off`, `switches[].moved.off.frame`, `switches[].moved.off.frames` | courtesy | No recorded promised reader |
+| `switches[].moved.off.seconds`, `switches[].moved.off.speed`, `switches[].moved.off.speed.new`, `switches[].moved.off.speed.old` | courtesy | No recorded promised reader |
+| `switches[].moved.off.window`, `switches[].moved.on`, `switches[].moved.on.frame`, `switches[].moved.on.frames` | courtesy | No recorded promised reader |
+| `switches[].moved.on.seconds`, `switches[].moved.on.speed`, `switches[].moved.on.speed.new`, `switches[].moved.on.speed.old` | courtesy | No recorded promised reader |
+| `switches[].moved.on.window`, `switches[].offsets`, `switches[].offsets.*` | courtesy | No recorded promised reader |
+| `feet.blend.bounds`, `feet.blend.over`, `feet.blend.runs`, `feet.blend.runs[].frames` | courtesy | No recorded promised reader |
+| `feet.blend.runs[].k`, `feet.blend.runs[].k.max`, `feet.blend.runs[].k.min`, `feet.blend.runs[].side` | courtesy | No recorded promised reader |
+| `feet.blend.runs[].times`, `feet.jumpEvents[].frames`, `feet.jumpEvents[].times`, `feet.shifts[].frames` | courtesy | No recorded promised reader |
+| `feet.shifts[].shift`, `feet.shifts[].side`, `feet.shifts[].times` | courtesy | No recorded promised reader |
+| `flips[].bone`, `flips[].chain`, `flips[].frames`, `flips[].joints` | promised | R |
+| `flips[].times` | promised | R |
+| `flips[].clipped`, `flips[].h`, `flips[].jump`, `flips[].step` | courtesy | No recorded promised reader |
+| `flips[].turns`, `flips[].turns[].frame`, `flips[].turns[].jump`, `flips[].turns[].t` | courtesy | No recorded promised reader |
+| `legScale[].bone`, `legScale[].chain`, `legScale[].clamped`, `legScale[].clamped[].asked` | courtesy | No recorded promised reader |
+| `legScale[].clamped[].asked.max`, `legScale[].clamped[].asked.min`, `legScale[].clamped[].frames`, `legScale[].clamped[].limit` | courtesy | No recorded promised reader |
+| `legScale[].clamped[].times`, `legScale[].free`, `legScale[].free.above`, `legScale[].free.below` | courtesy | No recorded promised reader |
+| `legScale[].free.below.legLengths`, `legScale[].free.below.units`, `legScale[].free.count`, `legScale[].free.frames` | courtesy | No recorded promised reader |
+| `legScale[].free.side`, `legScale[].high`, `legScale[].joints`, `legScale[].limits` | courtesy | No recorded promised reader |
+| `legScale[].low`, `legScale[].ratio`, `legScale[].ratio.max`, `legScale[].ratio.median` | courtesy | No recorded promised reader |
+| `legScale[].ratio.min`, `legScale[].straight` | courtesy | No recorded promised reader |
+| `shear[].bone`, `shear[].frame`, `shear[].t` | promised | R |
+| `shear[].shear`, `shear[].x`, `shear[].y` | courtesy | No recorded promised reader |
+| `stance.bounds`, `stance.minSeconds`, `stance.over`, `stance.release` | courtesy | No recorded promised reader |
+| `stance.runs`, `stance.runs[].frames`, `stance.runs[].k`, `stance.runs[].maxHeight` | courtesy | No recorded promised reader |
+| `stance.runs[].moved`, `stance.runs[].moved.above`, `stance.runs[].moved.below`, `stance.runs[].moved.below.legLengths` | courtesy | No recorded promised reader |
+| `stance.runs[].moved.below.units`, `stance.runs[].moved.count`, `stance.runs[].moved.frames`, `stance.runs[].moved.side` | courtesy | No recorded promised reader |
+| `stance.runs[].side`, `stance.runs[].state`, `stance.runs[].times`, `stance.tolerance` | courtesy | No recorded promised reader |
 
 ### Problem codes and line tags
 
