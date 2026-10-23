@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/rig-c/pose/compare/v1.0.1...v1.0.2) (2026-10-23)
+
+
+### Bug Fixes
+
+* **readme:** split the reference out of the README into docs/REFERENCE.md ([#401](https://github.com/rig-c/pose/issues/401)) ([21389ca](https://github.com/rig-c/pose/commit/21389ca7e804fad564628e2e91c4a72609bacecb))
+
 ## [1.0.1](https://github.com/rig-c/pose/compare/v1.0.0...v1.0.1) (2026-10-23)
 
 
