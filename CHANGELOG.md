@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/rig-c/pose/compare/v1.0.0...v1.0.1) (2026-10-23)
+
+
+### Bug Fixes
+
+* **retarget:** give loop cycles a closing frame interval ([#394](https://github.com/rig-c/pose/issues/394)) ([143a32b](https://github.com/rig-c/pose/commit/143a32b079bda99359f3465301c2e374810ab84c))
+
 ## [1.0.0](https://github.com/rig-c/pose/compare/v0.45.5...v1.0.0) (2026-10-22)
 
 
