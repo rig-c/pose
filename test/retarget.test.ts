@@ -9925,7 +9925,13 @@ describe('#242: "in-place" is the sequence\'s property — its supports and its 
     expect(ran.status).toBe(0);
     const rep = JSON.parse(readFileSync(report, 'utf8')) as { feet: { supports: Read['supports']; steps: unknown[] } };
     const tracks = motionOf(c.out).animations.dance!.tracks;
-    const keysOf = (property: string, k: number) => tracks.find((t) => t.bone === 'head' && t.property === property)!.keys.map((x) => x.v[k]!);
+    const keysOf = (property: string, k: number) => {
+      const keys = tracks.find((t) => t.bone === 'head' && t.property === property)!.keys;
+      // #275 adds the closing endpoint; the nod still reports NN distinct pose frames.
+      expect(keys).toHaveLength(NN + 1);
+      expect(keys.at(-1)!.v).toEqual(keys[0]!.v);
+      return keys.slice(0, NN).map((x) => x.v[k]!);
+    };
     const rot = keysOf('rotate', 0);
     const nodX = keysOf('translate', 0);
     const nodY = keysOf('translate', 1);
@@ -10257,9 +10263,15 @@ describe('#241: the head nod — a NOD line, a map switch, and a loop\'s nod rea
     expect(ran.stderr).toBe('');
     expect(ran.status).toBe(0);
     const tracks = motionOf(c.out).animations.dance!.tracks;
-    const rot = tracks.find((t) => t.bone === 'head' && t.property === 'rotate')!.keys.map((x) => x.v[0]!);
+    // #275's closing key is checked separately from the NN frames the NOD line counts.
+    const frameValues = (keys: Array<{ t: number; v: number[] }>, k: number): number[] => {
+      expect(keys).toHaveLength(NN + 1);
+      expect(keys.at(-1)!.v).toEqual(keys[0]!.v);
+      return keys.slice(0, NN).map((x) => x.v[k]!);
+    };
+    const rot = frameValues(tracks.find((t) => t.bone === 'head' && t.property === 'rotate')!.keys, 0);
     const tr = tracks.find((t) => t.bone === 'head' && t.property === 'translate');
-    const ty = tr === undefined ? [] : tr.keys.map((x) => x.v[1]!);
+    const ty = tr === undefined ? [] : frameValues(tr.keys, 1);
     if (tr !== undefined) expect(tr.keys.every((x) => x.v[0] === 0)).toBe(true);
     let rotate = 0;
     let nod = 0;
