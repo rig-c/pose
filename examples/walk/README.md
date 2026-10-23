@@ -43,4 +43,4 @@ The constants above were judged on a limb-cut rig seen from the front, one cycle
 
 Every joint's step from frame 23 to frame 0 is no larger than its largest step between two frames inside the cycle: at most 1.000 of it (the left elbow, whose seam step equals its largest) and 0.27–0.98 for every other joint, the same before and after `clean`. Retargeted onto the wave's rig with the command above, each rotate key's step from its last key to its first is likewise at most its largest step between neighbouring keys (1.000 of it at most), each `scalex` key's step from last to first is at most 0.30 of its largest step between neighbouring keys, and the hip's x on the last frame is the first's.
 
-The motion holds 24 keys per track, `t` 0 to 0.958333 s, and its `duration` is 0.958333 s: the last key is frame 23, not a repeat of frame 0.
+With the command above, the motion holds 25 keys per track, `t` 0 to 1 s, and its `duration` is 1 s: the last key closes the loop with the frame-0 value ([#275](https://github.com/rig-c/pose/issues/275)).
