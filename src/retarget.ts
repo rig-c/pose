@@ -173,7 +173,7 @@ export interface RetargetOptions extends SwitchOptions {
   raisedByHead?: boolean;
   /** The sequence's `travel` (rig-c/pose#92, #242): "in-place" reads the supports, the camera-zoom normalisations and the head nod as a loop, with or without --plant-feet, and makes --plant-feet let the supporting foot follow its own track and close the loop; absent, nothing changes. */
   travel?: Travel;
-  /** The sequence was cleaned with `--loop` (its `cleaned.params.loop`, rig-c/pose#241): the head nod's detrend window wraps, the last frame running into the first. */
+  /** The sequence was cleaned with `--loop` (its `cleaned.params.loop`): the head nod's detrend window wraps (#241), and the animation includes the closing frame interval (#275). */
   loop?: boolean;
   /**
    * rig-c/pose#288: the sequence's pelvis track (`pelvisTilt` per frame, null where
@@ -3306,11 +3306,41 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     origin: origin.at,
   });
   return {
-    animation: { duration: keyTimes[n - 1]!, tracks },
+    // #275: timestamps state the cadence, not an fps field. Use the mean interval across the
+    // distinct frames, before rounding, so microsecond timestamps do not accumulate rounding error.
+    animation: { duration: opts.loop === true && n > 1 ? r6((times[n - 1]! - t0) * n / (n - 1)) : keyTimes[n - 1]!, tracks },
     times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale, scaleFit,
     switches: sw.switches, switchRuns: sw.runs, switchBinds: switchBinds(map, n), shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
     legScale, segments, legStraight, rigLeg, scales, feet, planted: plantOn, stance, floor, blendHold, closure, openDrift, ankles, pivot, raised, byHip, face, body, figureScale, headNod: headNodReading, nodSkipped, reach, reachOrigin, pelvis,
   };
+}
+
+/**
+ * #275: close the retarget's own tracks after reduction, which fits only the distinct pose frames.
+ * A duration alone leaves the last value held; the runtime's duration is its last timeline key.
+ * Discrete offsets hold through the last interval, and attachments return to their frame-0 state.
+ * A rotate closes to the equivalent first angle nearest its last, preserving an unwrapped turn.
+ */
+export function closeAnimationLoop(animation: Animation, slots: RigSlots): void {
+  for (const tr of animation.tracks) {
+    // A singleton has no cadence; a zero-duration or already-closed track needs no duplicate time.
+    if (tr.keys.length === 0 || tr.keys.at(-1)!.t >= animation.duration) continue;
+    if (tr.property === 'attachment') {
+      const first = tr.keys[0]!;
+      const v = first.t === 0 ? first.v : slots.get(tr.slot)!.setup;
+      if (first.t > 0) tr.keys.unshift({ t: 0, v });
+      tr.keys.push({ t: animation.duration, v });
+    } else {
+      const first = tr.keys[0]!;
+      const last = tr.keys.at(-1)!;
+      const v = [...first.v];
+      if (tr.property === 'rotate') v[0] = r3(v[0]! + 360 * Math.round((last.v[0]! - v[0]!) / 360));
+      // Only switch.ts's offset tracks hold every span. A mixed track's earlier hold
+      // does not decide the closing interval's interpolation.
+      if (tr.property === 'translate' && tr.keys.length > 1 && tr.keys.slice(0, -1).every((k) => k.ease === 'stepped')) last.ease = 'stepped';
+      tr.keys.push({ t: animation.duration, v });
+    }
+  }
 }
 
 /** rig-c/pose#288: the pelvis bone's source, from the chain, the track and the keys written. */
