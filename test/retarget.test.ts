@@ -386,13 +386,13 @@ const linesOf = (r: Ran, tag: string): string[] => r.stdout.split('\n').map((l) 
 const stanceRuns = (r: Ran): string[] => linesOf(r, 'STANCE').filter((l) => !l.startsWith('STANCE unit: '));
 
 /**
- * The report's documented top level (#83): the README's `--report` paragraph, its names outside its
- * parentheses, and the demand lists below it. `conditional` holds the demand lists the README says are
+ * The report's documented top level (#83): docs/REFERENCE.md's `--report` paragraph (the README's until
+ * rig-c/pose#400), its names outside its parentheses, and the demand lists below it. `conditional` holds the demand lists the reference says are
  * present only when a set of the map declares `place` (#93).
  */
 const COND_PLACE = 'Present only when a set of the map declares `place`; a run without one writes no `byHip` key.';
 function documentedReport(): { para: string; all: string[]; conditional: string[] } {
-  const readme = readFileSync(join(import.meta.dir, '..', 'README.md'), 'utf8');
+  const readme = readFileSync(join(import.meta.dir, '..', 'docs', 'REFERENCE.md'), 'utf8');
   const para = readme.split('\n').find((l) => l.startsWith('`--report <file>` writes all of it as JSON (`rig-pose-report/1`)'))!;
   let depth = 0;
   const top: string[] = [];
@@ -403,7 +403,7 @@ function documentedReport(): { para: string; all: string[]; conditional: string[
   }
   const lines = readme.split('\n');
   const from = lines.indexOf('The demand lists:');
-  if (from < 0) throw new Error('README has no "The demand lists:" line');
+  if (from < 0) throw new Error('docs/REFERENCE.md has no "The demand lists:" line');
   const conditional: string[] = [];
   for (const l of lines.slice(from + 2)) {
     const d = /^- `([A-Za-z]+)[`:]/.exec(l);
@@ -3055,16 +3055,16 @@ describe('#47: --leg-scale and --plant-feet', () => {
     expect(rep.feet.planted).toBe(true);
     expect(rep.feet.jumps).toEqual([]);
     expect(rep.legScale.map((l) => l.bone)).toEqual(['leg_r0', 'leg_r1', 'leg_l0', 'leg_l1']);
-    // #83: the README's `--report` paragraph is the documented interface. Its `feet` keys are read from
-    // the README itself and must equal the written ones, so a field added or dropped without the
-    // README fails here; `gate` is documented as a string and written as one.
-    const readme = readFileSync(join(import.meta.dir, '..', 'README.md'), 'utf8');
+    // #83: docs/REFERENCE.md's `--report` paragraph is the documented interface. Its `feet` keys are read from
+    // the reference itself and must equal the written ones, so a field added or dropped without the
+    // reference fails here; `gate` is documented as a string and written as one.
+    const readme = readFileSync(join(import.meta.dir, '..', 'docs', 'REFERENCE.md'), 'utf8');
     const para = readme.split('\n').find((l) => l.startsWith('`--report <file>` writes all of it as JSON (`rig-pose-report/1`)'))!;
     const feetDoc = /`feet` \(([^;)]*)/.exec(para)![1]!;
     const documented = [...feetDoc.matchAll(/`([A-Za-z]+)`/g)].map((m) => m[1]!).sort();
     expect(Object.keys(rep.feet).sort()).toEqual(documented);
     // The report's top level: the paragraph's names outside its parentheses, and the demand lists below it.
-    // A list the README marks as present only with `place` (#93) is absent here: this map declares none.
+    // A list the reference marks as present only with `place` (#93) is absent here: this map declares none.
     // Its presence on a run that does is held by the "by-hip" block below.
     const doc = documentedReport();
     expect(doc.conditional).toEqual(['byHip']);

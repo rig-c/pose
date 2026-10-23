@@ -8,7 +8,7 @@
  * written by `runcompare.ts`. The bars below were fixed in the issue before any
  * render-side keypoints existed, and they are grading lines (rig-c/exam): a
  * change to one is a new comment on the issue first, then a change here and in
- * the README together.
+ * docs/REFERENCE.md together.
  *
  * A finding is a run of frames over a measure's bar lasting ≥ 0.15 s (from the
  * first frame's time to the end of the last frame's, as `endOn`), spans merged

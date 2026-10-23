@@ -69,7 +69,7 @@ function straightKnee(dir: string): string {
 const run = (dir: string, o: { rig?: string; map?: string; pose?: string; extra?: string[] } = {}, cliPath = CLI): Ran =>
   cli(['retarget', '--rig', o.rig ?? RIG, '--map', o.map ?? MAP, '--pose', o.pose ?? POSE, '--out', join(dir, 'out.motion.json'), ...(o.extra ?? [])], cliPath);
 
-/** What a bend refusal must name (#238): the README's remedy for front-facing material, on the chain refused. */
+/** What a bend refusal must name (#238): docs/REFERENCE.md's remedy for front-facing material, on the chain refused. */
 const namesFree = (line: string, chain: string): boolean => line.includes(`state "bend": "free" on chain "${chain}"`) && line.includes('seen from the front');
 
 describe('the default output on the public example (#238)', () => {

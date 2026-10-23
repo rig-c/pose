@@ -19,7 +19,7 @@ type Frame = Partial<Record<Body18, Joint>>;
 const observed = (x: number, y: number): Joint => ({ state: 'observed', at: [x, y], score: 1 });
 function noRecommendation(line: string | null): void {
   expect(line).not.toBeNull();
-  expect(line).toContain('see README "The map: rig-pose-map/1", translate.scale rule');
+  expect(line).toContain('see docs/REFERENCE.md "The map: rig-pose-map/1", translate.scale rule');
   expect(line).not.toContain('steadier mapped pair:');
   expect(line).not.toContain('no steadier viable pair');
 }
@@ -150,7 +150,7 @@ function exampleAgrees(text: string): boolean {
   const section = text.split('## The map: `rig-pose-map/1`')[1]?.split('\n### ')[0] ?? '';
   const block = section.match(/```json\n([\s\S]*?)\n```/);
   if (block === null) return false;
-  const map = readMap(block[1]!, 'README map');
+  const map = readMap(block[1]!, 'REFERENCE map');
   const pose = map.translate?.scale.pose;
   if (pose?.join(',') !== 'mid_hip,neck') return false;
   const adjacent = section.slice(section.indexOf('```', section.indexOf('```') + 3) + 3).split('\n- A chain')[0]!;
@@ -163,7 +163,7 @@ function exampleAgrees(text: string): boolean {
 }
 
 test('#384 docs: the example pair and adjacent rule agree; unqualified trunk or contradictory example goes red', () => {
-  const text = readFileSync(join(ROOT, 'README.md'), 'utf8');
+  const text = readFileSync(join(ROOT, 'docs', 'REFERENCE.md'), 'utf8');
   expect(exampleAgrees(text)).toBe(true);
   expect(exampleAgrees(text.replace("This example's trunk scale pair is safe only when its picture length stays steady", 'The trunk pair is always safe'))).toBe(false);
   expect(exampleAgrees(text.replace('and the trunk is not foreshortened', 'even if the trunk is foreshortened'))).toBe(false);
@@ -315,6 +315,7 @@ test('#384 mutant: disabling the warning makes the CLI control red; copied sourc
   try {
     for (const name of ['src', 'test', 'examples']) cpSync(join(ROOT, name), join(dir, name), { recursive: true });
     for (const name of ['cli.ts', 'package.json', 'README.md']) cpSync(join(ROOT, name), join(dir, name));
+    cpSync(join(ROOT, 'docs'), join(dir, 'docs'), { recursive: true });
     symlinkSync(join(ROOT, 'node_modules'), join(dir, 'node_modules'), 'dir');
     const control = () => spawnSync(process.execPath, ['test', 'test/scalepair.test.ts', '--test-name-pattern', '^#384 CLI control:'], { cwd: dir, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
     const needle = 'const pairWarning = scalePairWarning(rest, map, frames, a.minScore);';

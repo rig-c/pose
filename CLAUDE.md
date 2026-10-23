@@ -124,7 +124,7 @@ into named failures.
 - **`compare`'s bars are grading lines.** They were fixed in rig-c/pose#38
   before any render was measured, and rig-c/exam grades against them. A change
   to a bar, the finding rule or a figure's definition is a new comment on the
-  issue first, then `src/compare.ts` (`BARS`, `CLOTH`) and the README's
+  issue first, then `src/compare.ts` (`BARS`, `CLOTH`) and `docs/REFERENCE.md`'s
   "Compare" section together. A finding is not a failure: `compare` exits 0
   whenever it compared.
 

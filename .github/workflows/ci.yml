@@ -39,8 +39,8 @@ jobs:
           GATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GATE_PR_BODY: ${{ github.event.pull_request.body }}
 
-  # rig-c/pose#377 (1.0 gate ⑤ of #217): every issue the README's known-limits
-  # list names is open and labelled `parked`. It reads the network, so it is a
+  # rig-c/pose#377 (1.0 gate ⑤ of #217): every issue the known-limits list in
+  # docs/REFERENCE.md names is open and labelled `parked`. It reads the network, so it is a
   # step here and not a test: `bun run test` stays offline, and test/scope.test.ts
   # holds the list's shape and this step's judgement on planted states. #46 is
   # closed (#261) and is judged first by the same code; it must come back
