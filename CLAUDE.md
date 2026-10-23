@@ -177,6 +177,12 @@ a session rotated, so it is here.
   auto-merge first, push, and report the new head; only HQ re-arms a feature
   PR. A merge of main into the branch counts as a push. An armed PR merges
   whatever head turns green, so a push to it lands a commit the sign never saw.
+- **The editor round-trip line** reports rig-c's `tools/editor_roundtrip.ts`
+  run on the emitted build through the Spine editor on this machine, with
+  `@esotericsoftware/spine-core` at this repository's dev pin installed beside
+  the scratch install. It records targets matched and refusals as
+  `targets N/N · refusals 0|<names>`. A cut that changes emitted motion requires
+  this trip; a cut that only adds a sidecar or docs may cite the previous trip.
 - **A cut is confirmed, not assumed.** After the `release` run: `npm view
   @rig-c/pose version` names the new version, an install into an empty
   directory runs, one `rig-pose retarget --build` on the exam rig from that
