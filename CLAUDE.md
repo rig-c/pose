@@ -15,9 +15,21 @@ animation in rig-c's motion format: `rotate` keys on the mapped bones,
 `translate` keys on the hip, and `attachment` keys where the map's alternate
 drawings switch in, checked through rig-c's gate before anything is written.
 
-**0.x is the prototype.** 0.1.0 is the first release and promises nothing about
-stability; the format, the command and the output may change in any 0.x release.
-The card that defines 0.1.0 is rig-c/pose#1.
+**1.x keeps its promises.** [What 1.x promises](RELEASING.md#what-1x-promises)
+is the classification of the command, flags, formats, report fields, problem
+codes and line tags. Surfaces marked **promised** are kept through every 1.x
+release; changing or removing one requires a major release. Surfaces marked
+**courtesy** may change in a minor release, with the change disclosed in the
+CHANGELOG. Default figures and the text after problem codes and line tags are
+courtesy.
+
+A promised report key covers its name, type and listed row fields, not its
+entire subtree. Follow RELEASING.md's explicit nested-field classifications;
+readers ignore fields they do not read.
+
+The supported surface is the `rig-pose` command. The package promises no
+importable API: `exports` exposes only `package.json`, so `src/*` cannot be
+deep-imported.
 
 It sits beside the rest of the toolchain: rig-c (`rig-c`, the compiler, the
 gate and the poser), `@rig-c/parts` (a rig from a painting), `@rig-c/play` (plays
