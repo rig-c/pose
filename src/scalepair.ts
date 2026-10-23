@@ -39,5 +39,5 @@ export function scalePairWarning(_rest: Rest, map: JointMap, frames: ReadonlyArr
   const nearBound = (100 * variation).toFixed(6) === (100 * SCALE_PAIR_VARIATION).toFixed(6);
   const percent = (v: number) => nearBound ? (100 * v).toPrecision(17) : (100 * v).toFixed(6);
   // #387 option (b): observed steadiness cannot validate pose-to-rig proportions.
-  return `SCALE-PAIR WARN ${t.scale.pose.join(' → ')} (rig ${t.scale.rig.join(' → ')}): picture length ${min.toFixed(2)}–${max.toFixed(2)}px on ${good}/${frames.length} good frames; variation (max-min)/max ${percent(variation)}% > ${percent(SCALE_PAIR_VARIATION)}% (inverse-length gain > ${SCALE_PAIR_GAIN}); see README "The map: rig-pose-map/1", translate.scale rule for choosing corresponding points; advisory only, scale unchanged`;
+  return `SCALE-PAIR WARN ${t.scale.pose.join(' → ')} (rig ${t.scale.rig.join(' → ')}): picture length ${min.toFixed(2)}–${max.toFixed(2)}px on ${good}/${frames.length} good frames; variation (max-min)/max ${percent(variation)}% > ${percent(SCALE_PAIR_VARIATION)}% (inverse-length gain > ${SCALE_PAIR_GAIN}); see docs/REFERENCE.md "The map: rig-pose-map/1", translate.scale rule for choosing corresponding points; advisory only, scale unchanged`;
 }

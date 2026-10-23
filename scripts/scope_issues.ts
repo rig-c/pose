@@ -1,5 +1,6 @@
 /**
- * rig-c/pose#377 (1.0 gate ⑤ of #217): the README's known-limits list, one bullet per limit, each
+ * rig-c/pose#377 (1.0 gate ⑤ of #217): the known-limits list in docs/REFERENCE.md (the README's until
+ * rig-c/pose#400), one bullet per limit, each
  * resting on one open issue labelled `parked`.
  *
  * Two halves read the same list through `parkedLimits`:
@@ -8,7 +9,7 @@
  * - this file run as a script, in CI: every issue the list names is open and labelled `parked`, read
  *   through `gh api`. A closed issue is a line that outlived its reason.
  *
- *   bun scripts/scope_issues.ts [--readme <file>] [--closed-control <n>]
+ *   bun scripts/scope_issues.ts [--doc <file>] [--closed-control <n>]
  *
  * `--closed-control <n>` names an issue known to be closed. It is judged by the same code before
  * the verdict and must come back refused, so a green verdict means the reader can see a closed
@@ -20,6 +21,8 @@ import { join } from 'node:path';
 export const START = '<!-- parked-limits:';
 export const END = '<!-- /parked-limits -->';
 const REPO = 'rig-c/pose';
+/** The file that carries the list, as the messages name it. */
+export const DOC = 'docs/REFERENCE.md';
 const LINK = /\[#(\d+)\]\(https:\/\/github\.com\/rig-c\/pose\/issues\/(\d+)\)/g;
 
 export interface Limit {
@@ -29,15 +32,15 @@ export interface Limit {
 }
 
 /** The list's bullets and their issues, or every problem with it, each naming the line. */
-export function parkedLimits(readme: string): { limits: Limit[]; problems: string[] } {
-  const lines = readme.split('\n');
+export function parkedLimits(doc: string): { limits: Limit[]; problems: string[] } {
+  const lines = doc.split('\n');
   const problems: string[] = [];
   const limits: Limit[] = [];
   const starts = lines.flatMap((l, i) => (l.startsWith(START) ? [i] : []));
   const ends = lines.flatMap((l, i) => (l.trim() === END ? [i] : []));
   if (starts.length !== 1 || ends.length !== 1 || ends[0]! < starts[0]!) {
     problems.push(
-      `SCOPE_LIST_MISSING: README needs exactly one "${START} …" line followed by one "${END}" line; found ${starts.length} start(s) and ${ends.length} end(s)${starts.length === 1 && ends.length === 1 ? ', the end before the start' : ''}`,
+      `SCOPE_LIST_MISSING: ${DOC} needs exactly one "${START} …" line followed by one "${END}" line; found ${starts.length} start(s) and ${ends.length} end(s)${starts.length === 1 && ends.length === 1 ? ', the end before the start' : ''}`,
     );
     return { limits, problems };
   }
@@ -47,30 +50,30 @@ export function parkedLimits(readme: string): { limits: Limit[]; problems: strin
     if (text.trim() === '') continue;
     const n = i + 1;
     if (!text.startsWith('- ')) {
-      problems.push(`SCOPE_NOT_A_BULLET: README line ${n} is inside the known-limits list and is not a "- " bullet: ${text.slice(0, 60)}`);
+      problems.push(`SCOPE_NOT_A_BULLET: ${DOC} line ${n} is inside the known-limits list and is not a "- " bullet: ${text.slice(0, 60)}`);
       continue;
     }
     const title = /^- \*\*(.+?)\.?\*\*/.exec(text)?.[1] ?? text.slice(2, 50);
     const links = [...text.matchAll(LINK)];
     if (links.length !== 1) {
-      problems.push(`SCOPE_ISSUE: README line ${n} ("${title}") names ${links.length} ${REPO} issue link(s); a limit rests on exactly one`);
+      problems.push(`SCOPE_ISSUE: ${DOC} line ${n} ("${title}") names ${links.length} ${REPO} issue link(s); a limit rests on exactly one`);
       continue;
     }
     const [, shown, target] = links[0]!;
     if (shown !== target) {
-      problems.push(`SCOPE_LINK: README line ${n} ("${title}") shows #${shown} and links issue ${target}`);
+      problems.push(`SCOPE_LINK: ${DOC} line ${n} ("${title}") shows #${shown} and links issue ${target}`);
       continue;
     }
     const issue = Number(target);
     const first = seen.get(issue);
     if (first !== undefined) {
-      problems.push(`SCOPE_DUPLICATE: README line ${n} ("${title}") names #${issue}, which line ${first} already names`);
+      problems.push(`SCOPE_DUPLICATE: ${DOC} line ${n} ("${title}") names #${issue}, which line ${first} already names`);
       continue;
     }
     seen.set(issue, n);
     limits.push({ line: n, title, issue });
   }
-  if (limits.length === 0 && problems.length === 0) problems.push(`SCOPE_EMPTY: the known-limits list (README line ${starts[0]! + 1}) has no bullets`);
+  if (limits.length === 0 && problems.length === 0) problems.push(`SCOPE_EMPTY: the known-limits list (${DOC} line ${starts[0]! + 1}) has no bullets`);
   return { limits, problems };
 }
 
@@ -97,9 +100,9 @@ if (import.meta.main) {
     const k = args.indexOf(name);
     return k === -1 ? undefined : args[k + 1];
   };
-  const readmePath = opt('--readme') ?? join(import.meta.dir, '..', 'README.md');
+  const docPath = opt('--doc') ?? join(import.meta.dir, '..', 'docs', 'REFERENCE.md');
   const control = opt('--closed-control');
-  const { limits, problems } = parkedLimits(readFileSync(readmePath, 'utf8'));
+  const { limits, problems } = parkedLimits(readFileSync(docPath, 'utf8'));
   if (problems.length > 0) {
     for (const p of problems) console.log(p);
     process.exit(1);
@@ -116,10 +119,10 @@ if (import.meta.main) {
   let bad = 0;
   for (const l of limits) {
     const why = refusal(l.issue, readIssue(l.issue));
-    if (why === null) console.log(`  ok  #${l.issue} open, parked — README line ${l.line} "${l.title}"`);
+    if (why === null) console.log(`  ok  #${l.issue} open, parked — ${DOC} line ${l.line} "${l.title}"`);
     else {
       bad++;
-      console.log(`${why} — README line ${l.line} "${l.title}" rests on it; drop the line or name the open issue that holds the limit`);
+      console.log(`${why} — ${DOC} line ${l.line} "${l.title}" rests on it; drop the line or name the open issue that holds the limit`);
     }
   }
   console.log(`SCOPE: ${limits.length} limit(s) named, ${bad} resting on an issue that is not open and parked`);

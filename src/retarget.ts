@@ -3957,7 +3957,7 @@ export function bendLine(e: BendEvent): string {
 }
 
 /**
- * The remedy both bend refusals name (rig-c/pose#238), as the README's map
+ * The remedy both bend refusals name (rig-c/pose#238), as docs/REFERENCE.md's map
  * section ("bend") gives it: front-facing material goes "free", a side view
  * keeps a side.
  */

@@ -321,7 +321,7 @@ compare
   --sheet <png>         draw the reference and render skeletons side by side at each finding's worst frame
 
   A finding is a run of frames over a bar lasting >= 0.15 s (gaps of one frame merged), worst first.
-  The bars (README, "Compare"): arm and leg segment direction > 20 deg; hand visibility reference >= 0.6
+  The bars (docs/REFERENCE.md, "Compare"): arm and leg segment direction > 20 deg; hand visibility reference >= 0.6
   while render < 0.4; foot plant render > 0.05 while reference < 0.02 hip widths/frame; eye-line tilt
   > 15 deg; torso length and hip height range under 0.5 x the reference's; cloth outside #34's bands.
   Exit 0 whenever it compared, findings or not.

@@ -1,5 +1,5 @@
 /**
- * rig-c/pose#377 (1.0 gate ⑤ of #217): the README's known-limits list is read here, offline — it is
+ * rig-c/pose#377 (1.0 gate ⑤ of #217): the known-limits list (docs/REFERENCE.md since rig-c/pose#400) is read here, offline — it is
  * there, every bullet names exactly one issue, and no issue is named twice. Whether each issue is
  * still open and parked needs the network, so CI asks that in its own step
  * (`bun scripts/scope_issues.ts`); its judgement, `refusal`, is held here on planted states.
@@ -9,11 +9,11 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { END, START, parkedLimits, refusal } from '../scripts/scope_issues.ts';
 
-const README = readFileSync(join(import.meta.dir, '..', 'README.md'), 'utf8');
+const README = readFileSync(join(import.meta.dir, '..', 'docs', 'REFERENCE.md'), 'utf8');
 const link = (n: number) => `[#${n}](https://github.com/rig-c/pose/issues/${n})`;
 const list = (...bullets: string[]) => `# x\n\n${START} test -->\n${bullets.join('\n')}\n${END}\n`;
 
-test('control: the README names each known limit once, each on its own issue', () => {
+test('control: the reference names each known limit once, each on its own issue', () => {
   const { limits, problems } = parkedLimits(README);
   expect(problems).toEqual([]);
   expect(limits.length).toBeGreaterThan(0);
@@ -38,7 +38,7 @@ test('planted: an empty list is refused by name', () => {
 
 test('planted: a bullet with no issue, or with two, is refused naming its line and title', () => {
   const none = parkedLimits(list(`- **A.** a (${link(1)}).`, '- **No issue.** nothing holds it.'));
-  expect(none.problems).toEqual(['SCOPE_ISSUE: README line 5 ("No issue") names 0 rig-c/pose issue link(s); a limit rests on exactly one']);
+  expect(none.problems).toEqual(['SCOPE_ISSUE: docs/REFERENCE.md line 5 ("No issue") names 0 rig-c/pose issue link(s); a limit rests on exactly one']);
   // A bare "#33" or another repository's issue is not a link to this one's.
   expect(parkedLimits(list('- **Bare.** see #33.')).problems[0]).toContain('names 0');
   expect(parkedLimits(list('- **Other.** ([#3](https://github.com/rig-c/parts/issues/3)).')).problems[0]).toContain('names 0');
@@ -47,7 +47,7 @@ test('planted: a bullet with no issue, or with two, is refused naming its line a
 
 test('planted: an issue named twice is refused naming both lines', () => {
   const { problems } = parkedLimits(list(`- **A.** a (${link(7)}).`, `- **B.** b (${link(7)}).`));
-  expect(problems).toEqual(['SCOPE_DUPLICATE: README line 5 ("B") names #7, which line 4 already names']);
+  expect(problems).toEqual(['SCOPE_DUPLICATE: docs/REFERENCE.md line 5 ("B") names #7, which line 4 already names']);
 });
 
 test('planted: a link whose text and target differ, and a line that is not a bullet, are refused', () => {
@@ -55,12 +55,12 @@ test('planted: a link whose text and target differ, and a line that is not a bul
   expect(parkedLimits(list(`A paragraph (${link(1)}).`)).problems[0]).toContain('SCOPE_NOT_A_BULLET');
 });
 
-test('planted: the real README with a bullet stripped of its issue, or duplicated, goes red', () => {
+test('planted: the real reference with a bullet stripped of its issue, or duplicated, goes red', () => {
   const { limits } = parkedLimits(README);
   const lines = README.split('\n');
   const first = limits[0]!;
   const stripped = lines.map((l, i) => (i === first.line - 1 ? l.replace(/\s*\(\[#\d+\]\([^)]*\)\)/, '') : l)).join('\n');
-  expect(parkedLimits(stripped).problems).toEqual([expect.stringContaining(`SCOPE_ISSUE: README line ${first.line}`)]);
+  expect(parkedLimits(stripped).problems).toEqual([expect.stringContaining(`SCOPE_ISSUE: docs/REFERENCE.md line ${first.line}`)]);
   const doubled = [...lines.slice(0, first.line), lines[first.line - 1]!, ...lines.slice(first.line)].join('\n');
   expect(parkedLimits(doubled).problems).toEqual([expect.stringContaining(`names #${first.issue}, which line ${first.line} already names`)]);
 });

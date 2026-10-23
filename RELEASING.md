@@ -161,7 +161,7 @@ No other repository in the org (core, parts, play, adapters, parts-examples, tra
 
 ### What a promise covers
 
-- **A command or flag**: its name, its argument form, and what it does. Its default figure is courtesy: figures are re-measured. Where a figure was read off one reference (the README says which, e.g. `--stance 0.07` off a dance), it stays the README's advice, not a promise.
+- **A command or flag**: its name, its argument form, and what it does. Its default figure is courtesy: figures are re-measured. Where a figure was read off one reference (`docs/REFERENCE.md` says which, e.g. `--stance 0.07` off a dance), it stays the reference's advice, not a promise.
 - **An alias** is promised as an alias.
 - **A file format** (`spec`): its name, and every field a promised reader reads.
 - **A report key**: its name, its type, and the row fields listed beside it.
