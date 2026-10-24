@@ -38,6 +38,8 @@ Part of the rig-c toolchain: [core](https://github.com/rig-c/core) compiles and 
 
 <!-- demo -->
 
+The [visible accepted take](demos/visible-retarget/README.md) places a committed public source skeleton beside its unchanged accepted rig at 600 px. Its pinned recipe, timing, commands and stage-labelled raw lines distinguish historical pre-hand LAND from the accepted v3 gate and current FOLD reading. It is a 13-second non-looping take; shins 269/391 is shown as a known fold, and no new all-rig seam or detector-based fidelity result is implied.
+
 ## Try it
 
 [`examples/wave`](https://github.com/rig-c/pose/tree/main/examples/wave) is in the repository, not the npm package: clone the repository, or copy its four files. It runs with nothing else: a bones-only stick rig (no art), a 3-second wave made from joint angles (`make-pose.ts` writes it), and the map that joins them.

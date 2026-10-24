@@ -1,0 +1,76 @@
+{
+  "algorithm": "sha256",
+  "scope": "Actual source/record/still files; excludes this manifest. Large handoff videos are hash references in record.json, not claimed present files.",
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 12106,
+      "sha256": "cce11667a9a480dcba2f64af9e6b8005ce80fee4a4b2d57553d46f96346ee542"
+    },
+    {
+      "path": "docs/REFERENCE.md",
+      "bytes": 231808,
+      "sha256": "fe371e8b2dde51fa9a217bfbd765e26e2555852559ed57a68957e662f0e153d0"
+    },
+    {
+      "path": "docs/demos/visible-retarget/README.md",
+      "bytes": 7126,
+      "sha256": "1c2b2f7f223b4d90f0c51a23232a51bb8683419b8438193941771dbdc8130b17"
+    },
+    {
+      "path": "docs/demos/visible-retarget/contact-sheet.png",
+      "bytes": 139401,
+      "sha256": "b877c9d8c1822b85e11509177267ca35a3b9b7978c853cae5ace6a50dc7519ac"
+    },
+    {
+      "path": "docs/demos/visible-retarget/diagnostics.txt",
+      "bytes": 7061,
+      "sha256": "40a6504b2fccd031b720ec0cecacde3962ccf1b63290786d107bb19721c57e70"
+    },
+    {
+      "path": "docs/demos/visible-retarget/historical-stages.json",
+      "bytes": 3855,
+      "sha256": "16ba5556b648b29fe2e7a9492bfcc6fc6a6f070237ca419b82d8ddc7c84b0056"
+    },
+    {
+      "path": "docs/demos/visible-retarget/inputs.json",
+      "bytes": 49441,
+      "sha256": "f1c9c5bff4c68b0f65ddfd2049fa223853f9b78a31be1e9e2e66e533d37d376b"
+    },
+    {
+      "path": "docs/demos/visible-retarget/pose-dance.png",
+      "bytes": 42989,
+      "sha256": "a58c37ebf733afc64ee896eceaf4c2808cde6504be155f6d35515b5c331b62bc"
+    },
+    {
+      "path": "docs/demos/visible-retarget/record.json",
+      "bytes": 8881,
+      "sha256": "8db14d832b77a0f456f7ed2f5e986f8f8a11451146ef1bc5f761f6b2dc5ba78e"
+    },
+    {
+      "path": "docs/demos/visible-retarget/sampling.json",
+      "bytes": 54293,
+      "sha256": "0101b54d558480385e6d707bcebb0a7061a93edf7679c3d676d1198ce314f7fd"
+    },
+    {
+      "path": "docs/demos/visible-retarget/verification.json",
+      "bytes": 3995,
+      "sha256": "5c3ba9bbb01345bc1a6f331391472257f2bb9335889d0ea9332e32376d8dc7ca"
+    },
+    {
+      "path": "tools/visible-retarget-check.ts",
+      "bytes": 614,
+      "sha256": "a4660ea4bffbb096221912b098dd72cef87a8222496d76c3613a5b6403ee4604"
+    },
+    {
+      "path": "tools/visible-retarget.py",
+      "bytes": 26183,
+      "sha256": "84ad7e7c58e8419ea8714700b4fe49e3c36d3ac8027056e692f5fa397af0dc91"
+    },
+    {
+      "path": "tools/visible-retarget.requirements.txt",
+      "bytes": 15,
+      "sha256": "e2fe85b176ffadb6e1b3c300a6a40b327305d7d53b5cd3861b250ed1c05c3075"
+    }
+  ]
+}

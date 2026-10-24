@@ -1,0 +1,123 @@
+{
+  "spec": "rig-pose-visible-retarget-verification/1",
+  "examplesCommit": "f8d86e3045c267171180efd2ac47604511f9cb62",
+  "novaRun": "20261024T075945Z-4f24ab5f0f5a4e23a71686cdfc755f5a",
+  "rawResultSHA256": "75d8f3ae7b52acf6c5d2bec376416958fe280c54ebe5ef9a3b6e8f4a669c0737",
+  "evidenceManifestSHA256": "57aafd0efd2fb22f0a147d8642fbf713df9982c3cc23f31bea01193f477f8d3a",
+  "status": "passed",
+  "exitCode": 0,
+  "processQuiescent": true,
+  "budget": {
+    "memory.max": "6442450944",
+    "memory.swap.max": "0",
+    "cpu.max": "400000 100000",
+    "affinity": [
+      0,
+      1,
+      2,
+      3
+    ]
+  },
+  "steps": [
+    {
+      "step": "install",
+      "exitCode": 0
+    },
+    {
+      "step": "python-deps",
+      "exitCode": 0
+    },
+    {
+      "step": "typecheck",
+      "exitCode": 0
+    },
+    {
+      "step": "lint",
+      "exitCode": 0
+    },
+    {
+      "step": "pack",
+      "exitCode": 0
+    },
+    {
+      "step": "selftest",
+      "exitCode": 0
+    },
+    {
+      "step": "v3-pipeline",
+      "exitCode": 0
+    }
+  ],
+  "inputSHA256": "81961f1860a98ebc761350687b850259b892df01a2bf07bd918728cdf741b1ad",
+  "sourceUnchangedDuringRun": true,
+  "pinsVerified": {
+    "core": "2.67.2",
+    "spineCore": "4.3.13",
+    "partsInstalled": "1.60.0",
+    "poseInstalled": "1.0.1",
+    "playInstalled": "1.16.0",
+    "bun": "1.4.2",
+    "pillow": "12.2.0"
+  },
+  "reusedV3Build": "All3 compiled files/canonical rig+motion/native391PNG/runtime lock+package pins verified before reuse. New fold render reproduces native b75 digest.",
+  "historicalRetargetNotRerun": true,
+  "newRetargetOrGenerationOrHandWork": false,
+  "browser": {
+    "name": "ChatGPT in-app browser",
+    "cssWidth": 600,
+    "cssHeight": 540,
+    "initialTime": 0,
+    "playingTime": 10.889868,
+    "endTime": 13.033333,
+    "ended": true,
+    "pausedAtEnd": true,
+    "loop": false,
+    "autoplay": false,
+    "mediaError": null,
+    "warningOrErrorLogs": [],
+    "ownedTabClosed": true,
+    "ownedServerClosed": true,
+    "readability": "Both full figure panels and labels readable at actual600x540 CSS size; historical/current stage text appears below video",
+    "privateCaptureSHA256": {
+      "preview-playback.png": "f652950cfe94b91f79ec2b4f5770ead657c2d25979c1b5e3fbd0c16eb15c811a",
+      "preview-ended.png": "782447faca596a7489a178dab3c46371c9a917e36650f210d31db920c17d4f33"
+    },
+    "playStartTime": 0.042512
+  },
+  "samplingExactlyMatchesPreservedV1": "0101b54d558480385e6d707bcebb0a7061a93edf7679c3d676d1198ce314f7fd",
+  "recoveredArtifactBytes": 1753608,
+  "nativeFrameSetOrFullGeometryRecovered": false,
+  "preflightOrderingException": {
+    "failure": "Private wrapper passed a relative fixture path with a different cwd (ENOENT); submission proceeded before corrected wrapper dry run. Earlier actual reader/selftest already passed.",
+    "correction": "Absolute-path local dry run passed after submission; raw exception and chronology retained privately. No subsequent submission or repeated render.",
+    "scope": "No source/fixture/runtime failure; report this ordering error separately from passed measurement/CI evidence."
+  },
+  "siteConsumer": "HQ sibling PR; not edited or claimed landed here",
+  "fullSuite": "Not rerun; tools/docs only, actual pipeline/type/lint/pack/selftest used",
+  "actualPipelineCommand": [
+    "python3",
+    "tools/visible-retarget.py",
+    "run",
+    "--out",
+    "${OUTPUT}",
+    "--reuse-replay",
+    "${ACCEPTED_REPLAY}"
+  ],
+  "actualDiagnosticCommand": [
+    "bun",
+    "${ACCEPTED_REPLAY}/work/runtime/node_modules/rig-c/cli.ts",
+    "render",
+    "--candidate",
+    "${ACCEPTED_REPLAY}/build",
+    "--animation",
+    "zero-two-r3-hand",
+    "--fps",
+    "30",
+    "--folds",
+    "--viewport-from",
+    "${OUTPUT}/source/dancer/accepted-dance/viewport.json",
+    "--out",
+    "${OUTPUT}/media-diagnostic"
+  ],
+  "commandNormalization": "Only exact private immutable-cache/output/project prefixes replaced with named placeholders; flags and values unchanged."
+}

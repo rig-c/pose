@@ -6,6 +6,10 @@ Part of the rig-c toolchain: [core](https://github.com/rig-c/core) compiles and 
 
 <!-- demo -->
 
+[![Source skeleton beside the accepted rig](docs/demos/visible-retarget/pose-dance.png)](docs/demos/visible-retarget/README.md)
+
+[A visible accepted take](docs/demos/visible-retarget/README.md): source skeleton beside the unchanged public rig at 600 px, with pinned source, commands and stage-labelled diagnostics. It is a 13-second take, not a loop. Historical pre-hand LAND 20/20 is separate from the v3 gate and current fold reading; shins 269/391 remains a visible known fold. Site placement is a separate sibling delivery.
+
 ## Try it
 
 [`examples/wave`](https://github.com/rig-c/pose/tree/main/examples/wave) is in the repository, not the npm package: clone the repository, or copy its four files. It runs with nothing else: a bones-only stick rig (no art), a 3-second wave made from joint angles (`make-pose.ts` writes it), and the map that joins them.

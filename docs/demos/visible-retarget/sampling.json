@@ -1,0 +1,2739 @@
+[
+  {
+    "renderFrame": 0,
+    "renderTime": 0.0,
+    "sourceLo": 0,
+    "sourceHi": 0,
+    "weight": 0
+  },
+  {
+    "renderFrame": 1,
+    "renderTime": 0.03333333333333333,
+    "sourceLo": 0,
+    "sourceHi": 1,
+    "weight": 0.7999360051195904
+  },
+  {
+    "renderFrame": 2,
+    "renderTime": 0.06666666666666667,
+    "sourceLo": 1,
+    "sourceHi": 2,
+    "weight": 0.6000160025604097
+  },
+  {
+    "renderFrame": 3,
+    "renderTime": 0.1,
+    "sourceLo": 2,
+    "sourceHi": 3,
+    "weight": 0.4000479961603073
+  },
+  {
+    "renderFrame": 4,
+    "renderTime": 0.13333333333333333,
+    "sourceLo": 3,
+    "sourceHi": 4,
+    "weight": 0.19998400127989752
+  },
+  {
+    "renderFrame": 5,
+    "renderTime": 0.16666666666666666,
+    "sourceLo": 3,
+    "sourceHi": 4,
+    "weight": 0.9999200063994875
+  },
+  {
+    "renderFrame": 6,
+    "renderTime": 0.2,
+    "sourceLo": 4,
+    "sourceHi": 5,
+    "weight": 0.8000480076812294
+  },
+  {
+    "renderFrame": 7,
+    "renderTime": 0.23333333333333334,
+    "sourceLo": 5,
+    "sourceHi": 6,
+    "weight": 0.600031997440205
+  },
+  {
+    "renderFrame": 8,
+    "renderTime": 0.26666666666666666,
+    "sourceLo": 6,
+    "sourceHi": 7,
+    "weight": 0.39996800255979525
+  },
+  {
+    "renderFrame": 9,
+    "renderTime": 0.3,
+    "sourceLo": 7,
+    "sourceHi": 8,
+    "weight": 0.19995199231877095
+  },
+  {
+    "renderFrame": 10,
+    "renderTime": 0.3333333333333333,
+    "sourceLo": 8,
+    "sourceHi": 9,
+    "weight": 7.999360051115097e-05
+  },
+  {
+    "renderFrame": 11,
+    "renderTime": 0.36666666666666664,
+    "sourceLo": 8,
+    "sourceHi": 9,
+    "weight": 0.8000159987201017
+  },
+  {
+    "renderFrame": 12,
+    "renderTime": 0.4,
+    "sourceLo": 9,
+    "sourceHi": 10,
+    "weight": 0.5999520038396936
+  },
+  {
+    "renderFrame": 13,
+    "renderTime": 0.43333333333333335,
+    "sourceLo": 10,
+    "sourceHi": 11,
+    "weight": 0.3999839974395908
+  },
+  {
+    "renderFrame": 14,
+    "renderTime": 0.4666666666666667,
+    "sourceLo": 11,
+    "sourceHi": 12,
+    "weight": 0.20006399488040946
+  },
+  {
+    "renderFrame": 15,
+    "renderTime": 0.5,
+    "sourceLo": 12,
+    "sourceHi": 12,
+    "weight": 0
+  },
+  {
+    "renderFrame": 16,
+    "renderTime": 0.5333333333333333,
+    "sourceLo": 12,
+    "sourceHi": 13,
+    "weight": 0.7999360051195905
+  },
+  {
+    "renderFrame": 17,
+    "renderTime": 0.5666666666666667,
+    "sourceLo": 13,
+    "sourceHi": 14,
+    "weight": 0.6000160025604092
+  },
+  {
+    "renderFrame": 18,
+    "renderTime": 0.6,
+    "sourceLo": 14,
+    "sourceHi": 15,
+    "weight": 0.40004799616030645
+  },
+  {
+    "renderFrame": 19,
+    "renderTime": 0.6333333333333333,
+    "sourceLo": 15,
+    "sourceHi": 16,
+    "weight": 0.19998400127989696
+  },
+  {
+    "renderFrame": 20,
+    "renderTime": 0.6666666666666666,
+    "sourceLo": 15,
+    "sourceHi": 16,
+    "weight": 0.9999200063994875
+  },
+  {
+    "renderFrame": 21,
+    "renderTime": 0.7,
+    "sourceLo": 16,
+    "sourceHi": 17,
+    "weight": 0.8000480076812277
+  },
+  {
+    "renderFrame": 22,
+    "renderTime": 0.7333333333333333,
+    "sourceLo": 17,
+    "sourceHi": 18,
+    "weight": 0.6000319974402034
+  },
+  {
+    "renderFrame": 23,
+    "renderTime": 0.7666666666666667,
+    "sourceLo": 18,
+    "sourceHi": 19,
+    "weight": 0.3999680025597966
+  },
+  {
+    "renderFrame": 24,
+    "renderTime": 0.8,
+    "sourceLo": 19,
+    "sourceHi": 20,
+    "weight": 0.19995199231877228
+  },
+  {
+    "renderFrame": 25,
+    "renderTime": 0.8333333333333334,
+    "sourceLo": 20,
+    "sourceHi": 21,
+    "weight": 7.999360051248313e-05
+  },
+  {
+    "renderFrame": 26,
+    "renderTime": 0.8666666666666667,
+    "sourceLo": 20,
+    "sourceHi": 21,
+    "weight": 0.800015998720103
+  },
+  {
+    "renderFrame": 27,
+    "renderTime": 0.9,
+    "sourceLo": 21,
+    "sourceHi": 22,
+    "weight": 0.5999520038396936
+  },
+  {
+    "renderFrame": 28,
+    "renderTime": 0.9333333333333333,
+    "sourceLo": 22,
+    "sourceHi": 23,
+    "weight": 0.3999839974395908
+  },
+  {
+    "renderFrame": 29,
+    "renderTime": 0.9666666666666667,
+    "sourceLo": 23,
+    "sourceHi": 24,
+    "weight": 0.20006399488040946
+  },
+  {
+    "renderFrame": 30,
+    "renderTime": 1.0,
+    "sourceLo": 24,
+    "sourceHi": 24,
+    "weight": 0
+  },
+  {
+    "renderFrame": 31,
+    "renderTime": 1.0333333333333334,
+    "sourceLo": 24,
+    "sourceHi": 25,
+    "weight": 0.7999360051195911
+  },
+  {
+    "renderFrame": 32,
+    "renderTime": 1.0666666666666667,
+    "sourceLo": 25,
+    "sourceHi": 26,
+    "weight": 0.6000160025604098
+  },
+  {
+    "renderFrame": 33,
+    "renderTime": 1.1,
+    "sourceLo": 26,
+    "sourceHi": 27,
+    "weight": 0.40004799616031067
+  },
+  {
+    "renderFrame": 34,
+    "renderTime": 1.1333333333333333,
+    "sourceLo": 27,
+    "sourceHi": 28,
+    "weight": 0.19998400127989643
+  },
+  {
+    "renderFrame": 35,
+    "renderTime": 1.1666666666666667,
+    "sourceLo": 27,
+    "sourceHi": 28,
+    "weight": 0.9999200063994875
+  },
+  {
+    "renderFrame": 36,
+    "renderTime": 1.2,
+    "sourceLo": 28,
+    "sourceHi": 29,
+    "weight": 0.8000480076812293
+  },
+  {
+    "renderFrame": 37,
+    "renderTime": 1.2333333333333334,
+    "sourceLo": 29,
+    "sourceHi": 30,
+    "weight": 0.6000319974402071
+  },
+  {
+    "renderFrame": 38,
+    "renderTime": 1.2666666666666666,
+    "sourceLo": 30,
+    "sourceHi": 31,
+    "weight": 0.39996800255979287
+  },
+  {
+    "renderFrame": 39,
+    "renderTime": 1.3,
+    "sourceLo": 31,
+    "sourceHi": 32,
+    "weight": 0.1999519923187707
+  },
+  {
+    "renderFrame": 40,
+    "renderTime": 1.3333333333333333,
+    "sourceLo": 32,
+    "sourceHi": 33,
+    "weight": 7.999360051248291e-05
+  },
+  {
+    "renderFrame": 41,
+    "renderTime": 1.3666666666666667,
+    "sourceLo": 32,
+    "sourceHi": 33,
+    "weight": 0.8000159987201035
+  },
+  {
+    "renderFrame": 42,
+    "renderTime": 1.4,
+    "sourceLo": 33,
+    "sourceHi": 34,
+    "weight": 0.5999520038396893
+  },
+  {
+    "renderFrame": 43,
+    "renderTime": 1.4333333333333333,
+    "sourceLo": 34,
+    "sourceHi": 35,
+    "weight": 0.39998399743959023
+  },
+  {
+    "renderFrame": 44,
+    "renderTime": 1.4666666666666666,
+    "sourceLo": 35,
+    "sourceHi": 36,
+    "weight": 0.2000639948804089
+  },
+  {
+    "renderFrame": 45,
+    "renderTime": 1.5,
+    "sourceLo": 36,
+    "sourceHi": 36,
+    "weight": 0
+  },
+  {
+    "renderFrame": 46,
+    "renderTime": 1.5333333333333334,
+    "sourceLo": 36,
+    "sourceHi": 37,
+    "weight": 0.7999360051195911
+  },
+  {
+    "renderFrame": 47,
+    "renderTime": 1.5666666666666667,
+    "sourceLo": 37,
+    "sourceHi": 38,
+    "weight": 0.6000160025604098
+  },
+  {
+    "renderFrame": 48,
+    "renderTime": 1.6,
+    "sourceLo": 38,
+    "sourceHi": 39,
+    "weight": 0.40004799616031067
+  },
+  {
+    "renderFrame": 49,
+    "renderTime": 1.6333333333333333,
+    "sourceLo": 39,
+    "sourceHi": 40,
+    "weight": 0.19998400127989643
+  },
+  {
+    "renderFrame": 50,
+    "renderTime": 1.6666666666666667,
+    "sourceLo": 39,
+    "sourceHi": 40,
+    "weight": 0.9999200063994875
+  },
+  {
+    "renderFrame": 51,
+    "renderTime": 1.7,
+    "sourceLo": 40,
+    "sourceHi": 41,
+    "weight": 0.8000480076812293
+  },
+  {
+    "renderFrame": 52,
+    "renderTime": 1.7333333333333334,
+    "sourceLo": 41,
+    "sourceHi": 42,
+    "weight": 0.6000319974402071
+  },
+  {
+    "renderFrame": 53,
+    "renderTime": 1.7666666666666666,
+    "sourceLo": 42,
+    "sourceHi": 43,
+    "weight": 0.39996800255979287
+  },
+  {
+    "renderFrame": 54,
+    "renderTime": 1.8,
+    "sourceLo": 43,
+    "sourceHi": 44,
+    "weight": 0.1999519923187707
+  },
+  {
+    "renderFrame": 55,
+    "renderTime": 1.8333333333333333,
+    "sourceLo": 44,
+    "sourceHi": 45,
+    "weight": 7.999360051248291e-05
+  },
+  {
+    "renderFrame": 56,
+    "renderTime": 1.8666666666666667,
+    "sourceLo": 44,
+    "sourceHi": 45,
+    "weight": 0.8000159987201035
+  },
+  {
+    "renderFrame": 57,
+    "renderTime": 1.9,
+    "sourceLo": 45,
+    "sourceHi": 46,
+    "weight": 0.5999520038396893
+  },
+  {
+    "renderFrame": 58,
+    "renderTime": 1.9333333333333333,
+    "sourceLo": 46,
+    "sourceHi": 47,
+    "weight": 0.39998399743959023
+  },
+  {
+    "renderFrame": 59,
+    "renderTime": 1.9666666666666666,
+    "sourceLo": 47,
+    "sourceHi": 48,
+    "weight": 0.2000639948804089
+  },
+  {
+    "renderFrame": 60,
+    "renderTime": 2.0,
+    "sourceLo": 48,
+    "sourceHi": 48,
+    "weight": 0
+  },
+  {
+    "renderFrame": 61,
+    "renderTime": 2.033333333333333,
+    "sourceLo": 48,
+    "sourceHi": 49,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 62,
+    "renderTime": 2.066666666666667,
+    "sourceLo": 49,
+    "sourceHi": 50,
+    "weight": 0.600016002560414
+  },
+  {
+    "renderFrame": 63,
+    "renderTime": 2.1,
+    "sourceLo": 50,
+    "sourceHi": 51,
+    "weight": 0.4000479961603075
+  },
+  {
+    "renderFrame": 64,
+    "renderTime": 2.1333333333333333,
+    "sourceLo": 51,
+    "sourceHi": 52,
+    "weight": 0.19998400127989752
+  },
+  {
+    "renderFrame": 65,
+    "renderTime": 2.1666666666666665,
+    "sourceLo": 51,
+    "sourceHi": 52,
+    "weight": 0.9999200063994875
+  },
+  {
+    "renderFrame": 66,
+    "renderTime": 2.2,
+    "sourceLo": 52,
+    "sourceHi": 53,
+    "weight": 0.8000480076812314
+  },
+  {
+    "renderFrame": 67,
+    "renderTime": 2.2333333333333334,
+    "sourceLo": 53,
+    "sourceHi": 54,
+    "weight": 0.600031997440205
+  },
+  {
+    "renderFrame": 68,
+    "renderTime": 2.2666666666666666,
+    "sourceLo": 54,
+    "sourceHi": 55,
+    "weight": 0.39996800255979503
+  },
+  {
+    "renderFrame": 69,
+    "renderTime": 2.3,
+    "sourceLo": 55,
+    "sourceHi": 56,
+    "weight": 0.19995199231876856
+  },
+  {
+    "renderFrame": 70,
+    "renderTime": 2.3333333333333335,
+    "sourceLo": 56,
+    "sourceHi": 57,
+    "weight": 7.999360051248335e-05
+  },
+  {
+    "renderFrame": 71,
+    "renderTime": 2.3666666666666667,
+    "sourceLo": 56,
+    "sourceHi": 57,
+    "weight": 0.8000159987201025
+  },
+  {
+    "renderFrame": 72,
+    "renderTime": 2.4,
+    "sourceLo": 57,
+    "sourceHi": 58,
+    "weight": 0.5999520038396925
+  },
+  {
+    "renderFrame": 73,
+    "renderTime": 2.433333333333333,
+    "sourceLo": 58,
+    "sourceHi": 59,
+    "weight": 0.39998399743958596
+  },
+  {
+    "renderFrame": 74,
+    "renderTime": 2.466666666666667,
+    "sourceLo": 59,
+    "sourceHi": 60,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 75,
+    "renderTime": 2.5,
+    "sourceLo": 60,
+    "sourceHi": 60,
+    "weight": 0
+  },
+  {
+    "renderFrame": 76,
+    "renderTime": 2.533333333333333,
+    "sourceLo": 60,
+    "sourceHi": 61,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 77,
+    "renderTime": 2.566666666666667,
+    "sourceLo": 61,
+    "sourceHi": 62,
+    "weight": 0.600016002560414
+  },
+  {
+    "renderFrame": 78,
+    "renderTime": 2.6,
+    "sourceLo": 62,
+    "sourceHi": 63,
+    "weight": 0.4000479961603075
+  },
+  {
+    "renderFrame": 79,
+    "renderTime": 2.6333333333333333,
+    "sourceLo": 63,
+    "sourceHi": 64,
+    "weight": 0.19998400127989752
+  },
+  {
+    "renderFrame": 80,
+    "renderTime": 2.6666666666666665,
+    "sourceLo": 63,
+    "sourceHi": 64,
+    "weight": 0.9999200063994875
+  },
+  {
+    "renderFrame": 81,
+    "renderTime": 2.7,
+    "sourceLo": 64,
+    "sourceHi": 65,
+    "weight": 0.8000480076812314
+  },
+  {
+    "renderFrame": 82,
+    "renderTime": 2.7333333333333334,
+    "sourceLo": 65,
+    "sourceHi": 66,
+    "weight": 0.600031997440205
+  },
+  {
+    "renderFrame": 83,
+    "renderTime": 2.7666666666666666,
+    "sourceLo": 66,
+    "sourceHi": 67,
+    "weight": 0.39996800255979503
+  },
+  {
+    "renderFrame": 84,
+    "renderTime": 2.8,
+    "sourceLo": 67,
+    "sourceHi": 68,
+    "weight": 0.19995199231876856
+  },
+  {
+    "renderFrame": 85,
+    "renderTime": 2.8333333333333335,
+    "sourceLo": 68,
+    "sourceHi": 69,
+    "weight": 7.999360051248335e-05
+  },
+  {
+    "renderFrame": 86,
+    "renderTime": 2.8666666666666667,
+    "sourceLo": 68,
+    "sourceHi": 69,
+    "weight": 0.8000159987201025
+  },
+  {
+    "renderFrame": 87,
+    "renderTime": 2.9,
+    "sourceLo": 69,
+    "sourceHi": 70,
+    "weight": 0.5999520038396925
+  },
+  {
+    "renderFrame": 88,
+    "renderTime": 2.933333333333333,
+    "sourceLo": 70,
+    "sourceHi": 71,
+    "weight": 0.39998399743958596
+  },
+  {
+    "renderFrame": 89,
+    "renderTime": 2.966666666666667,
+    "sourceLo": 71,
+    "sourceHi": 72,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 90,
+    "renderTime": 3.0,
+    "sourceLo": 72,
+    "sourceHi": 72,
+    "weight": 0
+  },
+  {
+    "renderFrame": 91,
+    "renderTime": 3.033333333333333,
+    "sourceLo": 72,
+    "sourceHi": 73,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 92,
+    "renderTime": 3.066666666666667,
+    "sourceLo": 73,
+    "sourceHi": 74,
+    "weight": 0.600016002560414
+  },
+  {
+    "renderFrame": 93,
+    "renderTime": 3.1,
+    "sourceLo": 74,
+    "sourceHi": 75,
+    "weight": 0.4000479961603075
+  },
+  {
+    "renderFrame": 94,
+    "renderTime": 3.1333333333333333,
+    "sourceLo": 75,
+    "sourceHi": 76,
+    "weight": 0.19998400127989752
+  },
+  {
+    "renderFrame": 95,
+    "renderTime": 3.1666666666666665,
+    "sourceLo": 75,
+    "sourceHi": 76,
+    "weight": 0.9999200063994875
+  },
+  {
+    "renderFrame": 96,
+    "renderTime": 3.2,
+    "sourceLo": 76,
+    "sourceHi": 77,
+    "weight": 0.8000480076812314
+  },
+  {
+    "renderFrame": 97,
+    "renderTime": 3.2333333333333334,
+    "sourceLo": 77,
+    "sourceHi": 78,
+    "weight": 0.600031997440205
+  },
+  {
+    "renderFrame": 98,
+    "renderTime": 3.2666666666666666,
+    "sourceLo": 78,
+    "sourceHi": 79,
+    "weight": 0.39996800255979503
+  },
+  {
+    "renderFrame": 99,
+    "renderTime": 3.3,
+    "sourceLo": 79,
+    "sourceHi": 80,
+    "weight": 0.19995199231876856
+  },
+  {
+    "renderFrame": 100,
+    "renderTime": 3.3333333333333335,
+    "sourceLo": 80,
+    "sourceHi": 81,
+    "weight": 7.999360051248335e-05
+  },
+  {
+    "renderFrame": 101,
+    "renderTime": 3.3666666666666667,
+    "sourceLo": 80,
+    "sourceHi": 81,
+    "weight": 0.8000159987201025
+  },
+  {
+    "renderFrame": 102,
+    "renderTime": 3.4,
+    "sourceLo": 81,
+    "sourceHi": 82,
+    "weight": 0.5999520038396925
+  },
+  {
+    "renderFrame": 103,
+    "renderTime": 3.433333333333333,
+    "sourceLo": 82,
+    "sourceHi": 83,
+    "weight": 0.39998399743958596
+  },
+  {
+    "renderFrame": 104,
+    "renderTime": 3.466666666666667,
+    "sourceLo": 83,
+    "sourceHi": 84,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 105,
+    "renderTime": 3.5,
+    "sourceLo": 84,
+    "sourceHi": 84,
+    "weight": 0
+  },
+  {
+    "renderFrame": 106,
+    "renderTime": 3.533333333333333,
+    "sourceLo": 84,
+    "sourceHi": 85,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 107,
+    "renderTime": 3.566666666666667,
+    "sourceLo": 85,
+    "sourceHi": 86,
+    "weight": 0.600016002560414
+  },
+  {
+    "renderFrame": 108,
+    "renderTime": 3.6,
+    "sourceLo": 86,
+    "sourceHi": 87,
+    "weight": 0.4000479961603075
+  },
+  {
+    "renderFrame": 109,
+    "renderTime": 3.6333333333333333,
+    "sourceLo": 87,
+    "sourceHi": 88,
+    "weight": 0.19998400127989752
+  },
+  {
+    "renderFrame": 110,
+    "renderTime": 3.6666666666666665,
+    "sourceLo": 87,
+    "sourceHi": 88,
+    "weight": 0.9999200063994875
+  },
+  {
+    "renderFrame": 111,
+    "renderTime": 3.7,
+    "sourceLo": 88,
+    "sourceHi": 89,
+    "weight": 0.8000480076812314
+  },
+  {
+    "renderFrame": 112,
+    "renderTime": 3.7333333333333334,
+    "sourceLo": 89,
+    "sourceHi": 90,
+    "weight": 0.600031997440205
+  },
+  {
+    "renderFrame": 113,
+    "renderTime": 3.7666666666666666,
+    "sourceLo": 90,
+    "sourceHi": 91,
+    "weight": 0.39996800255979503
+  },
+  {
+    "renderFrame": 114,
+    "renderTime": 3.8,
+    "sourceLo": 91,
+    "sourceHi": 92,
+    "weight": 0.19995199231876856
+  },
+  {
+    "renderFrame": 115,
+    "renderTime": 3.8333333333333335,
+    "sourceLo": 92,
+    "sourceHi": 93,
+    "weight": 7.999360051248335e-05
+  },
+  {
+    "renderFrame": 116,
+    "renderTime": 3.8666666666666667,
+    "sourceLo": 92,
+    "sourceHi": 93,
+    "weight": 0.8000159987201025
+  },
+  {
+    "renderFrame": 117,
+    "renderTime": 3.9,
+    "sourceLo": 93,
+    "sourceHi": 94,
+    "weight": 0.5999520038396925
+  },
+  {
+    "renderFrame": 118,
+    "renderTime": 3.933333333333333,
+    "sourceLo": 94,
+    "sourceHi": 95,
+    "weight": 0.39998399743958596
+  },
+  {
+    "renderFrame": 119,
+    "renderTime": 3.966666666666667,
+    "sourceLo": 95,
+    "sourceHi": 96,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 120,
+    "renderTime": 4.0,
+    "sourceLo": 96,
+    "sourceHi": 96,
+    "weight": 0
+  },
+  {
+    "renderFrame": 121,
+    "renderTime": 4.033333333333333,
+    "sourceLo": 96,
+    "sourceHi": 97,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 122,
+    "renderTime": 4.066666666666666,
+    "sourceLo": 97,
+    "sourceHi": 98,
+    "weight": 0.6000160025604033
+  },
+  {
+    "renderFrame": 123,
+    "renderTime": 4.1,
+    "sourceLo": 98,
+    "sourceHi": 99,
+    "weight": 0.40004799616029685
+  },
+  {
+    "renderFrame": 124,
+    "renderTime": 4.133333333333334,
+    "sourceLo": 99,
+    "sourceHi": 100,
+    "weight": 0.19998400127990815
+  },
+  {
+    "renderFrame": 125,
+    "renderTime": 4.166666666666667,
+    "sourceLo": 99,
+    "sourceHi": 100,
+    "weight": 0.9999200063994982
+  },
+  {
+    "renderFrame": 126,
+    "renderTime": 4.2,
+    "sourceLo": 100,
+    "sourceHi": 101,
+    "weight": 0.8000480076812314
+  },
+  {
+    "renderFrame": 127,
+    "renderTime": 4.233333333333333,
+    "sourceLo": 101,
+    "sourceHi": 102,
+    "weight": 0.600031997440205
+  },
+  {
+    "renderFrame": 128,
+    "renderTime": 4.266666666666667,
+    "sourceLo": 102,
+    "sourceHi": 103,
+    "weight": 0.39996800255979503
+  },
+  {
+    "renderFrame": 129,
+    "renderTime": 4.3,
+    "sourceLo": 103,
+    "sourceHi": 104,
+    "weight": 0.19995199231876856
+  },
+  {
+    "renderFrame": 130,
+    "renderTime": 4.333333333333333,
+    "sourceLo": 104,
+    "sourceHi": 105,
+    "weight": 7.999360050182606e-05
+  },
+  {
+    "renderFrame": 131,
+    "renderTime": 4.366666666666666,
+    "sourceLo": 104,
+    "sourceHi": 105,
+    "weight": 0.8000159987200919
+  },
+  {
+    "renderFrame": 132,
+    "renderTime": 4.4,
+    "sourceLo": 105,
+    "sourceHi": 106,
+    "weight": 0.5999520038397032
+  },
+  {
+    "renderFrame": 133,
+    "renderTime": 4.433333333333334,
+    "sourceLo": 106,
+    "sourceHi": 107,
+    "weight": 0.3999839974395966
+  },
+  {
+    "renderFrame": 134,
+    "renderTime": 4.466666666666667,
+    "sourceLo": 107,
+    "sourceHi": 108,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 135,
+    "renderTime": 4.5,
+    "sourceLo": 108,
+    "sourceHi": 108,
+    "weight": 0
+  },
+  {
+    "renderFrame": 136,
+    "renderTime": 4.533333333333333,
+    "sourceLo": 108,
+    "sourceHi": 109,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 137,
+    "renderTime": 4.566666666666666,
+    "sourceLo": 109,
+    "sourceHi": 110,
+    "weight": 0.6000160025604033
+  },
+  {
+    "renderFrame": 138,
+    "renderTime": 4.6,
+    "sourceLo": 110,
+    "sourceHi": 111,
+    "weight": 0.40004799616029685
+  },
+  {
+    "renderFrame": 139,
+    "renderTime": 4.633333333333334,
+    "sourceLo": 111,
+    "sourceHi": 112,
+    "weight": 0.19998400127990815
+  },
+  {
+    "renderFrame": 140,
+    "renderTime": 4.666666666666667,
+    "sourceLo": 111,
+    "sourceHi": 112,
+    "weight": 0.9999200063994982
+  },
+  {
+    "renderFrame": 141,
+    "renderTime": 4.7,
+    "sourceLo": 112,
+    "sourceHi": 113,
+    "weight": 0.8000480076812314
+  },
+  {
+    "renderFrame": 142,
+    "renderTime": 4.733333333333333,
+    "sourceLo": 113,
+    "sourceHi": 114,
+    "weight": 0.600031997440205
+  },
+  {
+    "renderFrame": 143,
+    "renderTime": 4.766666666666667,
+    "sourceLo": 114,
+    "sourceHi": 115,
+    "weight": 0.39996800255979503
+  },
+  {
+    "renderFrame": 144,
+    "renderTime": 4.8,
+    "sourceLo": 115,
+    "sourceHi": 116,
+    "weight": 0.19995199231876856
+  },
+  {
+    "renderFrame": 145,
+    "renderTime": 4.833333333333333,
+    "sourceLo": 116,
+    "sourceHi": 117,
+    "weight": 7.999360050182606e-05
+  },
+  {
+    "renderFrame": 146,
+    "renderTime": 4.866666666666666,
+    "sourceLo": 116,
+    "sourceHi": 117,
+    "weight": 0.8000159987200919
+  },
+  {
+    "renderFrame": 147,
+    "renderTime": 4.9,
+    "sourceLo": 117,
+    "sourceHi": 118,
+    "weight": 0.5999520038397032
+  },
+  {
+    "renderFrame": 148,
+    "renderTime": 4.933333333333334,
+    "sourceLo": 118,
+    "sourceHi": 119,
+    "weight": 0.3999839974395966
+  },
+  {
+    "renderFrame": 149,
+    "renderTime": 4.966666666666667,
+    "sourceLo": 119,
+    "sourceHi": 120,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 150,
+    "renderTime": 5.0,
+    "sourceLo": 120,
+    "sourceHi": 120,
+    "weight": 0
+  },
+  {
+    "renderFrame": 151,
+    "renderTime": 5.033333333333333,
+    "sourceLo": 120,
+    "sourceHi": 121,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 152,
+    "renderTime": 5.066666666666666,
+    "sourceLo": 121,
+    "sourceHi": 122,
+    "weight": 0.6000160025604033
+  },
+  {
+    "renderFrame": 153,
+    "renderTime": 5.1,
+    "sourceLo": 122,
+    "sourceHi": 123,
+    "weight": 0.40004799616029685
+  },
+  {
+    "renderFrame": 154,
+    "renderTime": 5.133333333333334,
+    "sourceLo": 123,
+    "sourceHi": 124,
+    "weight": 0.19998400127990815
+  },
+  {
+    "renderFrame": 155,
+    "renderTime": 5.166666666666667,
+    "sourceLo": 123,
+    "sourceHi": 124,
+    "weight": 0.9999200063994982
+  },
+  {
+    "renderFrame": 156,
+    "renderTime": 5.2,
+    "sourceLo": 124,
+    "sourceHi": 125,
+    "weight": 0.8000480076812314
+  },
+  {
+    "renderFrame": 157,
+    "renderTime": 5.233333333333333,
+    "sourceLo": 125,
+    "sourceHi": 126,
+    "weight": 0.600031997440205
+  },
+  {
+    "renderFrame": 158,
+    "renderTime": 5.266666666666667,
+    "sourceLo": 126,
+    "sourceHi": 127,
+    "weight": 0.39996800255979503
+  },
+  {
+    "renderFrame": 159,
+    "renderTime": 5.3,
+    "sourceLo": 127,
+    "sourceHi": 128,
+    "weight": 0.19995199231876856
+  },
+  {
+    "renderFrame": 160,
+    "renderTime": 5.333333333333333,
+    "sourceLo": 128,
+    "sourceHi": 129,
+    "weight": 7.999360050182606e-05
+  },
+  {
+    "renderFrame": 161,
+    "renderTime": 5.366666666666666,
+    "sourceLo": 128,
+    "sourceHi": 129,
+    "weight": 0.8000159987200919
+  },
+  {
+    "renderFrame": 162,
+    "renderTime": 5.4,
+    "sourceLo": 129,
+    "sourceHi": 130,
+    "weight": 0.5999520038397032
+  },
+  {
+    "renderFrame": 163,
+    "renderTime": 5.433333333333334,
+    "sourceLo": 130,
+    "sourceHi": 131,
+    "weight": 0.3999839974395966
+  },
+  {
+    "renderFrame": 164,
+    "renderTime": 5.466666666666667,
+    "sourceLo": 131,
+    "sourceHi": 132,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 165,
+    "renderTime": 5.5,
+    "sourceLo": 132,
+    "sourceHi": 132,
+    "weight": 0
+  },
+  {
+    "renderFrame": 166,
+    "renderTime": 5.533333333333333,
+    "sourceLo": 132,
+    "sourceHi": 133,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 167,
+    "renderTime": 5.566666666666666,
+    "sourceLo": 133,
+    "sourceHi": 134,
+    "weight": 0.6000160025604033
+  },
+  {
+    "renderFrame": 168,
+    "renderTime": 5.6,
+    "sourceLo": 134,
+    "sourceHi": 135,
+    "weight": 0.40004799616029685
+  },
+  {
+    "renderFrame": 169,
+    "renderTime": 5.633333333333334,
+    "sourceLo": 135,
+    "sourceHi": 136,
+    "weight": 0.19998400127990815
+  },
+  {
+    "renderFrame": 170,
+    "renderTime": 5.666666666666667,
+    "sourceLo": 135,
+    "sourceHi": 136,
+    "weight": 0.9999200063994982
+  },
+  {
+    "renderFrame": 171,
+    "renderTime": 5.7,
+    "sourceLo": 136,
+    "sourceHi": 137,
+    "weight": 0.8000480076812314
+  },
+  {
+    "renderFrame": 172,
+    "renderTime": 5.733333333333333,
+    "sourceLo": 137,
+    "sourceHi": 138,
+    "weight": 0.600031997440205
+  },
+  {
+    "renderFrame": 173,
+    "renderTime": 5.766666666666667,
+    "sourceLo": 138,
+    "sourceHi": 139,
+    "weight": 0.39996800255979503
+  },
+  {
+    "renderFrame": 174,
+    "renderTime": 5.8,
+    "sourceLo": 139,
+    "sourceHi": 140,
+    "weight": 0.19995199231876856
+  },
+  {
+    "renderFrame": 175,
+    "renderTime": 5.833333333333333,
+    "sourceLo": 140,
+    "sourceHi": 141,
+    "weight": 7.999360050182606e-05
+  },
+  {
+    "renderFrame": 176,
+    "renderTime": 5.866666666666666,
+    "sourceLo": 140,
+    "sourceHi": 141,
+    "weight": 0.8000159987200919
+  },
+  {
+    "renderFrame": 177,
+    "renderTime": 5.9,
+    "sourceLo": 141,
+    "sourceHi": 142,
+    "weight": 0.5999520038397032
+  },
+  {
+    "renderFrame": 178,
+    "renderTime": 5.933333333333334,
+    "sourceLo": 142,
+    "sourceHi": 143,
+    "weight": 0.3999839974395966
+  },
+  {
+    "renderFrame": 179,
+    "renderTime": 5.966666666666667,
+    "sourceLo": 143,
+    "sourceHi": 144,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 180,
+    "renderTime": 6.0,
+    "sourceLo": 144,
+    "sourceHi": 144,
+    "weight": 0
+  },
+  {
+    "renderFrame": 181,
+    "renderTime": 6.033333333333333,
+    "sourceLo": 144,
+    "sourceHi": 145,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 182,
+    "renderTime": 6.066666666666666,
+    "sourceLo": 145,
+    "sourceHi": 146,
+    "weight": 0.6000160025604033
+  },
+  {
+    "renderFrame": 183,
+    "renderTime": 6.1,
+    "sourceLo": 146,
+    "sourceHi": 147,
+    "weight": 0.40004799616029685
+  },
+  {
+    "renderFrame": 184,
+    "renderTime": 6.133333333333334,
+    "sourceLo": 147,
+    "sourceHi": 148,
+    "weight": 0.19998400127990815
+  },
+  {
+    "renderFrame": 185,
+    "renderTime": 6.166666666666667,
+    "sourceLo": 147,
+    "sourceHi": 148,
+    "weight": 0.9999200063994982
+  },
+  {
+    "renderFrame": 186,
+    "renderTime": 6.2,
+    "sourceLo": 148,
+    "sourceHi": 149,
+    "weight": 0.8000480076812314
+  },
+  {
+    "renderFrame": 187,
+    "renderTime": 6.233333333333333,
+    "sourceLo": 149,
+    "sourceHi": 150,
+    "weight": 0.600031997440205
+  },
+  {
+    "renderFrame": 188,
+    "renderTime": 6.266666666666667,
+    "sourceLo": 150,
+    "sourceHi": 151,
+    "weight": 0.39996800255979503
+  },
+  {
+    "renderFrame": 189,
+    "renderTime": 6.3,
+    "sourceLo": 151,
+    "sourceHi": 152,
+    "weight": 0.19995199231876856
+  },
+  {
+    "renderFrame": 190,
+    "renderTime": 6.333333333333333,
+    "sourceLo": 152,
+    "sourceHi": 153,
+    "weight": 7.999360050182606e-05
+  },
+  {
+    "renderFrame": 191,
+    "renderTime": 6.366666666666666,
+    "sourceLo": 152,
+    "sourceHi": 153,
+    "weight": 0.8000159987200919
+  },
+  {
+    "renderFrame": 192,
+    "renderTime": 6.4,
+    "sourceLo": 153,
+    "sourceHi": 154,
+    "weight": 0.5999520038397032
+  },
+  {
+    "renderFrame": 193,
+    "renderTime": 6.433333333333334,
+    "sourceLo": 154,
+    "sourceHi": 155,
+    "weight": 0.3999839974395966
+  },
+  {
+    "renderFrame": 194,
+    "renderTime": 6.466666666666667,
+    "sourceLo": 155,
+    "sourceHi": 156,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 195,
+    "renderTime": 6.5,
+    "sourceLo": 156,
+    "sourceHi": 156,
+    "weight": 0
+  },
+  {
+    "renderFrame": 196,
+    "renderTime": 6.533333333333333,
+    "sourceLo": 156,
+    "sourceHi": 157,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 197,
+    "renderTime": 6.566666666666666,
+    "sourceLo": 157,
+    "sourceHi": 158,
+    "weight": 0.6000160025604033
+  },
+  {
+    "renderFrame": 198,
+    "renderTime": 6.6,
+    "sourceLo": 158,
+    "sourceHi": 159,
+    "weight": 0.40004799616029685
+  },
+  {
+    "renderFrame": 199,
+    "renderTime": 6.633333333333334,
+    "sourceLo": 159,
+    "sourceHi": 160,
+    "weight": 0.19998400127990815
+  },
+  {
+    "renderFrame": 200,
+    "renderTime": 6.666666666666667,
+    "sourceLo": 159,
+    "sourceHi": 160,
+    "weight": 0.9999200063994982
+  },
+  {
+    "renderFrame": 201,
+    "renderTime": 6.7,
+    "sourceLo": 160,
+    "sourceHi": 161,
+    "weight": 0.8000480076812314
+  },
+  {
+    "renderFrame": 202,
+    "renderTime": 6.733333333333333,
+    "sourceLo": 161,
+    "sourceHi": 162,
+    "weight": 0.600031997440205
+  },
+  {
+    "renderFrame": 203,
+    "renderTime": 6.766666666666667,
+    "sourceLo": 162,
+    "sourceHi": 163,
+    "weight": 0.39996800255979503
+  },
+  {
+    "renderFrame": 204,
+    "renderTime": 6.8,
+    "sourceLo": 163,
+    "sourceHi": 164,
+    "weight": 0.19995199231876856
+  },
+  {
+    "renderFrame": 205,
+    "renderTime": 6.833333333333333,
+    "sourceLo": 164,
+    "sourceHi": 165,
+    "weight": 7.999360050182606e-05
+  },
+  {
+    "renderFrame": 206,
+    "renderTime": 6.866666666666666,
+    "sourceLo": 164,
+    "sourceHi": 165,
+    "weight": 0.8000159987200919
+  },
+  {
+    "renderFrame": 207,
+    "renderTime": 6.9,
+    "sourceLo": 165,
+    "sourceHi": 166,
+    "weight": 0.5999520038397032
+  },
+  {
+    "renderFrame": 208,
+    "renderTime": 6.933333333333334,
+    "sourceLo": 166,
+    "sourceHi": 167,
+    "weight": 0.3999839974395966
+  },
+  {
+    "renderFrame": 209,
+    "renderTime": 6.966666666666667,
+    "sourceLo": 167,
+    "sourceHi": 168,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 210,
+    "renderTime": 7.0,
+    "sourceLo": 168,
+    "sourceHi": 168,
+    "weight": 0
+  },
+  {
+    "renderFrame": 211,
+    "renderTime": 7.033333333333333,
+    "sourceLo": 168,
+    "sourceHi": 169,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 212,
+    "renderTime": 7.066666666666666,
+    "sourceLo": 169,
+    "sourceHi": 170,
+    "weight": 0.6000160025604033
+  },
+  {
+    "renderFrame": 213,
+    "renderTime": 7.1,
+    "sourceLo": 170,
+    "sourceHi": 171,
+    "weight": 0.40004799616029685
+  },
+  {
+    "renderFrame": 214,
+    "renderTime": 7.133333333333334,
+    "sourceLo": 171,
+    "sourceHi": 172,
+    "weight": 0.19998400127990815
+  },
+  {
+    "renderFrame": 215,
+    "renderTime": 7.166666666666667,
+    "sourceLo": 171,
+    "sourceHi": 172,
+    "weight": 0.9999200063994982
+  },
+  {
+    "renderFrame": 216,
+    "renderTime": 7.2,
+    "sourceLo": 172,
+    "sourceHi": 173,
+    "weight": 0.8000480076812314
+  },
+  {
+    "renderFrame": 217,
+    "renderTime": 7.233333333333333,
+    "sourceLo": 173,
+    "sourceHi": 174,
+    "weight": 0.600031997440205
+  },
+  {
+    "renderFrame": 218,
+    "renderTime": 7.266666666666667,
+    "sourceLo": 174,
+    "sourceHi": 175,
+    "weight": 0.39996800255979503
+  },
+  {
+    "renderFrame": 219,
+    "renderTime": 7.3,
+    "sourceLo": 175,
+    "sourceHi": 176,
+    "weight": 0.19995199231876856
+  },
+  {
+    "renderFrame": 220,
+    "renderTime": 7.333333333333333,
+    "sourceLo": 176,
+    "sourceHi": 177,
+    "weight": 7.999360050182606e-05
+  },
+  {
+    "renderFrame": 221,
+    "renderTime": 7.366666666666666,
+    "sourceLo": 176,
+    "sourceHi": 177,
+    "weight": 0.8000159987200919
+  },
+  {
+    "renderFrame": 222,
+    "renderTime": 7.4,
+    "sourceLo": 177,
+    "sourceHi": 178,
+    "weight": 0.5999520038397032
+  },
+  {
+    "renderFrame": 223,
+    "renderTime": 7.433333333333334,
+    "sourceLo": 178,
+    "sourceHi": 179,
+    "weight": 0.3999839974395966
+  },
+  {
+    "renderFrame": 224,
+    "renderTime": 7.466666666666667,
+    "sourceLo": 179,
+    "sourceHi": 180,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 225,
+    "renderTime": 7.5,
+    "sourceLo": 180,
+    "sourceHi": 180,
+    "weight": 0
+  },
+  {
+    "renderFrame": 226,
+    "renderTime": 7.533333333333333,
+    "sourceLo": 180,
+    "sourceHi": 181,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 227,
+    "renderTime": 7.566666666666666,
+    "sourceLo": 181,
+    "sourceHi": 182,
+    "weight": 0.6000160025604033
+  },
+  {
+    "renderFrame": 228,
+    "renderTime": 7.6,
+    "sourceLo": 182,
+    "sourceHi": 183,
+    "weight": 0.40004799616029685
+  },
+  {
+    "renderFrame": 229,
+    "renderTime": 7.633333333333334,
+    "sourceLo": 183,
+    "sourceHi": 184,
+    "weight": 0.19998400127990815
+  },
+  {
+    "renderFrame": 230,
+    "renderTime": 7.666666666666667,
+    "sourceLo": 183,
+    "sourceHi": 184,
+    "weight": 0.9999200063994982
+  },
+  {
+    "renderFrame": 231,
+    "renderTime": 7.7,
+    "sourceLo": 184,
+    "sourceHi": 185,
+    "weight": 0.8000480076812314
+  },
+  {
+    "renderFrame": 232,
+    "renderTime": 7.733333333333333,
+    "sourceLo": 185,
+    "sourceHi": 186,
+    "weight": 0.600031997440205
+  },
+  {
+    "renderFrame": 233,
+    "renderTime": 7.766666666666667,
+    "sourceLo": 186,
+    "sourceHi": 187,
+    "weight": 0.39996800255979503
+  },
+  {
+    "renderFrame": 234,
+    "renderTime": 7.8,
+    "sourceLo": 187,
+    "sourceHi": 188,
+    "weight": 0.19995199231876856
+  },
+  {
+    "renderFrame": 235,
+    "renderTime": 7.833333333333333,
+    "sourceLo": 188,
+    "sourceHi": 189,
+    "weight": 7.999360050182606e-05
+  },
+  {
+    "renderFrame": 236,
+    "renderTime": 7.866666666666666,
+    "sourceLo": 188,
+    "sourceHi": 189,
+    "weight": 0.8000159987200919
+  },
+  {
+    "renderFrame": 237,
+    "renderTime": 7.9,
+    "sourceLo": 189,
+    "sourceHi": 190,
+    "weight": 0.5999520038397032
+  },
+  {
+    "renderFrame": 238,
+    "renderTime": 7.933333333333334,
+    "sourceLo": 190,
+    "sourceHi": 191,
+    "weight": 0.3999839974395966
+  },
+  {
+    "renderFrame": 239,
+    "renderTime": 7.966666666666667,
+    "sourceLo": 191,
+    "sourceHi": 192,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 240,
+    "renderTime": 8.0,
+    "sourceLo": 192,
+    "sourceHi": 192,
+    "weight": 0
+  },
+  {
+    "renderFrame": 241,
+    "renderTime": 8.033333333333333,
+    "sourceLo": 192,
+    "sourceHi": 193,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 242,
+    "renderTime": 8.066666666666666,
+    "sourceLo": 193,
+    "sourceHi": 194,
+    "weight": 0.6000160025604033
+  },
+  {
+    "renderFrame": 243,
+    "renderTime": 8.1,
+    "sourceLo": 194,
+    "sourceHi": 195,
+    "weight": 0.40004799616029685
+  },
+  {
+    "renderFrame": 244,
+    "renderTime": 8.133333333333333,
+    "sourceLo": 195,
+    "sourceHi": 196,
+    "weight": 0.19998400127988686
+  },
+  {
+    "renderFrame": 245,
+    "renderTime": 8.166666666666666,
+    "sourceLo": 195,
+    "sourceHi": 196,
+    "weight": 0.9999200063994769
+  },
+  {
+    "renderFrame": 246,
+    "renderTime": 8.2,
+    "sourceLo": 196,
+    "sourceHi": 197,
+    "weight": 0.8000480076812101
+  },
+  {
+    "renderFrame": 247,
+    "renderTime": 8.233333333333333,
+    "sourceLo": 197,
+    "sourceHi": 198,
+    "weight": 0.6000319974401837
+  },
+  {
+    "renderFrame": 248,
+    "renderTime": 8.266666666666667,
+    "sourceLo": 198,
+    "sourceHi": 199,
+    "weight": 0.3999680025598163
+  },
+  {
+    "renderFrame": 249,
+    "renderTime": 8.3,
+    "sourceLo": 199,
+    "sourceHi": 200,
+    "weight": 0.19995199231878988
+  },
+  {
+    "renderFrame": 250,
+    "renderTime": 8.333333333333334,
+    "sourceLo": 200,
+    "sourceHi": 201,
+    "weight": 7.999360052314063e-05
+  },
+  {
+    "renderFrame": 251,
+    "renderTime": 8.366666666666667,
+    "sourceLo": 200,
+    "sourceHi": 201,
+    "weight": 0.8000159987201132
+  },
+  {
+    "renderFrame": 252,
+    "renderTime": 8.4,
+    "sourceLo": 201,
+    "sourceHi": 202,
+    "weight": 0.5999520038397032
+  },
+  {
+    "renderFrame": 253,
+    "renderTime": 8.433333333333334,
+    "sourceLo": 202,
+    "sourceHi": 203,
+    "weight": 0.3999839974395966
+  },
+  {
+    "renderFrame": 254,
+    "renderTime": 8.466666666666667,
+    "sourceLo": 203,
+    "sourceHi": 204,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 255,
+    "renderTime": 8.5,
+    "sourceLo": 204,
+    "sourceHi": 204,
+    "weight": 0
+  },
+  {
+    "renderFrame": 256,
+    "renderTime": 8.533333333333333,
+    "sourceLo": 204,
+    "sourceHi": 205,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 257,
+    "renderTime": 8.566666666666666,
+    "sourceLo": 205,
+    "sourceHi": 206,
+    "weight": 0.6000160025604033
+  },
+  {
+    "renderFrame": 258,
+    "renderTime": 8.6,
+    "sourceLo": 206,
+    "sourceHi": 207,
+    "weight": 0.40004799616029685
+  },
+  {
+    "renderFrame": 259,
+    "renderTime": 8.633333333333333,
+    "sourceLo": 207,
+    "sourceHi": 208,
+    "weight": 0.19998400127988686
+  },
+  {
+    "renderFrame": 260,
+    "renderTime": 8.666666666666666,
+    "sourceLo": 207,
+    "sourceHi": 208,
+    "weight": 0.9999200063994769
+  },
+  {
+    "renderFrame": 261,
+    "renderTime": 8.7,
+    "sourceLo": 208,
+    "sourceHi": 209,
+    "weight": 0.8000480076812101
+  },
+  {
+    "renderFrame": 262,
+    "renderTime": 8.733333333333333,
+    "sourceLo": 209,
+    "sourceHi": 210,
+    "weight": 0.6000319974401837
+  },
+  {
+    "renderFrame": 263,
+    "renderTime": 8.766666666666667,
+    "sourceLo": 210,
+    "sourceHi": 211,
+    "weight": 0.3999680025598163
+  },
+  {
+    "renderFrame": 264,
+    "renderTime": 8.8,
+    "sourceLo": 211,
+    "sourceHi": 212,
+    "weight": 0.19995199231878988
+  },
+  {
+    "renderFrame": 265,
+    "renderTime": 8.833333333333334,
+    "sourceLo": 212,
+    "sourceHi": 213,
+    "weight": 7.999360052314063e-05
+  },
+  {
+    "renderFrame": 266,
+    "renderTime": 8.866666666666667,
+    "sourceLo": 212,
+    "sourceHi": 213,
+    "weight": 0.8000159987201132
+  },
+  {
+    "renderFrame": 267,
+    "renderTime": 8.9,
+    "sourceLo": 213,
+    "sourceHi": 214,
+    "weight": 0.5999520038397032
+  },
+  {
+    "renderFrame": 268,
+    "renderTime": 8.933333333333334,
+    "sourceLo": 214,
+    "sourceHi": 215,
+    "weight": 0.3999839974395966
+  },
+  {
+    "renderFrame": 269,
+    "renderTime": 8.966666666666667,
+    "sourceLo": 215,
+    "sourceHi": 216,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 270,
+    "renderTime": 9.0,
+    "sourceLo": 216,
+    "sourceHi": 216,
+    "weight": 0
+  },
+  {
+    "renderFrame": 271,
+    "renderTime": 9.033333333333333,
+    "sourceLo": 216,
+    "sourceHi": 217,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 272,
+    "renderTime": 9.066666666666666,
+    "sourceLo": 217,
+    "sourceHi": 218,
+    "weight": 0.6000160025604033
+  },
+  {
+    "renderFrame": 273,
+    "renderTime": 9.1,
+    "sourceLo": 218,
+    "sourceHi": 219,
+    "weight": 0.40004799616029685
+  },
+  {
+    "renderFrame": 274,
+    "renderTime": 9.133333333333333,
+    "sourceLo": 219,
+    "sourceHi": 220,
+    "weight": 0.19998400127988686
+  },
+  {
+    "renderFrame": 275,
+    "renderTime": 9.166666666666666,
+    "sourceLo": 219,
+    "sourceHi": 220,
+    "weight": 0.9999200063994769
+  },
+  {
+    "renderFrame": 276,
+    "renderTime": 9.2,
+    "sourceLo": 220,
+    "sourceHi": 221,
+    "weight": 0.8000480076812101
+  },
+  {
+    "renderFrame": 277,
+    "renderTime": 9.233333333333333,
+    "sourceLo": 221,
+    "sourceHi": 222,
+    "weight": 0.6000319974401837
+  },
+  {
+    "renderFrame": 278,
+    "renderTime": 9.266666666666667,
+    "sourceLo": 222,
+    "sourceHi": 223,
+    "weight": 0.3999680025598163
+  },
+  {
+    "renderFrame": 279,
+    "renderTime": 9.3,
+    "sourceLo": 223,
+    "sourceHi": 224,
+    "weight": 0.19995199231878988
+  },
+  {
+    "renderFrame": 280,
+    "renderTime": 9.333333333333334,
+    "sourceLo": 224,
+    "sourceHi": 225,
+    "weight": 7.999360052314063e-05
+  },
+  {
+    "renderFrame": 281,
+    "renderTime": 9.366666666666667,
+    "sourceLo": 224,
+    "sourceHi": 225,
+    "weight": 0.8000159987201132
+  },
+  {
+    "renderFrame": 282,
+    "renderTime": 9.4,
+    "sourceLo": 225,
+    "sourceHi": 226,
+    "weight": 0.5999520038397032
+  },
+  {
+    "renderFrame": 283,
+    "renderTime": 9.433333333333334,
+    "sourceLo": 226,
+    "sourceHi": 227,
+    "weight": 0.3999839974395966
+  },
+  {
+    "renderFrame": 284,
+    "renderTime": 9.466666666666667,
+    "sourceLo": 227,
+    "sourceHi": 228,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 285,
+    "renderTime": 9.5,
+    "sourceLo": 228,
+    "sourceHi": 228,
+    "weight": 0
+  },
+  {
+    "renderFrame": 286,
+    "renderTime": 9.533333333333333,
+    "sourceLo": 228,
+    "sourceHi": 229,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 287,
+    "renderTime": 9.566666666666666,
+    "sourceLo": 229,
+    "sourceHi": 230,
+    "weight": 0.6000160025604033
+  },
+  {
+    "renderFrame": 288,
+    "renderTime": 9.6,
+    "sourceLo": 230,
+    "sourceHi": 231,
+    "weight": 0.40004799616029685
+  },
+  {
+    "renderFrame": 289,
+    "renderTime": 9.633333333333333,
+    "sourceLo": 231,
+    "sourceHi": 232,
+    "weight": 0.19998400127988686
+  },
+  {
+    "renderFrame": 290,
+    "renderTime": 9.666666666666666,
+    "sourceLo": 231,
+    "sourceHi": 232,
+    "weight": 0.9999200063994769
+  },
+  {
+    "renderFrame": 291,
+    "renderTime": 9.7,
+    "sourceLo": 232,
+    "sourceHi": 233,
+    "weight": 0.8000480076812101
+  },
+  {
+    "renderFrame": 292,
+    "renderTime": 9.733333333333333,
+    "sourceLo": 233,
+    "sourceHi": 234,
+    "weight": 0.6000319974401837
+  },
+  {
+    "renderFrame": 293,
+    "renderTime": 9.766666666666667,
+    "sourceLo": 234,
+    "sourceHi": 235,
+    "weight": 0.3999680025598163
+  },
+  {
+    "renderFrame": 294,
+    "renderTime": 9.8,
+    "sourceLo": 235,
+    "sourceHi": 236,
+    "weight": 0.19995199231878988
+  },
+  {
+    "renderFrame": 295,
+    "renderTime": 9.833333333333334,
+    "sourceLo": 236,
+    "sourceHi": 237,
+    "weight": 7.999360052314063e-05
+  },
+  {
+    "renderFrame": 296,
+    "renderTime": 9.866666666666667,
+    "sourceLo": 236,
+    "sourceHi": 237,
+    "weight": 0.8000159987201132
+  },
+  {
+    "renderFrame": 297,
+    "renderTime": 9.9,
+    "sourceLo": 237,
+    "sourceHi": 238,
+    "weight": 0.5999520038397032
+  },
+  {
+    "renderFrame": 298,
+    "renderTime": 9.933333333333334,
+    "sourceLo": 238,
+    "sourceHi": 239,
+    "weight": 0.3999839974395966
+  },
+  {
+    "renderFrame": 299,
+    "renderTime": 9.966666666666667,
+    "sourceLo": 239,
+    "sourceHi": 240,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 300,
+    "renderTime": 10.0,
+    "sourceLo": 240,
+    "sourceHi": 240,
+    "weight": 0
+  },
+  {
+    "renderFrame": 301,
+    "renderTime": 10.033333333333333,
+    "sourceLo": 240,
+    "sourceHi": 241,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 302,
+    "renderTime": 10.066666666666666,
+    "sourceLo": 241,
+    "sourceHi": 242,
+    "weight": 0.6000160025604033
+  },
+  {
+    "renderFrame": 303,
+    "renderTime": 10.1,
+    "sourceLo": 242,
+    "sourceHi": 243,
+    "weight": 0.40004799616029685
+  },
+  {
+    "renderFrame": 304,
+    "renderTime": 10.133333333333333,
+    "sourceLo": 243,
+    "sourceHi": 244,
+    "weight": 0.19998400127988686
+  },
+  {
+    "renderFrame": 305,
+    "renderTime": 10.166666666666666,
+    "sourceLo": 243,
+    "sourceHi": 244,
+    "weight": 0.9999200063994769
+  },
+  {
+    "renderFrame": 306,
+    "renderTime": 10.2,
+    "sourceLo": 244,
+    "sourceHi": 245,
+    "weight": 0.8000480076812101
+  },
+  {
+    "renderFrame": 307,
+    "renderTime": 10.233333333333333,
+    "sourceLo": 245,
+    "sourceHi": 246,
+    "weight": 0.6000319974401837
+  },
+  {
+    "renderFrame": 308,
+    "renderTime": 10.266666666666667,
+    "sourceLo": 246,
+    "sourceHi": 247,
+    "weight": 0.3999680025598163
+  },
+  {
+    "renderFrame": 309,
+    "renderTime": 10.3,
+    "sourceLo": 247,
+    "sourceHi": 248,
+    "weight": 0.19995199231878988
+  },
+  {
+    "renderFrame": 310,
+    "renderTime": 10.333333333333334,
+    "sourceLo": 248,
+    "sourceHi": 249,
+    "weight": 7.999360052314063e-05
+  },
+  {
+    "renderFrame": 311,
+    "renderTime": 10.366666666666667,
+    "sourceLo": 248,
+    "sourceHi": 249,
+    "weight": 0.8000159987201132
+  },
+  {
+    "renderFrame": 312,
+    "renderTime": 10.4,
+    "sourceLo": 249,
+    "sourceHi": 250,
+    "weight": 0.5999520038397032
+  },
+  {
+    "renderFrame": 313,
+    "renderTime": 10.433333333333334,
+    "sourceLo": 250,
+    "sourceHi": 251,
+    "weight": 0.3999839974395966
+  },
+  {
+    "renderFrame": 314,
+    "renderTime": 10.466666666666667,
+    "sourceLo": 251,
+    "sourceHi": 252,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 315,
+    "renderTime": 10.5,
+    "sourceLo": 252,
+    "sourceHi": 252,
+    "weight": 0
+  },
+  {
+    "renderFrame": 316,
+    "renderTime": 10.533333333333333,
+    "sourceLo": 252,
+    "sourceHi": 253,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 317,
+    "renderTime": 10.566666666666666,
+    "sourceLo": 253,
+    "sourceHi": 254,
+    "weight": 0.6000160025604033
+  },
+  {
+    "renderFrame": 318,
+    "renderTime": 10.6,
+    "sourceLo": 254,
+    "sourceHi": 255,
+    "weight": 0.40004799616029685
+  },
+  {
+    "renderFrame": 319,
+    "renderTime": 10.633333333333333,
+    "sourceLo": 255,
+    "sourceHi": 256,
+    "weight": 0.19998400127988686
+  },
+  {
+    "renderFrame": 320,
+    "renderTime": 10.666666666666666,
+    "sourceLo": 255,
+    "sourceHi": 256,
+    "weight": 0.9999200063994769
+  },
+  {
+    "renderFrame": 321,
+    "renderTime": 10.7,
+    "sourceLo": 256,
+    "sourceHi": 257,
+    "weight": 0.8000480076812101
+  },
+  {
+    "renderFrame": 322,
+    "renderTime": 10.733333333333333,
+    "sourceLo": 257,
+    "sourceHi": 258,
+    "weight": 0.6000319974401837
+  },
+  {
+    "renderFrame": 323,
+    "renderTime": 10.766666666666667,
+    "sourceLo": 258,
+    "sourceHi": 259,
+    "weight": 0.3999680025598163
+  },
+  {
+    "renderFrame": 324,
+    "renderTime": 10.8,
+    "sourceLo": 259,
+    "sourceHi": 260,
+    "weight": 0.19995199231878988
+  },
+  {
+    "renderFrame": 325,
+    "renderTime": 10.833333333333334,
+    "sourceLo": 260,
+    "sourceHi": 261,
+    "weight": 7.999360052314063e-05
+  },
+  {
+    "renderFrame": 326,
+    "renderTime": 10.866666666666667,
+    "sourceLo": 260,
+    "sourceHi": 261,
+    "weight": 0.8000159987201132
+  },
+  {
+    "renderFrame": 327,
+    "renderTime": 10.9,
+    "sourceLo": 261,
+    "sourceHi": 262,
+    "weight": 0.5999520038397032
+  },
+  {
+    "renderFrame": 328,
+    "renderTime": 10.933333333333334,
+    "sourceLo": 262,
+    "sourceHi": 263,
+    "weight": 0.3999839974395966
+  },
+  {
+    "renderFrame": 329,
+    "renderTime": 10.966666666666667,
+    "sourceLo": 263,
+    "sourceHi": 264,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 330,
+    "renderTime": 11.0,
+    "sourceLo": 264,
+    "sourceHi": 264,
+    "weight": 0
+  },
+  {
+    "renderFrame": 331,
+    "renderTime": 11.033333333333333,
+    "sourceLo": 264,
+    "sourceHi": 265,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 332,
+    "renderTime": 11.066666666666666,
+    "sourceLo": 265,
+    "sourceHi": 266,
+    "weight": 0.6000160025604033
+  },
+  {
+    "renderFrame": 333,
+    "renderTime": 11.1,
+    "sourceLo": 266,
+    "sourceHi": 267,
+    "weight": 0.40004799616029685
+  },
+  {
+    "renderFrame": 334,
+    "renderTime": 11.133333333333333,
+    "sourceLo": 267,
+    "sourceHi": 268,
+    "weight": 0.19998400127988686
+  },
+  {
+    "renderFrame": 335,
+    "renderTime": 11.166666666666666,
+    "sourceLo": 267,
+    "sourceHi": 268,
+    "weight": 0.9999200063994769
+  },
+  {
+    "renderFrame": 336,
+    "renderTime": 11.2,
+    "sourceLo": 268,
+    "sourceHi": 269,
+    "weight": 0.8000480076812101
+  },
+  {
+    "renderFrame": 337,
+    "renderTime": 11.233333333333333,
+    "sourceLo": 269,
+    "sourceHi": 270,
+    "weight": 0.6000319974401837
+  },
+  {
+    "renderFrame": 338,
+    "renderTime": 11.266666666666667,
+    "sourceLo": 270,
+    "sourceHi": 271,
+    "weight": 0.3999680025598163
+  },
+  {
+    "renderFrame": 339,
+    "renderTime": 11.3,
+    "sourceLo": 271,
+    "sourceHi": 272,
+    "weight": 0.19995199231878988
+  },
+  {
+    "renderFrame": 340,
+    "renderTime": 11.333333333333334,
+    "sourceLo": 272,
+    "sourceHi": 273,
+    "weight": 7.999360052314063e-05
+  },
+  {
+    "renderFrame": 341,
+    "renderTime": 11.366666666666667,
+    "sourceLo": 272,
+    "sourceHi": 273,
+    "weight": 0.8000159987201132
+  },
+  {
+    "renderFrame": 342,
+    "renderTime": 11.4,
+    "sourceLo": 273,
+    "sourceHi": 274,
+    "weight": 0.5999520038397032
+  },
+  {
+    "renderFrame": 343,
+    "renderTime": 11.433333333333334,
+    "sourceLo": 274,
+    "sourceHi": 275,
+    "weight": 0.3999839974395966
+  },
+  {
+    "renderFrame": 344,
+    "renderTime": 11.466666666666667,
+    "sourceLo": 275,
+    "sourceHi": 276,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 345,
+    "renderTime": 11.5,
+    "sourceLo": 276,
+    "sourceHi": 276,
+    "weight": 0
+  },
+  {
+    "renderFrame": 346,
+    "renderTime": 11.533333333333333,
+    "sourceLo": 276,
+    "sourceHi": 277,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 347,
+    "renderTime": 11.566666666666666,
+    "sourceLo": 277,
+    "sourceHi": 278,
+    "weight": 0.6000160025604033
+  },
+  {
+    "renderFrame": 348,
+    "renderTime": 11.6,
+    "sourceLo": 278,
+    "sourceHi": 279,
+    "weight": 0.40004799616029685
+  },
+  {
+    "renderFrame": 349,
+    "renderTime": 11.633333333333333,
+    "sourceLo": 279,
+    "sourceHi": 280,
+    "weight": 0.19998400127988686
+  },
+  {
+    "renderFrame": 350,
+    "renderTime": 11.666666666666666,
+    "sourceLo": 279,
+    "sourceHi": 280,
+    "weight": 0.9999200063994769
+  },
+  {
+    "renderFrame": 351,
+    "renderTime": 11.7,
+    "sourceLo": 280,
+    "sourceHi": 281,
+    "weight": 0.8000480076812101
+  },
+  {
+    "renderFrame": 352,
+    "renderTime": 11.733333333333333,
+    "sourceLo": 281,
+    "sourceHi": 282,
+    "weight": 0.6000319974401837
+  },
+  {
+    "renderFrame": 353,
+    "renderTime": 11.766666666666667,
+    "sourceLo": 282,
+    "sourceHi": 283,
+    "weight": 0.3999680025598163
+  },
+  {
+    "renderFrame": 354,
+    "renderTime": 11.8,
+    "sourceLo": 283,
+    "sourceHi": 284,
+    "weight": 0.19995199231878988
+  },
+  {
+    "renderFrame": 355,
+    "renderTime": 11.833333333333334,
+    "sourceLo": 284,
+    "sourceHi": 285,
+    "weight": 7.999360052314063e-05
+  },
+  {
+    "renderFrame": 356,
+    "renderTime": 11.866666666666667,
+    "sourceLo": 284,
+    "sourceHi": 285,
+    "weight": 0.8000159987201132
+  },
+  {
+    "renderFrame": 357,
+    "renderTime": 11.9,
+    "sourceLo": 285,
+    "sourceHi": 286,
+    "weight": 0.5999520038397032
+  },
+  {
+    "renderFrame": 358,
+    "renderTime": 11.933333333333334,
+    "sourceLo": 286,
+    "sourceHi": 287,
+    "weight": 0.3999839974395966
+  },
+  {
+    "renderFrame": 359,
+    "renderTime": 11.966666666666667,
+    "sourceLo": 287,
+    "sourceHi": 288,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 360,
+    "renderTime": 12.0,
+    "sourceLo": 288,
+    "sourceHi": 288,
+    "weight": 0
+  },
+  {
+    "renderFrame": 361,
+    "renderTime": 12.033333333333333,
+    "sourceLo": 288,
+    "sourceHi": 289,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 362,
+    "renderTime": 12.066666666666666,
+    "sourceLo": 289,
+    "sourceHi": 290,
+    "weight": 0.6000160025604033
+  },
+  {
+    "renderFrame": 363,
+    "renderTime": 12.1,
+    "sourceLo": 290,
+    "sourceHi": 291,
+    "weight": 0.40004799616029685
+  },
+  {
+    "renderFrame": 364,
+    "renderTime": 12.133333333333333,
+    "sourceLo": 291,
+    "sourceHi": 292,
+    "weight": 0.19998400127988686
+  },
+  {
+    "renderFrame": 365,
+    "renderTime": 12.166666666666666,
+    "sourceLo": 291,
+    "sourceHi": 292,
+    "weight": 0.9999200063994769
+  },
+  {
+    "renderFrame": 366,
+    "renderTime": 12.2,
+    "sourceLo": 292,
+    "sourceHi": 293,
+    "weight": 0.8000480076812101
+  },
+  {
+    "renderFrame": 367,
+    "renderTime": 12.233333333333333,
+    "sourceLo": 293,
+    "sourceHi": 294,
+    "weight": 0.6000319974401837
+  },
+  {
+    "renderFrame": 368,
+    "renderTime": 12.266666666666667,
+    "sourceLo": 294,
+    "sourceHi": 295,
+    "weight": 0.3999680025598163
+  },
+  {
+    "renderFrame": 369,
+    "renderTime": 12.3,
+    "sourceLo": 295,
+    "sourceHi": 296,
+    "weight": 0.19995199231878988
+  },
+  {
+    "renderFrame": 370,
+    "renderTime": 12.333333333333334,
+    "sourceLo": 296,
+    "sourceHi": 297,
+    "weight": 7.999360052314063e-05
+  },
+  {
+    "renderFrame": 371,
+    "renderTime": 12.366666666666667,
+    "sourceLo": 296,
+    "sourceHi": 297,
+    "weight": 0.8000159987201132
+  },
+  {
+    "renderFrame": 372,
+    "renderTime": 12.4,
+    "sourceLo": 297,
+    "sourceHi": 298,
+    "weight": 0.5999520038397032
+  },
+  {
+    "renderFrame": 373,
+    "renderTime": 12.433333333333334,
+    "sourceLo": 298,
+    "sourceHi": 299,
+    "weight": 0.3999839974395966
+  },
+  {
+    "renderFrame": 374,
+    "renderTime": 12.466666666666667,
+    "sourceLo": 299,
+    "sourceHi": 300,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 375,
+    "renderTime": 12.5,
+    "sourceLo": 300,
+    "sourceHi": 300,
+    "weight": 0
+  },
+  {
+    "renderFrame": 376,
+    "renderTime": 12.533333333333333,
+    "sourceLo": 300,
+    "sourceHi": 301,
+    "weight": 0.7999360051195901
+  },
+  {
+    "renderFrame": 377,
+    "renderTime": 12.566666666666666,
+    "sourceLo": 301,
+    "sourceHi": 302,
+    "weight": 0.6000160025604033
+  },
+  {
+    "renderFrame": 378,
+    "renderTime": 12.6,
+    "sourceLo": 302,
+    "sourceHi": 303,
+    "weight": 0.40004799616029685
+  },
+  {
+    "renderFrame": 379,
+    "renderTime": 12.633333333333333,
+    "sourceLo": 303,
+    "sourceHi": 304,
+    "weight": 0.19998400127988686
+  },
+  {
+    "renderFrame": 380,
+    "renderTime": 12.666666666666666,
+    "sourceLo": 303,
+    "sourceHi": 304,
+    "weight": 0.9999200063994769
+  },
+  {
+    "renderFrame": 381,
+    "renderTime": 12.7,
+    "sourceLo": 304,
+    "sourceHi": 305,
+    "weight": 0.8000480076812101
+  },
+  {
+    "renderFrame": 382,
+    "renderTime": 12.733333333333333,
+    "sourceLo": 305,
+    "sourceHi": 306,
+    "weight": 0.6000319974401837
+  },
+  {
+    "renderFrame": 383,
+    "renderTime": 12.766666666666667,
+    "sourceLo": 306,
+    "sourceHi": 307,
+    "weight": 0.3999680025598163
+  },
+  {
+    "renderFrame": 384,
+    "renderTime": 12.8,
+    "sourceLo": 307,
+    "sourceHi": 308,
+    "weight": 0.19995199231878988
+  },
+  {
+    "renderFrame": 385,
+    "renderTime": 12.833333333333334,
+    "sourceLo": 308,
+    "sourceHi": 309,
+    "weight": 7.999360052314063e-05
+  },
+  {
+    "renderFrame": 386,
+    "renderTime": 12.866666666666667,
+    "sourceLo": 308,
+    "sourceHi": 309,
+    "weight": 0.8000159987201132
+  },
+  {
+    "renderFrame": 387,
+    "renderTime": 12.9,
+    "sourceLo": 309,
+    "sourceHi": 310,
+    "weight": 0.5999520038397032
+  },
+  {
+    "renderFrame": 388,
+    "renderTime": 12.933333333333334,
+    "sourceLo": 310,
+    "sourceHi": 311,
+    "weight": 0.3999839974395966
+  },
+  {
+    "renderFrame": 389,
+    "renderTime": 12.966666666666667,
+    "sourceLo": 311,
+    "sourceHi": 312,
+    "weight": 0.20006399488041
+  },
+  {
+    "renderFrame": 390,
+    "renderTime": 13.0,
+    "sourceLo": 312,
+    "sourceHi": 312,
+    "weight": 0
+  }
+]

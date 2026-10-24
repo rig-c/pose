@@ -1,0 +1,1261 @@
+{
+  "repository": "rig-c/examples",
+  "commit": "f8d86e3045c267171180efd2ac47604511f9cb62",
+  "snapshotScope": "dancer/ only",
+  "files": [
+    {
+      "path": "dancer/.gitignore",
+      "bytes": 25,
+      "gitBlob": "0f5f902bc2053981cd6b6059f12c14ae1c5bf8c9",
+      "sha256": "16efb1aafab2d99d1dfee53e728010380484ce4c3ef3e5980bb1ba5f4aaa3533"
+    },
+    {
+      "path": "dancer/README.md",
+      "bytes": 13128,
+      "gitBlob": "a568fa79cff323aece713bff01e902729d0521f1",
+      "sha256": "4740c3709acf23594af59dec1b77bd6193a8c84b189544b56465824de1c82366"
+    },
+    {
+      "path": "dancer/accepted-dance/bun.lock",
+      "bytes": 1870,
+      "gitBlob": "29eb0160e490f45c2638eda56cf2e275bbc4947d",
+      "sha256": "06c5576d4acb9c9a265bce6eb4316ff2e220709e4945f3eb17031bba7c60f360"
+    },
+    {
+      "path": "dancer/accepted-dance/package.json",
+      "bytes": 250,
+      "gitBlob": "c80da0c589f2cf6d8ab8cab48eeb80691ccfcbff",
+      "sha256": "07cc68a5cb0919e864178109b6b709136e0af94aaecf5f123fab92199ef6d104"
+    },
+    {
+      "path": "dancer/accepted-dance/reproduction-evidence.json",
+      "bytes": 11085,
+      "gitBlob": "389cd05d0cfa6a12b2a3397f5d19f4fc52ffdee3",
+      "sha256": "cab44bb565b16ac530d86c4aa1b48a5e8d807e1a164dd918e86f42e234986808"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/README.md",
+      "bytes": 6156,
+      "gitBlob": "184262c8599ead064c68a620ae1f0951a97408b9",
+      "sha256": "4caf365a2a8b5a0bb7704662501a95c747a72802d293ddb2d42cf737208dbbee"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/accepted-render.json",
+      "bytes": 1332,
+      "gitBlob": "9e13d72d5c30ca8f9d777fae2ecc7fb08fe9516f",
+      "sha256": "55b49ab1f9f59d011e10f10ed7fb2c70ccfeaa9ec39db871d8dcaee4680a56c8"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/README.md",
+      "bytes": 4367,
+      "gitBlob": "99c5a2f99bbcaa091c7a577ef48f179f5a540382",
+      "sha256": "42552c740d7d6681f9d3c1c4c3a27c4fafffea0a5a207222d2d602d6d6af71c4"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/alts/seethrough_config.json",
+      "bytes": 19762,
+      "gitBlob": "910da35491174bcbbf31f1d67eb96e96fbe5b75e",
+      "sha256": "d8d603789d62facbd0d47b7594807ff0bb99cda0d9f1bada8a8e93d346457380"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/config.json",
+      "bytes": 1970,
+      "gitBlob": "00ecfe20e3c99cdaae00e95760e8991a4f614365",
+      "sha256": "78abcfebc915c17170836f9d2fe7948d04a6561deb35947fde7089469ddd5e1a"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys/config_H1m_hold_head.json",
+      "bytes": 2111,
+      "gitBlob": "356b54db8244221141ea70df9bb482ce877879ed",
+      "sha256": "ee323df49f8d209cac1af2380274f20935e2f13afbfa1ff9089b9ec6284db043"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys/config_H2z_hold_low.json",
+      "bytes": 2434,
+      "gitBlob": "63d004fa509774fbe739d9491f803cd275bd660c",
+      "sha256": "0850f022917ff29ff75bb3b13179c4bc4323e317552549aa7111cf9fe278d2bc"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys2/masks.py",
+      "bytes": 5573,
+      "gitBlob": "b85e51aefa612b380bf6b3df3162936b99b9f4ee",
+      "sha256": "d8582b6d1d85d9301fb9e24107ba841febfeee2045499484b988b9588a5c7573"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys3/H1_hold_head.json",
+      "bytes": 740,
+      "gitBlob": "9782dfdee263554a029ef6cd02e1b4f6a9502f2a",
+      "sha256": "30856bb3d777ae462553de9e15d71c2f991e7d1457fbcb9f61f4a5edaeab9f8c"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys3/H1m_hold_head.json",
+      "bytes": 740,
+      "gitBlob": "9782dfdee263554a029ef6cd02e1b4f6a9502f2a",
+      "sha256": "30856bb3d777ae462553de9e15d71c2f991e7d1457fbcb9f61f4a5edaeab9f8c"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys3/H2z_hold_low.json",
+      "bytes": 740,
+      "gitBlob": "d21a3e2f7cd7c74c1f8a1fdb218605351749e968",
+      "sha256": "89097b508fe7bcc66bc9fb3dcd10701a2381a80765cb885afc36b97ccd317099"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys3/inpaint2.py",
+      "bytes": 10887,
+      "gitBlob": "cbf81d4a3da0ce1c68ee2b4fcdd5c371ae098d1b",
+      "sha256": "d3bb0789c1bdaca2a350b581d19f73c9cc9d1b9bc0542f941af6664880564f5d"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys3/inpaint_H1_hold_head/prewarp.json",
+      "bytes": 253,
+      "gitBlob": "28d2e4c6f4f87a321a0e1bb2d9eaca87f557c94b",
+      "sha256": "04139a15bccc24ff2c6d8b536f023dc33fd4b5b3d742df74857ee42035544510"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys3/inpaint_H1_hold_head/warp_s1.json",
+      "bytes": 2579,
+      "gitBlob": "9490376dc5b924f63c32bd3f74f43e9759510a9e",
+      "sha256": "0b85478394294b12a05114d8cde4a52cf5ffd186e01a56067e6b35b3075e2b8c"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys3/inpaint_H1m_hold_head/prewarp.json",
+      "bytes": 253,
+      "gitBlob": "b68e344f702d0cc101e8c55610dfe2044a7bcf2b",
+      "sha256": "0ed3846753ce85e2f08140eb481118385265769dee4b0dd5866d0396de772c3e"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys3/inpaint_H1m_hold_head/warp_s62.json",
+      "bytes": 2783,
+      "gitBlob": "04b2281874b1094e9cd97f2f38b2cf0765caf975",
+      "sha256": "26831a4cc330b0c33103265eaedf3bd37278eb54229024b34ce174432b12eb2f"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys3/inpaint_H2z_hold_low/prewarp.json",
+      "bytes": 253,
+      "gitBlob": "b5199ae65164e068d4aefc37069c0d658b2106bb",
+      "sha256": "392c5a05ded1ee06ebd5792d5713cc172bb8671185730fbd760749133e45e377"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys3/inpaint_H2z_hold_low/warp_s53.json",
+      "bytes": 3059,
+      "gitBlob": "b2f1ee190267c1a06422204d3d0b5f35fa7c52e3",
+      "sha256": "d48d1798e21a244c18509fbc763f328b803c44f6ee023e5d4091c2c75323cf55"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys3/keys.json",
+      "bytes": 3346,
+      "gitBlob": "855fcfdbe5deb7be3979ef5775a804204888e6d0",
+      "sha256": "d3184854e846a49e7abe781944bb224bfa02d8dbe0bb81edbdefec66451004e5"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys3/masks.py",
+      "bytes": 5596,
+      "gitBlob": "a7f9f53ec30bf97b7d30accaa5f0f94134f367b3",
+      "sha256": "b30e93b5820346ba4758fb01cb07a747c566af758c2b813e06056284707cf73e"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys3/midriff_prep.py",
+      "bytes": 1822,
+      "gitBlob": "0e369d1ec6c2f65a9a6a09f756f1b1e3068d57bc",
+      "sha256": "b1b7c69f75abf978c0fe2dc137e6d6be63306c359b2606cd7e6310c506b09a9c"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys3/pieces/arms_hold_front_z0.json",
+      "bytes": 309,
+      "gitBlob": "8c801fed87eb85a860c623888d5bacbb0e646e1d",
+      "sha256": "41ade91fe116dc1bd09cbb1712bb2403c376304a77f08f5b4b9a67011de3d98a"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys3/pieces/arms_hold_head.json",
+      "bytes": 293,
+      "gitBlob": "c74ac6a5d36cda4e5a2649611f259606aa56ebad",
+      "sha256": "778efca8391574be46473c950b908aa5b259535e5f958ca3e05c282023686d0f"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys3/pieces/h1m_midriff.json",
+      "bytes": 140,
+      "gitBlob": "768a439604936e6899882616e9a8c474121d0443",
+      "sha256": "8fa2ce987dac762368476a7f85cba6e3cbbabff8e97c83c847d11b31bf73032d"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys3/prewarp.py",
+      "bytes": 18289,
+      "gitBlob": "94dff93d5944733ff8e8bbab3636c392c7da8d60",
+      "sha256": "d1bcf8c9211dfa54b20d3eb41303f653512d44a58d51bcef04fce54007f6633a"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys3/run_seethrough.sh",
+      "bytes": 1085,
+      "gitBlob": "829b8f9b03f086c19d78d9461d49e8464af1634f",
+      "sha256": "498a0b5911e76a41d35288d957b46061a2ff7ca48af5b06d219a6c4396788a9c"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys3/set_H1_hold_head/layers_full/meta.json",
+      "bytes": 961,
+      "gitBlob": "93a2dadc7943a96d0dafe5100e96dac68163fe80",
+      "sha256": "6b6559e8083dede2f33a4fe62e9849032a423806eff2da5a50f221e6761d4db8"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys3/set_H1m_hold_head/layers_full/meta.json",
+      "bytes": 963,
+      "gitBlob": "6eefc0873727c70232ec2e0515fc6b2f75784174",
+      "sha256": "df3f86e8ad4ea643bd47575051a40065969a430bee1fa75e1fd21b0e5036771b"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/keys3/set_H2z_hold_low/layers_full/meta.json",
+      "bytes": 961,
+      "gitBlob": "bc7298a644315aaf38cd967b081f9b99f7b2b2c7",
+      "sha256": "5a8eebcaca6c5ec649205e42a62198c79cda2f178e92416df081b8d71f534e9a"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/scripts/assemble_hold.py",
+      "bytes": 6309,
+      "gitBlob": "dddf885878d4ab159f3887ad7d0cf3b8a0506f53",
+      "sha256": "8a23f099157626ca1fb85128e9d3c59847a7274d322b6fc8de7ec69c53e30834"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/scripts/cut_jacket.py",
+      "bytes": 4160,
+      "gitBlob": "2c7b8fb7c98f1a7fc5b8a20a0d8fef880e9776fb",
+      "sha256": "24d8283c5cd3fa73148d02f337ed739c3f51c88001acad56752e137c8ff1d6e9"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/scripts/cut_piece.py",
+      "bytes": 4680,
+      "gitBlob": "e25be89d41dff44e6426cfcfe7c4e71271c0f09e",
+      "sha256": "ac304ae52547df2b17b03284093c4b28ff609d6c783278b9848a14b5d5ceb16b"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/scripts/v3_waist.py",
+      "bytes": 3533,
+      "gitBlob": "2808eb3cce83e8b0f8afeb35ba322dc139e92616",
+      "sha256": "d0b7c840f9caeac3ebf38713fa9a8472191ccd7ae2f30cb8bb935b1810c4694b"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/generation/source-files.json",
+      "bytes": 66367,
+      "gitBlob": "dcec321ad7ac2f9b4f1b1daf7c86d424dceb11a5",
+      "sha256": "158e01f403cc5420988ab8fa470b0615720902cd6a17b2080d24733660831ac7"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/motion.json",
+      "bytes": 1109631,
+      "gitBlob": "58c9cc03af7343e0f1c39c678c3cacba95a963d5",
+      "sha256": "46189464040b3ef8b42357399e1c8b0c1c4cbf6feedeabb24927eb09242f5aa7"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/reproduction-evidence.json",
+      "bytes": 65342,
+      "gitBlob": "b878e81cab1897151398c0779d8cceab085c6236",
+      "sha256": "9f12a75ebd757cf73d393a33267882618c7adad5216fd8ef6836dd517569aaa5"
+    },
+    {
+      "path": "dancer/accepted-dance/v3/rig.json",
+      "bytes": 1490283,
+      "gitBlob": "b2716752700cb1d4c1a5a594f5dc4d864ca9fc80",
+      "sha256": "a1860937f20890818a206a2b15318eaf2bf9e253d58584976b8aa9697f73e135"
+    },
+    {
+      "path": "dancer/accepted-dance/viewport.json",
+      "bytes": 635,
+      "gitBlob": "40cb5cad79d7d90f83ce5318003c4bb78e2884cc",
+      "sha256": "8a0f07c4304419d64125314d773b3b0f62bacdd0229a40cc0cbdffa57545a13c"
+    },
+    {
+      "path": "dancer/accepted/images/K0_forearm_l.png",
+      "bytes": 23240,
+      "gitBlob": "dd3623aaa29a1536c8587c5637dab5e16175ce48",
+      "sha256": "bf59e9ef903dafbaa992c98bea30d4a270ccc9d59dd24392640a2707b933cfc6"
+    },
+    {
+      "path": "dancer/accepted/images/K0_forearm_r.png",
+      "bytes": 23949,
+      "gitBlob": "a90538b840fb72d9a9489bc83954075e12775429",
+      "sha256": "4e30b720d37a1262246adb4eba603dbc95e75b85fdcec3ff27a55de9ec3067f2"
+    },
+    {
+      "path": "dancer/accepted/images/K0_topwear.png",
+      "bytes": 51081,
+      "gitBlob": "e19b4cd15fa2162e346041f71aaaf2a0bb65188e",
+      "sha256": "b0ddc7b7c1c599e6c60c78b45a36f028759a45c694d41b49bae2a4a819ac8455"
+    },
+    {
+      "path": "dancer/accepted/images/K0_upperarm_l.png",
+      "bytes": 18196,
+      "gitBlob": "b7d8dfed69987d17f1496758b9c4df25363a1d85",
+      "sha256": "12caaf4633902cf181272e590cc9110d3f93f5fd4c7713e33a43d02be56333f2"
+    },
+    {
+      "path": "dancer/accepted/images/K0_upperarm_r.png",
+      "bytes": 18410,
+      "gitBlob": "b5add8b08eb43c0f9cbf55fcef530fbf117ae5d7",
+      "sha256": "fe26483c3ddd5d437010bdd7db5584146558fea1c14fe48b84572fa63900c9c8"
+    },
+    {
+      "path": "dancer/accepted/images/K1_forearm_l.png",
+      "bytes": 21140,
+      "gitBlob": "6f65efdbf6109b1618357ebdcf398d9f07341b9a",
+      "sha256": "5cb9b21987e1a29c0bfc4c0b27228ead46223cb9e67ca21e686b42036a515083"
+    },
+    {
+      "path": "dancer/accepted/images/K1_forearm_r.png",
+      "bytes": 23098,
+      "gitBlob": "b55e9e398c612d3d553b02871744a6524a4f50de",
+      "sha256": "450cef5ee675848c9023dd5d44eba481baf0042071162c5b2423cafed206fe4f"
+    },
+    {
+      "path": "dancer/accepted/images/K1_topwear.png",
+      "bytes": 49312,
+      "gitBlob": "37592f2fcaf2c329248a93e762a65b4a3016d574",
+      "sha256": "0b42c0bec9c31b35989c25eeba300b674371b172f58004269a46c8dc3583cea4"
+    },
+    {
+      "path": "dancer/accepted/images/K1_upperarm_l.png",
+      "bytes": 21634,
+      "gitBlob": "3d9699ff21907caa7f98effafe3fac10661df19f",
+      "sha256": "f6260bcc31d6d2904f51c089e32960bdcca3c8bd282eb0424635298df8cd0dd0"
+    },
+    {
+      "path": "dancer/accepted/images/K1_upperarm_r.png",
+      "bytes": 19867,
+      "gitBlob": "972f3cc53c1acbdeb6928d0296888129fe7851f5",
+      "sha256": "f4ce6d6206abd01fd01e5d4c89201b048727b8db646fa25acb36c17209806ebc"
+    },
+    {
+      "path": "dancer/accepted/images/K2_forearm_l.png",
+      "bytes": 23123,
+      "gitBlob": "024ede95aaa1e41e08bf4b3b3238d59fdb1bde4c",
+      "sha256": "ebb11068ba7960ae8b786b2cbf42c60ae0ae0c6753385ba35a10fed964e53729"
+    },
+    {
+      "path": "dancer/accepted/images/K2_forearm_r.png",
+      "bytes": 27288,
+      "gitBlob": "ae5b8f5ef8fffc2003d439285e649e8de44dbb85",
+      "sha256": "c98d28815ca00b0f90546cb092c592410cb86bd1cabc9e146447a5028b5789c5"
+    },
+    {
+      "path": "dancer/accepted/images/K2_topwear.png",
+      "bytes": 44807,
+      "gitBlob": "823941864b7696e7a5e99399b9cc39cdc477c920",
+      "sha256": "8a8efeedf08c763f111982fff3e391b70c08cf23fd968d319c2913e1be1c1538"
+    },
+    {
+      "path": "dancer/accepted/images/K2_upperarm_l.png",
+      "bytes": 10303,
+      "gitBlob": "b9f563eb54411521c9e602487059d2cd2578cdaf",
+      "sha256": "ac18bb76e8318c5635ed187bd80683759ec14a7ce6f9955dbfbe06a79bffc0c2"
+    },
+    {
+      "path": "dancer/accepted/images/K2_upperarm_r.png",
+      "bytes": 18554,
+      "gitBlob": "871af479c9832bc8a435ebec426b6aaec56ec6f6",
+      "sha256": "26adfd742a039efcc0255d2b87c2e3ca0fe2cce3b47a5a789567d4fc9ef8a4e9"
+    },
+    {
+      "path": "dancer/accepted/images/K3_forearm_l.png",
+      "bytes": 26238,
+      "gitBlob": "771f10803ae8843b93cafd5a1d0f8b04d7208f12",
+      "sha256": "39be37a2d78afb300e8d4fdfac36719b9e23ae842f662625a0ca12ece502d748"
+    },
+    {
+      "path": "dancer/accepted/images/K3_forearm_r.png",
+      "bytes": 22509,
+      "gitBlob": "c7e5e30363c23deb17429cfe7719161c72e52f8b",
+      "sha256": "f1d3ee9f0cdc139cfc1b356a2097368d6c9dc91fb870687a3e31201a51ea1c8f"
+    },
+    {
+      "path": "dancer/accepted/images/K3_topwear.png",
+      "bytes": 50609,
+      "gitBlob": "3955f9b94cb75c5cc5762e83b809f7740384d213",
+      "sha256": "ab659f1fca4c5b23c23704c041d3fe0f1d7c579e7c962902dc82c4ef97e89618"
+    },
+    {
+      "path": "dancer/accepted/images/K3_upperarm_l.png",
+      "bytes": 18072,
+      "gitBlob": "6cb9c25abc2155c6b9f0769e2269a37d2ef2261e",
+      "sha256": "5cec4870f2ab6bf280abd39b30c9a6d952c58a26ae21cef1ef66d95695fc7700"
+    },
+    {
+      "path": "dancer/accepted/images/K3_upperarm_r.png",
+      "bytes": 22561,
+      "gitBlob": "8140259a9b3b54965e0f3b65c1769d1ca64653c7",
+      "sha256": "c7de2e42a186192b4a0627ab93e115dcdfd2b3163f509e04a37bc7d60ae07dcf"
+    },
+    {
+      "path": "dancer/accepted/images/K4_forearm_l.png",
+      "bytes": 24763,
+      "gitBlob": "87409cfd1af5fdccc59fee3cc555add7cfb11400",
+      "sha256": "a7ec075abfd015a3779b89f660d90c8ca8a0d10ae0b529c45ec0da5e98d69516"
+    },
+    {
+      "path": "dancer/accepted/images/K4_forearm_r.png",
+      "bytes": 29118,
+      "gitBlob": "3131db703793b32c9a0e28307fa8449c61c3a5d7",
+      "sha256": "220a0951210ab1f62553be29ebe0a3872e908477ee100c3a9de462dcf458db26"
+    },
+    {
+      "path": "dancer/accepted/images/K4_topwear.png",
+      "bytes": 49943,
+      "gitBlob": "cb54e1cb4b9934bf7317326bff0880b49e7e5145",
+      "sha256": "abce1cc903e9f48fdc5139296eb55ac3b3e44906e6401d3a2992bc4f07928fa8"
+    },
+    {
+      "path": "dancer/accepted/images/K4_upperarm_l.png",
+      "bytes": 20724,
+      "gitBlob": "f0e2767c2ced93feab88e5e40e4c63e47a2c9967",
+      "sha256": "c3324030687721f4cf8eed1b7d4c7c5fd48b87e72cee26207bdda20dc96d041a"
+    },
+    {
+      "path": "dancer/accepted/images/K4_upperarm_r.png",
+      "bytes": 14579,
+      "gitBlob": "446ea865644da7018ee61ade7596c1fb5c6e23ac",
+      "sha256": "5218997d0e05a50ab63e1aea4c50d26ea15c93109e9c69736221311fcd5fa11a"
+    },
+    {
+      "path": "dancer/accepted/images/arms_hold_front.png",
+      "bytes": 115241,
+      "gitBlob": "51c8fdba6a71dfe8b275946df558297ce6dc9412",
+      "sha256": "18b392875be888e28bf116edceede5e4c14cafe31554e192348f7de54db00701"
+    },
+    {
+      "path": "dancer/accepted/images/arms_hold_head.png",
+      "bytes": 114591,
+      "gitBlob": "ad4be3a74c491736f2a01929bd4bd5baeead234e",
+      "sha256": "6954c20fbe1bf3d988b4d1e9c8baff38f91d2549bb2a3ac2ee06d1907737318b"
+    },
+    {
+      "path": "dancer/accepted/images/bottomwear.png",
+      "bytes": 53567,
+      "gitBlob": "3d17239c93f5637060f2ade49ee9697fcd55d751",
+      "sha256": "2c9aea3750d0cc5c8e769f0b3948ca7311cfef470b31fd2d698c722fc0ba5d79"
+    },
+    {
+      "path": "dancer/accepted/images/brow_l.png",
+      "bytes": 305,
+      "gitBlob": "dda8ddfd2102ea327bd5b0b9549cc6b7dd1bde66",
+      "sha256": "58d8f5dd5b3b456e2279ffa53d4eb987632e5061f6a00c6fd5f54c8d867406c1"
+    },
+    {
+      "path": "dancer/accepted/images/brow_r.png",
+      "bytes": 569,
+      "gitBlob": "bc049d4eaa023242d08678b86ff1295569dbbb58",
+      "sha256": "4d62dfdffa30b6afb7d49f33502ad384deab515497e1c89342d245cc7cdb4b16"
+    },
+    {
+      "path": "dancer/accepted/images/ear_l.png",
+      "bytes": 1788,
+      "gitBlob": "57d504c0b00224b3468f5efeb2711ccb630dd5f0",
+      "sha256": "9cf0a1ed9e4a4650622c625664a038923b4ec98bc79625a91ca17c256c1c366b"
+    },
+    {
+      "path": "dancer/accepted/images/ear_r.png",
+      "bytes": 1901,
+      "gitBlob": "81fadca412a96a68117a7b88fd6ff0b8740f4cbe",
+      "sha256": "9136a74c08f1c615c48318f43ae1864c8d022cc1ede78989636c4c4fb1ab038d"
+    },
+    {
+      "path": "dancer/accepted/images/eyewhite_l.png",
+      "bytes": 1545,
+      "gitBlob": "205c9b8c95c2e589b7e4adb53523eb54acd37616",
+      "sha256": "62c542d0de59410cc9077d892c8138afb078a45dc01f74e1d20ccfcd89822a3a"
+    },
+    {
+      "path": "dancer/accepted/images/eyewhite_r.png",
+      "bytes": 1509,
+      "gitBlob": "beff90d915e0421b758acb10932877896fd5cf53",
+      "sha256": "1a0a252b1859d5c91f8cbbaeb4dc41c165f84f0203b837bb8fbea95b47580560"
+    },
+    {
+      "path": "dancer/accepted/images/face.png",
+      "bytes": 13515,
+      "gitBlob": "4f3d314ddf21f45b87327bb28db015d382fedd9c",
+      "sha256": "c4b273759474164ce2e3ed50b76400877ee7b5268b91361c1bc192c71e2eddb2"
+    },
+    {
+      "path": "dancer/accepted/images/forearm_l.png",
+      "bytes": 32424,
+      "gitBlob": "8b1e3111cdd55d984bd0b1422b5a528a8bf76588",
+      "sha256": "beebfa8eba7f51b0f89df2c1e3e0f79b9fb81f1279adff5781e8f1e01a18991e"
+    },
+    {
+      "path": "dancer/accepted/images/forearm_r.png",
+      "bytes": 35637,
+      "gitBlob": "aa432d27d49482ea8a5a5c80ff542b54aeb3af01",
+      "sha256": "978773db93e962c8b24e8e88723d65c89adbfa23235a9120553a63fc32079b17"
+    },
+    {
+      "path": "dancer/accepted/images/hair_back.png",
+      "bytes": 33152,
+      "gitBlob": "a34757b93c8d80738921a08bdbb801c6361ae18e",
+      "sha256": "809652f89fa30abbf5b9afb8fa3bae421cff0d83f2cb12443943eb30928e8404"
+    },
+    {
+      "path": "dancer/accepted/images/hair_front.png",
+      "bytes": 32475,
+      "gitBlob": "5718920095b27ccecd17aed3dd93ec7f73d99b94",
+      "sha256": "92ee31f2da01f1586759c3c57d5ca507cce3adc82e0949313dadd791fdbd825f"
+    },
+    {
+      "path": "dancer/accepted/images/hairpin.png",
+      "bytes": 6779,
+      "gitBlob": "b186f17969e9c5fd0fca645adefcf92bbf8d673a",
+      "sha256": "62111a97a3f65abfde9ef073ff5803defdaa5caa5ca079d20f319d051d9424bb"
+    },
+    {
+      "path": "dancer/accepted/images/iris_l.png",
+      "bytes": 1400,
+      "gitBlob": "e9617a7784d0c62a2923dae83857ae8cabe7fb04",
+      "sha256": "52fab7f7ab371840a8d30f7b4aa5ddce5e69d02c7ee5e59feee85b993e7eac54"
+    },
+    {
+      "path": "dancer/accepted/images/iris_r.png",
+      "bytes": 1438,
+      "gitBlob": "8a55e9700f1b603736e320bd7f96c69328f2dbd7",
+      "sha256": "0467eb19345073ef4b46823e345844225ad62ba579c9902f832557297ffce31f"
+    },
+    {
+      "path": "dancer/accepted/images/lash_l.png",
+      "bytes": 1734,
+      "gitBlob": "c0fa6eadaa52fc1516a31c10f21cf7cc14e44d36",
+      "sha256": "69dda3102bece4df929f0c6708e91f60cf393076811a3cca34d5b72a75c5d3c5"
+    },
+    {
+      "path": "dancer/accepted/images/lash_r.png",
+      "bytes": 1578,
+      "gitBlob": "f7edf94c5e27614979477a920ec5bc332850d7c4",
+      "sha256": "42c91c0e44d3c6ee0571549f3b4187750b53c6dbd674dcd290cae8bee0f3c633"
+    },
+    {
+      "path": "dancer/accepted/images/mouth.png",
+      "bytes": 666,
+      "gitBlob": "9f46a1ba789f44539741dfd47765f969b72e6f13",
+      "sha256": "169c617778e2b73e816065b8f7f301968f2f84b27e1a45c6db7fc4db1cc32452"
+    },
+    {
+      "path": "dancer/accepted/images/neck.png",
+      "bytes": 3733,
+      "gitBlob": "67f29a3baf47a7483b7a18a20117adc99c8de9c7",
+      "sha256": "39a35dd5063c674fa99aac4d3fc7fd2a2eb702c6c83b103da7b7bdd752f6c98c"
+    },
+    {
+      "path": "dancer/accepted/images/nose.png",
+      "bytes": 166,
+      "gitBlob": "2c8e0bc8d1b1f5ee880453a840b08171de9ee351",
+      "sha256": "73299c9cdeb983fae5e771fe5d91065c49cbf3eefb6f65fd3127bab02dbf403f"
+    },
+    {
+      "path": "dancer/accepted/images/shin_l.png",
+      "bytes": 21310,
+      "gitBlob": "7c636523007a1beb8324978557b97903f509d643",
+      "sha256": "be37e6016c1d4b7804755e40d5afd69f9c7db18daf60d79bcc60351d833a4d2a"
+    },
+    {
+      "path": "dancer/accepted/images/shin_r.png",
+      "bytes": 21803,
+      "gitBlob": "84c4e4fd1d1dbc335867caa806213c1664eb01f2",
+      "sha256": "194e8b16dc25fe1edc8e77a40c20930683158394605bb0ca0dd0e7b2f5ae3703"
+    },
+    {
+      "path": "dancer/accepted/images/shins.png",
+      "bytes": 56860,
+      "gitBlob": "35d1b495e1e525057939ee9ff5e48f6039eb9f86",
+      "sha256": "f61e4fa37f0fa495c198f008c99d746f08d3014ae8ed29db853f073054c05a25"
+    },
+    {
+      "path": "dancer/accepted/images/shoe_l.png",
+      "bytes": 16974,
+      "gitBlob": "5f537c9ed7d7822bc3ea9687589d7f24deaa8136",
+      "sha256": "1000c93f4190e546965f5d44a1c8a56b5b33cda8901cc7ea583ab4d72f6de71b"
+    },
+    {
+      "path": "dancer/accepted/images/shoe_r.png",
+      "bytes": 16987,
+      "gitBlob": "48c253bde7e3b16ce1c817d5c954a2d8d66b8449",
+      "sha256": "8ee71530a0e09341098f250de31eca0238c3d336522721768511599cf18c566d"
+    },
+    {
+      "path": "dancer/accepted/images/sleevefront_l.png",
+      "bytes": 3273,
+      "gitBlob": "253597feb705c54a1216704c7cc3a4b3884c4a34",
+      "sha256": "908a53f78216b72d21367f1e3b54e2b0ac9ec7b512f4083cc9ef39eafab60f1e"
+    },
+    {
+      "path": "dancer/accepted/images/thigh_l.png",
+      "bytes": 25705,
+      "gitBlob": "02e07bb7d86c13315e2eb79aeb69f6a454d8019c",
+      "sha256": "78bad7d68d12078bcc588f7290096629de078fc081cd215951bbdf0a52d5ce69"
+    },
+    {
+      "path": "dancer/accepted/images/thigh_r.png",
+      "bytes": 25711,
+      "gitBlob": "83caa854097bf3d4178cca2ccf05dc712371fd1d",
+      "sha256": "ed63d33c39719771352fe5fb77aa7a3679f1f52edf7ff60381ad2811e2afe4ca"
+    },
+    {
+      "path": "dancer/accepted/images/topwear.png",
+      "bytes": 65387,
+      "gitBlob": "228392896b59c34518a09b2c5ab13ca9bc589d20",
+      "sha256": "d35407077aa7ab99264383dbb40d74aa7a52536943f508d009faca49dbbda571"
+    },
+    {
+      "path": "dancer/accepted/images/upperarm_l.png",
+      "bytes": 23482,
+      "gitBlob": "c680910b0c4f1d1b4eab880a8fa26b5476453c2a",
+      "sha256": "c11f83c8b61958af5f240ab07fe5b27ff0ffbf0dc159ac9db0fab148c05a3bbf"
+    },
+    {
+      "path": "dancer/accepted/images/upperarm_r.png",
+      "bytes": 23839,
+      "gitBlob": "b6f9a7324d861db865613f820b3486b9d90d86eb",
+      "sha256": "1c2b32d343436c443526ab176fb23bee53a00cb738813616389970db14ecff1b"
+    },
+    {
+      "path": "dancer/accepted/images/waist.png",
+      "bytes": 8189,
+      "gitBlob": "14ecd94113ed50a0a49d478c34fd5f933bfb6c88",
+      "sha256": "1c733bdf717741d98162c96439995d3cb6a009ddf1900bad4c9271a55712d5cb"
+    },
+    {
+      "path": "dancer/accepted/motion.json",
+      "bytes": 184650,
+      "gitBlob": "0f9f6ab210bac6c2dcff81b54388ae402dde2b21",
+      "sha256": "67beb056983b32a5af4e402a1ebcb8257d1ded8f4cfd372a223b6eeeb0c166ab"
+    },
+    {
+      "path": "dancer/accepted/rig.json",
+      "bytes": 185889,
+      "gitBlob": "07bc6572d3a9649c831c9ced601c2a5dd9d251b3",
+      "sha256": "490fd2116a5c7b5c1188be010d6091b68c35c2d837475cd8540f631367da08d6"
+    },
+    {
+      "path": "dancer/accepted/sequence.json",
+      "bytes": 1174746,
+      "gitBlob": "9e51d99a4162cd6340e4fc80305388b157d43a7a",
+      "sha256": "8713172431674a57caa8d7c3f452a05bf46ec8079ca368bb4cd9df7952c2edfd"
+    },
+    {
+      "path": "dancer/build-accepted-dance.sh",
+      "bytes": 412,
+      "gitBlob": "b282a9bb50be7154a0361c1d49108a22150dd84f",
+      "sha256": "52fa862fa989b79edd02ba0f98ab5e36958dbef164257debbfca0df06314cf41"
+    },
+    {
+      "path": "dancer/build-accepted.sh",
+      "bytes": 469,
+      "gitBlob": "ba5bbb0b9f819a8219c404952982639b122750fa",
+      "sha256": "6f7f3800648b6c9f187396e759f564b4da8e29a5db96d6c67133a8829c62ec26"
+    },
+    {
+      "path": "dancer/build-evidence.json",
+      "bytes": 5715,
+      "gitBlob": "da70b1cd59cabff6a93ec471a7d80c82be74057b",
+      "sha256": "b46ba4e724ba6f33e1eed87adbc4255858b877b016951de5dc9171c1a44bf847"
+    },
+    {
+      "path": "dancer/build.sh",
+      "bytes": 397,
+      "gitBlob": "24c6f44e7beabc0501ae4cafd643066247b7e64e",
+      "sha256": "d38e00ec57c13cb0662c21788d12b0a0a01ce8164a1ae71649eda547cd7d18c2"
+    },
+    {
+      "path": "dancer/check-inputs.py",
+      "bytes": 3233,
+      "gitBlob": "c0f759d7cc0a01e2c02a753a62720a54e6b324d2",
+      "sha256": "584b80f031cdaf791615d3394e4e05539002d847730b49d4ea6549ec9142af2f"
+    },
+    {
+      "path": "dancer/config-base.json",
+      "bytes": 25151,
+      "gitBlob": "51d8f458ea09c7caf2422a2c7c2d65d7c932cc8f",
+      "sha256": "f249133220a8a782f64cd3502b275b60ee57296ef3b722068637553646dea6af"
+    },
+    {
+      "path": "dancer/config.json",
+      "bytes": 46184,
+      "gitBlob": "bf21ebf465f4ee9ebed42401bf71ea0cbffd10d9",
+      "sha256": "9e73777e0cfdf0b1fcc4c4e55f06bd47694cf787708d3d0142b100a1d44d3c8a"
+    },
+    {
+      "path": "dancer/declared-repairs-v3.json",
+      "bytes": 32304,
+      "gitBlob": "d83419d641bebddae5dc0699fd897a4ad1206723",
+      "sha256": "a9587f76c8b4d1c1f29919131763a0c565ee67a8e812db4559794c9215ac7a00"
+    },
+    {
+      "path": "dancer/declared-repairs.json",
+      "bytes": 1160549,
+      "gitBlob": "5bcb7081d991054bb398238fc1ea8d4105a61e66",
+      "sha256": "55b8d0bf36120048309de1df6e08b8c22c7ccc09cdabf5edd6ce3e151452cbf7"
+    },
+    {
+      "path": "dancer/generation/config.json",
+      "bytes": 1970,
+      "gitBlob": "00ecfe20e3c99cdaae00e95760e8991a4f614365",
+      "sha256": "78abcfebc915c17170836f9d2fe7948d04a6561deb35947fde7089469ddd5e1a"
+    },
+    {
+      "path": "dancer/generation/control_pose.png",
+      "bytes": 10677,
+      "gitBlob": "fc03f84aec032efb896380ad0e41a0ddde5a85f7",
+      "sha256": "102906e39d3309f39af3f283dd857896566acb723bc30d64955743461464b55f"
+    },
+    {
+      "path": "dancer/generation/pose_a.json",
+      "bytes": 668,
+      "gitBlob": "8ff8c4831c96a0b38077cf7d8b461de0587a5963",
+      "sha256": "f3aba92ec798bd54e42113efc52fc4d83540013d57773f0883848b9adff3b276"
+    },
+    {
+      "path": "dancer/inputs/st_input_full.png",
+      "bytes": 1374301,
+      "gitBlob": "2ed022eeb9e2dfa8df4e6f2addc780f410cc25e0",
+      "sha256": "8d343f3edf473420def2b49d839bf7ecbeffe243f0de270777441693de156b45"
+    },
+    {
+      "path": "dancer/inputs/st_input_head.png",
+      "bytes": 235284,
+      "gitBlob": "a73084e06a9a910ae5767ae1a7e0fab4413f38f3",
+      "sha256": "a89d4be4810c6d662db6aca084a21d167e3d0c061d4cd5ecab980eedba359f5b"
+    },
+    {
+      "path": "dancer/layers/full/layers.json",
+      "bytes": 9641,
+      "gitBlob": "9cc67589706664ce158942c1ff30ba012db8227d",
+      "sha256": "fae34555a878d23f18f8c5d8df32f8d5ab51a79f1bf5961c9c8642bffe380f6e"
+    },
+    {
+      "path": "dancer/layers/full/meta.json",
+      "bytes": 932,
+      "gitBlob": "61c804dea3976c662aa2c52349d7df3ca21db0ce",
+      "sha256": "5f48ab2939d8d2f0af56265f7484453f129d83475f05aa049677675fba9988b4"
+    },
+    {
+      "path": "dancer/layers/full/parts/back hair.png",
+      "bytes": 557253,
+      "gitBlob": "78154d004fee3ae8460c2b33c41e7a17d85f34b0",
+      "sha256": "0109e1adc3a980a69fb6d03d7d3a9cc07525eb2eec2690020f61a13cb9b1ad1e"
+    },
+    {
+      "path": "dancer/layers/full/parts/bottomwear.png",
+      "bytes": 484792,
+      "gitBlob": "db2521959c5a4236189d90829970c2127aa63d4c",
+      "sha256": "ed11a317c6e4d7d007d850251df46c367f369461e076baca1866fde93aa1c1af"
+    },
+    {
+      "path": "dancer/layers/full/parts/ears-l.png",
+      "bytes": 1676,
+      "gitBlob": "d9492dd6cd7f2d9198f65e51f71cf22c6286f51b",
+      "sha256": "572be425cc913984fcf2e340b19c8005c5d1d52ab9215ef17037574e818a834b"
+    },
+    {
+      "path": "dancer/layers/full/parts/ears-r.png",
+      "bytes": 1718,
+      "gitBlob": "514dcc35d9204d47d60f894f99fb1b06ef965722",
+      "sha256": "250fabd04751d649e1e6e19982b559e446651dd08f7df98a18eff406f16d69d3"
+    },
+    {
+      "path": "dancer/layers/full/parts/earwear.png",
+      "bytes": 489692,
+      "gitBlob": "29212d42a4fdd52699ce8ec67c14464c7656f402",
+      "sha256": "7bf2c6d15606bb547a62764038396177d67b9d2ee6082baefe9d69f3e7ae8d39"
+    },
+    {
+      "path": "dancer/layers/full/parts/eyebrow-l.png",
+      "bytes": 377,
+      "gitBlob": "18d64d8399af75900e6396d5a4599c8580e4a690",
+      "sha256": "994f158139c2d29cd9a8bd185eba2146fdf5c93a8ba8844f0e64a9da4f35afc7"
+    },
+    {
+      "path": "dancer/layers/full/parts/eyebrow-r.png",
+      "bytes": 329,
+      "gitBlob": "42997e5c6b995b995ab926b6fb990d6c6e0ad7b3",
+      "sha256": "1b265416c25e07eeafbec0a115ef8eba24affb5ca8e97d84a0e17e6c098097fb"
+    },
+    {
+      "path": "dancer/layers/full/parts/eyelash-l.png",
+      "bytes": 1768,
+      "gitBlob": "8958737373272447b660cf880062fc62494871f0",
+      "sha256": "a42ae91f65be92b8618ad7aceb0f6a423d5f4c3d4ba6d079814647a8d3eaae5e"
+    },
+    {
+      "path": "dancer/layers/full/parts/eyelash-r.png",
+      "bytes": 1838,
+      "gitBlob": "debf5e987b59cd5851bda7de3ebb831664227a34",
+      "sha256": "dbbbc1a68ecd284de80d7c85ac1fe297236e80b9a6470e262b964d878a56408e"
+    },
+    {
+      "path": "dancer/layers/full/parts/eyewear.png",
+      "bytes": 498495,
+      "gitBlob": "cd7c51c576a7cc2b5202ca16d87cce1f00980c14",
+      "sha256": "202172b954c5917156f56fe72c58ba9b5e0a9c6ce3f1c98967012ed21d72d210"
+    },
+    {
+      "path": "dancer/layers/full/parts/eyewhite-l.png",
+      "bytes": 1239,
+      "gitBlob": "1cd93901d4695db8c598d9cd17287550e99543a5",
+      "sha256": "f4050dbb638194ca5b701eab751b3d562cb5aad99c77573aaae2d823e145c3f7"
+    },
+    {
+      "path": "dancer/layers/full/parts/eyewhite-r.png",
+      "bytes": 1277,
+      "gitBlob": "4ff6ee869882796657bbf59cbe7a3b3cb58adbe9",
+      "sha256": "ee11fa1db0ee0da9ef115c03961518bd66962c5a9255171130bca6c4751dbf54"
+    },
+    {
+      "path": "dancer/layers/full/parts/face.png",
+      "bytes": 631540,
+      "gitBlob": "2e5797042dca39126243ff3a9ea09160dd595150",
+      "sha256": "ae7ea8e010e55fff7ecc2b9e5da43a1de0d12039d9e7e28c236a74037acc478f"
+    },
+    {
+      "path": "dancer/layers/full/parts/footwear.png",
+      "bytes": 386423,
+      "gitBlob": "f9e9f758cf29cc078b02536debd43c30080837fd",
+      "sha256": "1189c7c2bf2bb26c26abb3c72110ec86feb3a3217e006d2dc92bfac652e27131"
+    },
+    {
+      "path": "dancer/layers/full/parts/front hair.png",
+      "bytes": 585994,
+      "gitBlob": "4099e35ad1074b2ab0fe1ff21a443fe9276008c8",
+      "sha256": "7baebb64c1aec94198afbd3df87ded3b51644c511aad0d4e97ccce4bb676c0ab"
+    },
+    {
+      "path": "dancer/layers/full/parts/handwear-l.png",
+      "bytes": 57626,
+      "gitBlob": "43c0240bb847f4f18b76d18501c5bbb776e46625",
+      "sha256": "7b2b6841f531f25be0aaf28c053692ccc9c20d7a62aef465a721fd45d202b430"
+    },
+    {
+      "path": "dancer/layers/full/parts/handwear-r.png",
+      "bytes": 57157,
+      "gitBlob": "676413a101d08c1fe9d08da0f5357a7be288bf5b",
+      "sha256": "86ba7ded66cea4f4e2be3bba78c21121c83ee2eb0befcc4cb9298b9bd14ffcc0"
+    },
+    {
+      "path": "dancer/layers/full/parts/headwear.png",
+      "bytes": 404580,
+      "gitBlob": "eb90c0d4c76ea7e2314e6fce046e37ff5d04aff4",
+      "sha256": "4fb45501f27426acfffc12465552f09dc81d6460a2f03ff250d1c3e206d96161"
+    },
+    {
+      "path": "dancer/layers/full/parts/irides-l.png",
+      "bytes": 1060,
+      "gitBlob": "7257569300539bb0e3f46b5db65c83f03cd86869",
+      "sha256": "5a6b75a7de3a159a7322dbb97744b38a0a230dad6a1dc5d736c2c690f868a117"
+    },
+    {
+      "path": "dancer/layers/full/parts/irides-r.png",
+      "bytes": 1098,
+      "gitBlob": "81430fda3ceb182db42b0dab7272525fc6beebb0",
+      "sha256": "e2f51c0b1d2c0a6e640538e84cee22ffb71793f3b23e8660deaeaa8027c4bfbd"
+    },
+    {
+      "path": "dancer/layers/full/parts/legwear.png",
+      "bytes": 655835,
+      "gitBlob": "8c280063cd3115903b3b04b5d5350c9671c40fd3",
+      "sha256": "8654a0bcdf4ee050460a8fabde5be85b4833cbe747c0cba4ee7f9e2e48b641f5"
+    },
+    {
+      "path": "dancer/layers/full/parts/mouth.png",
+      "bytes": 367488,
+      "gitBlob": "a6f587da28196bf29a133e5ff80e5b4e4a4d66e0",
+      "sha256": "45abd64f144c1962f2fffed209471056818971958fdb8326732777ba225e17f8"
+    },
+    {
+      "path": "dancer/layers/full/parts/neck.png",
+      "bytes": 585140,
+      "gitBlob": "2daa299ab241f0531767cd46f068a7e6bfae3b20",
+      "sha256": "c8ed5423a7bf76d67bd2c1ce07f894778f1ce5579df25aee3543ee61bf1d909e"
+    },
+    {
+      "path": "dancer/layers/full/parts/neckwear.png",
+      "bytes": 451892,
+      "gitBlob": "4568d1502c3b784c7d1087daf986529bfe4ad08b",
+      "sha256": "3db9eadaaa6ad3648229d5b0c303f209f99926cf9de1780efaf4144bba1690a4"
+    },
+    {
+      "path": "dancer/layers/full/parts/nose.png",
+      "bytes": 366888,
+      "gitBlob": "ff6b670a2f7cd4dccf905b2e4320da52589ce4a4",
+      "sha256": "fdcfa3ca99b8b30f991601b51efd02b79c8d0d4602f61512bcf47de8ecbdb71a"
+    },
+    {
+      "path": "dancer/layers/full/parts/objects.png",
+      "bytes": 485084,
+      "gitBlob": "33f96302f6c46bbe1b7d7200a68ee12f697dddff",
+      "sha256": "6c904615322c6d48e8b00c79e081d3a82c788add64c05821329a28b8960198ce"
+    },
+    {
+      "path": "dancer/layers/full/parts/tail.png",
+      "bytes": 484116,
+      "gitBlob": "e901058a4f2ee440d6c8c6b9a30fcaf2169e1bf0",
+      "sha256": "71b9f1eb028f638e9051b80d243ec6413aa44e579d79ad792eb178b14dd40dd5"
+    },
+    {
+      "path": "dancer/layers/full/parts/topwear.png",
+      "bytes": 557282,
+      "gitBlob": "a9aad648d9b5786182799c344ea5e9b87db4b7cc",
+      "sha256": "b688da9d0228887f098f2bf8b584c7bf4e0b0927074e6646606b405858e4cc4b"
+    },
+    {
+      "path": "dancer/layers/full/parts/wings.png",
+      "bytes": 1046152,
+      "gitBlob": "d8d1eb5e3be274e3318dd32d7ef543dda52d7868",
+      "sha256": "aeadb1666683a9e71beaa872d16357bf204a8ec2114e843909a89b9df56b184f"
+    },
+    {
+      "path": "dancer/layers/full/previews/spine_parts_3b0af7d3_preview_layers_00001_.png",
+      "bytes": 834153,
+      "gitBlob": "7d73e20e2e83e9863df618f0276ad05869ba9d5c",
+      "sha256": "091d806b919437eaf5b67f2257ea52096d20e180415dc2f003d3c11c6656621c"
+    },
+    {
+      "path": "dancer/layers/full/previews/spine_parts_3b0af7d3_preview_parts_00001_.png",
+      "bytes": 181472,
+      "gitBlob": "c56d6984043aab6b8af0abf3ffeaa55d02d3981a",
+      "sha256": "840e3a1d40ddf7fc092fee09eadb2118f00413d83d657b4c63c842b6cc30dce2"
+    },
+    {
+      "path": "dancer/layers/head/layers.json",
+      "bytes": 9621,
+      "gitBlob": "24a1d87922f46b07227a2903d1f16ab392f4b872",
+      "sha256": "2cfa12d70997ac640dfc6be285ddb0cc941f16e9d50c6e5034c3aebca85be3b8"
+    },
+    {
+      "path": "dancer/layers/head/meta.json",
+      "bytes": 933,
+      "gitBlob": "30c3ed4de1b7b055007ba3dfedefa771814035e3",
+      "sha256": "783086bf6cf49ddce264251eaf3fc020381a42b3f976f70518aaaf61970fbc37"
+    },
+    {
+      "path": "dancer/layers/head/parts/back hair.png",
+      "bytes": 683613,
+      "gitBlob": "3f9061b3aca90fa09f45c65d7de54f37b77a898b",
+      "sha256": "13d7bada2d2b84c2dce7e5c142f55c9c0472c56c2d93ab06e96d699fa07ea624"
+    },
+    {
+      "path": "dancer/layers/head/parts/bottomwear.png",
+      "bytes": 481581,
+      "gitBlob": "84e6ce2605a9db0c923f7bd09b80eec230b1ad18",
+      "sha256": "b86b1ba7310c8cd9f0b2d5e243bd8603fdf4a7874ea9b39dc1857b99d3cf2cfe"
+    },
+    {
+      "path": "dancer/layers/head/parts/ears-l.png",
+      "bytes": 16525,
+      "gitBlob": "df42c0e68cdba42d037a5e5397b1af597710f274",
+      "sha256": "be69b1f02dfed2d63fbd48b86e882fdeca9a818f76434add3fb4bc68b738246d"
+    },
+    {
+      "path": "dancer/layers/head/parts/ears-r.png",
+      "bytes": 16914,
+      "gitBlob": "bc47caa9cb62f64b3cc69297fa840560de8b0e90",
+      "sha256": "cf1fa72f57b468fa37f4934947a5adb0aa759049f66bc37141174c47d99e5b68"
+    },
+    {
+      "path": "dancer/layers/head/parts/earwear.png",
+      "bytes": 444594,
+      "gitBlob": "939e15df4154fbda774b92fff6d889aa0d57fc55",
+      "sha256": "420d34885a655b0cc32ac5395d5cb5137e799e278c89c84158e2271fa425653a"
+    },
+    {
+      "path": "dancer/layers/head/parts/eyebrow-l.png",
+      "bytes": 2144,
+      "gitBlob": "2d5baf575377acd44da8f9a27be21323a06044da",
+      "sha256": "b8c042ce48d719bf89a1ad2498b352a076870faeeb6bb482543c89dc8006bc1b"
+    },
+    {
+      "path": "dancer/layers/head/parts/eyebrow-r.png",
+      "bytes": 2396,
+      "gitBlob": "3dd5203513c09d5d93c96d204b98f114edad2414",
+      "sha256": "be946769955b490fcf0dceead85bd0aef8ab40773542896fdf66b8d338c12c06"
+    },
+    {
+      "path": "dancer/layers/head/parts/eyelash-l.png",
+      "bytes": 17104,
+      "gitBlob": "29aa0917a0f921d12d840aabb726694b40ff2e8f",
+      "sha256": "99ad84eae8b4f66a7f110878be7fbbd797165d64d775faad19f7299c4f274422"
+    },
+    {
+      "path": "dancer/layers/head/parts/eyelash-r.png",
+      "bytes": 19392,
+      "gitBlob": "8d1dd6ae506ee5e53d03ab1706f5ed286462905f",
+      "sha256": "3eb5dc51c5d4b37061b88003ab68a31a0a2edd300dce446dda43fd851f3f0238"
+    },
+    {
+      "path": "dancer/layers/head/parts/eyewear.png",
+      "bytes": 442123,
+      "gitBlob": "7963e5c7e09510c3324ac66ef63790ec869f0bda",
+      "sha256": "59549448329b9ae16008eaa74019a74e7dad49ca783f1474030f78dd7a02ece1"
+    },
+    {
+      "path": "dancer/layers/head/parts/eyewhite-l.png",
+      "bytes": 13053,
+      "gitBlob": "eb377d5bc74c51e20dbb2b6717520e6cc67fcd51",
+      "sha256": "681da480dadf2f9f9980a1b8e9eccd0c6534fadf4b07986c4ee2bb071c303e6b"
+    },
+    {
+      "path": "dancer/layers/head/parts/eyewhite-r.png",
+      "bytes": 11944,
+      "gitBlob": "d5337cf344a1e3fd1aaa9511b227505cdc7a6cbc",
+      "sha256": "fb59fa264c1100f9b2e455a5494175709a4122ea9f1f8c38e8b92c849d10a59b"
+    },
+    {
+      "path": "dancer/layers/head/parts/face.png",
+      "bytes": 689467,
+      "gitBlob": "0aaaa9af081cb567e7902814d8ca2cb6e664b912",
+      "sha256": "9b01257fca6cc82303f1433ae1c6da92710140667cb04e93b4622940063fece3"
+    },
+    {
+      "path": "dancer/layers/head/parts/footwear.png",
+      "bytes": 486549,
+      "gitBlob": "d9587df14896220ec3b4472f341ee5ba45eec0be",
+      "sha256": "f029ea18e7471717134752cb19ca04abeb488ba7077cc44f1d0a39e35884c71f"
+    },
+    {
+      "path": "dancer/layers/head/parts/front hair.png",
+      "bytes": 663105,
+      "gitBlob": "e7b515adbbe97567a8f008e7e204db95cbf16228",
+      "sha256": "1d39bacded505ccdfb5b5ebfff03a2c3fd6caf019fccad5801a77be195824935"
+    },
+    {
+      "path": "dancer/layers/head/parts/handwear-l.png",
+      "bytes": 91,
+      "gitBlob": "03741cd14be58cb7ec68250c313e3614a6dbe8ce",
+      "sha256": "2026d0ee5e2cdfa8edca6026fe89bd89996cbbd0378040da95a3bd0228ca23f6"
+    },
+    {
+      "path": "dancer/layers/head/parts/handwear-r.png",
+      "bytes": 339,
+      "gitBlob": "9f049b79705012633fe97acf11a8ab4142179db0",
+      "sha256": "179d5ac7030bfad6eaca46e0181fcdd597765d0836f8ee775f71eb5e600e2be8"
+    },
+    {
+      "path": "dancer/layers/head/parts/headwear.png",
+      "bytes": 380370,
+      "gitBlob": "b93d5edf715075472add50c152a87d3e31396c9b",
+      "sha256": "3ba61a86536db611aaa21645cc2f898a980aefbb62ac597db720a4c6a8611172"
+    },
+    {
+      "path": "dancer/layers/head/parts/irides-l.png",
+      "bytes": 10742,
+      "gitBlob": "c9ac6d0df752794dfc0bd7f5878a604412ec3197",
+      "sha256": "fe7adf85f5a640a7e129413d2d88859ff3753f873d3f2f4d62e05598432a9a34"
+    },
+    {
+      "path": "dancer/layers/head/parts/irides-r.png",
+      "bytes": 11648,
+      "gitBlob": "cc3acb324867929c4203af4c047689d11f94f7aa",
+      "sha256": "714abe515a71a9133167d00c6e4466a2bc5b707f7a3a2d4256552dce72c3b3ef"
+    },
+    {
+      "path": "dancer/layers/head/parts/legwear.png",
+      "bytes": 475781,
+      "gitBlob": "46907f1c97358b4e6a46220a0fbb7fcfb47ba6fb",
+      "sha256": "f023afef02a984b28ce7ba71c52f0edca7cdf73223328429ab70a4d50a7f88d3"
+    },
+    {
+      "path": "dancer/layers/head/parts/mouth.png",
+      "bytes": 605075,
+      "gitBlob": "524c5f3916aa17a0dcb606846b2dfa8968567fe7",
+      "sha256": "b7c451d388c773fd35c88ca233f6e567c2371a45f660e8260bae9fca568b1099"
+    },
+    {
+      "path": "dancer/layers/head/parts/neck.png",
+      "bytes": 522619,
+      "gitBlob": "67d80039b444eb0c06f6cc14a121052721403caa",
+      "sha256": "2f3b0b8261b40de59a380f775598e1414c29d55c9410fb2ab64b364d5721313d"
+    },
+    {
+      "path": "dancer/layers/head/parts/neckwear.png",
+      "bytes": 447137,
+      "gitBlob": "f87d113ed5125a199a8ad6c1c356a4ada1d52a2b",
+      "sha256": "969b5871f6b15edfe5b73a1ccd92fd6f7a7de516f2780dce6557fa6201dc443b"
+    },
+    {
+      "path": "dancer/layers/head/parts/nose.png",
+      "bytes": 616991,
+      "gitBlob": "3d170038c2d19e233aca5698dea788c0b3c15553",
+      "sha256": "22e74c7b41e201abb579781765910f5c0a972a58ab1cf31feb4cdd01a8ea5df0"
+    },
+    {
+      "path": "dancer/layers/head/parts/objects.png",
+      "bytes": 477988,
+      "gitBlob": "9c3e27b95a54b1b603d1f9facad29454a39f383e",
+      "sha256": "faac6e62df62247556f549e2936211538e418cf052ab090b817990808be4002f"
+    },
+    {
+      "path": "dancer/layers/head/parts/tail.png",
+      "bytes": 450537,
+      "gitBlob": "1fdbb33bf5a8c08678f34a578a6040aa36a3356c",
+      "sha256": "b1c59af132045e1de6f5cae52e76d97da923184d516769ba4dea411884983725"
+    },
+    {
+      "path": "dancer/layers/head/parts/topwear.png",
+      "bytes": 582276,
+      "gitBlob": "cfef6f97149aa1e6df92973bc9cf5226fe1eba6b",
+      "sha256": "a2b5540b81f98e8d9885bd41d951a523b4743679dd3c908bd57c57d6a8095344"
+    },
+    {
+      "path": "dancer/layers/head/parts/wings.png",
+      "bytes": 433101,
+      "gitBlob": "d61b1eddc8a45971577fb476f68c5dd1c34984f6",
+      "sha256": "c7f95eab4bcacc092bf41b09ac8c59982c3876e9bcacb210a8dd258f98200eaa"
+    },
+    {
+      "path": "dancer/layers/head/previews/spine_parts_05084fdf_preview_layers_00001_.png",
+      "bytes": 493734,
+      "gitBlob": "b3326e055e53517cd28187f2170f8634f32572a4",
+      "sha256": "7c8288026beda3aae4e238f098f0fc89a7aa0ef550936f8017c9a64817434d7b"
+    },
+    {
+      "path": "dancer/layers/head/previews/spine_parts_05084fdf_preview_parts_00001_.png",
+      "bytes": 444548,
+      "gitBlob": "de112e0a1cc7483848bfdd9ec4dba24e52a08da4",
+      "sha256": "5ba2602be18a62d76f48aedc3e7fef30f1132c1feb1b67cd0fc1f6bb893d9aaf"
+    },
+    {
+      "path": "dancer/map.json",
+      "bytes": 9285,
+      "gitBlob": "9d6d52e930b50b519e9109595eead868ff86a8c8",
+      "sha256": "9dca5394f6c0cf9cc72e2456b53b41adf898b963a6081d9f6f9b3c2ad6191096"
+    },
+    {
+      "path": "dancer/package.json",
+      "bytes": 198,
+      "gitBlob": "ba699f5a983e1e5563aa25ad3ea02428ae88aa42",
+      "sha256": "9ad6f6bc815512c4dec1abf8d849037d3d4b2f041a41a83c64ebbe684c2fcb46"
+    },
+    {
+      "path": "dancer/painting.png",
+      "bytes": 1439904,
+      "gitBlob": "6b9fc462f83d7c4949dc80b0332eff7888a9cb9b",
+      "sha256": "54f5ee3c60725c1a7fd3e13ab479199797a7a74040989bc3b76b4d28d65208f1"
+    },
+    {
+      "path": "dancer/painting_meta.json",
+      "bytes": 2428,
+      "gitBlob": "7848737b6e142c05d56672517b6b8f167ae966b9",
+      "sha256": "6b53a913ec83eed57c2f55e20c202caefc3e2af76d7029bbbe13ee0e029f48f4"
+    },
+    {
+      "path": "dancer/path-normalization.json",
+      "bytes": 307,
+      "gitBlob": "4dfa16e799419aaa18bb930576dea4a6ff5740fb",
+      "sha256": "bed9d637bd00706c84138244895a41acaad98f13fc8989d6494bf3a169b1a3ec"
+    },
+    {
+      "path": "dancer/pose_a.json",
+      "bytes": 668,
+      "gitBlob": "8ff8c4831c96a0b38077cf7d8b461de0587a5963",
+      "sha256": "f3aba92ec798bd54e42113efc52fc4d83540013d57773f0883848b9adff3b276"
+    },
+    {
+      "path": "dancer/provenance/bridge-triangle-alpha.json",
+      "bytes": 169,
+      "gitBlob": "a7ca60f5830fb1069f6d540169cf712b1c6b41fd",
+      "sha256": "37baedaa53b181bdac8f96729e29638368553eb4109e8823d5c99cef78d188c3"
+    },
+    {
+      "path": "dancer/provenance/config-diff.json",
+      "bytes": 61771,
+      "gitBlob": "9a8407a00c56e690b3bfaba54efa2f9bffac893f",
+      "sha256": "965aa4eae10885177a293acac13c037669bce565d814226f136dc09492e883c0"
+    },
+    {
+      "path": "dancer/provenance/hand-port.json",
+      "bytes": 1686,
+      "gitBlob": "2945dec7612054d77de2d8ab1bfa122a132a1b22",
+      "sha256": "58d00989dbecfd5afcf05dc3c83b6219fd2122dc23a211cbd2178f7f6eb7872a"
+    },
+    {
+      "path": "dancer/provenance/port-diff.json",
+      "bytes": 29734,
+      "gitBlob": "b1211d313cbe17d7421abef84713fa64986d5b3e",
+      "sha256": "861882fbe246bf2176285d1e27e4fbd7ae197f6d70711213148c7963b8d30df1"
+    },
+    {
+      "path": "dancer/provenance/weighted-shins-diff.json",
+      "bytes": 5071,
+      "gitBlob": "4da8fccb27226f50fda0b26d76969dddc9614bad",
+      "sha256": "db057ea89e2f9816d91a150fbe53c48a17d6713f5d374d201ebcc51d4c8cae7f"
+    },
+    {
+      "path": "dancer/requirements.json",
+      "bytes": 1669,
+      "gitBlob": "40249fd771ff288511744a8bb46a7bc9b3b2a706",
+      "sha256": "274b996dd08949d6c8dadc4f7f3d4728d2c9831be8b4ef34f718c384e2daec63"
+    },
+    {
+      "path": "dancer/seethrough.json",
+      "bytes": 97,
+      "gitBlob": "388478684a1991f7db0a8ac16fbb0916bd3cff16",
+      "sha256": "dfb4c1275bb62fa7a9ef895e2a30a81c1787874ab79f1d988cf52f1e9dd09dd3"
+    },
+    {
+      "path": "dancer/selected-art.json",
+      "bytes": 6205,
+      "gitBlob": "9adf6e6d9dd21d726ab825f3d2313ad6324f0a41",
+      "sha256": "1b3c1fcf27da6571bdabc5ee8a8e1b8111140698fc2f0c756c430fcdf116503b"
+    },
+    {
+      "path": "dancer/source-manifest.json",
+      "bytes": 92374,
+      "gitBlob": "66478ac60893f329e016a537a65788b80bcf3ca8",
+      "sha256": "617873560b25b0a60986713b9cd65f72b956a306c9e4db3208a049155dc5bf87"
+    },
+    {
+      "path": "dancer/stress.json",
+      "bytes": 12458,
+      "gitBlob": "e55f686f81fcdb62c6f7a59f7a4310b8e7294a1b",
+      "sha256": "1b55c3428dc3b1baeb16cdbfccadff286387ea6f95125a0b8edf79447f897ecb"
+    },
+    {
+      "path": "dancer/tools/apply-accepted-dance.py",
+      "bytes": 6244,
+      "gitBlob": "6ca5dbbcfade9b45eb315e62b60a30c39fc86f0b",
+      "sha256": "89accceae9aa04647b17d2feeba3a425b06d62bd5ae9e24347affb3f3811ecae"
+    },
+    {
+      "path": "dancer/tools/read-accepted-inputs.ts",
+      "bytes": 1604,
+      "gitBlob": "272a0556b97daca02de36f320100fbf1c61ed8ea",
+      "sha256": "a640f595f484db4ebd3d54635036e5032924d909c04194ede5732802ff627dae"
+    },
+    {
+      "path": "dancer/tools/reproduce-accepted-dance-v3.py",
+      "bytes": 7734,
+      "gitBlob": "beff2860543e9dd453dfb3683be7e09ca75a5403",
+      "sha256": "f43c32e6c721e66c5ad6bbc7f4adfa1088480c48c79ed7c86d2e5182f37909ec"
+    },
+    {
+      "path": "dancer/tools/reproduce-accepted-dance.py",
+      "bytes": 5579,
+      "gitBlob": "d7a305572c532b5eb9ae37f110d38aa6b294ba8b",
+      "sha256": "b12df59c29e0d1d2bb472d9bc04a485d1de44677ca9f2a5c1771036e97881851"
+    },
+    {
+      "path": "dancer/under/elbow_l.png",
+      "bytes": 11101,
+      "gitBlob": "f2f917b1bbe79bd95c11551ff533e0b44168c1e8",
+      "sha256": "7dab8baada61626ad98d56acfa1a4004aee3cd6e58b37b3355dba686a2a6ce28"
+    },
+    {
+      "path": "dancer/under/elbow_r.png",
+      "bytes": 10800,
+      "gitBlob": "00dd1f3fbee431b3edb27729c162c8e9833f5f5a",
+      "sha256": "9841ee592ad4315e80db8f089357a83f101851363dc44edd94b9b33b181e8c23"
+    },
+    {
+      "path": "dancer/under/knee_l.png",
+      "bytes": 2496,
+      "gitBlob": "3ab1815c96a9a246941b0ea3763de9ccdccf1c9d",
+      "sha256": "268ebfeef30c0f34954b111a747e5eef64ad7374d0f008a121d59aeb56ca78a3"
+    },
+    {
+      "path": "dancer/under/knee_r.png",
+      "bytes": 2502,
+      "gitBlob": "e307539212b280cb4286237d2e2e3d3cac08611e",
+      "sha256": "f2d09ab0c2f387658f36ae8ba1a4acd1dea19fdca56e2cb3ce60e8e9ecf775f5"
+    }
+  ]
+}

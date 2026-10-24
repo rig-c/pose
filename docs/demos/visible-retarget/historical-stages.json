@@ -1,0 +1,47 @@
+{
+  "spec": "rig-pose-visible-retarget-history/1",
+  "corpusCommit": "87f24a59d47a0af232656ea4e0ed4062bab6a312",
+  "runId": "20261024T055246Z-9e21a80e877d4deca88bf07d49637ee6",
+  "scope": "Historical v1 original-pose retarget before intentional foot-goal edit; not a newly run v3 LAND check",
+  "rawRetargetLogSHA256": "4b53366648a63731d689b046e7be5d02b68e4dc2b0aa8b36b5efacd845b18316",
+  "retargetReportSHA256": "2ae6f2d1dc62f0df8d43d8afe91743eecbb4e2f6b57b4dc24a3e26c88ea1c1d4",
+  "landings": 20,
+  "allWithinTolerance": true,
+  "rawLines": [
+    "  GATE   rigc build --profile spine: green — 50 assertions: 23 measured (23 passed, 0 failed), 13 skipped, 14 not in profile \"spine\"",
+    "  LAND   bone \"hip\" aim — worst |reached − asked| 0.000509° at frame 130 (t=5.417s); the tolerance is 0.01°",
+    "  LAND   bone \"chest\" aim — worst |reached − asked| 0.000933° at frame 206 (t=8.583s); the tolerance is 0.01°",
+    "  LAND   bone \"head\" aim — worst |reached − asked| 0.00127° at frame 179 (t=7.458s); the tolerance is 0.01°",
+    "  LAND   bone \"sleeve_r0\" aim — worst |reached − asked| 0.00126° at frame 228 (t=9.500s); the tolerance is 0.01°",
+    "  LAND   bone \"sleeve_r1\" aim — worst |reached − asked| 0.00168° at frame 234 (t=9.750s); the tolerance is 0.01°",
+    "  LAND   bone \"sleeve_l0\" aim — worst |reached − asked| 0.00129° at frame 169 (t=7.042s); the tolerance is 0.01°",
+    "  LAND   bone \"sleeve_l1\" aim — worst |reached − asked| 0.00177° at frame 169 (t=7.042s); the tolerance is 0.01°",
+    "  LAND   bone \"leg_r0\" aim — worst |reached − asked| 0.000930° at frame 259 (t=10.792s); the tolerance is 0.01°",
+    "  LAND   bone \"leg_r1\" aim — worst |reached − asked| 0.00143° at frame 133 (t=5.542s); the tolerance is 0.01°",
+    "  LAND   bone \"leg_l0\" aim — worst |reached − asked| 0.000970° at frame 133 (t=5.542s); the tolerance is 0.01°",
+    "  LAND   bone \"leg_l1\" aim — worst |reached − asked| 0.00142° at frame 148 (t=6.167s); the tolerance is 0.01°",
+    "  LAND   bone \"yaw_dial\" aim — worst |reached − asked| 0.0000202° at frame 193 (t=8.042s); the tolerance is 0.01°",
+    "  LAND   bone \"pitch_dial\" aim — worst |reached − asked| 0.0000229° at frame 119 (t=4.958s); the tolerance is 0.01°",
+    "  LAND   bone \"leg_r0\" scale — worst |reached − asked| 5.79e-7 of its setup length at frame 109 (t=4.542s); the tolerance is 0.0001 of its setup length",
+    "  LAND   bone \"leg_r1\" scale — worst |reached − asked| 0.00000106 of its setup length at frame 152 (t=6.333s); the tolerance is 0.0001 of its setup length",
+    "  LAND   bone \"leg_l0\" scale — worst |reached − asked| 5.67e-7 of its setup length at frame 140 (t=5.833s); the tolerance is 0.0001 of its setup length",
+    "  LAND   bone \"leg_l1\" scale — worst |reached − asked| 0.00000114 of its setup length at frame 184 (t=7.667s); the tolerance is 0.0001 of its setup length",
+    "  LAND   bone \"hip\" origin — worst |reached − asked| 0.000657 units at frame 92 (t=3.833s); the tolerance is 0.01 units",
+    "  LAND   bone \"leg_r1:tip\" ankle — worst |reached − asked| 0.00993 units at frame 133 (t=5.542s); the tolerance is 0.062 units",
+    "  LAND   bone \"leg_l1:tip\" ankle — worst |reached − asked| 0.00944 units at frame 87 (t=3.625s); the tolerance is 0.0623 units"
+  ],
+  "historicalV1Fold": {
+    "foldedFrames": 269,
+    "sampledFrames": 391,
+    "scope": "Historical v1; current v3 fold reading is recorded separately"
+  },
+  "historicalPosthocFootGoal": {
+    "samples": 53,
+    "maximum": {
+      "frame": 343,
+      "errorWorldUnits": 0.00020067541288534303
+    },
+    "units": "rig world units",
+    "scope": "Historical v1 hand foot-goal residual; not newly measured v3 or original-pose LAND"
+  }
+}
