@@ -55,7 +55,10 @@ export function measureFigureScale(track: Array<Partial<Record<Body18, Joint>>>)
   if (count < 2 || minFrame === null || maxFrame === null) return { ...base, referencePx: null, scale: track.map(() => null), minFrame: null, maxFrame: null, variation: null };
   const max = filtered[maxFrame]!;
   const min = filtered[minFrame]!;
-  return { ...base, referencePx: max, scale: filtered.map((v) => v === null ? null : v / max), minFrame, maxFrame, variation: (max - min) / max };
+  const scale = filtered.map((v) => v === null ? null : v / max);
+  // Distinct raw doubles can divide to the same ratio. Match the reader's first
+  // extrema on the actual serialized track, without changing the raw metric.
+  return { ...base, referencePx: max, scale, minFrame: scale.indexOf(min / max), maxFrame: scale.indexOf(1), variation: (max - min) / max };
 }
 
 /** Output lines only: no warning becomes a refusal or changes a position. */

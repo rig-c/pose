@@ -170,6 +170,64 @@ test('a newer minor keeps the existing strict unknown-input policy and names the
   expect(() => readPoseSequence(JSON.stringify(doc), 'newer unknown field')).toThrow('a newer minor than this reader');
 });
 
+/** Preserve the actual double-valued pixel spans through the real input reader. */
+function spanFixture(spans: number[]): PoseSequence {
+  const seq = fixture(spans.map(() => 1));
+  seq.frames.forEach((f, i) => {
+    const j = f.people[0]!.joints;
+    j.neck!.at = [0, 0];
+    j.r_shoulder!.at = [-10, 0]; j.l_shoulder!.at = [10, 0];
+    j.r_hip!.at = [-5, spans[i]!]; j.l_hip!.at = [5, spans[i]!];
+  });
+  return reread(seq);
+}
+const plateauSpans = (...spans: number[]) => spans.flatMap((v) => Array<number>(8).fill(v));
+const tiedMinimum = () => spanFixture(plateauSpans(65.40000000000013, 65.40000000000012, 260.6699999999979));
+const tiedMaximum = () => spanFixture(plateauSpans(260.66999999999786, 260.6699999999979, 260.6699999999979));
+
+test('distinct raw minimum plateaus that serialize to one ratio round trip at the first normalized tie', () => {
+  const c = clean(tiedMinimum(), params);
+  const text = writePoseSequence(c.seq);
+  const loaded = readPoseSequence(text, 'own double-valued minimum-tie output');
+  const r = loaded.cleaned!.figureScale!;
+  expect(r.scale[2]).toBe(0.2508919323282336);
+  expect(r.scale[8]).toBe(0.2508919323282336);
+  expect(r.minFrame).toBe(2);
+  expect(r.maxFrame).toBe(16);
+  expect(r.referencePx).toBe(260.6699999999979);
+  expect(r.variation).toBe(c.record.figureScale!.variation);
+  expect(writePoseSequence(loaded)).toBe(text);
+});
+
+test('a nearby ratio below 1 does not displace the first of two maximum plateaus', () => {
+  const c = clean(tiedMaximum(), params);
+  const text = writePoseSequence(c.seq);
+  const loaded = readPoseSequence(text, 'own maximum-tie output');
+  const r = loaded.cleaned!.figureScale!;
+  expect(r.scale[2]!).toBeLessThan(1);
+  expect(r.scale[8]).toBe(1); expect(r.scale[16]).toBe(1);
+  expect(r.minFrame).toBe(2); expect(r.maxFrame).toBe(8);
+  expect(r.referencePx).toBe(260.6699999999979);
+  expect(writePoseSequence(loaded)).toBe(text);
+});
+
+test.each([['minimum', tiedMinimum, 2, 16], ['maximum', tiedMaximum, 2, 8]] as const)('real CLI output with a normalized %s tie re-enters the reader with deterministic bytes', (_name, make, minFrame, maxFrame) => {
+  mkdirSync(scratch, { recursive: true });
+  const dir = mkdtempSync(join(scratch, 'ratio-cli-')); made.push(dir);
+  const input = join(dir, 'input.json'), output = join(dir, 'clean.json');
+  // Input serialization uses the detector's full double precision, not the pose writer's px rounding.
+  writeFileSync(input, JSON.stringify(make()));
+  const run = () => spawnSync(process.execPath, [join(ROOT, 'cli.ts'), 'clean', '--pose', input, '--out', output, '--legs', '1', '--rest', '1', '--hold', 'off'], { cwd: ROOT, encoding: 'utf8' });
+  const first = run(); expect(first.status).toBe(0); expect(first.stderr).toBe('');
+  const bytes = readFileSync(output, 'utf8');
+  const loaded = readPoseSequence(bytes, 'CLI double-valued tie output');
+  expect(loaded.cleaned!.figureScale!.minFrame).toBe(minFrame);
+  expect(loaded.cleaned!.figureScale!.maxFrame).toBe(maxFrame);
+  expect(writePoseSequence(loaded)).toBe(bytes);
+  const second = run(); expect(second.status).toBe(0);
+  expect(second.stdout).toBe(first.stdout); expect(readFileSync(output, 'utf8')).toBe(bytes);
+});
+
 test('real CLI warns, exits 0, writes the measured record, and repeats identical bytes and lines', () => {
   mkdirSync(scratch, { recursive: true });
   const dir = mkdtempSync(join(scratch, 'cli-')); made.push(dir);
