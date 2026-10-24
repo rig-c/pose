@@ -32,6 +32,8 @@ export interface ProvenanceArgs {
   options: Record<string, unknown>;
   /** `--reference` exactly as given; absent when it was not. */
   reference?: string;
+  /** #408: every additional consumed input, only on an opted-in run. */
+  shoulderLift?: { configuration: ProvenanceInput; rest: ProvenanceInput; painting: ProvenanceInput };
 }
 
 /** The record's text: fixed key order, 2-space JSON, a trailing newline. */
@@ -44,6 +46,7 @@ export function provenanceText(a: ProvenanceArgs): string {
       rig: { path: a.rig.path, sha256: a.rig.sha256 },
       map: { path: a.map.path, sha256: a.map.sha256 },
       sequence: { path: a.sequence.path, sha256: a.sequence.sha256, source: a.sequence.source },
+      ...(a.shoulderLift === undefined ? {} : { shoulderLift: a.shoulderLift }),
     },
     flags: { name: a.name, ...a.options },
     ...(a.reference === undefined ? {} : { reference: a.reference }),

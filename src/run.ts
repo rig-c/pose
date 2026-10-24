@@ -29,9 +29,14 @@ import { PROVENANCE_FILE, provenanceText } from './provenance.ts';
 import { madeLine, planOutDirs } from './outdir.ts';
 import { bodyLine, faceLine } from './face.ts';
 import { contactKeysLines, readContactKeys } from './contacts.ts';
+import { readShoulderConfig, readShoulderSignal, shoulderRigGuard, shoulderLocal, shoulderMatrix, shoulderOrigin, type ShoulderReading } from './shoulderlift.ts';
+import { measureShoulderLanding } from './verify.ts';
+import { pointAt, pointParts, partBone } from './map.ts';
 import { scalePairWarning } from './scalepair.ts';
 
 export interface RetargetArgs extends RetargetOptions {
+  /** #408: closed external calibration; absent preserves the legacy output. */
+  shoulderLiftFile?: string;
   rig: string;
   map: string;
   pose: string;
@@ -158,6 +163,33 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
   // rig-c/pose#303: the contact keys, read against the sequence's frames before any gate runs.
   const contactKeysSnapshot = a.contactKeysFile === undefined ? null : readFileSync(a.contactKeysFile);
   const contactKeys = contactKeysSnapshot === null ? null : readContactKeys(contactKeysSnapshot.toString('utf8'), a.contactKeysFile!, seq.frames.length);
+  // Read the actual input before retarget's holds, without changing global point semantics.
+  const shoulder = a.shoulderLiftFile === undefined ? null : (() => {
+    const problems = new Problems();
+    const unknown = (field: string, message: string) => { problems.add('SHOULDER_LIFT_INPUT', `unknown — ${field}: ${message}`); };
+    const snapshot = (file: string, field: string): ReportInputSnapshot | null => {
+      try { return readReportInput(file); } catch (e) { unknown(field, `input "${file}": ${String(e)}`); return null; }
+    };
+    const configuration = snapshot(a.shoulderLiftFile!, 'configuration');
+    if (configuration === null) throw new Refusal(problems.list);
+    // Malformed configuration cannot safely identify its dependent inputs.
+    const config = readShoulderConfig(configuration.bytes.toString('utf8'), a.shoulderLiftFile!);
+    const restInput = snapshot(resolve(dirname(configuration.file), config.rest.sequence.path), 'rest.sequence.path');
+    const painting = snapshot(resolve(dirname(configuration.file), config.painting.path), 'painting.path');
+    for (const [field, expected, found] of [
+      ['sequenceSHA256', config.sequenceSHA256, poseSnapshot.identity.sha256], ['rigSHA256', config.rigSHA256, rigSnapshot.identity.sha256],
+      ['rest.sequence.sha256', config.rest.sequence.sha256, restInput?.identity.sha256], ['painting.sha256', config.painting.sha256, painting?.identity.sha256],
+    ]) if (found !== undefined && expected !== found) unknown(field!, `expected ${expected}, consumed ${found}`);
+    const selected = a.person ?? [...new Set(seq.frames.flatMap(f => f.people.map(p => p.id)))][0];
+    if (config.person !== selected) unknown('person', `configuration names "${config.person}" but retarget selects "${selected}"`);
+    // Collect independent snapshots/identities/person first; never parse or pose
+    // a missing or identity-mismatched dependent input merely to continue.
+    if (problems.any || restInput === null || painting === null) throw new Refusal(problems.list);
+    const restSequence = readPoseSequence(restInput.bytes.toString('utf8'), restInput.file);
+    const reading = readShoulderSignal(config, seq, restSequence, a.minScore);
+    if (reading.status === 'unknown') throw new Refusal(reading.problems);
+    return { config, reading, snapshots: [configuration, restInput, painting], inputs: { configuration: configuration.identity, rest: restInput.identity, painting: painting.identity } };
+  })();
   const times = seq.frames.map((f) => f.t);
 
   const scratch = mkdtempSync(join(tmpdir(), 'rig-pose-'));
@@ -173,6 +205,10 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     const slots = slotsOf(doc0);
     resolveMap(map, rest, a.map, slots, input.sets);
 
+    if (shoulder !== null) {
+      shoulderRigGuard(shoulder.config, rest, map, doc0);
+      if (a.raisedByHead) throw new Refusal([{ code: 'SHOULDER_LIFT_COMPOSITION', text: 'unknown — --raised-by-head is a positional solve; shoulder translation requires a jointly approved solve' }]);
+    }
     const r = retarget(rest, map, frames, times, { ...a, ...(seq.travel !== undefined ? { travel: seq.travel } : {}), ...(seq.cleaned!.params.loop ? { loop: true } : {}), ...(seq.pelvisSource !== undefined ? { pelvis: { source: seq.pelvisSource, tilt: seq.frames.map((f) => f.pelvisTilt ?? null) } } : {}), ...(contactKeys !== null ? { contactKeys } : {}), ...(seq.cleaned!.params.depth !== undefined ? { gait: seq.cleaned!.params.depth.gait } : {}) }, slots, input.sets);
     if (fragment.length > 0 && ((r.face?.sets?.length ?? 0) > 0 || (r.body?.sets?.length ?? 0) > 0)) {
       const known = knownSetsOf(map, input.sets);
@@ -371,15 +407,70 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     const tracked = added.length === 0 ? r.animation : { ...r.animation, tracks: [...own, ...added] };
     // #304: rig-c's one draw-order timeline sits on the animation beside its tracks; written only when keyed.
     const animation = drawOrder === null || drawOrder.keys.length === 0 ? tracked : { ...tracked, drawOrder: drawOrderKeys(drawOrder) };
-    const motion = { ...base, animations: { ...animations, [a.name]: animation } };
-    const g1 = gate(input.rig, motion, join(scratch, 'with'), a.profile, a.images);
+    let motion = { ...base, animations: { ...animations, [a.name]: animation } };
+    let g1 = gate(input.rig, motion, join(scratch, 'with'), a.profile, a.images);
     if (!g1.green) {
       refuse([{ code: 'RIG_GATE', text: `rigc build --profile ${a.profile} is red with "${a.name}" in (exit ${g1.run.status}); nothing written` }, ...g1.fails.map((f) => ({ code: 'RIGC', text: f }))]);
     }
+    let doc = readBuild(g1.build);
+    let shoulderReport: (ShoulderReading & { inputs: { configuration: ReportInput; rest: ReportInput; painting: ReportInput }; landing: ReturnType<typeof measureShoulderLanding> }) | null = null;
+    if (shoulder !== null) {
+      const target = shoulder.config.target.bone;
+      const baselineTracks = animation.tracks as unknown as RigcTrack[];
+      const translates = (tr: RigcTrack) => ['translate', 'translatex', 'translatey'].includes(tr.property);
+      const touches = (tr: RigcTrack) => tr.bone === target || (typeof tr.group === 'string' && (groups[tr.group] ?? []).includes(target));
+      const reject = (why: string): never => { throw new Refusal([{ code: 'SHOULDER_LIFT_COMPOSITION', text: `unknown — target "${target}": ${why}` }]); };
+      if (own.some(tr => touches(tr) && translates(tr))) reject('already owns a generated translation channel');
+      if (fragment.some(tr => touches(tr) && translates(tr))) reject('a merge fragment owns its translation');
+      if (baselineTracks.some(tr => typeof tr.group === 'string' && touches(tr) && translates(tr))) reject('group translation cannot be split silently');
+      const names = [target, shoulder.config.target.shoulders.r, shoulder.config.target.shoulders.l];
+      const protectedNames = new Set<string>();
+      for (const name of names.flatMap(point => pointParts(point).map(partBone))) {
+        for (let bone: string | null = name; bone !== null; bone = rest.get(bone)?.parent ?? null) protectedNames.add(bone);
+      }
+      const baseAnimation = doc.animations.find(x => x.name === a.name)!;
+      for (const b of baseAnimation.timelines.bones) if (protectedNames.has(b.name) && b.timelines.some(t => t.kind === 'inherit')) reject(`bone "${b.name}" has a dynamic inherit timeline on a protected shoulder path`);
+      const neutral = { ...doc, animations: doc.animations.map(an => an.name !== a.name ? an : { ...an, timelines: { ...an.timelines, bones: an.timelines.bones.map(b => b.name !== target ? b : { ...b, timelines: b.timelines.filter(t => !['translate', 'translatex', 'translatey'].includes(t.kind)) }) } }) };
+      const clock = seq.cleaned!.params.loop ? [...r.times, r.animation.duration] : r.times;
+      const baseline = poseFrames(doc, a.name, clock), stripped = poseFrames(neutral, a.name, clock);
+      const lengths = new Map(doc.bones.map(b => [b.name, b.length ?? 0]));
+      // Validate the composed world domain on all keys, including a loop's
+      // duration endpoint; a bounded local key alone does not bound world space.
+      const finalTargets = names.map(point => ({ point, at: baseline.map((bones, i): [number, number] => {
+        const v = pointAt(bones, lengths, point)!;
+        const lift = shoulder.reading.frames[i < r.times.length ? i : 0]!.worldUnits;
+        const at: [number, number] = [v[0], v[1] + lift]; shoulderOrigin(point, at, i); return at;
+      }) }));
+      const expected = finalTargets.map(row => ({ point: row.point, at: row.at.slice(0, r.times.length) }));
+      const keys = baseline.map((bones, i) => {
+        const b = bones.get(target)!;
+        for (const name of protectedNames) shoulderMatrix(bones.get(name)!, Math.min(i, r.times.length - 1));
+        const n = stripped[i]!.get(target)!;
+        const parent = b.parent === null ? null : bones.get(b.parent)!;
+        const lift = shoulder.reading.frames[i < r.times.length ? i : 0]!.worldUnits;
+        return { t: clock[i]!, v: shoulderLocal(parent, [b.worldX, b.worldY], [n.worldX, n.worldY], lift, i) };
+      });
+      // A zero reading preserves the original baseline channels exactly, including idle curves.
+      if (shoulder.reading.frames.some(f => f.worldUnits !== 0)) {
+        const tracks = [...baselineTracks.filter(tr => !(touches(tr) && translates(tr))), { bone: target, property: 'translate', keys }];
+        motion = { ...base, animations: { ...animations, [a.name]: { ...animation, tracks } } };
+        g1 = gate(input.rig, motion, join(scratch, 'shoulder-final'), a.profile, a.images);
+        if (!g1.green) reject(`final existing motion keys failed rig-c gate (exit ${g1.run.status}): ${g1.fails.join('; ')}`);
+        doc = readBuild(g1.build);
+      }
+      const finalPosed = poseFrames(doc, a.name, clock);
+      for (const point of names) finalPosed.forEach((bones, frame) => {
+        const at = pointAt(bones, lengths, point);
+        if (at === null) throw new Refusal([{ code: 'SHOULDER_LIFT_RIG', text: `unknown — final point "${point}" frame ${frame} is absent` }]);
+        shoulderOrigin(point, at, frame);
+      });
+      const landing = measureShoulderLanding(doc, a.name, r.times, expected);
+      if (landing.worst > landing.tolerance) throw new Refusal([{ code: 'SHOULDER_LIFT_LANDS', text: `unknown — point "${landing.bone}" frame ${landing.frame}: emitted world residual ${landing.worst} units, required <= ${landing.tolerance}` }]);
+      shoulderReport = { ...shoulder.reading, inputs: shoulder.inputs, landing };
+      tell(`  SHOULDER-LIFT SUPPLIED target "${target}"; ${shoulder.reading.frames.length} calibrated samples; world landing ${landing.worst} <= ${landing.tolerance} units`);
+    }
     const gateText = gateLine(a.profile, g1.summary);
     say(`  GATE   ${gateText}`);
-
-    const doc = readBuild(g1.build);
     const posed = poseFrames(doc, a.name, r.times);
     // A reduced track is held to the dense target plus its tolerance (#32); an ankle, to what the
     // reduced bones above it may move it by (#94, `footReduce`). A scale keeps its own: it is reduced within half of it.
@@ -466,10 +557,12 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     for (const d of drift) say(`  REDUCE ${ankleDriftLine(d)}`);
 
     assertReportInputs([rigSnapshot,mapSnapshot,poseSnapshot]);
+    if (shoulder !== null) assertReportInputs(shoulder.snapshots);
     // Every retarget option as resolved: the report's `options`, and with the name the build record's `flags` (#270).
-    const options = { minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', floor: a.floor ?? null, raisedByHead: a.raisedByHead === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', ...(a.reduceChains === undefined ? {} : { reduceChains: a.reduceChains }), reduceHip: a.reduceHip ?? 'off', ...(a.reduceKeepPlanted === true ? { reduceKeepPlanted: true } : {}), ...(a.drawOrder !== undefined ? { drawOrder: a.drawOrder } : {}), ...(a.contactKeysFile !== undefined ? { contactKeys: a.contactKeysFile } : {}) };
+    const options = { ...(shoulder === null ? {} : { shoulderLift: a.shoulderLiftFile }), minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', floor: a.floor ?? null, raisedByHead: a.raisedByHead === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', ...(a.reduceChains === undefined ? {} : { reduceChains: a.reduceChains }), reduceHip: a.reduceHip ?? 'off', ...(a.reduceKeepPlanted === true ? { reduceKeepPlanted: true } : {}), ...(a.drawOrder !== undefined ? { drawOrder: a.drawOrder } : {}), ...(a.contactKeysFile !== undefined ? { contactKeys: a.contactKeysFile } : {}) };
     const reportText = writeReport({
         spec: 'rig-pose-report/1',
+        ...(shoulderReport === null ? {} : { shoulderLift: shoulderReport }),
         rigc,
         rig: input.name,
         animation: a.name,
@@ -547,11 +640,12 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     if (a.build !== undefined) {
       // Built again where it will live, not copied: rigc's page paths are relative to the build (#18).
       rmSync(a.build, { recursive: true, force: true });
-      const kept = buildInto(input.rig, join(scratch, 'with', 'motion.json'), resolve(a.build), a.profile, undefined, a.images);
+      const kept = buildInto(input.rig, join(dirname(g1.build), 'motion.json'), resolve(a.build), a.profile, undefined, a.images);
       if (!kept.green) refuse([{ code: 'RIG_GATE', text: `rigc build into --build ${a.build} is red where the same build was green in scratch (exit ${kept.run.status}); nothing written` }, ...kept.fails.map((x) => ({ code: 'RIGC', text: x }))]);
     }
     // The kept build reads the rig again; its bytes must still match the report.
     assertReportInputs([rigSnapshot,mapSnapshot,poseSnapshot]);
+    if (shoulder !== null) assertReportInputs(shoulder.snapshots);
     if (a.build !== undefined) {
       // #270: what made the build, beside it — the inputs as given with the bytes' hashes (the ones just
       // re-checked), the versions, the options; `reference` only when the author gave one.
@@ -562,6 +656,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         sequence: { path: a.pose, sha256: poseSnapshot.identity.sha256, source: seq.source },
         name: a.name,
         options,
+        ...(shoulder === null ? {} : { shoulderLift: shoulder.inputs }),
         ...(a.reference === undefined ? {} : { reference: a.reference }),
       }));
       say(`  RECORD ${PROVENANCE_FILE} written beside the build (reference: ${a.reference ?? 'none given'})`);
