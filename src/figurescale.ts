@@ -79,4 +79,3 @@ export function figureScaleLines(r: FigureScale, cameraDeclared: boolean): strin
   if (!cameraDeclared && r.variation > r.threshold) lines.push(`CAMERA_UNDECLARED WARN: ${reading}, over ${(100 * r.threshold).toFixed(1)}%; declare camera before clean (acquisition → camera declaration → clean): zoom can read as motion; pose foreshortening can also change figure scale; no camera guessed or corrected`);
   return lines;
 }
-
