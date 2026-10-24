@@ -908,3 +908,16 @@ export function jitterLine(j: JitterRow): string {
   const ratio = j.ratio === null ? (j.pair === 0 ? ' — the pair is still' : '') : ` (${j.ratio.toFixed(2)}×)`;
   return `bone "${j.bone}" (chain "${j.chain}", ${j.joints[0]} → ${j.joints[1]}${j.reach ? ', reach' : ''}): mean |Δ²| of the keyed local rotation as posed ${f(j.rig)} against ${vs} ${f(j.pair)}${ratio}, over ${j.triples} frame triple(s); a reading`;
 }
+
+/** #408: independent final poser comparison, including both supplied shoulder rig points. */
+export function measureShoulderLanding(doc: CompiledDocument, animation: string, times: readonly number[], expected: readonly { point: string; at: readonly [number, number][] }[]): { bone: string; frame: number; t: number; worst: number; tolerance: number } {
+  const posed = poseFrames(doc, animation, times), lengths = new Map(doc.bones.map(b => [b.name, b.length ?? 0]));
+  let out = { bone: expected[0]!.point, frame: 0, t: times[0]!, worst: 0, tolerance: ORIGIN_TOLERANCE };
+  for (const row of expected) posed.forEach((bones, frame) => {
+    const reached = pointAt(bones, lengths, row.point), asked = row.at[frame]!;
+    const error = reached === null ? Infinity : Math.hypot(reached[0] - asked[0], reached[1] - asked[1]);
+    if (!Number.isFinite(error)) out = { ...out, bone: row.point, frame, t: times[frame]!, worst: Infinity };
+    else if (error > out.worst) out = { ...out, bone: row.point, frame, t: times[frame]!, worst: error };
+  });
+  return out;
+}

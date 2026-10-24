@@ -133,6 +133,7 @@ retarget
   --base-motion <path>  the rig's motion spec, when it is not motion.json beside rig.json
   --images <dir>        passed to rigc build: where the rig spec's images are, when its own "images" path
                         does not reach them (a rig.json copied away from its images)
+  --shoulder-lift <file>  read supplied calibrated shoulder elevation relative to arms-down rest; unknown refuses
   --min-score <s>       a joint scored below s is not good on that frame and holds its last good
                         value (default: 0.3); a joint with no score is good
   --smooth <n>          an alias kept since rig-c/pose#67: the smoothing is clean's (--legs, --rest); retarget
@@ -411,7 +412,7 @@ function legScaleOf(f: Map<string, string>): [number, number] | 'off' {
 const RETARGET_ALIASES = { sequence: 'pose', animation: 'name' } as const;
 
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'reference', 'render', 'parts', 'report', 'camera', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor', 'draw-order', 'contact-keys'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head', 'reduce-keep-planted', 'verbose', 'summary'], RETARGET_ALIASES);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'reference', 'render', 'parts', 'report', 'camera', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor', 'draw-order', 'contact-keys', 'shoulder-lift'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head', 'reduce-keep-planted', 'verbose', 'summary'], RETARGET_ALIASES);
   if (f.has('verbose') && f.has('summary')) throw new Usage('--verbose and --summary are both given; --verbose prints every line in full and --summary one line per measure, so give one');
   if (f.has('reference') && !f.has('build')) throw new Usage(`--reference needs --build: the record it goes in is written beside the build (${PROVENANCE_FILE})`);
   const bends = f.get('bends') ?? 'refuse';
@@ -461,6 +462,7 @@ function retargetArgs(argv: string[]): RetargetArgs {
     ...reduceOf(f),
     output: f.has('verbose') ? 'verbose' : f.has('summary') ? 'summary' : 'default',
     ...(drawOrder !== undefined ? { drawOrder: 'depth' as const } : {}),
+    ...(f.has('shoulder-lift') ? { shoulderLiftFile: f.get('shoulder-lift')! } : {}),
     ...(f.has('contact-keys') ? { contactKeysFile: f.get('contact-keys')! } : {}),
   };
 }

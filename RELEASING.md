@@ -193,6 +193,7 @@ No other repository in the org (core, parts, play, adapters, parts-examples, tra
 | `rig-pose-camera/1` (`--camera`) | promised | S |
 | `rig-pose-tracks/1` (`--merge`), `rig-pose-compare/1` (`compare --report`) | courtesy | — |
 | `rig-pose-retarget/1` (`--build`'s `retarget.json`, rig-c/pose#270) | courtesy | — |
+| `rig-pose-shoulder-lift/1` (`retarget --shoulder-lift`, #408), every configuration field documented in docs/REFERENCE.md | courtesy | No recorded promised reader |
 | `rig-pose-figure-scale/1` (`clean`'s `<out>.figure-scale.json`, rig-c/pose#404): `spec`, `inputSHA256`, `sequenceSHA256`, `person`, `cameraDeclared`, and `figureScale` with `source`, `method`, `minScore`, `threshold`, `referencePx`, `scale`, `minFrame`, `maxFrame`, `variation` | courtesy | No recorded promised reader; a separate diagnostic, never a field in the strict pose/cleaned format |
 
 ### Flags
@@ -257,6 +258,7 @@ Every flag `parseFlags` reads in `cli.ts`, once. `test/promise.test.ts` holds th
 | `retarget` | `--reduce-keep-planted` | courtesy | — | |
 | `retarget` | `--draw-order` | courtesy | — | (rig-c/pose#304) |
 | `retarget` | `--contact-keys` | courtesy | — | (rig-c/pose#303) |
+| `retarget` | `--shoulder-lift` | courtesy | — | Supplied calibration file; #408 |
 | `retarget` | `--verbose` | courtesy | — | |
 | `retarget` | `--summary` | courtesy | — | |
 | `retarget` | `--sequence` | promised | X 1 | alias of `--pose` |
@@ -320,6 +322,7 @@ Every key `rig-pose-report/1` can carry, once: the keys `src/run.ts` writes, and
 | `switchRuns` | courtesy | — | (rig-c/pose#279; `turned`, rig-c/pose#355) |
 | `switchBinds` | courtesy | — | only when the map binds a set (rig-c/pose#360) |
 | `drawOrder` | courtesy | — | (rig-c/pose#304; `layout` and `groups`, the forearms against the trunk, rig-c/pose#346) |
+| `shoulderLift` | courtesy | — | Only with --shoulder-lift; supplied inputs, signed frame readings and independent world landing (#408) |
 | `contactKeys` | courtesy | — | only with `--contact-keys` (rig-c/pose#303) |
 | `reach` | courtesy | — | |
 | `reachOrigin` | courtesy | — | only when the map has a `reach` chain (rig-c/pose#282) |
@@ -476,6 +479,115 @@ coordinates on flips and shear remain promised.
 | `stance.runs[].moved`, `stance.runs[].moved.above`, `stance.runs[].moved.below`, `stance.runs[].moved.below.legLengths` | courtesy | No recorded promised reader |
 | `stance.runs[].moved.below.units`, `stance.runs[].moved.count`, `stance.runs[].moved.frames`, `stance.runs[].moved.side` | courtesy | No recorded promised reader |
 | `stance.runs[].side`, `stance.runs[].state`, `stance.runs[].times`, `stance.tolerance` | courtesy | No recorded promised reader |
+| `options.shoulderLift` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.axis` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.calibration` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.calibration.cameraToPainting` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.calibration.cameraToPainting.absoluteError` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.calibration.cameraToPainting.source` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.calibration.cameraToPainting.value` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.calibration.paintingToRig` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.calibration.paintingToRig.absoluteError` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.calibration.paintingToRig.source` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.calibration.paintingToRig.value` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.camera` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.camera.domain` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.camera.mode` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.camera.residualPx` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.camera.source` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.evidence` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.frames` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.frames[].frame` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.frames[].paintingPx` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.frames[].sequencePx` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.frames[].sourceBoundUnits` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.frames[].sourceTime` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.frames[].states` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.frames[].states.l_ear` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.frames[].states.l_hip` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.frames[].states.l_shoulder` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.frames[].states.r_ear` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.frames[].states.r_hip` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.frames[].states.r_shoulder` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.frames[].t` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.frames[].toleranceUnits` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.frames[].worldUnits` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.inputs` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.inputs.configuration` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.inputs.configuration.path` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.inputs.configuration.sha256` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.inputs.painting` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.inputs.painting.path` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.inputs.painting.sha256` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.inputs.rest` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.inputs.rest.path` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.inputs.rest.sha256` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.landing` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.landing.bone` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.landing.frame` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.landing.t` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.landing.tolerance` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.landing.worst` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.method` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.rest` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.rest.q0` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.rest.sampleIndices` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.rest.states` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.rest.states[].l_ear` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.rest.states[].l_hip` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.rest.states[].l_shoulder` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.rest.states[].r_ear` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.rest.states[].r_hip` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.rest.states[].r_shoulder` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.sampling` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.sampling.pointErrorPx` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.sampling.resolutionPx` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.status` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.target` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.target.bone` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.target.ears` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.target.ears.l` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.target.ears.r` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.target.hips` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.target.hips.l` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.target.hips.r` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.target.idle` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.target.shoulders` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.target.shoulders.l` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `shoulderLift.target.shoulders.r` | courtesy | Supplied opt-in reading; no recorded promised reader (#408) |
+| `cleaned.holds` | promised | Existing #209 clean event identity/time contract; exposed by the #408 control |
+| `cleaned.holds[].bone` | promised | Existing #209 clean event identity/time contract; exposed by the #408 control |
+| `cleaned.holds[].frames` | promised | Existing #209 clean event identity/time contract; exposed by the #408 control |
+| `cleaned.holds[].jitter` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `cleaned.holds[].jitter.after` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `cleaned.holds[].jitter.before` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `cleaned.holds[].joint` | promised | Existing #209 clean event identity/time contract; exposed by the #408 control |
+| `cleaned.holds[].times` | promised | Existing #209 clean event identity/time contract; exposed by the #408 control |
+| `cleaned.params.hold` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `cleaned.params.hold.blend` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `cleaned.params.hold.minSeconds` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `cleaned.params.hold.reach` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `cleaned.params.hold.speed` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `cleaned.seams` | promised | Existing #209 clean event identity/time contract; exposed by the #408 control |
+| `cleaned.unheld` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `cleaned.unheld[].bone` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `cleaned.unheld[].frames` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `cleaned.unheld[].joint` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `cleaned.unheld[].test` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `cleaned.unheld[].times` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `cleaned.unheld[].value` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `idleDropped[].carried` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `idleDropped[].carried.cycles` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `idleDropped[].carried.keys` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `idleDropped[].carried.seams` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `idleDropped[].duration` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `idleDropped[].keys` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `idleDropped[].members` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `idleDropped[].notCarried` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `idleDropped[].property` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `idleDropped[].target` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `idleDropped[].target.kind` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `idleDropped[].target.name` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
 
 ### Problem codes and line tags
 
@@ -485,6 +597,8 @@ Promised codes, with their use:
 - D: `RIG_GATE_BASE`, `POSE_NOT_CLEANED`, `POSE_BEND_ONE_WAY`, `POSE_POINT_NEVER_GOOD`, `STANCE`.
 - X: `ARG_PATH`, `MAP_BEND_SIDE`, `MAP_CHAIN_JOINTS`, `MAP_TRANSLATE_SCALE`, `RIGC`.
 
+The #408 codes `SHOULDER_LIFT_CONFIG`, `SHOULDER_LIFT_INPUT`, `SHOULDER_LIFT_CALIBRATION`, `SHOULDER_LIFT_JOINT`, `SHOULDER_LIFT_LOOP`, `SHOULDER_LIFT_RIG`, `SHOULDER_LIFT_COMPOSITION` and `SHOULDER_LIFT_LANDS` are courtesy. They refuse a requested reading as unknown; no successful zero replaces missing evidence. Optional `rig-pose-retarget/1` input `inputs.shoulderLift` and its `configuration`, `rest`, `painting` path/sha256 identities are courtesy. Existing input and exit promises remain unchanged.
+
 Every other code is courtesy (`FIGURE_SCALE_RECORD` (#404, malformed external figure-scale record), `SET_KEY_DRAWN`, rig-c/pose#355; `MAP_ALT_BIND`, `SET_BIND_FRAMES` and `SET_BIND_OVERLAP`, rig-c/pose#360; and rig-c/pose#346's `MAP_LAYOUT`, `LAYOUT_JSON`, `LAYOUT_SPEC`, `LAYOUT_SHAPE`, `LAYOUT_RIG_SHA`, `LAYOUT_SETS_SHA`, `LAYOUT_SETUP`, `LAYOUT_ADJACENCY`, `LAYOUT_MISSING`, `LAYOUT_UNBOUND`, `LAYOUT_BINDING_UNKNOWN` and `LAYOUT_BINDING_BONES`, among them). That a refusal always carries some code is promised; which code it carries is promised only for the codes above.
 
 Promised line tags, with their use:
@@ -492,6 +606,8 @@ Promised line tags, with their use:
 - S: `SCALE`, which the sheets name.
 - D: `GATE`.
 - X: `BODY`, `CLEAN`, `FEET`, `FOLD`, `HOLD`, `IDLE-DROPPED`, `IDLE-KEPT-OUT`, `LAND`, `LEG-SCALE`, `POSTURE`, `RIGC`, `SHEAR`, `STANCE`.
+
+The #408 `SHOULDER-LIFT` tag is courtesy and explicitly labels evidence `SUPPLIED`.
 
 Every other tag is courtesy (`FIGURE-SCALE` and `CAMERA_UNDECLARED` (#404, an advisory warning, never a refusal), `SWITCH-TURN`, rig-c/pose#355, and `SWITCH-BIND`, rig-c/pose#360, among them).
 

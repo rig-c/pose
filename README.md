@@ -44,6 +44,8 @@ The map names **chains**: each limb as bones that descend from one another, pare
 
 ## Commands
 
+`rig-pose retarget ... --shoulder-lift <file>` opts into [calibrated shoulder elevation](docs/REFERENCE.md#calibrated-shoulder-elevation---shoulder-lift).
+
 The order is **clean → retarget**, with `pelvis` before `clean` when the drawing carries a pelvis tilt the detector lost, and `compare` after a render. Every command refuses by name and writes nothing when it refuses; `rig-pose --help` lists every flag. Exit codes are `0` written (for `compare`: compared), `1` refused, `2` bad invocation.
 
 ### `rig-pose clean`
