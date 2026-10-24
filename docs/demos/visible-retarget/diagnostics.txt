@@ -1,0 +1,78 @@
+HISTORICAL V1 PRE-HAND RETARGET — original pose targets; not newly measured v3 LAND
+  GATE   rigc build --profile spine: green — 50 assertions: 23 measured (23 passed, 0 failed), 13 skipped, 14 not in profile "spine"
+  LAND   bone "hip" aim — worst |reached − asked| 0.000509° at frame 130 (t=5.417s); the tolerance is 0.01°
+  LAND   bone "chest" aim — worst |reached − asked| 0.000933° at frame 206 (t=8.583s); the tolerance is 0.01°
+  LAND   bone "head" aim — worst |reached − asked| 0.00127° at frame 179 (t=7.458s); the tolerance is 0.01°
+  LAND   bone "sleeve_r0" aim — worst |reached − asked| 0.00126° at frame 228 (t=9.500s); the tolerance is 0.01°
+  LAND   bone "sleeve_r1" aim — worst |reached − asked| 0.00168° at frame 234 (t=9.750s); the tolerance is 0.01°
+  LAND   bone "sleeve_l0" aim — worst |reached − asked| 0.00129° at frame 169 (t=7.042s); the tolerance is 0.01°
+  LAND   bone "sleeve_l1" aim — worst |reached − asked| 0.00177° at frame 169 (t=7.042s); the tolerance is 0.01°
+  LAND   bone "leg_r0" aim — worst |reached − asked| 0.000930° at frame 259 (t=10.792s); the tolerance is 0.01°
+  LAND   bone "leg_r1" aim — worst |reached − asked| 0.00143° at frame 133 (t=5.542s); the tolerance is 0.01°
+  LAND   bone "leg_l0" aim — worst |reached − asked| 0.000970° at frame 133 (t=5.542s); the tolerance is 0.01°
+  LAND   bone "leg_l1" aim — worst |reached − asked| 0.00142° at frame 148 (t=6.167s); the tolerance is 0.01°
+  LAND   bone "yaw_dial" aim — worst |reached − asked| 0.0000202° at frame 193 (t=8.042s); the tolerance is 0.01°
+  LAND   bone "pitch_dial" aim — worst |reached − asked| 0.0000229° at frame 119 (t=4.958s); the tolerance is 0.01°
+  LAND   bone "leg_r0" scale — worst |reached − asked| 5.79e-7 of its setup length at frame 109 (t=4.542s); the tolerance is 0.0001 of its setup length
+  LAND   bone "leg_r1" scale — worst |reached − asked| 0.00000106 of its setup length at frame 152 (t=6.333s); the tolerance is 0.0001 of its setup length
+  LAND   bone "leg_l0" scale — worst |reached − asked| 5.67e-7 of its setup length at frame 140 (t=5.833s); the tolerance is 0.0001 of its setup length
+  LAND   bone "leg_l1" scale — worst |reached − asked| 0.00000114 of its setup length at frame 184 (t=7.667s); the tolerance is 0.0001 of its setup length
+  LAND   bone "hip" origin — worst |reached − asked| 0.000657 units at frame 92 (t=3.833s); the tolerance is 0.01 units
+  LAND   bone "leg_r1:tip" ankle — worst |reached − asked| 0.00993 units at frame 133 (t=5.542s); the tolerance is 0.062 units
+  LAND   bone "leg_l1:tip" ankle — worst |reached − asked| 0.00944 units at frame 87 (t=3.625s); the tolerance is 0.0623 units
+
+V3 ACCEPTED CORE GATE — verified matching accepted build; reused raw build log
+  PASS  A07_ATLAS_TEXT_SHAPE
+  PASS  A08_REGION_NAMES_MATCH_ATTACHMENTS
+  PASS  A52_WEIGHTED_VERTICES_SHARE_ONE_BONE_ORDER
+  PASS  A00_ROUNDTRIP_PARSE
+  PASS  A16_SKELETON_VERSION_4_3
+  PASS  A01_NO_LEGACY_TOPLEVEL_CONSTRAINT_ARRAYS
+  PASS  A02_NO_BONE_TRANSFORM_KEY
+  PASS  A05_CURVE_ARRAY_LENGTH
+  PASS  A03_REGION_WIDTH_HEIGHT_FINITE
+  PASS  A04_MESH_TRIANGLES_AND_ENCODING
+  PASS  A20_MESH_WEIGHTS_COHERENT
+  PASS  A22_MESH_UVS_IN_UNIT_RANGE
+  PASS  A23_PHYSICS_CONSTRAINT_EFFECTIVE
+  PASS  A37_SLIDER_CONSTRAINT_EFFECTIVE
+  PASS  A47_IK_CONSTRAINT_NOT_MUTED_THROUGHOUT
+  PASS  A48_TRANSFORM_CONSTRAINT_NOT_MUTED_THROUGHOUT
+  PASS  A40_SLIDERS_COMPOSE_ON_A_SHARED_TARGET
+  PASS  A09_ANIMATION_DURATION_MATCHES_SPEC
+  PASS  A10_NO_NAN_AFTER_STEPPING
+  PASS  A17_ATLAS_PAGE_FILES_EXIST
+  PASS  A06_ATLAS_PAGE_SIZE_MATCHES_PNG
+  PASS  A51_BONES_LIE_ALONG_THEIR_DECLARED_AXIS
+  PASS  A18_DETERMINISTIC_EMIT
+  SKIP  A31_DRAW_ORDER_OFFSETS_RESOLVE: no animation carries a drawOrder timeline
+  SKIP  A32_EVENT_KEYS_RESOLVE: no animation carries an event timeline
+  SKIP  A34_CONSTRAINT_TIMELINE_TARGETS: no animation carries a constraint timeline
+  SKIP  A35_DEFORM_KEYS_FIT_THE_ATTACHMENT: no animation carries a deform timeline
+  SKIP  A33_VERTEX_ATTACHMENT_GEOMETRY: the skeleton carries no bounding box, clipping attachment or path
+  SKIP  A36_PATH_CONSTRAINT_EFFECTIVE: the skeleton declares no path constraint
+  SKIP  A42_DRIVEN_CONSTRAINTS_UPDATE_AFTER_THEIR_DRIVER: no animation applied by one of the 2 slider constraints keys a property of a constraint, so no slider here drives a constraint
+  SKIP  A38_SKIN_MEMBERS_ARE_SKIN_REQUIRED: no skin activates a bone or a constraint, and nothing declares itself skinRequired
+  SKIP  A43_TWO_COLOR_TINT_LOADS_AND_POSES_AS_WRITTEN: no slot declares a "dark" colour and no animation keys an "rgba2" or "rgb2" timeline, so there is no two-colour tint to read back
+  SKIP  A45_SEPARABLE_COLOR_TIMELINES_OWN_THEIR_CHANNELS_AND_POSE_AS_WRITTEN: no animation keys an "rgb" or "alpha" timeline, so there is no separable slot colour to read back
+  SKIP  A44_LINKED_MESH_STATES_NO_GEOMETRY_OF_ITS_OWN: no attachment in this skeleton takes its geometry from another one
+  SKIP  A46_SEQUENCE_ATTACHMENTS_SHOW_THE_FRAME_THE_FILE_STATES: no attachment carries a "sequence" block and no animation keys a "sequence" timeline, so there is no numbered series to read back
+  SKIP  A50_STAGE_BOX_IS_THE_STAGE: nothing asks for a stage box: no rigc-compiled/3 model document beside this skeleton states one (stage.box, from the rig spec's skeleton.stageBox) — a rig that does not ask, or an export, carries no stage in its Spine files to measure
+  PROF  A12_NO_DARK_COLOR: renderer rule, not in profile "spine"
+  PROF  A13_MESH_BUDGET: renderer rule, not in profile "spine"
+  PROF  A14_NO_FULL_FRAME_MESH: renderer rule, not in profile "spine"
+  PROF  A15_IDLE_NO_MESH_BONE_KEYS: renderer rule, not in profile "spine"
+  PROF  A21_MESH_RIM_PINNED: archetype rule, not in profile "spine"
+  PROF  A39_DEFORM_KEEPS_TRIANGLE_WINDING: archetype rule, not in profile "spine"
+  PROF  A19_OVERLAY_PNGS_HAVE_ALPHA: renderer rule, not in profile "spine"
+  PROF  A49_PACKED_FOOTPRINTS_DO_NOT_OVERLAP: renderer rule, not in profile "spine"
+  PROF  A24_AXIS_SPACE_STROKE: archetype rule, not in profile "spine"
+  PROF  A25_DETACHED_BONE_PARENTAGE: archetype rule, not in profile "spine"
+  PROF  A26_SLOT_DRAW_ORDER: archetype rule, not in profile "spine"
+  PROF  A28_RIBBON_ROWS_SHARE_WEIGHTS: archetype rule, not in profile "spine"
+  PROF  A29_STROKE_WITHIN_CONTACT_DEPTH: archetype rule, not in profile "spine"
+  PROF  A30_STROKE_WITHIN_CAP_CONTAINMENT: archetype rule, not in profile "spine"
+50 assertions: 23 measured (23 passed, 0 failed), 13 skipped, 14 not in profile "spine"
+
+V3 FOLD — freshly measured on unchanged accepted model; NOT green
+  ..    folds    "zero-two-r3-hand": mesh "shins" (slot "shins") folds on 269 frame(s) [0-190, 195-220, 339-390] at 30 fps; worst frame 0 (t=0.0000s): 2 of 448 triangle(s) [28, 29] in world box x [-7.16, 12.38] y [461.80, 476.25] (19.53 × 14.43), setup-pose area 144.00 units² = 0.446% of the mesh's; 2 triangle(s) fold on some frame [28, 29]
