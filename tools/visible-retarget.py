@@ -210,7 +210,7 @@ def stage_record(corpus, replay, render, diagnostic_log):
     return result, diagnostics
 
 
-def compose(corpus, replay, media):
+def compose(corpus, replay, media, reuse_diagnostic=None):
     from PIL import Image, ImageDraw, ImageFont, __version__ as pillow_version
     require(pillow_version == '12.2.0', 'PILLOW_PIN', f'expected 12.2.0, found {pillow_version}')
     sequence_path = corpus / 'accepted/sequence.json'
@@ -221,14 +221,24 @@ def compose(corpus, replay, media):
     times, frames = source_track(seq)
     require(times[0] == 0 and times[-1] == 13, 'SOURCE_TIME', 'the baseline take must cover 0..13 seconds')
     verify_replay(corpus, replay)
-    viewport_path = diagnostic_render(corpus, replay, media.parent / (media.name + '-diagnostic'))
+    if reuse_diagnostic is None:
+        viewport_path = diagnostic_render(corpus, replay, media.parent / (media.name + '-diagnostic'))
+    else:
+        # Reuse only the exact accepted diagnostic already bound in the public record.
+        expected = json.loads((ROOT / 'docs/demos/visible-retarget/record.json').read_text())
+        require(expected['acceptedModelSHA256'] == MODEL and expected['acceptedNativeFramesSHA256'] == NATIVE, 'DIAGNOSTIC_PIN', 'published diagnostic belongs to a different build')
+        viewport_path = reuse_diagnostic / 'frames.json'
     metadata = json.loads(viewport_path.read_text())
     sets = [s for s in metadata['sets'] if s['animation'] == 'zero-two-r3-hand']
     require(len(sets) == 1 and sets[0]['fps'] == FPS and sets[0]['written'] == FRAME_COUNT and sets[0]['duration'] == 13, 'RENDER_TIME', 'the accepted render time base changed')
     render = viewport_path.parent / sets[0]['dir']
+    if reuse_diagnostic is not None:
+        require(digest(render / 'folds.json') == expected['stages']['currentV3Fold']['foldsSHA256'], 'DIAGNOSTIC_HASH', 'reused fold measurement differs from the published record')
     require(digest(replay / 'build/skeleton.model.json') == MODEL, 'MODEL_HASH', 'final accepted model differs')
     require(metadata['viewport'] == json.loads((corpus / 'accepted-dance/viewport.json').read_text())['viewport'], 'RIG_VIEW', 'accepted fixed viewport differs')
-    stages, diagnostics = stage_record(corpus, replay, render, media.parent / 'logs/v3-fold-render.txt')
+    native_digest(render)
+    diagnostic_log = viewport_path.parent.parent / 'logs/v3-fold-render.txt'
+    stages, diagnostics = stage_record(corpus, replay, render, diagnostic_log)
     media.mkdir(parents=True)
     (media / 'diagnostics.txt').write_text(diagnostics)
     view = source_view(frames)
@@ -245,9 +255,9 @@ def compose(corpus, replay, media):
         sampling.append({'renderFrame': i, **alignment})
         canvas = Image.new('RGB', SIZE, (245, 246, 248))
         draw = ImageDraw.Draw(canvas)
-        draw.text((12, 8), 'Accepted v3 · source skeleton and unchanged rig', fill='#152233', font=font)
-        draw.text((12, 30), 'SOURCE skeleton · camera normalized', fill='#273646', font=small)
-        draw.text((306, 30), 'RIG · accepted fixed world view', fill='#273646', font=small)
+        draw.text((12, 8), 'Dance retarget: source pose beside the rig', fill='#152233', font=font)
+        draw.text((12, 30), 'Source pose (camera-normalized)', fill='#273646', font=small)
+        draw.text((306, 30), 'Rig', fill='#273646', font=small)
         for x, y, w, h in PANELS:
             draw.rectangle((x, y, x + w - 1, y + h - 1), fill=(232, 232, 232), outline='#aab0b8')
         for a, b in EDGES:
@@ -263,8 +273,7 @@ def compose(corpus, replay, media):
             rig = rig.resize((round(rig.width * k), round(rig.height * k)), Image.Resampling.LANCZOS)
             canvas.paste(rig, (x + (w - rig.width) // 2, y + (h - rig.height) // 2))
         draw = ImageDraw.Draw(canvas)
-        draw.text((12, 480), f't={i/FPS:.3f}s · frame {i}/390 · 13s take · NOT A LOOP', fill='#253444', font=font)
-        draw.text((12, 501), 'V3 FOLD shins 269/391 · independent views; no accuracy claim', fill='#8b3b14', font=small)
+        draw.text((12, 480), f't={i/FPS:.3f}s', fill='#253444', font=font)
         canvas.save(frame_dir / f'f{i:04d}.png')
         if i == 0: canvas.save(media / 'pose-dance.png')
         if i in sheet_indices: thumbs.append(canvas.resize((300, 270), Image.Resampling.LANCZOS))
@@ -334,6 +343,7 @@ def main():
     parser.add_argument('--out',required=True)
     parser.add_argument('--source',help='Previously fetched, hash-verified source/dancer for compose')
     parser.add_argument('--replay',help='Completed accepted v3 replay for compose')
+    parser.add_argument('--reuse-diagnostic', help='Read-only diagnostic render matching the published fold hash, accepted viewport/time base and native PNG digest')
     parser.add_argument('--reuse-replay',help='Read-only accepted v3 replay cache; exact canonical/build/native/runtime verification required')
     args=parser.parse_args();out=Path(args.out).resolve()
     if args.command=='selftest': selftest(out);return
@@ -342,7 +352,7 @@ def main():
     if args.command=='compose':
         require(args.source is not None and args.replay is not None,'COMPOSE_INPUT','--source and --replay are required')
         corpus=Path(args.source).resolve();replay=Path(args.replay).resolve()
-        compose(corpus,replay,out);return
+        compose(corpus,replay,out,Path(args.reuse_diagnostic).resolve() if args.reuse_diagnostic else None);return
     out.mkdir(parents=True)
     corpus=fetch(out/'source')
     checked=real_reader(corpus/'accepted/sequence.json');write_json(out/'reader-preflight.json',checked)
@@ -352,7 +362,7 @@ def main():
         replay=out/'replay'
         run_command('accepted-reproduction',['sh',str(corpus/'build-accepted-dance.sh'),str(replay)],ROOT,out/'logs')
     verify_replay(corpus,replay)
-    compose(corpus,replay,out/'media')
+    compose(corpus,replay,out/'media',Path(args.reuse_diagnostic).resolve() if args.reuse_diagnostic else None)
 
 
 if __name__ == '__main__':

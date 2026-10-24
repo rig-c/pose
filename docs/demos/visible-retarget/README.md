@@ -53,7 +53,11 @@ Incremental `run --reuse-replay <completed-v3-output>` may reuse an immutable
 accepted replay only after the same exact canonical/build/native/runtime
 checks. `compose --source <source/dancer> --replay <completed-v3-output> --out
 <new-media-dir>` uses those checks too. The optional cache is never modified
-and is not required by the default public recipe. Large native frames and
+and is not required by the default public recipe. To recompose pixel copy only,
+`compose --reuse-diagnostic <completed-diagnostic-dir>` can reuse the already
+measured v3 diagnostic: its published fold hash, accepted native PNG digest,
+time base and viewport are verified before use. It does not rerun the native
+render or change the recorded measurement stage. Large native frames and
 runtime stay remote; only final small media and records need recovery.
 
 ## Timing and views
@@ -80,8 +84,8 @@ one frame. There is no loop attribute or loop-seam claim.
 - **Accepted v3 gate 23 PASS / 0 FAIL / 13 SKIP / 14 excluded:** actual build
   log bound to verified source/model. Reuse is explicit; skips and exclusions
   are not passes.
-- **Current v3 FOLD:** freshly read on the unchanged build. Shins 269/391 is
-  shown as a known fold. A contradiction is reported, not tuned away. The
+- **Current v3 FOLD diagnostic:** measured on the accepted hand-passed build.
+  Shins 269/391 is a diagnostic, not a gate. A contradiction is reported, not tuned away. The
   preview prints the verbatim raw fold line beside the other stage records.
 - Old v1 foot-goal residual and FOLD 269/391 remain historical fields. New v3
   original-pose LAND, foot-goal residual, all-rig SEAM and same-detector
@@ -94,31 +98,48 @@ consumer is separately owned and is not claimed landed here.
 ## Completed validation
 
 [record.json](record.json), [verification.json](verification.json),
-[diagnostics.txt](diagnostics.txt) and [sampling.json](sampling.json) describe
-the actual v3 run. Typecheck, lint, package dry run, reader fixtures and Nova
-pipeline exited 0. The fresh v3 fold reading is 269/391 and its native PNG
-digest exactly matches the accepted target. MP4 is 820,544 bytes, SHA-256
-`900bf62cd9161a37af219814618f300c44aec1502766662389eaec70ccfba8e9`;
-WebM is 639,175 bytes, SHA-256
-`92aa075cc0986dc8fcfdbc826769ec42cf697534850db7449733e49088751c93`.
-The videos remain small handoff artifacts for the site sibling; their source
-and encoding commands are recorded here rather than pointing at an unlanded
-site URL. [Contact sheet](contact-sheet.png).
+[diagnostics.txt](diagnostics.txt) and [sampling.json](sampling.json) bind the
+accepted v3 measurement and the later pixel-copy repair. Original typecheck,
+lint, package dry run, reader controls and v3 pipeline exited 0. The accepted
+hand-passed v3 FOLD269/391 is a diagnostic, not a gate. This repair reuses that
+immutable diagnostic and native PNG digest; it performs no native render,
+build, retarget, generation or hand work.
 
-Actual browser verification measured 600×540 CSS pixels, playback time
-0.042512→10.889868 seconds, then ended/paused at 13.033333 seconds, with loop
-and autoplay false, no media error and no warning/error logs. Both figures
-and labels were readable; the owned tab and server were closed. The source
-sampling hash is byte-identical to the preserved v1 sampling, while the rig
-and media bind the new v3 source.
+All 391 frames retain byte-identical figure-panel pixels. Every non-media
+record field, sampling byte and diagnostic byte remains exact. The title,
+panel labels and timestamp are the only text in the video pixels; version,
+non-loop and diagnostic details remain in this documentation and records.
+The native target stays `b75fc5696ac468f3ea9f58cc892d79389d66bf6ce7aeb31428f95350b9121029`.
+MP4 is 793,736 bytes, SHA-256
+`e71f26c35edd370a54e41eb718273b01d875118ff1c89d07914657e3a2c82eb8`;
+WebM is 603,729 bytes, SHA-256
+`bffcfa985f9a87286d232ec7e9130431b0060f960e760e14ac1e47f0204a8137`.
+Small media are handed to the separate site sibling; no unlanded site URL is
+claimed. [Revised contact sheet](contact-sheet.png).
+
+Actual revised-media browser verification measured 600×540 CSS pixels,
+playback 0.010050→4.493015 seconds, then ended/paused at
+13.033333 seconds. Loop and autoplay were false; no media error or
+warning/error logs occurred. Both figures and revised labels were readable;
+the owned tab and server were closed. The source sampling remains byte-exact.
 
 A private preflight wrapper used the wrong relative fixture path and failed
 with ENOENT; submission proceeded before that wrapper was corrected. The
 earlier actual reader/selftest had passed. The corrected absolute-path dry
 run passed after submission; this ordering exception is retained separately
-from the successful Nova and browser measurements in verification.json.
+from the successful Nova and browser measurements in verification.json. This
+violated the mandatory dry-run-before-first-Nova-submission rule; the private
+final checkpoint records it prominently in CLOSE RETRO.
 
-The exact measured pipeline and diagnostic argument lists are in
+The first pixel-copy repair attempt failed before encoding because the cache
+fold path was resolved at the diagnostic root. A local regression reproduced
+that failure and passed after resolving the actual metadata set directory.
+The absolute-path dry run and parent coordination gate passed before the
+second repair submission, which completed composition and encoding. Both
+attempts and their exact chronology remain in verification.json.
+
+The original measured pipeline and diagnostic argument lists are in
 verification.json (`actualPipelineCommand`, `actualDiagnosticCommand`). Named
 workspace/cache placeholders replace only private path prefixes; flags and
-values are unchanged. The default public command above needs no cache.
+values are unchanged. The later actual composition command and reuse proof
+are recorded in `pixelCopyRepair`. The default public command needs no cache.

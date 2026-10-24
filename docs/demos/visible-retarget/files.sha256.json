@@ -14,13 +14,13 @@
     },
     {
       "path": "docs/demos/visible-retarget/README.md",
-      "bytes": 7126,
-      "sha256": "1c2b2f7f223b4d90f0c51a23232a51bb8683419b8438193941771dbdc8130b17"
+      "bytes": 8538,
+      "sha256": "364e53cf0b28e09659fe4b238b4448d2dafb45dbc6eab749d2b48fe73dca51a7"
     },
     {
       "path": "docs/demos/visible-retarget/contact-sheet.png",
-      "bytes": 139401,
-      "sha256": "b877c9d8c1822b85e11509177267ca35a3b9b7978c853cae5ace6a50dc7519ac"
+      "bytes": 123710,
+      "sha256": "2e26feb7c46d52b413be1b7ae0762e2fbf57c2d8c069d6d72d85d4af3a0bb2a5"
     },
     {
       "path": "docs/demos/visible-retarget/diagnostics.txt",
@@ -39,13 +39,13 @@
     },
     {
       "path": "docs/demos/visible-retarget/pose-dance.png",
-      "bytes": 42989,
-      "sha256": "a58c37ebf733afc64ee896eceaf4c2808cde6504be155f6d35515b5c331b62bc"
+      "bytes": 35967,
+      "sha256": "15389a8f1ac0667e63a8f9e1af2db4c5232e99c79a83df28ef15584264402d72"
     },
     {
       "path": "docs/demos/visible-retarget/record.json",
       "bytes": 8881,
-      "sha256": "8db14d832b77a0f456f7ed2f5e986f8f8a11451146ef1bc5f761f6b2dc5ba78e"
+      "sha256": "d681ded402eb00d11ea35767880494f467b9684aa50946d4b018599ecba669af"
     },
     {
       "path": "docs/demos/visible-retarget/sampling.json",
@@ -54,8 +54,8 @@
     },
     {
       "path": "docs/demos/visible-retarget/verification.json",
-      "bytes": 3995,
-      "sha256": "5c3ba9bbb01345bc1a6f331391472257f2bb9335889d0ea9332e32376d8dc7ca"
+      "bytes": 8647,
+      "sha256": "935f6cb522e853e34a6423dec50f2a00b8f237e5d488c4f886b4acbec20d2731"
     },
     {
       "path": "tools/visible-retarget-check.ts",
@@ -64,8 +64,8 @@
     },
     {
       "path": "tools/visible-retarget.py",
-      "bytes": 26183,
-      "sha256": "84ad7e7c58e8419ea8714700b4fe49e3c36d3ac8027056e692f5fa397af0dc91"
+      "bytes": 27075,
+      "sha256": "e06b4a83433fe44c89359bbe499687785f8e7b8a3d8b924c8d72519102da2628"
     },
     {
       "path": "tools/visible-retarget.requirements.txt",
