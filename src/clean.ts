@@ -64,6 +64,7 @@
  *
  * Pure: no clock, no randomness, no disk.
  */
+import { measureFigureScale, type FigureScale } from './figurescale.ts';
 import { BODY18, type Body18 } from './joints.ts';
 import { deriveDepth, depthSourceOf, type DerivedDepth } from './depth.ts';
 import type { CleanRecord, CleanSeam, CleanSpike, CleanUnheld, DepthGait, Joint, PoseFrame, PoseSequence } from './pose.ts';
@@ -172,6 +173,8 @@ export interface HoldFound {
 export interface Cleaned {
   seq: PoseSequence;
   record: CleanRecord;
+  /** Advisory input measurement, kept outside the strict pose/cleaned format. */
+  figureScale: FigureScale;
   person: string;
   /** Neck → mid_hip, the median picture length, px, and over how many frames. */
   trunk: { length: number; frames: number };
@@ -677,6 +680,7 @@ export function clean(seq: PoseSequence, params: CleanParams, wanted: string | u
     if (why !== null) p.add('CLEAN_WINDOW', why);
   }
   const track = personTrack(seq, wanted, where);
+  const figureScale = measureFigureScale(track);
   const n = track.length;
   // rig-c/pose#281: depth a sequence already carries — a 3D detector's is carried through, clean's own is read again or refused.
   const carried = depthSourceOf(seq.frames);
@@ -851,6 +855,7 @@ export function clean(seq: PoseSequence, params: CleanParams, wanted: string | u
     // #92: a loop is one cycle of a gait repeated in place, so it carries no travel of its own.
     seq: { ...rest, ...(params.loop ? { travel: TRAVEL_IN_PLACE } : {}), cleaned: record, frames },
     record,
+    figureScale,
     person,
     trunk: { length: trunk, frames: lengths.length },
     spikes,

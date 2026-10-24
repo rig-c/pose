@@ -193,6 +193,7 @@ No other repository in the org (core, parts, play, adapters, parts-examples, tra
 | `rig-pose-camera/1` (`--camera`) | promised | S |
 | `rig-pose-tracks/1` (`--merge`), `rig-pose-compare/1` (`compare --report`) | courtesy | — |
 | `rig-pose-retarget/1` (`--build`'s `retarget.json`, rig-c/pose#270) | courtesy | — |
+| `rig-pose-figure-scale/1` (`clean`'s `<out>.figure-scale.json`, rig-c/pose#404): `spec`, `inputSHA256`, `sequenceSHA256`, `person`, `cameraDeclared`, and `figureScale` with `source`, `method`, `minScore`, `threshold`, `referencePx`, `scale`, `minFrame`, `maxFrame`, `variation` | courtesy | No recorded promised reader; a separate diagnostic, never a field in the strict pose/cleaned format |
 
 ### Flags
 
@@ -355,7 +356,10 @@ The classification follows #262, not the runtime value: previously promised
 reader fields and event coordinates stay promised. The other nested fields are
 courtesy because no promised reader was recorded for them. Listing a parent as
 promised does not promote its entire subtree. New fields still require an
-explicit classification; readers continue to ignore fields they do not read.
+explicit classification. Report consumers ignore fields they do not read; this
+is not permission to add keys to strict input formats. The pose reader
+continues to refuse unknown root and `cleaned` keys. #404 adds an external
+figure-scale sidecar so an older reader can still consume the unchanged pose.
 The generated run exercises leg scaling, stance, and foot blending: their
 internal readings remain courtesy, while the existing event targets and frame/time
 coordinates on flips and shear remain promised.
@@ -481,7 +485,7 @@ Promised codes, with their use:
 - D: `RIG_GATE_BASE`, `POSE_NOT_CLEANED`, `POSE_BEND_ONE_WAY`, `POSE_POINT_NEVER_GOOD`, `STANCE`.
 - X: `ARG_PATH`, `MAP_BEND_SIDE`, `MAP_CHAIN_JOINTS`, `MAP_TRANSLATE_SCALE`, `RIGC`.
 
-Every other code is courtesy (`SET_KEY_DRAWN`, rig-c/pose#355; `MAP_ALT_BIND`, `SET_BIND_FRAMES` and `SET_BIND_OVERLAP`, rig-c/pose#360; and rig-c/pose#346's `MAP_LAYOUT`, `LAYOUT_JSON`, `LAYOUT_SPEC`, `LAYOUT_SHAPE`, `LAYOUT_RIG_SHA`, `LAYOUT_SETS_SHA`, `LAYOUT_SETUP`, `LAYOUT_ADJACENCY`, `LAYOUT_MISSING`, `LAYOUT_UNBOUND`, `LAYOUT_BINDING_UNKNOWN` and `LAYOUT_BINDING_BONES`, among them). That a refusal always carries some code is promised; which code it carries is promised only for the codes above.
+Every other code is courtesy (`FIGURE_SCALE_RECORD` (#404, malformed external figure-scale record), `SET_KEY_DRAWN`, rig-c/pose#355; `MAP_ALT_BIND`, `SET_BIND_FRAMES` and `SET_BIND_OVERLAP`, rig-c/pose#360; and rig-c/pose#346's `MAP_LAYOUT`, `LAYOUT_JSON`, `LAYOUT_SPEC`, `LAYOUT_SHAPE`, `LAYOUT_RIG_SHA`, `LAYOUT_SETS_SHA`, `LAYOUT_SETUP`, `LAYOUT_ADJACENCY`, `LAYOUT_MISSING`, `LAYOUT_UNBOUND`, `LAYOUT_BINDING_UNKNOWN` and `LAYOUT_BINDING_BONES`, among them). That a refusal always carries some code is promised; which code it carries is promised only for the codes above.
 
 Promised line tags, with their use:
 
@@ -489,7 +493,7 @@ Promised line tags, with their use:
 - D: `GATE`.
 - X: `BODY`, `CLEAN`, `FEET`, `FOLD`, `HOLD`, `IDLE-DROPPED`, `IDLE-KEPT-OUT`, `LAND`, `LEG-SCALE`, `POSTURE`, `RIGC`, `SHEAR`, `STANCE`.
 
-Every other tag is courtesy (`SWITCH-TURN`, rig-c/pose#355, and `SWITCH-BIND`, rig-c/pose#360, among them).
+Every other tag is courtesy (`FIGURE-SCALE` and `CAMERA_UNDECLARED` (#404, an advisory warning, never a refusal), `SWITCH-TURN`, rig-c/pose#355, and `SWITCH-BIND`, rig-c/pose#360, among them).
 
 ### Imports
 
