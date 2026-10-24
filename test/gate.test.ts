@@ -1146,12 +1146,22 @@ export function formatGateTable(rows: ReadonlyArray<{ diff?: RefDiffVerdict; con
   return [header, sep, ...body].join('\n');
 }
 
-interface GateBaseInput { cli?: string; baseSha?: string; headSha?: string; body?: string }
+interface GateBaseInput {
+  cli?: string;
+  baseSha?: string;
+  headSha?: string;
+  body?: string;
+  baseRepo?: string;
+  baseRef?: string;
+}
+
+const DEFAULT_BASE_REPO = 'https://github.com/rig-c/pose.git';
 
 /** A missing optional base is SKIP; a requested base that cannot be read is red. */
 function withGateBase<T>(read: (cli: string | undefined, claims: string) => T, input: GateBaseInput = {
   cli: process.env.GATE_BASE_CLI, baseSha: process.env.GATE_BASE_SHA,
   headSha: process.env.GATE_HEAD_SHA, body: process.env.GATE_PR_BODY,
+  baseRepo: process.env.GATE_BASE_REPO, baseRef: process.env.GATE_BASE_REF,
 }): T {
   const body = input.body ?? '';
   const cli = input.cli?.trim() ?? '';
@@ -1165,6 +1175,39 @@ function withGateBase<T>(read: (cli: string | undefined, claims: string) => T, i
     return read(cli, body);
   }
   const baseSha = input.baseSha?.trim() ?? '';
+  const baseRef = input.baseRef?.trim() ?? '';
+  const hasGit = existsSync(join(ROOT, '.git'));
+  if (baseRef.length > 0 || (!hasGit && baseSha.length > 0)) {
+    const repo = (input.baseRepo ?? process.env.GATE_BASE_REPO ?? DEFAULT_BASE_REPO).trim();
+    const ref = baseSha || baseRef;
+    if (repo.length === 0) {
+      throw new Error('GATE_BASE_UNAVAILABLE: GATE_BASE_REPO must be non-empty');
+    }
+    mkdirSync(MUTANTS, { recursive: true });
+    const tree = mkdtempSync(join(MUTANTS, 'gate-base-'));
+    try {
+      const init = spawnSync('git', ['init', '-q'], { cwd: tree, encoding: 'utf8' });
+      if (init.status !== 0) {
+        throw new Error(`GATE_BASE_UNAVAILABLE: cannot initialize base snapshot in ${tree}: ${init.stderr}`);
+      }
+      const fetch = spawnSync('git', ['fetch', '--depth', '1', '--no-tags', '--', repo, ref], {
+        cwd: tree,
+        encoding: 'utf8',
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      });
+      if (fetch.status !== 0) {
+        throw new Error(`GATE_BASE_UNAVAILABLE: cannot fetch base ${ref} from ${repo}: ${fetch.stderr}`);
+      }
+      const checkout = spawnSync('git', ['checkout', '-q', 'FETCH_HEAD'], { cwd: tree, encoding: 'utf8' });
+      if (checkout.status !== 0) {
+        throw new Error(`GATE_BASE_UNAVAILABLE: cannot checkout base ${ref} from ${repo}: ${checkout.stderr}`);
+      }
+      rmSync(join(tree, '.git'), { recursive: true, force: true });
+      return withGateBase(read, { cli: join(tree, 'cli.ts'), body });
+    } finally {
+      rmSync(tree, { recursive: true, force: true });
+    }
+  }
   if (baseSha.length === 0) {
     console.log('GATE_BASE_UNAVAILABLE: track comparison SKIP (no GATE_BASE_SHA or GATE_BASE_CLI); continuity and support height are still measured');
     return read(undefined, body);
@@ -1227,11 +1270,46 @@ describe('#208: two-reference regression gate and standing continuity assertions
     }
   }, SLOW);
 
-  test('#375: optional base absence is SKIP; an explicitly unavailable or self base fails by name', () => {
+  test('#375 & #410: optional base absence is SKIP; GATE_BASE_REF extracts a separate origin snapshot and catches a planted track change; a missing or self base fails by name', () => {
     withGateBase((cli) => expect(cli).toBeUndefined(), {});
     expect(() => withGateBase(() => {}, { cli: join(tempDir(), 'missing.ts') })).toThrow('GATE_BASE_UNAVAILABLE');
     expect(() => withGateBase(() => {}, { cli: CLI })).toThrow('no self-comparison');
-  });
+    expect(() => withGateBase(() => {}, { baseRepo: join(tempDir(), 'missing-repo'), baseRef: 'refs/heads/main' })).toThrow('GATE_BASE_UNAVAILABLE');
+    expect(() => withGateBase(() => {}, { baseRepo: '', baseRef: 'refs/heads/main' })).toThrow('GATE_BASE_UNAVAILABLE');
+
+    const originRepo = join(tempDir(), 'origin-repo');
+    mkdirSync(originRepo, { recursive: true });
+    cpSync(join(ROOT, 'src'), join(originRepo, 'src'), { recursive: true });
+    cpSync(join(ROOT, 'cli.ts'), join(originRepo, 'cli.ts'));
+    cpSync(join(ROOT, 'package.json'), join(originRepo, 'package.json'));
+    expect(spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: originRepo }).status).toBe(0);
+    expect(spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: originRepo }).status).toBe(0);
+    expect(spawnSync('git', ['config', 'user.name', 'test'], { cwd: originRepo }).status).toBe(0);
+    expect(spawnSync('git', ['add', '.'], { cwd: originRepo }).status).toBe(0);
+    expect(spawnSync('git', ['commit', '-q', '-m', 'base snapshot'], { cwd: originRepo }).status).toBe(0);
+
+    expect(() => withGateBase(() => {}, { baseRepo: originRepo, baseRef: 'refs/heads/missing' })).toThrow('GATE_BASE_UNAVAILABLE');
+
+    let extractedCLI = '';
+    withGateBase((baseCLI, claims) => {
+      expect(baseCLI).toBeDefined();
+      extractedCLI = baseCLI!;
+      expect(existsSync(extractedCLI)).toBe(true);
+      expect(resolve(extractedCLI)).not.toBe(resolve(CLI));
+      expect(claims).toBe('Claim-Track: run hip.translate 2 #410');
+
+      const baseOut = runReference(setupRunRef(tempDir()), extractedCLI);
+      const planted: RefRunOutput = { ...baseOut, tracks: structuredClone(baseOut.tracks) };
+      const hip = planted.tracks.find((t) => t.bone === 'hip' && t.property === 'translate')!;
+      (hip.keys[2]!.v as number[])[1]! += 1.5;
+
+      const unclaimed = diffReferenceTracks(baseOut, planted, []);
+      expect(unclaimed.failures.some((f) => f.includes('GATE_UNCLAIMED_TRACK: run track "hip.translate"'))).toBe(true);
+      const claimed = diffReferenceTracks(baseOut, planted, parseTrackClaims(claims));
+      expect(claimed.failures).toEqual([]);
+    }, { baseRepo: originRepo, baseRef: 'refs/heads/main', body: 'Claim-Track: run hip.translate 2 #410' });
+    expect(existsSync(extractedCLI)).toBe(false);
+  }, SLOW);
 
   test('#375 controls: generator ground survives false jump labels, a common vertical shift fails, and run track changes still require claims', () => {
     const out = runReference(setupRunRef(tempDir()));

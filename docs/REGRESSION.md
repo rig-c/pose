@@ -33,11 +33,17 @@ claims are read from `GATE_PR_BODY` and the intervening commit messages. A
 requested base that cannot be resolved, archived or extracted is refused as
 `GATE_BASE_UNAVAILABLE`. With no base requested, track comparison explicitly
 reports `SKIP`; the candidate's continuity and support height still run.
-A source-snapshot runner without Git history may instead set `GATE_BASE_CLI`
-to a separate base tree's `cli.ts` (with dependencies resolvable beside it).
-For that adapter, supply all claims in `GATE_PR_BODY`; commit messages are not
-available. Missing paths and the candidate CLI itself are refused, never used
-as a self-comparison fallback.
+A source-snapshot or pool runner without Git history may pass
+`GATE_BASE_REF` (for example `GATE_BASE_REF=refs/heads/main`, or `GATE_BASE_SHA`
+on a `.git`-less checkout) to fetch a separate origin snapshot from
+`GATE_BASE_REPO` (default `https://github.com/rig-c/pose.git`) into a temporary
+tree under `node_modules/.cache/rig-pose-mutants` and run its `cli.ts` through
+the `GATE_BASE_CLI` path, or set `GATE_BASE_CLI` directly to a separate base
+tree's `cli.ts` (with dependencies resolvable beside it). For those adapters,
+supply all claims in `GATE_PR_BODY`; commit messages are not available. Missing
+paths, failed fetches or checkouts, and the candidate CLI itself are refused as
+`GATE_BASE_UNAVAILABLE`, never reported as `SKIP` or used as a self-comparison
+fallback.
 
 The run has no meshes or gesture switches. Its mesh-fold row reports `SKIP`;
 the original references retain the fold and gesture coverage. This row does
