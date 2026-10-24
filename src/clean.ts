@@ -64,6 +64,7 @@
  *
  * Pure: no clock, no randomness, no disk.
  */
+import { measureFigureScale } from './figurescale.ts';
 import { BODY18, type Body18 } from './joints.ts';
 import { deriveDepth, depthSourceOf, type DerivedDepth } from './depth.ts';
 import type { CleanRecord, CleanSeam, CleanSpike, CleanUnheld, DepthGait, Joint, PoseFrame, PoseSequence } from './pose.ts';
@@ -794,6 +795,7 @@ export function clean(seq: PoseSequence, params: CleanParams, wanted: string | u
     },
     spikes: { found: spikes.map((s) => ({ frame: s.frame, joint: s.joint })), untested },
     jitter: { before: before.value, after: after.value },
+    figureScale: measureFigureScale(track),
     ...(hold === undefined || hold === 'off' ? {} : {
       holds: holds.map((h) => ({
         joint: h.joint,

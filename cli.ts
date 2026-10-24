@@ -6,6 +6,7 @@
  * refusal names the rule, the object, the value found and the value required,
  * and the exit code says which kind of outcome it was.
  */
+import { figureScaleLines } from './src/figurescale.ts';
 import { readFileSync, writeFileSync } from 'node:fs';
 import pkg from './package.json' with { type: 'json' };
 import { clean, cleanLine, holdRegions, unheldText, untestedText, HOLD_BLEND, HOLD_MIN_SECONDS, HOLD_REACH, HOLD_SPEED, HOLD_SPEED_WINDOW, LEGS, OCCLUSION_SCORE, OCCLUSION_WINDOW, SPIKE_TRUNKS, SPIKE_WINDOW, windowProblem } from './src/clean.ts';
@@ -594,6 +595,7 @@ function runClean(argv: string[], say: (l: string) => void): void {
   const n = seq.frames.length;
   const tOf = (i: number) => `t=${seq.frames[i]!.t.toFixed(3)}s`;
   say(`rig-pose clean: ${n} frame(s) of person "${c.person}" from ${input}${f.has('coco') ? ' (COCO-17)' : ''}; legs ${params.legs}, rest ${params.rest}, ${params.loop ? 'loop (every window wraps)' : 'no loop (windows cut at the ends)'}`);
+  if (c.record.figureScale !== undefined) for (const line of figureScaleLines(c.record.figureScale, seq.camera !== undefined)) say(`  ${line}`);
   say(`  TRUNK  neck → mid_hip: median ${fmt(c.trunk.length)} px over ${c.trunk.frames} frame(s); a spike is > ${fmt(SPIKE_TRUNKS * c.trunk.length)} px (${SPIKE_TRUNKS} trunk) from its ${SPIKE_WINDOW}-frame median`);
   for (const s of c.spikes) say(`  SPIKE  joint "${s.joint}" frame ${s.frame} (${tOf(s.frame)}): ${fmt(s.off)} px from its ${SPIKE_WINDOW}-frame median, over ${fmt(SPIKE_TRUNKS * c.trunk.length)} — took the median`);
   say(`  SPIKES ${c.spikes.length} replaced; ${untestedText(c.untested)}`);

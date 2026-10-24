@@ -369,6 +369,9 @@ coordinates on flips and shear remain promised.
 | `body.read.opening.max`, `body.read.opening.min`, `body.read.opening.range`, `body.read.yaw` | courtesy | No recorded promised reader |
 | `body.read.yaw.max`, `body.read.yaw.min`, `body.read.yaw.range`, `body.standing` | courtesy | No recorded promised reader |
 | `body.standing.hip`, `body.standing.shoulder` | courtesy | No recorded promised reader |
+| `cleaned.figureScale`, `cleaned.figureScale.source`, `cleaned.figureScale.method` | courtesy | Advisory measured input picture scale, #404; not a camera estimate |
+| `cleaned.figureScale.minScore`, `cleaned.figureScale.threshold`, `cleaned.figureScale.referencePx` | courtesy | No recorded promised reader |
+| `cleaned.figureScale.scale`, `cleaned.figureScale.minFrame`, `cleaned.figureScale.maxFrame`, `cleaned.figureScale.variation` | courtesy | No recorded promised reader; null when unmeasurable |
 | `cleaned.jitter`, `cleaned.jitter.after`, `cleaned.jitter.before`, `cleaned.params` | courtesy | No recorded promised reader |
 | `cleaned.params.legs`, `cleaned.params.loop`, `cleaned.params.rest`, `cleaned.spec` | courtesy | No recorded promised reader |
 | `cleaned.spikes`, `cleaned.spikes.found`, `cleaned.spikes.found[].bone`, `cleaned.spikes.found[].bones` | courtesy | No recorded promised reader |
@@ -489,7 +492,7 @@ Promised line tags, with their use:
 - D: `GATE`.
 - X: `BODY`, `CLEAN`, `FEET`, `FOLD`, `HOLD`, `IDLE-DROPPED`, `IDLE-KEPT-OUT`, `LAND`, `LEG-SCALE`, `POSTURE`, `RIGC`, `SHEAR`, `STANCE`.
 
-Every other tag is courtesy (`SWITCH-TURN`, rig-c/pose#355, and `SWITCH-BIND`, rig-c/pose#360, among them).
+Every other tag is courtesy (`FIGURE-SCALE` and `CAMERA_UNDECLARED` (#404, an advisory warning, never a refusal), `SWITCH-TURN`, rig-c/pose#355, and `SWITCH-BIND`, rig-c/pose#360, among them).
 
 ### Imports
 

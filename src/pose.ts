@@ -34,6 +34,7 @@
  * it, so a sequence with depth is "/1.2" whether or not it also carries the
  * pelvis track; one with the track and no depth stays "/1.1".
  */
+import { copyFigureScale, readFigureScale, type FigureScale } from './figurescale.ts';
 import { BODY18, COCO17, COCO17_TO_BODY18, isBody18, type Body18 } from './joints.ts';
 import { isObject, parseJson, Problems, refuseUnknownKeys, refuseUnknownKeys as refuseKeys, typeName } from './problems.ts';
 
@@ -262,6 +263,8 @@ export interface DepthParams {
   gait: DepthGait;
 }
 export interface CleanRecord {
+  /** #404: advisory input picture scale, absent in earlier records. */
+  figureScale?: FigureScale;
   spec: typeof CLEAN_SPEC;
   /**
    * `hipsInferred` is present only when clean marked the hips (`--hips-inferred`).
@@ -574,7 +577,8 @@ function readCleaned(p: Problems, where: string, c: unknown, frames: number | nu
     return undefined;
   }
   const before = p.list.length;
-  refuseUnknownKeys(p, 'POSE_CLEANED', cw, c, ['spec', 'params', 'spikes', 'jitter', 'holds', 'unheld', 'seams']);
+  refuseUnknownKeys(p, 'POSE_CLEANED', cw, c, ['spec', 'params', 'spikes', 'jitter', 'holds', 'unheld', 'seams', 'figureScale']);
+  const figureScale = 'figureScale' in c ? readFigureScale(p, `${cw} figureScale`, c.figureScale, frames, note) : undefined;
   for (const k of ['spec', 'params', 'spikes', 'jitter']) if (!(k in c)) p.add('POSE_CLEANED', `${cw} has no "${k}"; the record is ${shape}`);
   if ('spec' in c && c.spec !== CLEAN_SPEC) p.add('POSE_CLEANED', `${cw} "spec" is ${typeName(c.spec)}; this reader reads "${CLEAN_SPEC}"`);
   const window = (v: unknown) => Number.isInteger(v) && (v === 1 || ((v as number) >= 5 && (v as number) % 2 === 1));
@@ -730,6 +734,7 @@ function readCleaned(p: Problems, where: string, c: unknown, frames: number | nu
       untested: [...(c.spikes as { untested: number[] }).untested],
     },
     jitter: { before: j.before, after: j.after },
+    ...(figureScale !== undefined ? { figureScale } : {}),
     ...('holds' in c ? { holds: (c.holds as CleanHold[]).map(copyHold) } : {}),
     ...('unheld' in c ? { unheld: (c.unheld as CleanUnheld[]).map(copyUnheld) } : {}),
     ...('seams' in c ? { seams: (c.seams as CleanSeam[]).map((x) => ({ joint: x.joint, frame: x.frame, step: x.step, gap: x.gap })) } : {}),
@@ -1077,6 +1082,7 @@ export function writePoseSequence(seq: PoseSequence): string {
     params: { loop: c.params.loop, legs: c.params.legs, rest: c.params.rest, ...(c.params.hipsInferred !== undefined ? { hipsInferred: copyHipsInferred(c.params.hipsInferred) } : {}), ...(c.params.hold !== undefined ? { hold: holdParamsOf(c.params.hold) } : {}), ...(c.params.pelvis !== undefined ? { pelvis: { window: c.params.pelvis.window } } : {}), ...(c.params.depth !== undefined ? { depth: { gait: c.params.depth.gait } } : {}) },
     spikes: { found: c.spikes.found.map((s) => ({ frame: s.frame, joint: s.joint })), untested: [...c.spikes.untested] },
     jitter: { before: jit(c.jitter.before), after: jit(c.jitter.after) },
+    ...(c.figureScale !== undefined ? { figureScale: copyFigureScale(c.figureScale) } : {}),
     ...(c.holds !== undefined ? { holds: c.holds.map((h) => ({ joint: h.joint, frames: [h.frames[0], h.frames[1]], ...(h.excursion !== undefined ? { excursion: [h.excursion[0], h.excursion[1]] } : {}), jitter: { before: jit(h.jitter.before), after: jit(h.jitter.after) } })) } : {}),
     ...(c.seams !== undefined ? { seams: c.seams.map((x) => ({ joint: x.joint, frame: x.frame, step: round(x.step, 4), gap: x.gap })) } : {}),
     ...(c.unheld !== undefined ? { unheld: c.unheld.map((u) => ({ joint: u.joint, frames: [u.frames[0], u.frames[1]], test: u.test, value: u.value === null ? null : round(u.value, 4) })) } : {}),
