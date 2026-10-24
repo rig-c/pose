@@ -113,12 +113,27 @@ test('F1 finite inputs whose calibration intermediates overflow are named unknow
   }
 });
 
-test('half-anchor response: hip-only and ear-only motion each has exactly half weight', () => {
-  for (const pair of [['r_hip', 'l_hip'], ['r_ear', 'l_ear']] as const) {
-    const s = shoulderSequence([0, 0, 0]);
-    for (const n of pair) s.frames[1]!.people[0]!.joints[n]!.at![1] += 10;
-    const r = read(shoulderConfig(), s); expect(r.status).toBe('read');
-    if (r.status === 'read') { expect(r.frames[1]!.sequencePx).toBe(5); expect(r.frames[1]!.worldUnits).toBe(2.5); }
+test('span-normalised: pure hip-to-ear span changes at fixed shoulder fraction read 0 within .02u; single-anchor shifts scale by f', () => {
+  const s = shoulderSequence([0, 0, 0, 0, 0]);
+  const spans: [number, number, number][] = [[200, 0, 80], [250, 0, 100], [150, 0, 60], [320, 20, 140], [200, 0, 80]];
+  spans.forEach(([hipY, earY, shY], i) => {
+    const j = s.frames[i]!.people[0]!.joints;
+    for (const n of ['r_hip', 'l_hip'] as const) j[n]!.at![1] = hipY;
+    for (const n of ['r_ear', 'l_ear'] as const) j[n]!.at![1] = earY;
+    for (const n of ['r_shoulder', 'l_shoulder'] as const) j[n]!.at![1] = shY;
+  });
+  const r = read(shoulderConfig(), s); expect(r.status).toBe('read');
+  if (r.status === 'read') {
+    expect(r.rest.q0).toBe(.6);
+    expect(r.frames.map(f => f.sequencePx)).toEqual([0, 0, 0, 0, 0]);
+    expect(r.frames.map(f => f.worldUnits)).toEqual([0, 0, 0, 0, 0]);
+    for (const f of r.frames) expect(Math.abs(f.worldUnits)).toBeLessThanOrEqual(f.toleranceUnits);
+  }
+  for (const [pair, seqPx, world] of [[['r_hip', 'l_hip'], 80 / 21, 40 / 21], [['r_ear', 'l_ear'], 120 / 19, 60 / 19]] as const) {
+    const a = shoulderSequence([0, 0, 0]);
+    for (const n of pair) a.frames[1]!.people[0]!.joints[n]!.at![1] += 10;
+    const u = read(shoulderConfig(), a); expect(u.status).toBe('read');
+    if (u.status === 'read') { expect(u.frames[1]!.sequencePx).toBeCloseTo(seqPx, 12); expect(u.frames[1]!.worldUnits).toBeCloseTo(world, 12); }
   }
 });
 
