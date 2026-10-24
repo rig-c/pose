@@ -85,7 +85,9 @@ export interface ShoulderReading {
 export type ShoulderResult = ShoulderReading | { status: 'unknown'; problems: readonly Problem[] };
 const mid = (a: Pt, b: Pt): Pt => [a[0] / 2 + b[0] / 2, a[1] / 2 + b[1] / 2];
 const vector = (v: Points): Pt => { const h = mid(v.r_hip, v.l_hip), e = mid(v.r_ear, v.l_ear); return [e[0] - h[0], e[1] - h[1]]; };
-const qOf = (v: Points) => (v.r_shoulder[1] / 2 + v.l_shoulder[1] / 2) - (v.r_hip[1] / 4 + v.l_hip[1] / 4 + v.r_ear[1] / 4 + v.l_ear[1] / 4);
+const spanOf = (v: Points) => (v.r_hip[1] / 2 + v.l_hip[1] / 2) - (v.r_ear[1] / 2 + v.l_ear[1] / 2);
+const elevOf = (v: Points) => (v.r_hip[1] / 2 + v.l_hip[1] / 2) - (v.r_shoulder[1] / 2 + v.l_shoulder[1] / 2);
+const qOf = (v: Points) => { const span = spanOf(v); return span <= 0 ? Number.NaN : elevOf(v) / span; };
 const median = (v: number[]) => { const s = [...v].sort((a, b) => a - b); return s.length % 2 ? s[s.length >> 1]! : s[s.length / 2 - 1]! / 2 + s[s.length / 2]! / 2; };
 const errorOf = (s: Sampling, residual: number) => s.resolutionPx / 2 + s.pointErrorPx + residual;
 /** Reject unrepresentable intermediates before comparisons: Infinity > Infinity is false. */
@@ -123,18 +125,19 @@ export function readShoulderSignal(c: ShoulderConfig, seq: PoseSequence, rest: P
   const first = seq.frames[0]!.t;
   const times = seq.frames.map(f => Math.round((f.t - first) * 1e6) / 1e6);
   for (let i = 1; i < times.length; i++) if (times[i]! <= times[i - 1]!) p.add('POSE_TIME', `shoulder frames ${i - 1}/${i} collide after microsecond rounding`);
+  const restSpan = r.map(s => spanOf(s.points)), activeSpan = a.map(s => spanOf(s.points));
   const restQ = r.map(s => qOf(s.points)), activeQ = a.map(s => qOf(s.points));
-  restQ.forEach((q, i) => calibrationFinite(p, `rest sampleIndex ${c.rest.frames[i]}`, { q }));
-  activeQ.forEach((q, i) => calibrationFinite(p, `active frame ${i}`, { q }));
+  restQ.forEach((q, i) => calibrationFinite(p, `rest sampleIndex ${c.rest.frames[i]}`, { span: restSpan[i]!, q }));
+  activeQ.forEach((q, i) => calibrationFinite(p, `active frame ${i}`, { span: activeSpan[i]!, q }));
   times.forEach((t, i) => { if (!finite(t)) p.add('POSE_TIME', `shoulder frame ${i}: nonrepresentable source-relative microsecond time`); });
   if (p.any) return { status: 'unknown', problems: p.list };
-  const q0 = median(restQ);
+  const q0 = median(restQ), span0 = median(restSpan);
   const { value: ca, absoluteError: da } = c.calibration.cameraToPainting, { value: cb, absoluteError: db } = c.calibration.paintingToRig;
   const gain = ca * cb, dg = cb * da + ca * db + da * db;
   const eR = errorOf(c.rest, c.camera.residualPx), eF = errorOf(c.sampling, c.camera.residualPx), ep = errorOf(c.painting, 0);
   const pv = vector(c.painting.points), pvNorm = Math.hypot(...pv);
   const maxA = ca + da, maxGain = gain + dg, pointErrorSum = eF + eR;
-  calibrationFinite(p, 'calibration products', { q0, gain, errorProductBA: cb * da, errorProductAB: ca * db, errorProductDADB: da * db, dg, maxA, maxGain, eR, eF, ep, pointErrorSum, paintingX: pv[0], paintingY: pv[1], paintingNorm: pvNorm });
+  calibrationFinite(p, 'calibration products', { q0, span0, gain, errorProductBA: cb * da, errorProductAB: ca * db, errorProductDADB: da * db, dg, maxA, maxGain, eR, eF, ep, pointErrorSum, paintingX: pv[0], paintingY: pv[1], paintingNorm: pvNorm });
   if (gain <= 0) p.add('SHOULDER_LIFT_CALIBRATION', 'unknown — nonrepresentable positive calibration gain');
   if (p.any) return { status: 'unknown', problems: p.list };
   for (const [index, s] of r.entries()) {
@@ -147,9 +150,10 @@ export function readShoulderSignal(c: ShoulderConfig, seq: PoseSequence, rest: P
   }
   if (p.any) return { status: 'unknown', problems: p.list };
   const frames = a.map((s, frame): ShoulderSample => {
-    const d = q0 - activeQ[frame]!, twiceGain = maxGain * 2, coordinateBound = twiceGain * pointErrorSum, scaleBound = Math.abs(d) * dg;
+    const span = activeSpan[frame]!, df = activeQ[frame]! - q0, d = (elevOf(s.points) - q0 * span) * (span0 / span);
+    const twiceGain = maxGain * 2, coordinateBound = twiceGain * pointErrorSum, scaleBound = Math.abs(d) * dg;
     const bound = coordinateBound + scaleBound, worldUnits = gain * d, paintingPx = ca * d, toleranceUnits = bound + 0.01;
-    calibrationFinite(p, `frame ${frame}`, { d, twiceGain, coordinateBound, scaleBound, bound, worldUnits, paintingPx, toleranceUnits });
+    calibrationFinite(p, `frame ${frame}`, { df, d, twiceGain, coordinateBound, scaleBound, bound, worldUnits, paintingPx, toleranceUnits });
     return { frame, sourceTime: seq.frames[frame]!.t, t: times[frame]!, states: s.states, sequencePx: d, paintingPx, worldUnits, sourceBoundUnits: bound, toleranceUnits };
   });
   if (p.any) return { status: 'unknown', problems: p.list };

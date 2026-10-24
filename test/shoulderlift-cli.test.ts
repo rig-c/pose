@@ -115,7 +115,8 @@ test('CLI invalid parent scale and ambiguous fragment ownership refuse by name',
 test('isolated source mutants: sign/scale/local-axis/idle/missing-held controls must turn red', () => {
   const base = join(ROOT, 'node_modules', '.cache', 'rig-pose-mutants'); mkdirSync(base, { recursive: true });
   const cases = [
-    { name: 'sign', file: 'shoulderlift.ts', from: 'const d = q0 - activeQ[frame]!', to: 'const d = activeQ[frame]! - q0', test: 'shoulderlift.test.ts', filter: 'analytical normal' },
+    { name: 'sign', file: 'shoulderlift.ts', from: 'const span = activeSpan[frame]!, df = activeQ[frame]! - q0, d = (elevOf(s.points) - q0 * span) * (span0 / span);', to: 'const span = activeSpan[frame]!, df = q0 - activeQ[frame]!, d = (q0 * span - elevOf(s.points)) * (span0 / span);', test: 'shoulderlift.test.ts', filter: 'analytical normal' },
+    { name: 'unnormalised-midpoint', file: 'shoulderlift.ts', from: 'const span = activeSpan[frame]!, df = activeQ[frame]! - q0, d = (elevOf(s.points) - q0 * span) * (span0 / span);', to: 'const span = activeSpan[frame]!, df = 0, d = (0.5 * span0 - q0 * span0) - (0.5 * span - elevOf(s.points));', test: 'shoulderlift.test.ts', filter: 'span-normalised' },
     { name: 'scale', file: 'shoulderlift.ts', from: 'const gain = ca * cb, dg', to: 'const gain = ca, dg', test: 'shoulderlift.test.ts', filter: 'analytical normal' },
     { name: 'local-axis', file: 'shoulderlift.ts', from: 'return [round(x), round(y)];', to: 'return [round(dx), round(dy)];', test: 'shoulderlift-cli.test.ts', filter: 'CLI whole minimal chain' },
     { name: 'idle', file: 'shoulderlift.ts', from: 'const dx = base[0] - neutral[0], dy = base[1] + lift - neutral[1];', to: 'const dx = 0, dy = lift;', test: 'shoulderlift-cli.test.ts', filter: 'CLI whole minimal chain' },
