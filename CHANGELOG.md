@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.0](https://github.com/rig-c/pose/compare/v1.0.2...v1.1.0) (2026-10-24)
+
+
+### Features
+
+* **clean:** warn about undeclared figure-scale drift ([#405](https://github.com/rig-c/pose/issues/405)) ([84bd77a](https://github.com/rig-c/pose/commit/84bd77a729a97121880004b56562944bd0f89107))
+* **demo:** show the dance beside its source skeleton ([#407](https://github.com/rig-c/pose/issues/407)) ([8ebf365](https://github.com/rig-c/pose/commit/8ebf36569c5ef77534d4ea362a04106a7df4e6fd))
+* **engines:** raise the declared Bun floor to 1.4.0 ([#414](https://github.com/rig-c/pose/issues/414)) ([ec8b408](https://github.com/rig-c/pose/commit/ec8b408d27859a78dae2f7f4ece06bb21e074772))
+* **retarget:** read calibrated shoulder elevation relative to rest ([#409](https://github.com/rig-c/pose/issues/409)) ([6581da5](https://github.com/rig-c/pose/commit/6581da5bd03a8f08e0f3494665b70dc1c8395ac3))
+
 ## [1.0.2](https://github.com/rig-c/pose/compare/v1.0.1...v1.0.2) (2026-10-23)
 
 
