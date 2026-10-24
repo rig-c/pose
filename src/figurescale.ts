@@ -4,7 +4,6 @@
  */
 import type { Body18 } from './joints.ts';
 import type { Joint } from './pose.ts';
-import { isObject, Problems, refuseUnknownKeys, typeName } from './problems.ts';
 
 export const FIGURE_SCALE_METHOD = 'trunk-median-5';
 export const FIGURE_SCALE_SCORE = 0.3;
@@ -24,6 +23,16 @@ export interface FigureScale {
   variation: number | null;
 }
 
+/** Fixed IEEE operation order avoids platform libm hypot rounding differences. */
+function euclideanSpan(dx: number, dy: number): number | null {
+  const maxAbs = Math.max(Math.abs(dx), Math.abs(dy));
+  if (!Number.isFinite(maxAbs) || maxAbs === 0) return null;
+  const x = dx / maxAbs;
+  const y = dy / maxAbs;
+  const span = maxAbs * Math.sqrt(x * x + y * y);
+  return Number.isFinite(span) && span > 0 ? span : null;
+}
+
 export function measureFigureScale(track: Array<Partial<Record<Body18, Joint>>>): FigureScale {
   const spans = track.map((joints) => {
     const points: Array<[number, number]> = [];
@@ -33,8 +42,7 @@ export function measureFigureScale(track: Array<Partial<Record<Body18, Joint>>>)
       points.push(j.at);
     }
     const [rh, lh, rs, ls] = points as [[number, number], [number, number], [number, number], [number, number]];
-    const span = Math.hypot(rh[0] / 2 + lh[0] / 2 - rs[0] / 2 - ls[0] / 2, rh[1] / 2 + lh[1] / 2 - rs[1] / 2 - ls[1] / 2);
-    return Number.isFinite(span) && span > 0 ? span : null;
+    return euclideanSpan(rh[0] / 2 + lh[0] / 2 - rs[0] / 2 - ls[0] / 2, rh[1] / 2 + lh[1] / 2 - rs[1] / 2 - ls[1] / 2);
   });
   const filtered = spans.map((_, i) => {
     if (i < 2 || i >= spans.length - 2) return null;
@@ -72,44 +80,3 @@ export function figureScaleLines(r: FigureScale, cameraDeclared: boolean): strin
   return lines;
 }
 
-/** Optional additive clean record; old records have no such field. */
-export function readFigureScale(p: Problems, where: string, value: unknown, frames: number | null, note: string): FigureScale | undefined {
-  const before = p.list.length;
-  const bad = (text: string) => p.add('POSE_CLEANED', `${where} ${text}`);
-  if (!isObject(value)) { bad(`is ${typeName(value)}; it must be a measured figure-scale record`); return undefined; }
-  const keys = ['source', 'method', 'minScore', 'threshold', 'referencePx', 'scale', 'minFrame', 'maxFrame', 'variation'];
-  refuseUnknownKeys(p, 'POSE_CLEANED', where, value, keys, note);
-  for (const k of keys) if (!(k in value)) bad(`has no "${k}"; a measured figure-scale record carries ${keys.join(', ')}`);
-  for (const [k, v] of [['source', 'measured'], ['method', FIGURE_SCALE_METHOD], ['minScore', FIGURE_SCALE_SCORE], ['threshold', FIGURE_SCALE_THRESHOLD]] as const) {
-    if (value[k] !== v) bad(`"${k}" is ${typeName(value[k])}; it must be ${JSON.stringify(v)} for this measurement`);
-  }
-  const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
-  const scale = value.scale;
-  if (!Array.isArray(scale) || (frames !== null && scale.length !== frames)) bad(`"scale" is ${Array.isArray(scale) ? `${scale.length} entries` : typeName(scale)}; it must have one number or null per frame (${frames ?? 'the sequence frame count'})`);
-  else {
-    scale.forEach((v: unknown, i: number) => { if (!(v === null || (finite(v) && v >= 0 && v <= 1))) bad(`"scale"[${i}] is ${typeName(v)}; it must be null or a finite ratio in [0, 1]`); });
-    if (value.referencePx === null) {
-      if (scale.some((v: unknown) => v !== null) || value.minFrame !== null || value.maxFrame !== null || value.variation !== null) bad('has null "referencePx"; an unknown measurement has an all-null scale, minFrame, maxFrame and variation');
-    } else {
-      if (!(finite(value.referencePx) && value.referencePx > 0)) bad(`"referencePx" is ${typeName(value.referencePx)}; it must be null or a finite span > 0 px`);
-      const measured = scale.filter((v: unknown): v is number => finite(v) && v >= 0 && v <= 1);
-      if (measured.length < 2) bad(`has ${measured.length} measured frame(s); a known measurement needs at least 2`);
-      if (measured.length >= 2) {
-        let min = 1;
-        for (const v of measured) min = Math.min(min, v);
-        const minFrame = scale.indexOf(min), maxFrame = scale.indexOf(1);
-        if (maxFrame < 0) bad('"scale" has no maximum 1; the track is normalised by referencePx');
-        if (value.minFrame !== minFrame) bad(`"minFrame" is ${typeName(value.minFrame)}; it must be the first minimum frame ${minFrame}`);
-        if (value.maxFrame !== maxFrame) bad(`"maxFrame" is ${typeName(value.maxFrame)}; it must be the first maximum frame ${maxFrame}`);
-        if (!(finite(value.variation) && value.variation >= 0 && value.variation <= 1 && Math.abs(value.variation - (1 - min)) <= 1e-12)) bad(`"variation" is ${typeName(value.variation)}; it must be (max-min)/max, ${1 - min}`);
-      }
-    }
-  }
-  if (p.list.length !== before) return undefined;
-  return copyFigureScale(value as unknown as FigureScale);
-}
-
-/** Fixed field order; retain measured precision, including at the warning bar. */
-export function copyFigureScale(r: FigureScale): FigureScale {
-  return { source: r.source, method: r.method, minScore: r.minScore, threshold: r.threshold, referencePx: r.referencePx, scale: [...r.scale], minFrame: r.minFrame, maxFrame: r.maxFrame, variation: r.variation };
-}

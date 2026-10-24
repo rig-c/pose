@@ -7,7 +7,9 @@
  * and the exit code says which kind of outcome it was.
  */
 import { figureScaleLines } from './src/figurescale.ts';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, lstatSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { FIGURE_SCALE_SPEC, figureScalePath, writeFigureScaleRecord } from './src/figurescalerecord.ts';
 import pkg from './package.json' with { type: 'json' };
 import { clean, cleanLine, holdRegions, unheldText, untestedText, HOLD_BLEND, HOLD_MIN_SECONDS, HOLD_REACH, HOLD_SPEED, HOLD_SPEED_WINDOW, LEGS, OCCLUSION_SCORE, OCCLUSION_WINDOW, SPIKE_TRUNKS, SPIKE_WINDOW, windowProblem } from './src/clean.ts';
 import { convertCoco17, DEPTH_GAITS, readPoseSequence, writePoseSequence, type DepthGait } from './src/pose.ts';
@@ -63,7 +65,8 @@ pelvis (before clean; rig-c/pose#288)
 
 clean (required before retarget; rig-c/pose#67)
   --pose <file>         rig-pose-sequence/1 as a scan wrote it, or COCO-17 with --coco
-  --out <file>          the cleaned rig-pose-sequence/1, carrying the record of what was done ("cleaned")
+  --out <file>          the cleaned rig-pose-sequence/1, carrying the record of what was done ("cleaned");
+                        also writes <out>.figure-scale.json, an external measured input-scale diagnostic
   --coco                read --pose as coco17-sequence/1 and convert it first (neck = the shoulders' midpoint)
   --person <id>         the person to clean when the sequence holds more than one; only that person is written
   --loop                the sequence is one cycle (a gait's strike to strike): every window wraps, last frame
@@ -586,16 +589,28 @@ function runClean(argv: string[], say: (l: string) => void): void {
   const gait = f.get('depth');
   if (gait !== undefined && !(DEPTH_GAITS as readonly string[]).includes(gait)) throw new Usage(`--depth is "${gait}"; it must be ${DEPTH_GAITS.join(' or ')} (the gait decides the joint --draw-order depth orders the legs by: the ankle in a walk, the knee in a run)`);
   const outPath = new Problems();
+  // Both files share a parent; plan it once, then check both actual destinations.
+  const sidecar = figureScalePath(out);
   const outDirs = planOutDirs([['--out', out]], outPath);
+  for (const [name, path] of [['--out', out], ['figure-scale sidecar', sidecar]]) {
+    let exists = false;
+    try { lstatSync(path); exists = true; } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT' && !outPath.any) outPath.add('ARG_PATH', `${name} ${path} — cannot inspect output: ${(e as Error).message}`); }
+    if (!exists) continue;
+    try {
+      if (!statSync(path).isFile()) outPath.add('ARG_PATH', `${name} ${path} — output is not a regular file`);
+      else accessSync(path, constants.W_OK);
+    } catch (e) { outPath.add('ARG_PATH', `${name} ${path} — output is not writable: ${(e as Error).message}`); }
+  }
   outPath.throwIfAny();
   const params = { loop: f.has('loop'), legs: windowOf(f, 'legs', 5), rest: windowOf(f, 'rest', 7), hipsInferred: f.has('hips-inferred'), hold: holdOf(f), ...(gait !== undefined ? { depth: gait as DepthGait } : {}) };
-  const text = readFileSync(input, 'utf8');
+  const inputBytes = readFileSync(input);
+  const text = inputBytes.toString('utf8');
   const seq = f.has('coco') ? convertCoco17(text, input) : readPoseSequence(text, input);
   const c = clean(seq, params, f.get('person'), input);
   const n = seq.frames.length;
   const tOf = (i: number) => `t=${seq.frames[i]!.t.toFixed(3)}s`;
   say(`rig-pose clean: ${n} frame(s) of person "${c.person}" from ${input}${f.has('coco') ? ' (COCO-17)' : ''}; legs ${params.legs}, rest ${params.rest}, ${params.loop ? 'loop (every window wraps)' : 'no loop (windows cut at the ends)'}`);
-  if (c.record.figureScale !== undefined) for (const line of figureScaleLines(c.record.figureScale, seq.camera !== undefined)) say(`  ${line}`);
+  for (const line of figureScaleLines(c.figureScale, seq.camera !== undefined)) say(`  ${line}`);
   say(`  TRUNK  neck → mid_hip: median ${fmt(c.trunk.length)} px over ${c.trunk.frames} frame(s); a spike is > ${fmt(SPIKE_TRUNKS * c.trunk.length)} px (${SPIKE_TRUNKS} trunk) from its ${SPIKE_WINDOW}-frame median`);
   for (const s of c.spikes) say(`  SPIKE  joint "${s.joint}" frame ${s.frame} (${tOf(s.frame)}): ${fmt(s.off)} px from its ${SPIKE_WINDOW}-frame median, over ${fmt(SPIKE_TRUNKS * c.trunk.length)} — took the median`);
   say(`  SPIKES ${c.spikes.length} replaced; ${untestedText(c.untested)}`);
@@ -632,8 +647,13 @@ function runClean(argv: string[], say: (l: string) => void): void {
     say(`  DEPTH  derived per segment for a ${params.depth} (rig-c/pose#281): ratio = drawn ÷ rest, rest the larger side's 95th-percentile length (${rest} px); flat within ${FLAT_BAND[0]}–${FLAT_BAND[1]}; toward ${d.signs.toward}, away ${d.signs.away}, flat or undecided ${d.signs.flat} segment-frame(s); the trunk faced the camera on ${d.facing.toward}, away on ${d.facing.away}, side-on (under ${SIDE_ON} trunk wide, sign 0) on ${d.facing.side} frame(s)`);
   } else if (c.seq.frames.some((x) => x.depth !== undefined)) say('  DEPTH  measured depth (a 3D detector\'s) carried through as read');
   if (c.inferred !== null) say(`  INFERRED r_hip on ${c.inferred.r_hip} frame(s), l_hip on ${c.inferred.l_hip} frame(s) of ${n} marked "inferred" (every frame where it has a position): declared at clean (--hips-inferred); positions and scores unchanged`);
+  const sequenceText = writePoseSequence(c.seq);
+  const sha256 = (bytes: string | Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
+  const sidecarText = writeFigureScaleRecord({ spec: FIGURE_SCALE_SPEC, inputSHA256: sha256(inputBytes), sequenceSHA256: sha256(sequenceText), person: c.person, cameraDeclared: seq.camera !== undefined, figureScale: c.figureScale });
   makeOutDirs(outDirs, say);
-  writeFileSync(out, writePoseSequence(c.seq));
+  writeFileSync(sidecar, sidecarText);
+  writeFileSync(out, sequenceText);
+  say(`  wrote ${sidecar} (measured input figure scale)`);
   say(`  CLEAN  ${cleanLine(c.record)}`);
   say(`  wrote ${out}`);
 }

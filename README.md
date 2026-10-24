@@ -50,7 +50,7 @@ rig-pose clean --pose dance.scan.json --out dance.pose.json [--loop] [--legs 5] 
 
 Takes the detector's shake out of a pose sequence — spikes, occluded joints, jitter, a joint that has stopped — and writes the sequence with a `cleaned` record saying what it did; `--loop` declares one gait cycle, `--depth walk|run` adds each limb segment's foreshortening as depth, `--coco` reads COCO-17 and converts it first. `retarget` reads only a sequence `clean` wrote. Rules: [Clean first](docs/REFERENCE.md#clean-first-rig-pose-clean), [Derived depth](docs/REFERENCE.md#derived-depth-clean---depth).
 
-Before moving joints, `clean` records a measured figure-scale track and warns `CAMERA_UNDECLARED` when its spread exceeds 10% without a declared `camera`. A zoom can be read as body motion; pose foreshortening can also change this measurement. It neither fits nor corrects a camera and does not refuse the sequence. Measurement and unknown-frame rules: [Clean first](docs/REFERENCE.md#clean-first-rig-pose-clean).
+Before moving joints, `clean` always writes a measured figure-scale sidecar at `<out>.figure-scale.json` (`rig-pose-figure-scale/1`) and warns `CAMERA_UNDECLARED` when its spread exceeds 10% without a declared `camera`. A zoom can be read as body motion; pose foreshortening can also change this measurement. It neither fits nor corrects a camera and does not refuse the sequence. The sidecar binds the raw input and written sequence with SHA-256; the pose JSON format stays unchanged. Measurement and unknown-frame rules: [Clean first](docs/REFERENCE.md#clean-first-rig-pose-clean).
 
 ### `rig-pose pelvis`
 
