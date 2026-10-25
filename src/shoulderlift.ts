@@ -136,24 +136,36 @@ export function readShoulderSignal(c: ShoulderConfig, seq: PoseSequence, rest: P
   const gain = ca * cb, dg = cb * da + ca * db + da * db;
   const eR = errorOf(c.rest, c.camera.residualPx), eF = errorOf(c.sampling, c.camera.residualPx), ep = errorOf(c.painting, 0);
   const pv = vector(c.painting.points), pvNorm = Math.hypot(...pv);
-  const maxA = ca + da, maxGain = gain + dg, pointErrorSum = eF + eR;
-  calibrationFinite(p, 'calibration products', { q0, span0, gain, errorProductBA: cb * da, errorProductAB: ca * db, errorProductDADB: da * db, dg, maxA, maxGain, eR, eF, ep, pointErrorSum, paintingX: pv[0], paintingY: pv[1], paintingNorm: pvNorm });
+  const maxA = ca + da, maxGain = gain + dg, twoER = 2 * eR, twoEF = 2 * eF, maxSpan0 = span0 + twoER;
+  calibrationFinite(p, 'calibration products', { q0, span0, gain, errorProductBA: cb * da, errorProductAB: ca * db, errorProductDADB: da * db, dg, maxA, maxGain, eR, eF, ep, twoER, twoEF, maxSpan0, paintingX: pv[0], paintingY: pv[1], paintingNorm: pvNorm });
   if (gain <= 0) p.add('SHOULDER_LIFT_CALIBRATION', 'unknown — nonrepresentable positive calibration gain');
   if (p.any) return { status: 'unknown', problems: p.list };
+  let dq0Max = 0;
   for (const [index, s] of r.entries()) {
     const rv = vector(s.points), rvNorm = Math.hypot(...rv), scaledX = ca * rv[0], scaledY = ca * rv[1];
     const residualX = pv[0] - scaledX, residualY = pv[1] - scaledY, residual = Math.hypot(residualX, residualY);
     const scaledError = maxA * eR, coordinateError = ep + scaledError, coordinateBound = 2 * Math.SQRT2 * coordinateError, scaleBound = da * rvNorm;
     const bound = coordinateBound + scaleBound;
-    if (!calibrationFinite(p, `rest sampleIndex ${c.rest.frames[index]}`, { restX: rv[0], restY: rv[1], restNorm: rvNorm, scaledX, scaledY, residualX, residualY, residual, scaledError, coordinateError, coordinateBound, scaleBound, bound })) continue;
+    const span = restSpan[index]!, q = restQ[index]!, minSpan = span - twoER, coeff = 1 + Math.abs(1 - q) + Math.abs(q);
+    if (!calibrationFinite(p, `rest sampleIndex ${c.rest.frames[index]}`, { restX: rv[0], restY: rv[1], restNorm: rvNorm, scaledX, scaledY, residualX, residualY, residual, scaledError, coordinateError, coordinateBound, scaleBound, bound, minSpan, coeff })) continue;
     if (rvNorm === 0 || pvNorm === 0 || residual > bound) p.add('SHOULDER_LIFT_CALIBRATION', `unknown — rest sampleIndex ${c.rest.frames[index]} hip→ear calibration residual ${residual}px exceeds supplied bound ${bound}px`);
+    if (minSpan <= 0) p.add('SHOULDER_LIFT_CALIBRATION', `unknown — rest sampleIndex ${c.rest.frames[index]} hip→ear span ${span}px does not exceed denominator uncertainty ${twoER}px`);
+    else {
+      const dq = (coeff * eR) / minSpan;
+      if (calibrationFinite(p, `rest sampleIndex ${c.rest.frames[index]}`, { dq }) && dq > dq0Max) dq0Max = dq;
+    }
   }
+  activeSpan.forEach((span, frame) => {
+    const minSpan = span - twoEF;
+    if (calibrationFinite(p, `active frame ${frame}`, { minSpan }) && minSpan <= 0) p.add('SHOULDER_LIFT_CALIBRATION', `unknown — active frame ${frame} hip→ear span ${span}px does not exceed denominator uncertainty ${twoEF}px`);
+  });
   if (p.any) return { status: 'unknown', problems: p.list };
   const frames = a.map((s, frame): ShoulderSample => {
-    const span = activeSpan[frame]!, df = activeQ[frame]! - q0, d = (elevOf(s.points) - q0 * span) * (span0 / span);
-    const twiceGain = maxGain * 2, coordinateBound = twiceGain * pointErrorSum, scaleBound = Math.abs(d) * dg;
+    const span = activeSpan[frame]!, minSpan = span - twoEF, f = activeQ[frame]!, df = f - q0, d = (elevOf(s.points) - q0 * span) * (span0 / span);
+    const coeff = 1 + Math.abs(1 - f) + Math.abs(f), dfMax = (coeff * eF) / minSpan, span0Error = Math.abs(df) * twoER;
+    const dErrorPx = maxSpan0 * (dfMax + dq0Max) + span0Error, coordinateBound = maxGain * dErrorPx, scaleBound = Math.abs(d) * dg;
     const bound = coordinateBound + scaleBound, worldUnits = gain * d, paintingPx = ca * d, toleranceUnits = bound + 0.01;
-    calibrationFinite(p, `frame ${frame}`, { df, d, twiceGain, coordinateBound, scaleBound, bound, worldUnits, paintingPx, toleranceUnits });
+    calibrationFinite(p, `frame ${frame}`, { df, d, coeff, dfMax, span0Error, dErrorPx, coordinateBound, scaleBound, bound, worldUnits, paintingPx, toleranceUnits });
     return { frame, sourceTime: seq.frames[frame]!.t, t: times[frame]!, states: s.states, sequencePx: d, paintingPx, worldUnits, sourceBoundUnits: bound, toleranceUnits };
   });
   if (p.any) return { status: 'unknown', problems: p.list };

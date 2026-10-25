@@ -30,7 +30,8 @@ const read = (c = shoulderConfig(), s = shoulderSequence(), r = shoulderSequence
 test('analytical normal: 0/8/16/-8/0 pixels recover 0/4/8/-4/0 within predeclared .02 units', () => {
   const r = read(); expect(r.status).toBe('read'); if (r.status !== 'read') return;
   expect(r.frames.map(f => f.worldUnits)).toEqual([0, 4, 8, -4, 0]);
-  for (const f of r.frames) expect(f.toleranceUnits).toBe(.02);
+  const expectedTol = [.0200010000500025, .0202010000500025, .0204010000500025, .0202010000500025, .0200010000500025];
+  for (const [i, f] of r.frames.entries()) expect(f.toleranceUnits).toBeCloseTo(expectedTol[i]!, 15);
   expect(r.frames.map(f => f.t)).toEqual([0, .25, .5, .75, 1]);
   expect(r.evidence).toBe('SUPPLIED');
 });
@@ -142,8 +143,93 @@ test('nonzero calibration uncertainties use the declared worst-case formula with
   c.calibration.cameraToPainting.absoluteError = .02; c.calibration.paintingToRig.absoluteError = .003;
   const r = read(c); expect(r.status).toBe('read');
   // Independently expanded constants: dg=.25*.02 + 2*.003 + .02*.003=.01106,
-  // eF=.155, eR=.255, d=16: B=.51106*.82 + 16*.01106=.5960292.
-  if (r.status === 'read') { expect(r.frames[2]!.sourceBoundUnits).toBeCloseTo(.5960292, 12); expect(r.frames[2]!.toleranceUnits).toBeCloseTo(.6060292, 12); expect(r.frames[2]!.worldUnits).toBe(8); }
+  // eF=.155, eR=.255, df=.08, d=16, dfMax=.31/199.69, dq0Max=.51/199.49,
+  // dErrorPx=200.51*(dfMax+dq0Max)+.08*.51=.8646806226145588, B=.51106*dErrorPx+16*.01106=.6188636789933966.
+  if (r.status === 'read') { expect(r.frames[2]!.sourceBoundUnits).toBeCloseTo(.6188636789933966, 12); expect(r.frames[2]!.toleranceUnits).toBeCloseTo(.6288636789933966, 12); expect(r.frames[2]!.worldUnits).toBe(8); }
+});
+
+test('quotient tolerance: Codex short-span control, single/simultaneous perturbations on short and long spans, halved bound plant, and denominator uncertainty refusals', () => {
+  const frameAt = (span: number, f: number) => {
+    const s = shoulderSequence([0]);
+    const j = s.frames[0]!.people[0]!.joints;
+    for (const n of ['r_hip', 'l_hip'] as const) j[n]!.at![1] = span;
+    for (const n of ['r_ear', 'l_ear'] as const) j[n]!.at![1] = 0;
+    for (const n of ['r_shoulder', 'l_shoulder'] as const) j[n]!.at![1] = span * (1 - f);
+    return s;
+  };
+  // 1. Codex failing case: rest span 200px, active span 20px, f=0.6, gain=0.5, 0.01px resolution (eF=eR=0.005px).
+  const codexBase = read(shoulderConfig(), frameAt(20, .6), shoulderSequence([0]));
+  expect(codexBase.status).toBe('read');
+  const codexShiftedSeq = frameAt(20, .6);
+  for (const n of ['r_shoulder', 'l_shoulder'] as const) codexShiftedSeq.frames[0]!.people[0]!.joints[n]!.at![1] -= .005;
+  const codexShifted = read(shoulderConfig(), codexShiftedSeq, shoulderSequence([0]));
+  expect(codexShifted.status).toBe('read');
+  if (codexBase.status === 'read' && codexShifted.status === 'read') {
+    const liftError = Math.abs(codexShifted.frames[0]!.worldUnits - codexBase.frames[0]!.worldUnits);
+    expect(liftError).toBeCloseTo(.025, 12);
+    // Old un-normalised bound (.01u source bound, .02u tolerance) is exceeded by .025u; new bound (.055028u / .065028u) covers it.
+    expect(liftError).toBeGreaterThan(.02);
+    expect(codexBase.frames[0]!.sourceBoundUnits).toBeCloseTo(.055028013781879694, 12);
+    expect(codexBase.frames[0]!.toleranceUnits).toBeCloseTo(.0650280137818797, 12);
+    expect(liftError).toBeLessThanOrEqual(codexBase.frames[0]!.sourceBoundUnits);
+    expect(liftError).toBeLessThanOrEqual(codexBase.frames[0]!.toleranceUnits);
+  }
+  // 2. Perturbing each input point by its declared error on a short span (20px) and a long span (320px) never exceeds the stated bound; halving the bound goes red.
+  for (const span of [20, 320]) {
+    const c = shoulderConfig(); c.sampling.pointErrorPx = .5; c.rest.pointErrorPx = .5;
+    const eF = .505, eR = .505, gain = .5;
+    const baseSeq = frameAt(span, .68), baseRest = shoulderSequence([0]);
+    const base = read(c, baseSeq, baseRest); expect(base.status).toBe('read');
+    if (base.status !== 'read') continue;
+    const d0 = base.frames[0]!.sequencePx, w0 = base.frames[0]!.worldUnits;
+    const boundU = base.frames[0]!.sourceBoundUnits, boundPx = boundU / gain;
+    let maxDeltaD = 0, maxDeltaW = 0;
+    // Perturb each of the 6 active joints and 6 rest joints individually by +-eF / +-eR.
+    for (const joint of SHOULDER_JOINTS) for (const sign of [-1, 1]) {
+      const aSeq = structuredClone(baseSeq); aSeq.frames[0]!.people[0]!.joints[joint]!.at![1] += sign * eF;
+      const ra = read(c, aSeq, baseRest); expect(ra.status).toBe('read');
+      if (ra.status === 'read') {
+        const dd = Math.abs(ra.frames[0]!.sequencePx - d0), dw = Math.abs(ra.frames[0]!.worldUnits - w0);
+        expect(dd).toBeLessThanOrEqual(boundPx); expect(dw).toBeLessThanOrEqual(boundU);
+        if (dd > maxDeltaD) maxDeltaD = dd; if (dw > maxDeltaW) maxDeltaW = dw;
+      }
+      const rSeq = structuredClone(baseRest); rSeq.frames[0]!.people[0]!.joints[joint]!.at![1] += sign * eR;
+      const rr = read(c, baseSeq, rSeq); expect(rr.status).toBe('read');
+      if (rr.status === 'read') {
+        const dd = Math.abs(rr.frames[0]!.sequencePx - d0), dw = Math.abs(rr.frames[0]!.worldUnits - w0);
+        expect(dd).toBeLessThanOrEqual(boundPx); expect(dw).toBeLessThanOrEqual(boundU);
+        if (dd > maxDeltaD) maxDeltaD = dd; if (dw > maxDeltaW) maxDeltaW = dw;
+      }
+    }
+    // Perturb all 12 points simultaneously across every corner of [-eF, eF]^3 x [-eR, eR]^3.
+    for (const dS of [-eF, eF]) for (const dH of [-eF, eF]) for (const dE of [-eF, eF]) {
+      for (const dS0 of [-eR, eR]) for (const dH0 of [-eR, eR]) for (const dE0 of [-eR, eR]) {
+        const aSeq = structuredClone(baseSeq), rSeq = structuredClone(baseRest);
+        const aj = aSeq.frames[0]!.people[0]!.joints, rj = rSeq.frames[0]!.people[0]!.joints;
+        for (const n of ['r_shoulder', 'l_shoulder'] as const) { aj[n]!.at![1] += dS; rj[n]!.at![1] += dS0; }
+        for (const n of ['r_hip', 'l_hip'] as const) { aj[n]!.at![1] += dH; rj[n]!.at![1] += dH0; }
+        for (const n of ['r_ear', 'l_ear'] as const) { aj[n]!.at![1] += dE; rj[n]!.at![1] += dE0; }
+        const rc = read(c, aSeq, rSeq); expect(rc.status).toBe('read');
+        if (rc.status === 'read') {
+          const dd = Math.abs(rc.frames[0]!.sequencePx - d0), dw = Math.abs(rc.frames[0]!.worldUnits - w0);
+          expect(dd).toBeLessThanOrEqual(boundPx); expect(dw).toBeLessThanOrEqual(boundU);
+          if (dd > maxDeltaD) maxDeltaD = dd; if (dw > maxDeltaW) maxDeltaW = dw;
+        }
+      }
+    }
+    // Planted halved bound is exceeded by the valid perturbations (red when halved).
+    expect(maxDeltaD).toBeGreaterThan(boundPx / 2);
+    expect(maxDeltaW).toBeGreaterThan(boundU / 2);
+  }
+  // 3. Denominator uncertainty preventing a finite bound (span <= 2*eF or restSpan <= 2*eR) is refused by name.
+  const badActive = shoulderConfig(); badActive.sampling.pointErrorPx = 9.995; // eF = 10, 2*eF = 20 >= active span 20
+  const raBad = read(badActive, frameAt(20, .6), shoulderSequence([0]));
+  expect(raBad.status).toBe('unknown');
+  if (raBad.status === 'unknown') expect(raBad.problems.some(p => p.code === 'SHOULDER_LIFT_CALIBRATION' && p.text.includes('active frame 0') && p.text.includes('denominator uncertainty'))).toBe(true);
+  const badRest = shoulderConfig(); badRest.rest.pointErrorPx = 99.995; badRest.painting.pointErrorPx = 200; // eR = 100, 2*eR = 200 >= rest span 200
+  const rrBad = read(badRest, frameAt(200, .6), shoulderSequence([0]));
+  expect(rrBad.status).toBe('unknown');
+  if (rrBad.status === 'unknown') expect(rrBad.problems.some(p => p.code === 'SHOULDER_LIFT_CALIBRATION' && p.text.includes('rest sampleIndex 0') && p.text.includes('denominator uncertainty'))).toBe(true);
 });
 
 test('first, last and all-frame missing points remain named unknown', () => {
