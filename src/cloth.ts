@@ -12,7 +12,7 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
-import { poseRawAnimation, readModel, type CompiledDocument, type RawPose } from 'rig-c/core';
+import { physicsClockStep, poseRawAnimationEach, readModel, type CompiledDocument, type RawPose } from 'rig-c/core';
 import { readPlate, type Plate } from 'rig-c/plate';
 import { CLOTH, CLOTH_SPEC, clothFigures, median, type ClothFigures, type ClothWindow } from './compare.ts';
 import { pointAt, readMap, resolveMap, type JointMap } from './map.ts';
@@ -111,15 +111,25 @@ interface RawFrame {
 
 type Pt = [number, number];
 
-/** Clip triangle `(a, b, c)` (already in y-down coordinates) to the half-plane `y >= yMid`, returning a polygon of 0, 3, or 4 vertices. */
-function clipTriLower(a: Pt, b: Pt, c: Pt, yMid: number): Pt[] {
+export interface ClothPlant {
+  /** `'upper'` plants the upper-half skirt band (`y <= y_mid`) in place of the lower half (`y >= y_mid`). */
+  half?: 'lower' | 'upper';
+  /** `-1` plants the sign-flipped cross-correlation (`Y[i - L]`) in `xcorrLag`. */
+  lagSign?: 1 | -1;
+  /** Custom physics clock step (`dt => dt` plants the unshifted frame clock in place of `physicsClockStep`). */
+  clock?: (dt: number) => number;
+}
+
+/** Clip triangle `(a, b, c)` (already in y-down coordinates) to the half-plane `y >= yMid` (`half = 'lower'`) or `y <= yMid` (`half = 'upper'`). */
+function clipTriBand(a: Pt, b: Pt, c: Pt, yMid: number, half: 'lower' | 'upper' = 'lower'): Pt[] {
   const pts: Pt[] = [a, b, c];
   const out: Pt[] = [];
+  const inside = (y: number) => (half === 'lower' ? y >= yMid : y <= yMid);
   for (let k = 0; k < 3; k++) {
     const p = pts[k]!;
     const q = pts[(k + 1) % 3]!;
-    const pIn = p[1] >= yMid;
-    const qIn = q[1] >= yMid;
+    const pIn = inside(p[1]);
+    const qIn = inside(q[1]);
     if (pIn && qIn) {
       out.push(q);
     } else if (pIn && !qIn) {
@@ -148,6 +158,7 @@ function triMomentX(a: Pt, b: Pt, c: Pt): { area2: number; mx2: number } {
 export function measureSkirtTriangles(
   triangles: ReadonlyArray<readonly [Pt, Pt, Pt]>,
   vertices: ReadonlyArray<Pt>,
+  half: 'lower' | 'upper' = 'lower',
 ): { skirtTop: number; skirtBottom: number; skirtCx: number; hemL: number; hemR: number; hemLY: number; hemRY: number; hemBandCx: number } | null {
   if (vertices.length === 0) return null;
   let skirtTop = Infinity;
@@ -161,21 +172,21 @@ export function measureSkirtTriangles(
   let totalMx2 = 0;
   let bandArea2 = 0;
   let bandMx2 = 0;
-  const lowerPts: Pt[] = [];
-  for (const p of vertices) if (p[1] >= yMid) lowerPts.push(p);
+  const bandPts: Pt[] = [];
+  for (const p of vertices) if (half === 'lower' ? p[1] >= yMid : p[1] <= yMid) bandPts.push(p);
   for (const [a, b, c] of triangles) {
     const m = triMomentX(a, b, c);
     totalArea2 += m.area2;
     totalMx2 += m.mx2;
-    const clipped = clipTriLower(a, b, c, yMid);
-    for (const p of clipped) lowerPts.push(p);
+    const clipped = clipTriBand(a, b, c, yMid, half);
+    for (const p of clipped) bandPts.push(p);
     for (let k = 1; k + 1 < clipped.length; k++) {
       const bm = triMomentX(clipped[0]!, clipped[k]!, clipped[k + 1]!);
       bandArea2 += bm.area2;
       bandMx2 += bm.mx2;
     }
   }
-  const pts = lowerPts.length > 0 ? lowerPts : vertices;
+  const pts = bandPts.length > 0 ? bandPts : vertices;
   let hemL = Infinity;
   let hemR = -Infinity;
   let hemLY = yMid;
@@ -197,10 +208,13 @@ export function measureSkirtTriangles(
 
 /**
  * Measure the skirt envelope and centroids from a raster PNG plate (`alpha >= alphaMin`, y down).
+ * On an opaque uniform background (where the border's median alpha is `>= alphaMin`, such as `rigc render --slot`'s
+ * `[232, 232, 232, 255]`), `alphaMin` also serves as the RGB colour-distance threshold against the border median.
  */
 export function measureSkirtPlate(
   plate: Plate,
   alphaMin: number,
+  half: 'lower' | 'upper' = 'lower',
 ): { skirtTop: number; skirtBottom: number; skirtCx: number; hemL: number; hemR: number; hemLY: number; hemRY: number; hemBandCx: number } | null {
   const { width, height, data } = plate;
   // Detect whether the plate has a transparent background or an opaque uniform background (such as `rigc render --slot`'s [232, 232, 232, 255]):
@@ -252,14 +266,15 @@ export function measureSkirtPlate(
   }
   if (totalWeight === 0) return null;
   const yMid = skirtTop + 0.5 * (skirtBottom - skirtTop);
-  const yStart = Math.ceil(yMid - 1e-9);
+  const yStart = half === 'lower' ? Math.max(0, Math.ceil(yMid - 1e-9)) : skirtTop;
+  const yEnd = half === 'lower' ? skirtBottom : Math.min(height - 1, Math.floor(yMid + 1e-9));
   let hemL = Infinity;
   let hemR = -Infinity;
   let hemLY = yStart;
   let hemRY = yStart;
   let bandWeight = 0;
   let bandWx = 0;
-  for (let y = Math.max(0, yStart); y <= skirtBottom; y++) {
+  for (let y = yStart; y <= yEnd; y++) {
     for (let x = 0; x < width; x++) {
       const w = pixelWeight(x, y);
       if (w === 0) continue;
@@ -286,6 +301,7 @@ export function buildClothTrack(
   meta: { subject: string; method: string; source: string; fps: number; unit: 'picture px' | 'rig world units' },
   windows: readonly ClothWindow[] | undefined,
   p: Problems,
+  plant?: ClothPlant,
 ): { doc: ClothTrackDocument; windows: ClothSwingWindow[] } {
   const widths = rawFrames.map((f) => f.hipW).filter((w) => Number.isFinite(w) && w > 0);
   if (widths.length === 0) {
@@ -341,7 +357,7 @@ export function buildClothTrack(
     for (const w of windows) {
       const f0 = frameOf(w.from);
       const f1 = frameOf(w.to);
-      const fig: ClothFigures = clothFigures(hipSeries, hemSeries, f0, f1, CLOTH.stroke);
+      const fig: ClothFigures = clothFigures(hipSeries, hemSeries, f0, f1, CLOTH.stroke, plant?.lagSign ?? 1);
       swingWindows.push({
         name: w.name,
         t: [w.from, w.to],
@@ -449,7 +465,7 @@ export function measureRigCloth(
   doc: CompiledDocument,
   map: JointMap,
   mapWhere: string,
-  opts: { rigWhere: string; animation: string; skirtSlots: readonly string[]; fps: number; windows?: readonly ClothWindow[] },
+  opts: { rigWhere: string; animation: string; skirtSlots: readonly string[]; fps: number; windows?: readonly ClothWindow[]; plant?: ClothPlant },
 ): { doc: ClothTrackDocument; windows: ClothSwingWindow[] } {
   const p = new Problems();
   const rest = restOf(doc);
@@ -478,7 +494,8 @@ export function measureRigCloth(
   const stepCount = Math.max(1, Math.round(duration * opts.fps));
   const dt = 1 / opts.fps;
   const steps = Array.from({ length: stepCount }, () => dt);
-  const poses = poseRawAnimation(doc, opts.animation, steps, {}, 'animation');
+  const poses: RawPose[] = [];
+  poseRawAnimationEach(doc, opts.animation, steps, {}, 'animation', (pose) => poses.push(pose), opts.plant?.clock ?? physicsClockStep);
   const lengths = new Map(doc.bones.map((b) => [b.name, b.length ?? 0]));
   const slotSet = new Set(opts.skirtSlots);
   const [rSpec, lSpec] = (hips as { joints: [string, string]; points: [string, string] }).joints[0] === 'r_hip'
@@ -504,7 +521,7 @@ export function measureRigCloth(
     const tiltDeg = wrap(Math.atan2(-(lHip[1] - rHip[1]), lHip[0] - rHip[0]) * DEG);
 
     const { triangles, vertices } = poseSkirtFrame(pose, slotSet);
-    const m = measureSkirtTriangles(triangles, vertices);
+    const m = measureSkirtTriangles(triangles, vertices, opts.plant?.half);
     if (m === null) {
       p.add('CLOTH_EMPTY_FRAME', `frame ${i} (t=${t.toFixed(3)}s): slot(s) ${opts.skirtSlots.map((s) => `"${s}"`).join(', ')} drew no vertices`);
       return;
@@ -539,6 +556,7 @@ export function measureRigCloth(
     },
     opts.windows,
     p,
+    opts.plant,
   );
 }
 
@@ -565,7 +583,7 @@ export function measureFramesCloth(
   seq: PoseSequence,
   poseWhere: string,
   framesWhere: string,
-  opts: { person?: string; alphaMin: number; windows?: readonly ClothWindow[] },
+  opts: { person?: string; alphaMin: number; windows?: readonly ClothWindow[]; plant?: ClothPlant },
 ): { doc: ClothTrackDocument; windows: ClothSwingWindow[] } {
   const p = new Problems();
   const track = personTrack(seq, opts.person, poseWhere);
@@ -588,9 +606,9 @@ export function measureFramesCloth(
       p.add('CLOTH_FRAMES', `${name} (frame ${i}) is ${plate.width}×${plate.height} and ${poseWhere} is ${seq.width}×${seq.height}; the joints are in the frames' pixels`);
       return;
     }
-    const m = measureSkirtPlate(plate, opts.alphaMin);
+    const m = measureSkirtPlate(plate, opts.alphaMin, opts.plant?.half);
     if (m === null) {
-      p.add('CLOTH_EMPTY_FRAME', `${name} (frame ${i}, t=${t.toFixed(3)}s) has no pixel with alpha ≥ ${opts.alphaMin}`);
+      p.add('CLOTH_EMPTY_FRAME', `${name} (frame ${i}, t=${t.toFixed(3)}s) has no pixel with alpha ≥ ${opts.alphaMin} (or colour distance ≥ ${opts.alphaMin} from an opaque border background)`);
       return;
     }
     const rHip = rHips![i]!;
@@ -633,6 +651,7 @@ export function measureFramesCloth(
     },
     opts.windows,
     p,
+    opts.plant,
   );
 }
 

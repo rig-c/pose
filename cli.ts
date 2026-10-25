@@ -335,7 +335,7 @@ compare
 
 cloth (rig-c/pose#34)
   --rig <path>          the built rig (skeleton.model.json, its build directory, or a rig.json / rig directory):
-                        stepped at --fps through rig-c's core poser (Physics.reset at 0, Physics.update per step)
+                        stepped at --fps through rig-c's core poser (poseRawAnimationEach with physicsClockStep)
                         to measure the skirt slots in rig world units
   --map <map.json>      with --rig: rig-pose-map/1, naming the two hip points (the hip line's "a>b" aim, or the
                         first bones of the chains starting at r_hip and l_hip) that set the hip width and mid-hip
@@ -346,7 +346,10 @@ cloth (rig-c/pose#34)
                         sequence's picture size, measured in picture px
   --pose <file>         with --frames: rig-pose-sequence/1 whose r_hip and l_hip set the hip width and mid-hip
   --person <id>         with --frames: the person to read when --pose holds more than one
-  --alpha-min <1..255>  with --frames: the alpha threshold for skirt pixels (default: 16)
+  --alpha-min <1..255>  with --frames: the alpha threshold for skirt pixels on transparent PNGs, and the RGB
+                        colour-distance threshold from the border median on opaque-background PNGs such as
+                        rigc render --slot (default: 16; a skirt within < --alpha-min of the background is
+                        refused as CLOTH_EMPTY_FRAME)
   --windows <t0-t1,...> optional windows in seconds (named A, B, ...) over which #34's lag, swing ratio and
                         overshoot are computed (stroke threshold 0.2 hip widths) and written under "skirtSwing"
   --out <file>          where the rig-c-cloth-track/0 JSON is written, ready for rig-pose compare

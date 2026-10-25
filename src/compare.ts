@@ -773,8 +773,8 @@ export function gradient(a: readonly number[]): number[] {
   return a.map((_, i) => (i === 0 ? a[1]! - a[0]! : i === n - 1 ? a[n - 1]! - a[n - 2]! : (a[i + 1]! - a[i - 1]!) / 2));
 }
 
-/** The lag (frames, the hem after the hip positive) at the peak of the normalised cross-correlation, refined by a parabola. */
-export function xcorrLag(x: readonly number[], y: readonly number[], lo: number = CLOTH.lagFrom, hi: number = CLOTH.lagTo): { lag: number; peak: number } {
+/** The lag (frames, the hem after the hip positive) at the peak of the normalised cross-correlation, refined by a parabola. `sign = -1` is the planted sign-flip mutant (`Y[i - L]`). */
+export function xcorrLag(x: readonly number[], y: readonly number[], lo: number = CLOTH.lagFrom, hi: number = CLOTH.lagTo, sign: 1 | -1 = 1): { lag: number; peak: number } {
   const z = (v: readonly number[]) => {
     const m = v.reduce((s, q) => s + q, 0) / v.length;
     const sd = Math.sqrt(v.reduce((s, q) => s + (q - m) * (q - m), 0) / v.length);
@@ -784,10 +784,11 @@ export function xcorrLag(x: readonly number[], y: readonly number[], lo: number 
   const Y = z(y);
   const cs = new Map<number, number>();
   for (let L = lo; L <= hi; L++) {
+    const shift = sign * L;
     let s = 0;
     let k = 0;
-    for (let i = Math.max(0, -L); i < X.length && i + L < Y.length; i++) {
-      s += X[i]! * Y[i + L]!;
+    for (let i = Math.max(0, -shift); i < X.length && i + shift < Y.length; i++) {
+      s += X[i]! * Y[i + shift]!;
       k++;
     }
     cs.set(L, k > 0 ? s / k : NaN);
@@ -837,13 +838,13 @@ function roundHalfEven(x: number): number {
  * #34's three figures over one window [f0, f1) of a hip-x and hem-x series (in hip widths): the lag, the median
  * swing ratio and the median overshoot over the window's hip strokes of at least `minexc`. HQ's `analyse`.
  */
-export function clothFigures(hipRaw: readonly number[], hemRaw: readonly number[], f0: number, f1: number, minexc: number): ClothFigures {
+export function clothFigures(hipRaw: readonly number[], hemRaw: readonly number[], f0: number, f1: number, minexc: number, lagSign: 1 | -1 = 1): ClothFigures {
   const hip = gaussSmooth(hipRaw);
   const hem = gaussSmooth(hemRaw);
   const n = hem.length;
   const dh = gradient(hip).slice(f0, f1);
   const de = gradient(hem).slice(f0, f1);
-  const { lag, peak } = xcorrLag(dh, de);
+  const { lag, peak } = xcorrLag(dh, de, CLOTH.lagFrom, CLOTH.lagTo, lagSign);
   const rev = reversals(hip, f0, f1, minexc);
   const Lr = roundHalfEven(lag);
   const clamp = (i: number) => Math.min(n - 1, Math.max(0, i));

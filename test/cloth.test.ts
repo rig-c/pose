@@ -11,17 +11,17 @@
  *   on `Plate` (`400×600`, `24 fps`) alongside its `rig-pose-sequence/1`, measured through
  *   `rig-pose cloth --frames ... --pose ...`, with its error stated against the analytical curve.
  * - Planted failures (mutants) beside the controls:
- *   1. Rigid skirt (`mix: 0`) flagged by `rig-pose compare` as a `cloth` `swingRatio` finding (`fix: rig`).
- *   2. Sign-flipped cross-correlation (`Y[i - L]`) flipping `+lag` to `-lag` and failing Control A.
- *   3. Upper-half skirt band (`y <= y_mid`) instead of lower-half (`y >= y_mid`), collapsing `swingRatio`.
- *   4. Input and CLI refusals (`CLOTH_SLOT`, `CLOTH_ANIMATION`, `CLOTH_FRAMES`, `CLOTH_EMPTY_FRAME`, `CLOTH_WINDOW`).
+ *   1. Rigid skirt (physics constraint omitted; rig-c's `A23_PHYSICS_CONSTRAINT_EFFECTIVE` refuses a resting `mix: 0`) flagged by `rig-pose compare` as a `cloth` `swingRatio` finding (`fix: rig`).
+ *   2. Sign-flipped cross-correlation (`xcorrLag` with `sign = -1`: `Y[i - L]`) flipping `+lag` to `-lag` and failing Control A.
+ *   3. Upper-half skirt band (`measureSkirtTriangles`, `measureSkirtPlate`, `measureRigCloth`, `measureFramesCloth` with `half = 'upper'`: `y <= y_mid`) instead of lower-half (`y >= y_mid`), collapsing `swingRatio` on Control A in both Mode 1 and Mode 2.
+ *   4. Input and CLI refusals (`CLOTH_SLOT`, `CLOTH_ANIMATION`, `CLOTH_FRAMES`, `CLOTH_EMPTY_FRAME` on both transparent and opaque-background plates within `< --alpha-min` of background, `CLOTH_WINDOW`).
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { Plate, type RGBA } from 'rig-c/plate';
+import { Plate, readPlate, type RGBA } from 'rig-c/plate';
 import { clean } from '../src/clean.ts';
 import {
   buildClothTrack,
@@ -32,7 +32,7 @@ import {
   runCloth,
   type ClothTrackDocument,
 } from '../src/cloth.ts';
-import { CLOTH, clothFigures, gaussSmooth, gradient, median, parseWindows, readCloth } from '../src/compare.ts';
+import { CLOTH, clothFigures, gaussSmooth, gradient, median, parseWindows, readCloth, xcorrLag } from '../src/compare.ts';
 import { readMap } from '../src/map.ts';
 import { readPoseSequence, writePoseSequence } from '../src/pose.ts';
 import { Problems } from '../src/problems.ts';
@@ -228,52 +228,26 @@ function makePoseForHip(hipWorldX: (i: number) => number, frameCount = FRAMES_CO
 }
 
 describe('rig-pose cloth (#34): Controls A & B, public stand-in reference, and planted mutants', () => {
-  test('Control A (analytical keyed skirt): figures match values derived from the keyed curve, Mode 1 & Mode 2 agree, and compare reports 0 findings', () => {
+  test('Control A (analytical keyed skirt): figures match values derived from the keyed curve without calling the production reader, Mode 1 & Mode 2 agree, and compare reports 0 findings', () => {
     const dir = tempDir();
     const { rigPath, mapPath } = makeSkirtRig(dir);
 
-    // Derive the exact per-frame hip translation and skirt bone rotation so that:
-    //   hip_x(i) = analyticalHipNorm(i) * HIP_W_RIG
-    //   skirt bottom centre x(i) = hip_x(i) + SKIRT_LEN * sin(theta_rad(i)) = analyticalHemNorm(i) * HIP_W_RIG
-    // Wait: in `measureSkirtTriangles`, the mesh top is at y=0 (width 30) and the bottom hem is at y = SKIRT_LEN * cos(theta).
-    // If we also translate or rotate `skirt` so the lower-half hem midpoint `hem_mid` lands on `analyticalHemNorm(i)`:
-    // Specifically, if `skirt` has rotation `theta_deg(i)` around `-90°`, then the bottom vertices (1 and 2) have
-    // center x = `hip_x(i) + SKIRT_LEN * sin(theta_rad)` and y_down = `SKIRT_LEN * cos(theta_rad)`.
-    // At the midpoint `y_mid = 0.5 * SKIRT_LEN * cos(theta_rad)`, the clipped lower half spans from `y_mid` to `y_bottom`:
-    // its leftmost and rightmost points are the bottom corners `center_x ± 20 * cos(theta_rad)` whenever `|center_x - hip_x| + 20*cos(theta) >= 0.5*(center_x + hip_x) + ...`,
-    // OR even simpler: if the top vertices (0 and 3) are ALSO bound to `skirt` at `x = 0, y = ±20` and `skirt` is translated in x relative to `hip`
-    // (or rotated by `theta_deg`), let's compute the exact expected series directly from the geometry of the keyed curve!
+    // Key `hip` translate in world x by `analyticalHipNorm(i) * HIP_W_RIG` and `skirt` translate in `hip`'s
+    // horizontal frame by `dx(i) = (analyticalHemNorm(i) - analyticalHipNorm(i)) * HIP_W_RIG`.
+    // Top waist vertices (0, 3) are bound to `hip` at `x = ±10, y_down = 0`, while bottom hem vertices (1, 2)
+    // are bound to `skirt` at `x = ±35, y_down = SKIRT_LEN = 60`, so in the lower half `y_down in [30, 60]`
+    // the flare (`35 - 22.5 = 12.5 > 0.5 * max|dx| ≈ 9.2`) guarantees that the leftmost and rightmost points
+    // of the lower half are the bottom hem corners `hemX ± 35` at `y_down = 60`, whose midpoint is identically
+    // `analyticalHemNorm(i)` — evaluated directly from the analytical curve without calling `measureSkirtTriangles`.
     const hipSeriesWanted = Array.from({ length: FRAMES_COUNT }, (_, i) => analyticalHipNorm(i));
-    const thetaDegOf = (i: number): number => {
-      const dx = (analyticalHemNorm(i) - analyticalHipNorm(i)) * HIP_W_RIG;
-      const ratio = Math.max(-0.85, Math.min(0.85, dx / SKIRT_LEN));
-      return (Math.asin(ratio) * 180) / Math.PI;
-    };
+    const hemSeriesWanted = Array.from({ length: FRAMES_COUNT }, (_, i) => analyticalHemNorm(i));
+    const dxOf = (i: number): number => (hemSeriesWanted[i]! - hipSeriesWanted[i]!) * HIP_W_RIG;
 
-    // Derive the exact expected hem_mid(i) in hip widths directly from the keyed curve `thetaDegOf(i)` and `analyticalHipNorm(i)`:
-    const hemSeriesDerived = Array.from({ length: FRAMES_COUNT }, (_, i) => {
-      const hipX = hipSeriesWanted[i]! * HIP_W_RIG;
-      const rad = (thetaDegOf(i) * Math.PI) / 180;
-      // In Spine world (y up), `skirt` setup rotation is -90°, keyed by +thetaDegOf(i), so world rotation is -90 + theta:
-      // bone.a = cos(-90 + theta) = sin(theta), bone.b = -sin(-90 + theta) = cos(theta)
-      // bone.c = sin(-90 + theta) = -cos(theta), bone.d = cos(-90 + theta) = sin(theta)
-      const a = Math.sin(rad);
-      const b = Math.cos(rad);
-      const c = -Math.cos(rad);
-      const d = Math.sin(rad);
-      const v0: Pt = [hipX - 10, 0];
-      const v1: Pt = [hipX + SKIRT_LEN * a - 35 * b, -(SKIRT_LEN * c - 35 * d)];
-      const v2: Pt = [hipX + SKIRT_LEN * a + 35 * b, -(SKIRT_LEN * c + 35 * d)];
-      const v3: Pt = [hipX + 10, 0];
-      const m = measureSkirtTriangles([[v0, v1, v2], [v0, v2, v3]], [v0, v1, v2, v3])!;
-      return (0.5 * (m.hemL + m.hemR)) / HIP_W_RIG;
-    });
-
-    // Derive Control A's expected window figures directly in the test from the keyed curve (Note 1: no magic literals!):
-    const win = ( parseWindows('0.5-4.5') as Array<{ name: string; from: number; to: number }> )[0]!;
+    // Derive Control A's expected window figures directly from the analytical curves (never from `measureSkirtTriangles`):
+    const win = (parseWindows('0.5-4.5') as Array<{ name: string; from: number; to: number }>)[0]!;
     const f0 = Math.round(win.from * FPS);
     const f1 = Math.round(win.to * FPS);
-    const expectedFromCurve = clothFigures(hipSeriesWanted, hemSeriesDerived, f0, f1, CLOTH.stroke);
+    const expectedFromCurve = clothFigures(hipSeriesWanted, hemSeriesWanted, f0, f1, CLOTH.stroke);
     expect(expectedFromCurve.strokes).toBeGreaterThanOrEqual(4);
     expect(expectedFromCurve.lag).toBeGreaterThan(1.5);
     expect(expectedFromCurve.swingRatio!).toBeGreaterThan(1.5);
@@ -298,10 +272,10 @@ describe('rig-pose cloth (#34): Controls A & B, public stand-in reference, and p
             },
             {
               bone: 'skirt',
-              property: 'rotate',
+              property: 'translate',
               keys: Array.from({ length: FRAMES_COUNT }, (_, i) => ({
                 t: Number((i / FPS).toFixed(5)),
-                v: [Number(thetaDegOf(i).toFixed(5))],
+                v: [Number(dxOf(i).toFixed(5)), 0],
               })),
             },
           ],
@@ -329,7 +303,9 @@ describe('rig-pose cloth (#34): Controls A & B, public stand-in reference, and p
 
     const rawRigJson = JSON.parse(readFileSync(outRigCloth, 'utf8')) as ClothTrackDocument;
     const winARig = rawRigJson.skirtSwing!.A!;
-    // Compare Mode 1 figures against `expectedFromCurve` derived in the test from the keyed curve:
+    const maxRigHemErr = Math.max(...rawRigJson.frames.map((f, i) => Math.abs(f.hem_mid - hemSeriesWanted[i]!)));
+    expect(maxRigHemErr).toBeLessThan(1e-4);
+    // Compare Mode 1 figures against `expectedFromCurve` derived directly from `analyticalHipNorm` and `analyticalHemNorm`:
     expect(Math.abs(winARig.lag - expectedFromCurve.lag)).toBeLessThan(0.01);
     expect(Math.abs(winARig.swingRatio! - expectedFromCurve.swingRatio!)).toBeLessThan(0.01);
     expect(Math.abs(winARig.overshoot! - expectedFromCurve.overshoot!)).toBeLessThan(0.01);
@@ -396,12 +372,17 @@ describe('rig-pose cloth (#34): Controls A & B, public stand-in reference, and p
     expect(r2.status, r2.stderr).toBe(0);
     const rawFramesJson = JSON.parse(readFileSync(outFramesCloth, 'utf8')) as ClothTrackDocument;
     const winAFrames = rawFramesJson.skirtSwing!.A!;
+    const maxFramesHemErr = Math.max(...rawFramesJson.frames.map((f, i) => Math.abs(f.hem_mid - hemSeriesWanted[i]!)));
+    expect(maxFramesHemErr).toBeLessThan(0.025);
     console.log(
       `CONTROL_A window A (0.5-4.5s): curve lag=${expectedFromCurve.lag.toFixed(4)}f swing=${expectedFromCurve.swingRatio!.toFixed(4)} overshoot=${expectedFromCurve.overshoot!.toFixed(4)} | ` +
-        `Mode 1 (--rig) lag=${winARig.lag.toFixed(4)}f swing=${winARig.swingRatio!.toFixed(4)} overshoot=${winARig.overshoot!.toFixed(4)} | ` +
-        `Mode 2 (--frames) lag=${winAFrames.lag.toFixed(4)}f swing=${winAFrames.swingRatio!.toFixed(4)} overshoot=${winAFrames.overshoot!.toFixed(4)}`,
+        `Mode 1 (--rig) lag=${winARig.lag.toFixed(4)}f swing=${winARig.swingRatio!.toFixed(4)} overshoot=${winARig.overshoot!.toFixed(4)} (max|Δhem_mid|=${maxRigHemErr.toFixed(5)}hw) | ` +
+        `Mode 2 (--frames) lag=${winAFrames.lag.toFixed(4)}f swing=${winAFrames.swingRatio!.toFixed(4)} overshoot=${winAFrames.overshoot!.toFixed(4)} (max|Δhem_mid|=${maxFramesHemErr.toFixed(5)}hw)`,
     );
     // Mode 1 (geometry) and Mode 2 (raster PNGs) agree well within pixel quantisation:
+    expect(Math.abs(winAFrames.lag - expectedFromCurve.lag)).toBeLessThan(0.15);
+    expect(Math.abs(winAFrames.swingRatio! - expectedFromCurve.swingRatio!)).toBeLessThan(0.1);
+    expect(Math.abs(winAFrames.overshoot! - expectedFromCurve.overshoot!)).toBeLessThan(0.05);
     expect(Math.abs(winAFrames.lag - winARig.lag)).toBeLessThan(0.15);
     expect(Math.abs(winAFrames.swingRatio! - winARig.swingRatio!)).toBeLessThan(0.1);
     expect(Math.abs(winAFrames.overshoot! - winARig.overshoot!)).toBeLessThan(0.05);
@@ -444,7 +425,7 @@ describe('rig-pose cloth (#34): Controls A & B, public stand-in reference, and p
     expect(cmp.stdout).toContain('  0 finding(s)');
   }, 60_000);
 
-  test('Control B (live rigc physics constraint on skirt) and Planted Mutant 1 (rigid skirt mix: 0 refused by compare)', () => {
+  test('Control B (live rigc physics constraint on skirt: Mode 1 and Mode 2 agree under physicsClockStep, while plain clock fails) and Planted Mutant 1 (rigid skirt refused by compare)', () => {
     const dir = tempDir();
     // Control B: live physics constraint driven solely by hip translate keys
     const { rigPath: physRigPath, mapPath } = makeSkirtRig(dir, {
@@ -483,14 +464,97 @@ describe('rig-pose cloth (#34): Controls A & B, public stand-in reference, and p
       windows,
     });
     const winPhys = physRes.windows[0]!;
-    console.log(
-      `CONTROL_B (physics skirt, inertia=1.8, strength=22, damping=0.92, mix=1): lag=${winPhys.lag.toFixed(4)}f, swingRatio=${winPhys.swingRatio!.toFixed(4)}, overshoot=${winPhys.overshoot!.toFixed(4)}, strokes=${winPhys.strokes}`,
-    );
     expect(winPhys.lag).toBeGreaterThan(0.5);
     expect(winPhys.swingRatio!).toBeGreaterThan(1.15);
     expect(winPhys.overshoot!).toBeGreaterThan(0.02);
 
-    // Planted Mutant 1: rigid skirt (no physics constraint) -> hem moves 1:1 with hip (`swingRatio = 1, lag = 0, overshoot = 0`).
+    // Render Control B's physics skirt with `rigc render --slot skirt` and measure it with Mode 2 (--frames + --pose):
+    const renderPhysOut = join(dir, 'render-phys');
+    const renPhys = runRigc(['render', '--candidate', gPhys.build, '--animation', 'dance', '--slot', 'skirt', '--fps', String(FPS), '--out', renderPhysOut]);
+    expect(renPhys.status, renPhys.out).toBe(0);
+    const framesSidecarB = JSON.parse(readFileSync(join(renderPhysOut, 'frames.json'), 'utf8')) as {
+      viewport: { x: number; y: number; width: number; height: number; scale: number; pixelWidth: number; pixelHeight: number };
+      sets: Array<{ animation: string; dir: string }>;
+    };
+    const setDirB = resolve(dirname(join(renderPhysOut, 'frames.json')), framesSidecarB.sets.find((s) => s.animation === 'dance')!.dir);
+    const vpB = framesSidecarB.viewport;
+
+    const poseBPath = join(dir, 'pose-b.json');
+    const hipHalfPxB = 15 * vpB.scale;
+    const framesPoseB = physRes.doc.frames.map((f, i) => {
+      const wx = f.hip_x * physRes.doc.hipWidth.median + physRes.doc.origin[0];
+      const cx = (wx - vpB.x) * vpB.scale;
+      const cy = (vpB.y + vpB.height - 200) * vpB.scale;
+      const joints: Record<string, { state: 'observed'; at: Pt; score: number }> = {
+        nose: { state: 'observed', at: [cx, cy - 180 * vpB.scale], score: 0.99 },
+        neck: { state: 'observed', at: [cx, cy - 150 * vpB.scale], score: 0.99 },
+        r_eye: { state: 'observed', at: [cx - 6 * vpB.scale, cy - 185 * vpB.scale], score: 0.99 },
+        l_eye: { state: 'observed', at: [cx + 6 * vpB.scale, cy - 185 * vpB.scale], score: 0.99 },
+        r_ear: { state: 'observed', at: [cx - 12 * vpB.scale, cy - 180 * vpB.scale], score: 0.99 },
+        l_ear: { state: 'observed', at: [cx + 12 * vpB.scale, cy - 180 * vpB.scale], score: 0.99 },
+        r_shoulder: { state: 'observed', at: [cx - 30 * vpB.scale, cy - 140 * vpB.scale], score: 0.99 },
+        r_elbow: { state: 'observed', at: [cx - 40 * vpB.scale, cy - 70 * vpB.scale], score: 0.99 },
+        r_wrist: { state: 'observed', at: [cx - 45 * vpB.scale, cy - 10 * vpB.scale], score: 0.99 },
+        l_shoulder: { state: 'observed', at: [cx + 30 * vpB.scale, cy - 140 * vpB.scale], score: 0.99 },
+        l_elbow: { state: 'observed', at: [cx + 40 * vpB.scale, cy - 70 * vpB.scale], score: 0.99 },
+        l_wrist: { state: 'observed', at: [cx + 45 * vpB.scale, cy - 10 * vpB.scale], score: 0.99 },
+        r_hip: { state: 'observed', at: [cx - hipHalfPxB, cy], score: 0.99 },
+        r_knee: { state: 'observed', at: [cx - hipHalfPxB, cy + 80 * vpB.scale], score: 0.99 },
+        r_ankle: { state: 'observed', at: [cx - hipHalfPxB, cy + 150 * vpB.scale], score: 0.99 },
+        l_hip: { state: 'observed', at: [cx + hipHalfPxB, cy], score: 0.99 },
+        l_knee: { state: 'observed', at: [cx + hipHalfPxB, cy + 80 * vpB.scale], score: 0.99 },
+        l_ankle: { state: 'observed', at: [cx + hipHalfPxB, cy + 150 * vpB.scale], score: 0.99 },
+      };
+      return { t: Number((i / FPS).toFixed(5)), people: [{ id: 'a', joints }] };
+    });
+    writeFileSync(
+      poseBPath,
+      JSON.stringify({
+        spec: 'rig-pose-sequence/1',
+        space: { units: 'picture-px', origin: 'top-left', y: 'down' },
+        width: vpB.pixelWidth,
+        height: vpB.pixelHeight,
+        source: 'render-b',
+        frames: framesPoseB,
+      }),
+    );
+
+    const outFramesB = join(dir, 'control-b.frames.cloth.json');
+    const r2B = spawnSync(
+      process.execPath,
+      [CLI, 'cloth', '--frames', setDirB, '--pose', poseBPath, '--windows', '0.5-4.5', '--out', outFramesB],
+      { encoding: 'utf8' },
+    );
+    expect(r2B.status, r2B.stderr).toBe(0);
+    const rawFramesB = JSON.parse(readFileSync(outFramesB, 'utf8')) as ClothTrackDocument;
+    const winFramesB = rawFramesB.skirtSwing!.A!;
+    const maxHemDiffB = Math.max(...physRes.doc.frames.map((f, i) => Math.abs(f.hem_mid - rawFramesB.frames[i]!.hem_mid)));
+    console.log(
+      `CONTROL_B (physics skirt, inertia=1.8, strength=22, damping=0.92, mix=1): ` +
+        `Mode 1 (--rig) lag=${winPhys.lag.toFixed(4)}f swingRatio=${winPhys.swingRatio!.toFixed(4)} overshoot=${winPhys.overshoot!.toFixed(4)} strokes=${winPhys.strokes} | ` +
+        `Mode 2 (--frames) lag=${winFramesB.lag.toFixed(4)}f swingRatio=${winFramesB.swingRatio!.toFixed(4)} overshoot=${winFramesB.overshoot!.toFixed(4)} strokes=${winFramesB.strokes} | ` +
+        `max|Δhem_mid|=${maxHemDiffB.toFixed(5)}hw (${(maxHemDiffB * HIP_W_RIG * vpB.scale).toFixed(2)}px)`,
+    );
+    // Frame-level and window-level agreement between Mode 1 (`physicsClockStep`) and Mode 2 (`rigc render --slot skirt`):
+    expect(maxHemDiffB).toBeLessThan(0.025);
+    expect(Math.abs(winFramesB.lag - winPhys.lag)).toBeLessThan(0.15);
+    expect(Math.abs(winFramesB.swingRatio! - winPhys.swingRatio!)).toBeLessThan(0.1);
+    expect(Math.abs(winFramesB.overshoot! - winPhys.overshoot!)).toBeLessThan(0.05);
+
+    // Planted plain clock (`(dt) => dt`, without `physicsClockStep`'s `1 + 2^-30` nudge) drifts off `rigc render`'s 60 Hz physics clock by > 0.12 hip widths:
+    const plainClockRes = measureRigCloth(physDoc, map, mapPath, {
+      rigWhere: gPhys.build,
+      animation: 'dance',
+      skirtSlots: ['skirt'],
+      fps: FPS,
+      windows,
+      plant: { clock: (dt) => dt },
+    });
+    const maxPlainHemDiffB = Math.max(...plainClockRes.doc.frames.map((f, i) => Math.abs(f.hem_mid - rawFramesB.frames[i]!.hem_mid)));
+    expect(maxPlainHemDiffB).toBeGreaterThan(0.12);
+
+    // Planted Mutant 1: rigid skirt (physics constraint omitted; rig-c's A23_PHYSICS_CONSTRAINT_EFFECTIVE refuses a resting mix: 0)
+    // -> hem moves 1:1 with hip (`swingRatio = 1, lag = 0, overshoot = 0`).
     // When compared against a swaying reference track, `rig-pose compare` must flag `cloth` `swingRatio` with `fix: rig`.
     const dirRigid = join(dir, 'rigid');
     mkdirSync(dirRigid, { recursive: true });
@@ -603,7 +667,9 @@ describe('rig-pose cloth (#34): Controls A & B, public stand-in reference, and p
     expect(overshootErr).toBeLessThan(0.02);
   });
 
-  test('Planted Mutant 2 (sign-flipped xcorr lag) and Planted Mutant 3 (upper-half skirt band instead of lower-half) go red against the control', () => {
+  test('Planted Mutant 2 (sign-flipped xcorrLag) and Planted Mutant 3 (upper-half skirt band in measureRigCloth and measureFramesCloth) go red against Control A', () => {
+    const dir = tempDir();
+    const { rigPath, mapPath } = makeSkirtRig(dir);
     const f0 = Math.round(0.5 * FPS);
     const f1 = Math.round(4.5 * FPS);
     const hip = Array.from({ length: FRAMES_COUNT }, (_, i) => analyticalHipNorm(i));
@@ -611,48 +677,133 @@ describe('rig-pose cloth (#34): Controls A & B, public stand-in reference, and p
     const control = clothFigures(hip, hem, f0, f1, CLOTH.stroke);
     expect(control.lag).toBeGreaterThan(1.5);
 
-    // Mutant 2: sign-flipped cross-correlation `X[i] * Y[i - L]` instead of `X[i] * Y[i + L]`
+    // Build Control A's rig and rendered frames so Mutant 2 and Mutant 3 exercise the production readers directly:
+    const motion = {
+      spec: 'rigc-motion/1',
+      archetype: 'wave',
+      cut: 'wave',
+      easings: {},
+      animations: {
+        dance: {
+          duration: Number((N / FPS).toFixed(5)),
+          tracks: [
+            {
+              bone: 'hip',
+              property: 'translate',
+              keys: Array.from({ length: FRAMES_COUNT }, (_, i) => ({
+                t: Number((i / FPS).toFixed(5)),
+                v: [Number((hip[i]! * HIP_W_RIG).toFixed(5)), 0],
+              })),
+            },
+            {
+              bone: 'skirt',
+              property: 'translate',
+              keys: Array.from({ length: FRAMES_COUNT }, (_, i) => ({
+                t: Number((i / FPS).toFixed(5)),
+                v: [Number(((hem[i]! - hip[i]!) * HIP_W_RIG).toFixed(5)), 0],
+              })),
+            },
+          ],
+        },
+      },
+    };
+    const g = gate(rigPath, motion, join(dir, 'build-mut'), 'spine');
+    expect(g.green, g.fails.join('\n')).toBe(true);
+    const doc = readBuild(g.build);
+    const map = readMap(readFileSync(mapPath, 'utf8'), mapPath);
+    const windows = parseWindows('0.5-4.5') as Array<{ name: string; from: number; to: number }>;
+
+    // Mutant 2: plant `xcorrLag` (`sign = -1`) and `measureRigCloth` (`plant: { lagSign: -1 }`) so Control A goes red:
     const dh = gradient(gaussSmooth(hip)).slice(f0, f1);
     const de = gradient(gaussSmooth(hem)).slice(f0, f1);
-    let bestFlipped = CLOTH.lagFrom;
-    let bestScore = -Infinity;
-    for (let L = CLOTH.lagFrom; L <= CLOTH.lagTo; L++) {
-      let s = 0;
-      let k = 0;
-      for (let i = Math.max(0, L); i < dh.length && i - L < de.length; i++) {
-        s += dh[i]! * de[i - L]!;
-        k++;
-      }
-      const score = s / k;
-      if (score > bestScore) {
-        bestScore = score;
-        bestFlipped = L;
-      }
-    }
-    expect(bestFlipped).toBeLessThan(0);
-    expect(Math.abs(bestFlipped - control.lag)).toBeGreaterThan(3);
-
-    // Mutant 3: reading the upper half (`y <= y_mid`) of a swaying skirt instead of the lower half (`y >= y_mid`)
-    const upperHemSeries = Array.from({ length: FRAMES_COUNT }, (_, i) => {
-      const hipX = hip[i]! * HIP_W_RIG;
-      const hemX = hem[i]! * HIP_W_RIG;
-      const v0: Pt = [hipX - 10, 0];
-      const v3: Pt = [hipX + 10, 0];
-      const v1: Pt = [hemX - 35, SKIRT_LEN];
-      const v2: Pt = [hemX + 35, SKIRT_LEN];
-      // Control (`measureSkirtTriangles`) clips to `y >= y_mid` and reads the lower half (`hemX ± 35`):
-      const lower = measureSkirtTriangles([[v0, v1, v2], [v0, v2, v3]], [v0, v1, v2, v3])!;
-      expect((0.5 * (lower.hemL + lower.hemR)) / HIP_W_RIG).toBeCloseTo(hem[i]!, 6);
-      // Planted mutant: take only vertices in the upper half `y < y_mid` (`v0` and `v3`, anchored at `hipX ± 10`):
-      const upperMid = 0.5 * (v0[0] + v3[0]);
-      return upperMid / HIP_W_RIG;
+    expect(xcorrLag(dh, de, CLOTH.lagFrom, CLOTH.lagTo, 1).lag).toBeCloseTo(control.lag, 6);
+    const flippedLag = xcorrLag(dh, de, CLOTH.lagFrom, CLOTH.lagTo, -1);
+    expect(flippedLag.lag).toBeLessThan(0);
+    expect(Math.abs(flippedLag.lag - control.lag)).toBeGreaterThan(3);
+    const rigMut2 = measureRigCloth(doc, map, mapPath, {
+      rigWhere: g.build,
+      animation: 'dance',
+      skirtSlots: ['skirt'],
+      fps: FPS,
+      windows,
+      plant: { lagSign: -1 },
     });
-    const mutantUpper = clothFigures(hip, upperHemSeries, f0, f1, CLOTH.stroke);
-    expect(mutantUpper.swingRatio!).toBeCloseTo(1.0, 4);
-    expect(Math.abs(mutantUpper.swingRatio! - control.swingRatio!)).toBeGreaterThan(0.8);
-  });
+    expect(rigMut2.windows[0]!.lag).toBeLessThan(0);
+    expect(Math.abs(rigMut2.windows[0]!.lag - control.lag)).toBeGreaterThan(3);
 
-  test('Planted Mutant 4: CLI and reader refusals by name (CLOTH_SLOT, CLOTH_ANIMATION, CLOTH_FRAMES, CLOTH_EMPTY_FRAME, CLOTH_WINDOW, Usage)', () => {
+    // Mutant 3: plant `half = 'upper'` in `measureSkirtTriangles`, `measureSkirtPlate`, `measureRigCloth` (Mode 1),
+    // and `measureFramesCloth` (Mode 2) on Control A so both Mode 1 and Mode 2 go red against `control.swingRatio`:
+    const rigUpper = measureRigCloth(doc, map, mapPath, {
+      rigWhere: g.build,
+      animation: 'dance',
+      skirtSlots: ['skirt'],
+      fps: FPS,
+      windows,
+      plant: { half: 'upper' },
+    });
+    expect(Math.abs(rigUpper.windows[0]!.swingRatio! - control.swingRatio!)).toBeGreaterThan(0.4);
+
+    // Also render Control A's isolated skirt frames and run Mode 2 (`measureFramesCloth`) with `plant: { half: 'upper' }`:
+    const renderOut = join(dir, 'render-mut');
+    const ren = runRigc(['render', '--candidate', g.build, '--animation', 'dance', '--slot', 'skirt', '--fps', String(FPS), '--out', renderOut]);
+    expect(ren.status, ren.out).toBe(0);
+    const framesSidecar = JSON.parse(readFileSync(join(renderOut, 'frames.json'), 'utf8')) as {
+      viewport: { x: number; y: number; width: number; height: number; scale: number; pixelWidth: number; pixelHeight: number };
+      sets: Array<{ animation: string; dir: string }>;
+    };
+    const setDir = resolve(dirname(join(renderOut, 'frames.json')), framesSidecar.sets.find((s) => s.animation === 'dance')!.dir);
+    const vp = framesSidecar.viewport;
+    const pngs = readdirSync(setDir).filter((f) => f.toLowerCase().endsWith('.png') && !/contact|sheet/i.test(f)).sort();
+    const plates = pngs.map((f) => {
+      const p = join(setDir, f);
+      return { name: p, plate: readPlate(p) };
+    });
+    const posePath = join(dir, 'pose-mut.json');
+    const hipHalfPx = 15 * vp.scale;
+    const framesPose = Array.from({ length: FRAMES_COUNT }, (_, i) => {
+      const wx = hip[i]! * HIP_W_RIG;
+      const cx = (wx - vp.x) * vp.scale;
+      const cy = (vp.y + vp.height - 200) * vp.scale;
+      const joints: Record<string, { state: 'observed'; at: Pt; score: number }> = {
+        nose: { state: 'observed', at: [cx, cy - 180 * vp.scale], score: 0.99 },
+        neck: { state: 'observed', at: [cx, cy - 150 * vp.scale], score: 0.99 },
+        r_eye: { state: 'observed', at: [cx - 6 * vp.scale, cy - 185 * vp.scale], score: 0.99 },
+        l_eye: { state: 'observed', at: [cx + 6 * vp.scale, cy - 185 * vp.scale], score: 0.99 },
+        r_ear: { state: 'observed', at: [cx - 12 * vp.scale, cy - 180 * vp.scale], score: 0.99 },
+        l_ear: { state: 'observed', at: [cx + 12 * vp.scale, cy - 180 * vp.scale], score: 0.99 },
+        r_shoulder: { state: 'observed', at: [cx - 30 * vp.scale, cy - 140 * vp.scale], score: 0.99 },
+        r_elbow: { state: 'observed', at: [cx - 40 * vp.scale, cy - 70 * vp.scale], score: 0.99 },
+        r_wrist: { state: 'observed', at: [cx - 45 * vp.scale, cy - 10 * vp.scale], score: 0.99 },
+        l_shoulder: { state: 'observed', at: [cx + 30 * vp.scale, cy - 140 * vp.scale], score: 0.99 },
+        l_elbow: { state: 'observed', at: [cx + 40 * vp.scale, cy - 70 * vp.scale], score: 0.99 },
+        l_wrist: { state: 'observed', at: [cx + 45 * vp.scale, cy - 10 * vp.scale], score: 0.99 },
+        r_hip: { state: 'observed', at: [cx - hipHalfPx, cy], score: 0.99 },
+        r_knee: { state: 'observed', at: [cx - hipHalfPx, cy + 80 * vp.scale], score: 0.99 },
+        r_ankle: { state: 'observed', at: [cx - hipHalfPx, cy + 150 * vp.scale], score: 0.99 },
+        l_hip: { state: 'observed', at: [cx + hipHalfPx, cy], score: 0.99 },
+        l_knee: { state: 'observed', at: [cx + hipHalfPx, cy + 80 * vp.scale], score: 0.99 },
+        l_ankle: { state: 'observed', at: [cx + hipHalfPx, cy + 150 * vp.scale], score: 0.99 },
+      };
+      return { t: Number((i / FPS).toFixed(5)), people: [{ id: 'a', joints }] };
+    });
+    const seq = readPoseSequence(
+      JSON.stringify({
+        spec: 'rig-pose-sequence/1',
+        space: { units: 'picture-px', origin: 'top-left', y: 'down' },
+        width: vp.pixelWidth,
+        height: vp.pixelHeight,
+        source: 'render-mut',
+        frames: framesPose,
+      }),
+      posePath,
+    );
+    const framesLower = measureFramesCloth(plates, seq, posePath, setDir, { alphaMin: 16, windows });
+    const framesUpper = measureFramesCloth(plates, seq, posePath, setDir, { alphaMin: 16, windows, plant: { half: 'upper' } });
+    expect(Math.abs(framesLower.windows[0]!.swingRatio! - control.swingRatio!)).toBeLessThan(0.1);
+    expect(Math.abs(framesUpper.windows[0]!.swingRatio! - control.swingRatio!)).toBeGreaterThan(0.4);
+  }, 60_000);
+
+  test('Planted Mutant 4: CLI and reader refusals by name (CLOTH_SLOT, CLOTH_ANIMATION, CLOTH_FRAMES, CLOTH_EMPTY_FRAME on transparent and opaque backgrounds, CLOTH_WINDOW, Usage)', () => {
     const dir = tempDir();
     const { rigPath, mapPath } = makeSkirtRig(dir);
     const out = join(dir, 'out.cloth.json');
@@ -700,6 +851,21 @@ describe('rig-pose cloth (#34): Controls A & B, public stand-in reference, and p
     );
     expect(emptyFrame.status).toBe(1);
     expect(emptyFrame.stderr).toContain('FAIL  CLOTH_EMPTY_FRAME:');
+
+    // Opaque-background PNG (`[232, 232, 232, 255]`, as in `rigc render --slot`) whose skirt (`[225, 225, 225, 255]`, RGB distance 7 < 16) is within `--alpha-min` of the border background -> CLOTH_EMPTY_FRAME
+    const lowContrastPlate = new Plate(400, 600);
+    lowContrastPlate.rect(0, 0, 400, 600, [232, 232, 232, 255]);
+    lowContrastPlate.rect(180, 300, 40, 80, [225, 225, 225, 255]);
+    expect(measureSkirtPlate(lowContrastPlate, 16)).toBeNull();
+    for (let i = 0; i < 20; i++) lowContrastPlate.writePng(join(framesDir, `f${String(i).padStart(2, '0')}.png`));
+    const opaqueEmpty = spawnSync(
+      process.execPath,
+      [CLI, 'cloth', '--frames', framesDir, '--pose', poseFile, '--alpha-min', '16', '--out', out],
+      { encoding: 'utf8' },
+    );
+    expect(opaqueEmpty.status).toBe(1);
+    expect(opaqueEmpty.stderr).toContain('FAIL  CLOTH_EMPTY_FRAME:');
+    expect(opaqueEmpty.stderr).toContain('colour distance ≥ 16 from an opaque border background');
 
     // Window <= 12 frames -> CLOTH_WINDOW
     const filledPlate = new Plate(400, 600);

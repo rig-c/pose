@@ -103,7 +103,7 @@ rig-pose cloth --rig build --map map.json --skirt-slots bottomwear [--animation 
 rig-pose cloth --frames skirt-frames/ --pose ref.pose.json [--alpha-min 16] [--windows 3.9-7.4,7.6-11.1] --out ref.cloth.json
 ```
 
-Measures a skirt's cloth track (`rig-c-cloth-track/0`) from a built rig's posed skirt slots (`--rig`, in rig world units) or from isolated skirt PNG frames beside a pose sequence (`--frames` + `--pose`, in picture px), normalised by the subject's median hip width, ready for `rig-pose compare --cloth-reference` and `--cloth-render`. Rules: [Measuring a cloth track](docs/REFERENCE.md#measuring-a-cloth-track-rig-pose-cloth).
+Measures a skirt's cloth track (`rig-c-cloth-track/0`) from a built rig's posed skirt slots (`--rig`, stepped with `poseRawAnimationEach` and `physicsClockStep`, in rig world units) or from isolated skirt PNG frames beside a pose sequence (`--frames` + `--pose`, in picture px, using `--alpha-min` as the alpha threshold on transparent PNGs and as the RGB colour-distance threshold from the border median on opaque-background PNGs such as `rigc render --slot`, refusing a frame with no pixel above threshold as `CLOTH_EMPTY_FRAME`), normalised by the subject's median hip width, ready for `rig-pose compare --cloth-reference` and `--cloth-render`. Rules: [Measuring a cloth track](docs/REFERENCE.md#measuring-a-cloth-track-rig-pose-cloth).
 
 ## What it does not do
 
