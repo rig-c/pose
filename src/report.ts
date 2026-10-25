@@ -60,8 +60,8 @@ export function enrichReport(input:Record<string,unknown>,map:JointMap,clock:Rep
       if(!render)fail(where,'render-domain event requires declared renderer metadata');
       add(value,'domain','render',where);return;
     }
-    // seamPairs' frame lists are the seam render's indices (#216); they carry no pose coordinate.
-    if(where.startsWith('report.seamPairs['))return;
+    // seamPairs' frame lists are the seam render's indices (#216); they carry no pose coordinate, and neither does clothFit (#34).
+    if(where.startsWith('report.seamPairs[')||where.startsWith('report.clothFit'))return;
     let coordinates=false;
     if(poseEvent(where)&&value.frame!==undefined&&typeof value.frame!=='number')fail(where+'.frame','expected nonnegative integer pose frame');
     if(typeof value.frame==='number'){add(value,'t',time(value.frame,where+'.frame'),where);coordinates=true;}

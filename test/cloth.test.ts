@@ -25,18 +25,26 @@ import { Plate, readPlate, type RGBA } from 'rig-c/plate';
 import { clean } from '../src/clean.ts';
 import {
   buildClothTrack,
+  discoverSkirtPhysics,
+  emitPhysicsTracks,
+  fitSkirtPhysics,
   measureFramesCloth,
   measureRigCloth,
   measureSkirtPlate,
   measureSkirtTriangles,
   runCloth,
+  SKIRT_PHYSICS_GRID,
   type ClothTrackDocument,
+  type SkirtPhysicsGridEntry,
+  type SkirtPhysicsLinkParams,
 } from '../src/cloth.ts';
 import { CLOTH, clothFigures, gaussSmooth, gradient, median, parseWindows, readCloth, xcorrLag } from '../src/compare.ts';
 import { readMap } from '../src/map.ts';
 import { readPoseSequence, writePoseSequence } from '../src/pose.ts';
-import { Problems } from '../src/problems.ts';
-import { gate, readBuild, runRigc } from '../src/rigc.ts';
+import { Problems, Refusal } from '../src/problems.ts';
+import { folds, gate, readBuild, runRigc } from '../src/rigc.ts';
+import { runRetarget } from '../src/run.ts';
+import { auditReport, releasing } from './surface.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const CLI = join(ROOT, 'cli.ts');
@@ -991,4 +999,692 @@ describe('rig-pose cloth (#34): Controls A & B, public stand-in reference, and p
     expect(lastHoldIdx).toBeGreaterThan(0);
     expect(wroteIdx).toBeGreaterThan(lastHoldIdx);
   });
+});
+
+/**
+ * Build a 3-chain × 3-link skirt rig (`bottomwear` slot, `skirt_r0..2`, `skirt_c0..2`, `skirt_l0..2`)
+ * with `rig/rig.json` and `rig/motion.json` (containing an `idle` animation so multi-animation emission is tested).
+ */
+function makeThreeLinkSkirtRig(
+  dir: string,
+  entry: { root: SkirtPhysicsLinkParams; lower: SkirtPhysicsLinkParams },
+  opts?: { pinchMiddleRow?: boolean; includeConstraints?: boolean },
+): { rigDir: string; rigPath: string; mapPath: string } {
+  const rigDir = join(dir, 'rig');
+  mkdirSync(join(rigDir, 'images'), { recursive: true });
+  const img = new Plate(80, 80);
+  img.rect(0, 0, 80, 80, [210, 80, 100, 255]);
+  img.writePng(join(rigDir, 'images', 'bottomwear.png'));
+
+  const waveRig = JSON.parse(readFileSync(join(ROOT, 'examples', 'wave', 'rig', 'rig.json'), 'utf8')) as {
+    bones: Array<Record<string, unknown>>;
+  };
+  const cols = [
+    { prefix: 'skirt_r', x: -12 },
+    { prefix: 'skirt_c', x: 0 },
+    { prefix: 'skirt_l', x: 12 },
+  ] as const;
+  const linkLen = 20;
+  const skirtBones: Array<Record<string, unknown>> = [];
+  for (const col of cols) {
+    skirtBones.push({ name: `${col.prefix}0`, parent: 'hip', x: col.x, y: 0, rotation: -90, length: linkLen });
+    skirtBones.push({ name: `${col.prefix}1`, parent: `${col.prefix}0`, x: linkLen, y: 0, rotation: 0, length: linkLen });
+    skirtBones.push({ name: `${col.prefix}2`, parent: `${col.prefix}1`, x: linkLen, y: 0, rotation: 0, length: linkLen });
+  }
+  const bones = [...waveRig.bones, ...skirtBones];
+  const slots = [{ name: 'bottomwear', bone: 'hip', attachment: 'bottomwear' }];
+
+  // 4 rows (r = 0..3 at y_down = 0, 20, 40, 60) x 3 columns (c = 0..2 at x = -12, 0, +12):
+  // When `pinchMiddleRow` is set (for fold plant tests), row 2 column 1 sits just 0.4 units right of column 0
+  // so moderate intra-chain shear between link 0 and link 1 flips triangle orientation.
+  const uvsGrid: Array<[number, number]> = [];
+  const weightsGrid: Array<Array<{ bone: string; x: number; y: number; weight: number }>> = [];
+  for (let r = 0; r <= 3; r++) {
+    for (let c = 0; c < 3; c++) {
+      const col = cols[c]!;
+      const flare = 1 + 0.15 * r;
+      const worldX = opts?.pinchMiddleRow && r === 2 && c === 1 ? cols[0]!.x * flare + 3.0 : col.x * flare;
+      const dxFromCol = worldX - col.x;
+      uvsGrid.push([c / 2, r / 3]);
+      if (r === 0) {
+        weightsGrid.push([{ bone: 'hip', x: worldX, y: 0, weight: 1 }]);
+      } else {
+        // In `skirt_*` local space (rotation -90°: local +x is world -y (down), local +y is world +x (right))
+        weightsGrid.push([{ bone: `${col.prefix}${r - 1}`, x: linkLen, y: dxFromCol, weight: 1 }]);
+      }
+    }
+  }
+  // Spine requires hull boundary vertices first (`[0, 1, 2, 5, 8, 11, 10, 9, 6, 3]`), followed by interior vertices (`[4, 7]`).
+  const order = [0, 1, 2, 5, 8, 11, 10, 9, 6, 3, 4, 7];
+  const newIdx = new Map<number, number>(order.map((oldIdx, idx) => [oldIdx, idx]));
+  const uvs = order.flatMap((oldIdx) => uvsGrid[oldIdx]!);
+  const weights = order.map((oldIdx) => weightsGrid[oldIdx]!);
+  const triangles: number[] = [];
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 2; c++) {
+      const v00 = newIdx.get(r * 3 + c)!;
+      const v01 = newIdx.get(r * 3 + (c + 1))!;
+      const v10 = newIdx.get((r + 1) * 3 + c)!;
+      const v11 = newIdx.get((r + 1) * 3 + (c + 1))!;
+      triangles.push(v00, v10, v11, v00, v11, v01);
+    }
+  }
+
+  const constraints: Array<Record<string, unknown>> = [];
+  if (opts?.includeConstraints !== false) {
+    for (const col of cols) {
+      for (let k = 0; k < 3; k++) {
+        const p = k === 0 ? entry.root : entry.lower;
+        constraints.push({
+          type: 'physics',
+          name: `${col.prefix}${k}_phys`,
+          bone: `${col.prefix}${k}`,
+          rotate: 1,
+          inertia: p.inertia,
+          strength: p.strength,
+          damping: p.damping,
+          mass: p.mass,
+          mix: p.mix,
+        });
+      }
+    }
+  }
+
+  const rigPath = join(rigDir, 'rig.json');
+  writeFileSync(
+    rigPath,
+    JSON.stringify(
+      {
+        spec: 'rigc-rig/1',
+        name: 'wave-skirt3',
+        images: 'images',
+        skeleton: { width: 400, height: 600 },
+        bones,
+        slots,
+        skins: {
+          default: {
+            bottomwear: {
+              bottomwear: {
+                type: 'mesh',
+                image: 'bottomwear.png',
+                uvs,
+                triangles,
+                weights,
+              },
+            },
+          },
+        },
+        ...(constraints.length > 0 ? { constraints } : {}),
+      },
+      null,
+      2,
+    ),
+  );
+  writeFileSync(
+    join(rigDir, 'motion.json'),
+    JSON.stringify(
+      {
+        spec: 'rigc-motion/1',
+        archetype: 'wave-skirt3',
+        cut: 'wave-skirt3',
+        easings: {},
+        animations: {
+          idle: {
+            duration: 1.0,
+            tracks: [
+              {
+                bone: 'head',
+                property: 'scale',
+                keys: [
+                  { t: 0, v: [1, 1] },
+                  { t: 1.0, v: [1, 1] },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      null,
+      2,
+    ),
+  );
+  const mapPath = join(dir, 'map.json');
+  writeFileSync(mapPath, readFileSync(join(ROOT, 'examples', 'wave', 'map.json'), 'utf8'));
+  return { rigDir, rigPath, mapPath };
+}
+
+describe('retarget --cloth-track (#34): known-answer control, fold plants, and refusals', () => {
+  const FIT_FRAMES = 169; // 7.0 s at 24 fps -> 169 frames (0..168), covering windows A (0.5-3.5s) and B (3.6-6.6s)
+  const FIT_WINDOWS = '0.5-3.5,3.6-6.6';
+
+  function makeSwayPoseFile(dir: string): string {
+    // Amplitude 18 px across both Window A (0.5-3.5s) and Window B (3.6-6.6s), well above the 0.2 hip-width stroke threshold.
+    const poseText = makePoseForHip((i) => 18 * Math.sin(OMEGA * i), FIT_FRAMES);
+    const posePath = join(dir, 'sway.pose.json');
+    writeFileSync(posePath, poseText);
+    return posePath;
+  }
+
+  test(
+    'Known-answer control: recovers exact SKIRT_PHYSICS_GRID parameters (score 0, 6/6 in-band, 0 folds), emits t=0 physics tracks on every animation in motion.json, and passes RELEASING.md surface audit',
+    () => {
+    // Assert that the known parameter set is an entry of SKIRT_PHYSICS_GRID so this test cannot pass by accident if the grid changes.
+    const knownEntry = SKIRT_PHYSICS_GRID.find(
+      (g) => g.family === 'cone' && g.root.inertia === 0.75 && g.root.strength === 100 && g.root.damping === 0.98 && g.root.mix === 0.6,
+    );
+    expect(knownEntry).toBeDefined();
+    expect(SKIRT_PHYSICS_GRID).toContain(knownEntry!);
+
+    const dir = tempDir();
+    const posePath = makeSwayPoseFile(dir);
+
+    // 1. Build the reference rig with `knownEntry` and retarget the sway pose onto it (without --cloth-track) to generate the ground-truth cloth track:
+    const refRig = makeThreeLinkSkirtRig(join(dir, 'ref'), knownEntry!);
+    const refMotionOut = join(dir, 'ref', 'motion.out.json');
+    const refBuild = join(dir, 'ref', 'build');
+    runRetarget(
+      {
+        rig: refRig.rigDir,
+        map: refRig.mapPath,
+        pose: posePath,
+        out: refMotionOut,
+        name: 'dance',
+        coco: false,
+        minScore: 0.3,
+        flip: 'off',
+        short: 'off',
+        bends: 'refuse',
+        bendTolerance: 0,
+        switchTolerance: 25,
+        switchMin: 0.25,
+        switchAt: 'first',
+        profile: 'spine',
+        build: refBuild,
+      },
+      () => {},
+    );
+    const refClothPath = join(dir, 'ref.cloth.json');
+    const wins = parseWindows(FIT_WINDOWS);
+    if (typeof wins === 'string') throw new Error(wins);
+    runCloth(
+      {
+        kind: 'rig',
+        rig: refBuild,
+        map: refRig.mapPath,
+        skirtSlots: ['bottomwear'],
+        animation: 'dance',
+        fps: FPS,
+        windows: wins,
+        out: refClothPath,
+      },
+      () => {},
+    );
+
+    // 2. Now build a candidate rig starting with untuned setup physics (not matching `knownEntry`) and run `retarget --cloth-track`:
+    const untuned: SkirtPhysicsGridEntry = {
+      family: 'uniform',
+      root: { inertia: 0.25, strength: 220, damping: 0.9, mass: 1, mix: 0.3 },
+      lower: { inertia: 0.25, strength: 220, damping: 0.9, mass: 1, mix: 0.3 },
+    };
+    const candRig = makeThreeLinkSkirtRig(join(dir, 'cand'), untuned);
+    const outMotion = join(dir, 'cand', 'fitted.motion.json');
+    const outReport = join(dir, 'cand', 'fitted.report.json');
+    const outBuild = join(dir, 'cand', 'build');
+    const fitLines: string[] = [];
+    const res = runRetarget(
+      {
+        rig: candRig.rigDir,
+        map: candRig.mapPath,
+        pose: posePath,
+        out: outMotion,
+        report: outReport,
+        build: outBuild,
+        name: 'dance',
+        coco: false,
+        minScore: 0.3,
+        flip: 'off',
+        short: 'off',
+        bends: 'refuse',
+        bendTolerance: 0,
+        switchTolerance: 25,
+        switchMin: 0.25,
+        switchAt: 'first',
+        profile: 'spine',
+        clothTrackFile: refClothPath,
+      },
+      (l) => fitLines.push(l),
+    );
+    expect(res.written).toBe(true);
+    const clothStdout = fitLines.filter((l) => l.startsWith('  CLOTH  '));
+    console.log(clothStdout.join('\n'));
+    expect(clothStdout.length).toBe(3);
+    expect(clothStdout[0]).toContain('picked #32 (cone: root inertia=0.75, strength=100, damping=0.98, mass=1, mix=0.6');
+    expect(clothStdout[0]).toContain('score 0.000 (6/6 in band), max link turn');
+    expect(clothStdout[0]).toContain('0 fold frame(s)');
+
+    const report = JSON.parse(readFileSync(outReport, 'utf8')) as Record<string, unknown> & {
+      clothFit: {
+        slots: string[];
+        family: string;
+        score: number;
+        passes: number;
+        checks: number;
+        folds: { frames: number; worstTriangles: number };
+        constraints: Record<string, { link: number; inertia: number; strength: number; damping: number; mass: number; mix: number }>;
+      };
+    };
+    expect(report.clothFit.slots).toEqual(['bottomwear']);
+    expect(report.clothFit.family).toBe('cone');
+    expect(report.clothFit.score).toBe(0);
+    expect(report.clothFit.passes).toBe(6);
+    expect(report.clothFit.checks).toBe(6);
+    expect(report.clothFit.folds).toEqual({ frames: 0, worstTriangles: 0 });
+    for (const c of Object.values(report.clothFit.constraints)) {
+      const expected = c.link === 0 ? knownEntry!.root : knownEntry!.lower;
+      expect(c.inertia).toBe(expected.inertia);
+      expect(c.strength).toBe(expected.strength);
+      expect(c.damping).toBe(expected.damping);
+      expect(c.mass).toBe(expected.mass);
+      expect(c.mix).toBe(expected.mix);
+    }
+
+    // Verify RELEASING.md surface classification for every field in the emitted report (including clothFit and options.clothTrack):
+    expect(auditReport(report, releasing())).toEqual([]);
+
+    // Verify that EVERY animation in `motion.json` (`idle` AND `dance`) carries the 45 t=0 physics timeline tracks (9 constraints * 5 properties):
+    const writtenMotion = JSON.parse(readFileSync(outMotion, 'utf8')) as {
+      animations: Record<string, { tracks: Array<{ physics?: string; property: string; keys: Array<{ t: number; v: number[] }> }> }>;
+    };
+    expect(Object.keys(writtenMotion.animations).sort()).toEqual(['dance', 'idle']);
+    for (const animName of ['idle', 'dance']) {
+      const physTracks = writtenMotion.animations[animName]!.tracks.filter((tr) => typeof tr.physics === 'string');
+      expect(physTracks.length).toBe(9 * 5);
+      for (const tr of physTracks) {
+        expect(tr.keys.length).toBe(1);
+        expect(tr.keys[0]!.t).toBe(0);
+        expect(Array.isArray(tr.keys[0]!.v)).toBe(true);
+        expect(tr.keys[0]!.v.length).toBe(1);
+      }
+    }
+
+    // 3. Search/emitter parity with a `wind` track present on the roots (Defect 1):
+    // Rebuild the emitted `motion.json` (`outWindBuild`) and re-measure lag, swingRatio, and overshoot;
+    // they must equal `windReport.clothFit.windows[w].fitted` exactly.
+    // Give the wind keys an oscillating wave so omitting them during search changes lag and swingRatio by > 0.02:
+    const windTracksPath = join(dir, 'wind.tracks.json');
+    writeFileSync(
+      windTracksPath,
+      JSON.stringify({
+        spec: 'rig-pose-tracks/1',
+        tracks: ['skirt_r0_phys', 'skirt_c0_phys', 'skirt_l0_phys'].map((physics) => ({
+          physics,
+          property: 'wind',
+          keys: Array.from({ length: 15 }, (_, k) => ({
+            t: Number((k * 0.5).toFixed(5)),
+            v: [k % 2 === 0 ? 400 : -400],
+          })),
+        })),
+      }),
+    );
+    const outWindMotion = join(dir, 'cand', 'wind.motion.json');
+    const outWindReport = join(dir, 'cand', 'wind.report.json');
+    const outWindBuild = join(dir, 'cand', 'wind-build');
+    runRetarget(
+      {
+        rig: candRig.rigDir,
+        map: candRig.mapPath,
+        pose: posePath,
+        out: outWindMotion,
+        report: outWindReport,
+        build: outWindBuild,
+        name: 'dance',
+        coco: false,
+        minScore: 0.3,
+        flip: 'off',
+        short: 'off',
+        bends: 'refuse',
+        bendTolerance: 0,
+        switchTolerance: 25,
+        switchMin: 0.25,
+        switchAt: 'first',
+        profile: 'spine',
+        merge: windTracksPath,
+        clothTrackFile: refClothPath,
+      },
+      () => {},
+    );
+    const windReport = JSON.parse(readFileSync(outWindReport, 'utf8')) as {
+      clothFit: {
+        windows: Record<string, { fitted: { lag: number; swingRatio: number; overshoot: number } }>;
+      };
+    };
+    const rebuiltDoc = readBuild(outWindBuild);
+    const rebuiltMap = readMap(readFileSync(candRig.mapPath, 'utf8'), candRig.mapPath);
+    const rebuiltMeas = measureRigCloth(rebuiltDoc, rebuiltMap, candRig.mapPath, {
+      rigWhere: outWindBuild,
+      animation: 'dance',
+      skirtSlots: ['bottomwear'],
+      fps: FPS,
+      windows: wins,
+    });
+    for (const rw of rebuiltMeas.windows) {
+      const repWin = windReport.clothFit.windows[rw.name]!;
+      expect(Number(rw.lag.toFixed(5))).toBe(repWin.fitted.lag);
+      expect(Number(rw.swingRatio!.toFixed(5))).toBe(repWin.fitted.swingRatio);
+      expect(Number(rw.overshoot!.toFixed(5))).toBe(repWin.fitted.overshoot);
+    }
+  },
+  60_000,
+);
+
+  test(
+    'Planted failures: (1) ignoreFolds selects a folding candidate rejected by the control and matches rigc render --folds; (2) idle folding under winning dance physics is rejected; (3) setup-hidden skirt mesh reads rest from setup pose; (4) all-fold candidate set is refused as CLOTH_FIT_FOLDS; (5) discovery and input refusals',
+    () => {
+    const dir = tempDir();
+    const posePath = makeSwayPoseFile(dir);
+
+    // Build a pinched-row rig where intra-chain shear between link 0 and link 1 flips a mesh triangle when link 1 lags link 0 strongly,
+    // whereas a cone candidate (stiff lower links) stays 0-fold.
+    const foldingEntry: SkirtPhysicsGridEntry = {
+      family: 'uniform',
+      root: { inertia: 0.1, strength: 400, damping: 0.95, mass: 1, mix: 0.1 },
+      lower: { inertia: 3.0, strength: 15, damping: 0.99, mass: 1, mix: 1.0 },
+    };
+    const safeConeEntry: SkirtPhysicsGridEntry = SKIRT_PHYSICS_GRID[0]!;
+    const pinchRig = makeThreeLinkSkirtRig(join(dir, 'pinch'), foldingEntry, { pinchMiddleRow: true });
+    const pinchMotionOut = join(dir, 'pinch', 'motion.json');
+    const pinchBuild = join(dir, 'pinch', 'build');
+    runRetarget(
+      {
+        rig: pinchRig.rigDir,
+        map: pinchRig.mapPath,
+        pose: posePath,
+        out: pinchMotionOut,
+        name: 'dance',
+        coco: false,
+        minScore: 0.3,
+        flip: 'off',
+        short: 'off',
+        bends: 'refuse',
+        bendTolerance: 0,
+        switchTolerance: 25,
+        switchMin: 0.25,
+        switchAt: 'first',
+        profile: 'spine',
+        build: pinchBuild,
+      },
+      () => {},
+    );
+    const wins = parseWindows(FIT_WINDOWS);
+    if (typeof wins === 'string') throw new Error(wins);
+    const foldingRefPath = join(dir, 'folding-ref.cloth.json');
+    runCloth(
+      {
+        kind: 'rig',
+        rig: pinchBuild,
+        map: pinchRig.mapPath,
+        skirtSlots: ['bottomwear'],
+        animation: 'dance',
+        fps: FPS,
+        windows: wins,
+        out: foldingRefPath,
+      },
+      () => {},
+    );
+
+    const doc = readBuild(pinchBuild);
+    const map = readMap(readFileSync(pinchRig.mapPath, 'utf8'), pinchRig.mapPath);
+    const refText = readFileSync(foldingRefPath, 'utf8');
+
+    // Control: with `[foldingEntry, safeConeEntry]`, `foldingEntry` (and Candidate 0, which also has `foldingEntry`) folds,
+    // so the fold-free filter rejects it and picks `safeConeEntry` with 0 fold frames.
+    const controlFit = fitSkirtPhysics(doc, map, pinchRig.mapPath, refText, foldingRefPath, {
+      rigWhere: pinchRig.rigDir,
+      animation: 'dance',
+      grid: [foldingEntry, safeConeEntry],
+    });
+    expect(controlFit.report.folds.frames).toBe(0);
+    expect(controlFit.report.family).toBe('cone');
+
+    // Plant 1 (`ignoreFolds: true`): without the fold-free filter, Candidate 0 (`foldingEntry`, exact match `score === 0`) wins despite folding!
+    const plantedFit = fitSkirtPhysics(doc, map, pinchRig.mapPath, refText, foldingRefPath, {
+      rigWhere: pinchRig.rigDir,
+      animation: 'dance',
+      grid: [foldingEntry, safeConeEntry],
+      plant: { ignoreFolds: true },
+    });
+    expect(plantedFit.report.folds.frames).toBeGreaterThan(0);
+    expect(plantedFit.report.score).toBeLessThan(1e-4);
+    expect(plantedFit.report.score).toBeLessThan(controlFit.report.score);
+
+    // Item 6: the fitter's fold count on the `ignoreFolds` plant (Candidate 0 on `pinchBuild`, where `idle` has 0 folds)
+    // equals `rigc render --folds` on the same build!
+    const foldsRender = folds(pinchBuild, 'dance', join(dir, 'folds-render'), FPS);
+    expect(foldsRender.run.status, foldsRender.run.out).toBe(0);
+    const foldsJson = JSON.parse(readFileSync(join(foldsRender.frames, 'folds.json'), 'utf8')) as {
+      meshes: Array<{ slot: string; attachment: string; frames: Array<{ time: number; triangles: number[] }>; worst: { triangles: number[] } | null }>;
+    };
+    const rigcMeshFolds = foldsJson.meshes.find((m) => m.slot === 'bottomwear' && m.attachment === 'bottomwear')!;
+    expect(plantedFit.report.folds.frames).toBe(rigcMeshFolds.frames.length);
+    expect(plantedFit.report.folds.worstTriangles).toBe(rigcMeshFolds.worst?.triangles.length ?? 0);
+
+    // Defect 2: an `idle` that folds under the winning `dance` physics must be rejected!
+    // `danceWinner` (`lower.inertia = 0.1, lower.strength = 100, lower.mix = 0.25`) has 0 folds on `dance` (and scores 0.000 against `dance` measured with it).
+    // When `idle` carries a strong `wind` timeline on `skirt_c1_phys` (`wind = -8000`), `danceWinner` folds on `idle` (`strength = 100, mix = 0.25`),
+    // whereas `idleSafeEntry` (`lower.strength = 2000, lower.mix = 0.05`) stays 0-fold on both `idle` and `dance`:
+    const danceAnim = doc.animations.find((a) => a.name === 'dance')!;
+    const calmIdleAnim = doc.animations.find((a) => a.name === 'idle')!;
+    const danceWinner: SkirtPhysicsGridEntry = {
+      family: 'uniform',
+      root: { inertia: 0.5, strength: 100, damping: 0.97, mass: 1, mix: 0.45 },
+      lower: { inertia: 0.1, strength: 100, damping: 0.95, mass: 1, mix: 0.25 },
+    };
+    const idleSafeEntry: SkirtPhysicsGridEntry = {
+      family: 'cone',
+      root: { inertia: 0.5, strength: 80, damping: 0.97, mass: 1, mix: 0.45 },
+      lower: { inertia: 0.1, strength: 2000, damping: 0.95, mass: 1, mix: 0.05 },
+    };
+    const docDanceWinnerWithCalmIdle = {
+      ...doc,
+      constraints: doc.constraints.map((c) =>
+        c.record?.kind === 'physics'
+          ? {
+              ...c,
+              record: {
+                ...c.record,
+                ...(c.record.name.endsWith('0_phys') ? danceWinner.root : danceWinner.lower),
+                massInverse: 1,
+              },
+            }
+          : c,
+      ),
+      animations: [calmIdleAnim, danceAnim],
+    };
+    const danceSafeRefMeas = measureRigCloth(docDanceWinnerWithCalmIdle, map, pinchRig.mapPath, {
+      rigWhere: pinchRig.rigDir,
+      animation: 'dance',
+      skirtSlots: ['bottomwear'],
+      fps: FPS,
+      windows: wins,
+    });
+    const danceSafeRefText = JSON.stringify(danceSafeRefMeas.doc);
+    // When `idle` is calm (`calmIdleAnim`), `danceWinner` has 0 folds on both `idle` and `dance`, and wins with `score === 0`:
+    const fitWithoutFoldingIdle = fitSkirtPhysics(docDanceWinnerWithCalmIdle, map, pinchRig.mapPath, danceSafeRefText, 'dance-safe-ref.cloth.json', {
+      rigWhere: pinchRig.rigDir,
+      animation: 'dance',
+      grid: [danceWinner, idleSafeEntry],
+    });
+    expect(fitWithoutFoldingIdle.report.folds.frames).toBe(0);
+    expect(fitWithoutFoldingIdle.report.family).toBe('rig');
+    expect(fitWithoutFoldingIdle.report.score).toBe(0);
+    // When `idle` keys `wind = -8000` on `skirt_c1_phys`, `danceWinner` folds on `idle` (even though it has 0 folds and `score === 0` on `dance`!)
+    // and is rejected in favour of `idleSafeEntry`:
+    const windyIdleAnim = {
+      ...calmIdleAnim,
+      constraints: {
+        ...calmIdleAnim.constraints,
+        physics: 1,
+        physicsKeyed: [
+          {
+            name: 'skirt_c1_phys',
+            kind: 'wind' as const,
+            keys: [{ time: 0, values: [Math.fround(-8000)], stated: { time: 0, values: [-8000] }, curve: 'stepped' as const }],
+          },
+        ],
+      },
+    };
+    const docWithFoldingIdle = {
+      ...docDanceWinnerWithCalmIdle,
+      animations: [windyIdleAnim, danceAnim],
+    };
+    const fitWithFoldingIdle = fitSkirtPhysics(docWithFoldingIdle, map, pinchRig.mapPath, danceSafeRefText, 'dance-safe-ref.cloth.json', {
+      rigWhere: pinchRig.rigDir,
+      animation: 'dance',
+      grid: [danceWinner, idleSafeEntry],
+    });
+    expect(fitWithFoldingIdle.report.folds.frames).toBe(0);
+    expect(fitWithFoldingIdle.report.family).toBe('cone');
+
+    // Defect 5: a skirt attachment not drawn at setup (`slot.setup === null`) must read its rest orientation from the setup rest pose,
+    // not from its first animated frame (where a bone rotation at `t = 0` has already flipped a triangle).
+    const docHiddenAtSetup = {
+      ...docDanceWinnerWithCalmIdle,
+      slots: docDanceWinnerWithCalmIdle.slots.map((s) => (s.name === 'bottomwear' ? { ...s, setup: null } : s)),
+      animations: [
+        {
+          ...danceAnim,
+          timelines: {
+            ...danceAnim.timelines,
+            slots: [
+              ...danceAnim.timelines.slots.filter((s) => s.name !== 'bottomwear'),
+              {
+                name: 'bottomwear',
+                timelines: [
+                  {
+                    kind: 'attachment' as const,
+                    keys: [{ time: 0, name: 'bottomwear', values: [], stated: { time: 0, values: [], name: 'bottomwear' }, curve: 'stepped' as const }],
+                  },
+                ],
+              },
+            ],
+            bones: [
+              ...danceAnim.timelines.bones.filter((b) => b.name !== 'skirt_c1'),
+              {
+                name: 'skirt_c1',
+                timelines: [
+                  {
+                    kind: 'rotate' as const,
+                    keys: [{ time: 0, values: [Math.fround(-45)], stated: { time: 0, values: [-45] }, curve: 'stepped' as const }],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    };
+    expect(() =>
+      fitSkirtPhysics(docHiddenAtSetup, map, pinchRig.mapPath, danceSafeRefText, 'dance-safe-ref.cloth.json', {
+        rigWhere: pinchRig.rigDir,
+        animation: 'dance',
+        grid: [safeConeEntry],
+      }),
+    ).toThrow(/CLOTH_FIT_FOLDS/);
+
+    // Plant 2 (all-fold refusal `CLOTH_FIT_FOLDS`): when every candidate in the grid folds, `fitSkirtPhysics` refuses with `CLOTH_FIT_FOLDS`.
+    expect(() =>
+      fitSkirtPhysics(doc, map, pinchRig.mapPath, refText, foldingRefPath, {
+        rigWhere: pinchRig.rigDir,
+        animation: 'dance',
+        grid: [foldingEntry],
+      }),
+    ).toThrow(Refusal);
+    try {
+      fitSkirtPhysics(doc, map, pinchRig.mapPath, refText, foldingRefPath, {
+        rigWhere: pinchRig.rigDir,
+        animation: 'dance',
+        grid: [foldingEntry],
+      });
+    } catch (e) {
+      expect(e).toBeInstanceOf(Refusal);
+      expect((e as Refusal).problems.map((p) => p.code)).toContain('CLOTH_FIT_FOLDS');
+    }
+
+    // Defect 4a: a rig with hair physics (`slot: "hair"`, no skirt slot matching `SKIRT_SLOT_PATTERN`) must refuse with `CLOTH_FIT_SLOTS`, not fit the hair:
+    const docHairOnly = {
+      ...doc,
+      slots: doc.slots.map((s) => (s.name === 'bottomwear' ? { ...s, name: 'hair', setup: 'hair' } : s)),
+      skins: doc.skins.map((sk) => ({
+        ...sk,
+        attachments: Object.fromEntries(
+          Object.entries(sk.attachments).map(([sName, atts]) => (sName === 'bottomwear' ? ['hair', { hair: atts.bottomwear! }] : [sName, atts])),
+        ),
+      })),
+    };
+    expect(() => discoverSkirtPhysics(docHairOnly, map, undefined, 'hair-rig')).toThrow(/CLOTH_FIT_SLOTS/);
+
+    // Defect 4d: physics constraints with `rotate === 0` are ignored by discovery and refuse with `CLOTH_FIT_CONSTRAINTS`:
+    const docZeroRotate = {
+      ...doc,
+      constraints: doc.constraints.map((c) =>
+        c.record?.kind === 'physics' ? { ...c, record: { ...c.record, rotate: 0, x: 1 } } : c,
+      ),
+    };
+    expect(() => discoverSkirtPhysics(docZeroRotate, map, ['bottomwear'], 'zero-rotate-rig')).toThrow(/CLOTH_FIT_CONSTRAINTS/);
+
+    // Defect 4e: `--skirt-slots` naming a slot with no mesh attachment refuses by name (`CLOTH_FIT_SLOTS`):
+    const docWithRegionSlot = {
+      ...doc,
+      slots: [...doc.slots, { ...doc.slots[0]!, name: 'ribbon', setup: null }],
+    };
+    expect(() => discoverSkirtPhysics(docWithRegionSlot, map, ['bottomwear', 'ribbon'], 'ribbon-rig')).toThrow(/CLOTH_FIT_SLOTS.*"ribbon"/);
+
+    // Input refusals: CLOTH_FIT_SLOTS, CLOTH_FIT_CONSTRAINTS, CLOTH_FIT_WINDOWS, and CLI Usage (exit 2)
+    expect(() =>
+      fitSkirtPhysics(doc, map, pinchRig.mapPath, refText, foldingRefPath, {
+        rigWhere: pinchRig.rigDir,
+        animation: 'dance',
+        skirtSlots: ['nonexistent_slot'],
+      }),
+    ).toThrow(/CLOTH_FIT_SLOTS/);
+
+    const docNoPhys = { ...doc, constraints: [] };
+    expect(() =>
+      fitSkirtPhysics(docNoPhys, map, pinchRig.mapPath, refText, foldingRefPath, {
+        rigWhere: pinchRig.rigDir,
+        animation: 'dance',
+        skirtSlots: ['bottomwear'],
+      }),
+    ).toThrow(/CLOTH_FIT_CONSTRAINTS/);
+
+    const noWinClothPath = join(dir, 'nowin.cloth.json');
+    runCloth(
+      {
+        kind: 'rig',
+        rig: pinchBuild,
+        map: pinchRig.mapPath,
+        skirtSlots: ['bottomwear'],
+        animation: 'dance',
+        fps: FPS,
+        out: noWinClothPath,
+      },
+      () => {},
+    );
+    expect(() =>
+      fitSkirtPhysics(doc, map, pinchRig.mapPath, readFileSync(noWinClothPath, 'utf8'), noWinClothPath, {
+        rigWhere: pinchRig.rigDir,
+        animation: 'dance',
+      }),
+    ).toThrow(/CLOTH_FIT_WINDOWS/);
+
+    const badCli = spawnSync(
+      process.execPath,
+      [CLI, 'retarget', '--rig', pinchRig.rigDir, '--map', pinchRig.mapPath, '--sequence', posePath, '--out', join(dir, 'bad.json'), '--cloth-windows', '0.5-3.5'],
+      { encoding: 'utf8' },
+    );
+    expect(badCli.status).toBe(2);
+    expect(badCli.stderr).toContain('--cloth-windows is given without --cloth-track');
+  },
+  60_000,
+);
 });
