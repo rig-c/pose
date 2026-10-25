@@ -33,10 +33,18 @@ import { readShoulderConfig, readShoulderSignal, shoulderRigGuard, shoulderLocal
 import { measureShoulderLanding } from './verify.ts';
 import { pointAt, pointParts, partBone } from './map.ts';
 import { scalePairWarning } from './scalepair.ts';
+import { emitPhysicsTracks, fitSkirtPhysics, type ClothFitResult } from './cloth.ts';
+import type { ClothWindow } from './compare.ts';
 
 export interface RetargetArgs extends RetargetOptions {
   /** #408: closed external calibration; absent preserves the legacy output. */
   shoulderLiftFile?: string;
+  /** #34: fit the skirt's physics constraints to a reference cloth track (`rig-c-cloth-track/0`). Absent: no physics fit, output as before. */
+  clothTrackFile?: string;
+  /** #34: windows in seconds (`t0-t1,...`) over which the cloth fit evaluates lag, swing ratio, and overshoot. */
+  clothWindows?: ClothWindow[];
+  /** #34: comma-separated slot names whose drawn attachments form the skirt (default: discovered from slots naming `skirt` or `bottomwear`). */
+  skirtSlots?: string[];
   rig: string;
   map: string;
   pose: string;
@@ -114,7 +122,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     throw new Refusal(problems);
   };
   const args = new Problems();
-  for (const [flag, path] of [['--map', a.map], ['--pose', a.pose], ['--merge', a.merge], ['--contact-keys', a.contactKeysFile]] as const) {
+  for (const [flag, path] of [['--map', a.map], ['--pose', a.pose], ['--merge', a.merge], ['--contact-keys', a.contactKeysFile], ['--cloth-track', a.clothTrackFile]] as const) {
     if (path !== undefined && !existsSync(path)) args.add('ARG_PATH', `${flag} ${path} does not exist`);
   }
   // rig-c/pose#239: the report is written unless asked elsewhere — beside the motion, as <out>.report.json.
@@ -226,7 +234,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         }
       }
     }
-    tell(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)${a.legScale !== undefined && a.legScale !== 'off' ? `, leg-scale ${a.legScale[0]}–${a.legScale[1]}` : ''}${a.plantFeet === true ? ', plant-feet' : ''}${a.stance !== undefined && a.stance !== 'off' ? `, stance ${a.stance}` : ''}${a.raisedByHead === true ? ', raised-by-head' : ''}${a.carryIdle === true ? ', carry-idle' : ''}${a.merge !== undefined ? `, merge ${a.merge}` : ''}${a.reduce !== undefined ? `, reduce ${a.reduce}°${chainsText(a.reduceChains)}${a.reduceHip !== undefined ? ` (hip ${a.reduceHip} units)` : ''}${a.reduceKeepPlanted === true ? ', planted legs kept dense' : ''}` : ''}`);
+    tell(`rig-pose retarget: ${seq.frames.length} frame(s), ${r.animation.duration.toFixed(3)}s, onto "${input.name}" as "${a.name}" — ${r.animation.tracks.length} track(s); min-score ${a.minScore}, flip ${a.flip === 'off' ? 'off' : `${a.flip}°`}, short ${a.short}, bends ${a.bends} (tolerance ${a.bendTolerance}°)${a.legScale !== undefined && a.legScale !== 'off' ? `, leg-scale ${a.legScale[0]}–${a.legScale[1]}` : ''}${a.plantFeet === true ? ', plant-feet' : ''}${a.stance !== undefined && a.stance !== 'off' ? `, stance ${a.stance}` : ''}${a.raisedByHead === true ? ', raised-by-head' : ''}${a.carryIdle === true ? ', carry-idle' : ''}${a.merge !== undefined ? `, merge ${a.merge}` : ''}${a.clothTrackFile !== undefined ? `, cloth-track ${a.clothTrackFile}` : ''}${a.reduce !== undefined ? `, reduce ${a.reduce}°${chainsText(a.reduceChains)}${a.reduceHip !== undefined ? ` (hip ${a.reduceHip} units)` : ''}${a.reduceKeepPlanted === true ? ', planted legs kept dense' : ''}` : ''}`);
     say(`  RIGC   rig-c ${rigc.version} (${rigc.entry}) gates and poses this run`);
     // #250: the gate was green without it, so nothing else would say the rig's own animations are not in --out.
     const unread = unreadMotionLine(a.rig, input.motion);
@@ -469,6 +477,24 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       shoulderReport = { ...shoulder.reading, inputs: shoulder.inputs, landing };
       tell(`  SHOULDER-LIFT SUPPLIED target "${target}"; ${shoulder.reading.frames.length} calibrated samples; world landing ${landing.worst} <= ${landing.tolerance} units`);
     }
+    let clothFit: ClothFitResult | null = null;
+    if (a.clothTrackFile !== undefined) {
+      const clothTrackText = readFileSync(a.clothTrackFile, 'utf8');
+      clothFit = fitSkirtPhysics(doc, map, a.map, clothTrackText, a.clothTrackFile, {
+        rigWhere: input.rig,
+        animation: a.name,
+        skirtSlots: a.skirtSlots,
+        windows: a.clothWindows,
+        retargetScale: r.scale?.factor ?? null,
+      });
+      motion = emitPhysicsTracks(motion, clothFit.constraints);
+      g1 = gate(input.rig, motion, join(scratch, 'cloth-final'), a.profile, a.images);
+      if (!g1.green) {
+        refuse([{ code: 'RIG_GATE', text: `rigc build --profile ${a.profile} is red with "${a.name}" and fitted physics tracks in (exit ${g1.run.status}); nothing written` }, ...g1.fails.map((f) => ({ code: 'RIGC', text: f }))]);
+      }
+      doc = readBuild(g1.build);
+      for (const l of clothFit.lines) say(`  ${l}`);
+    }
     const gateText = gateLine(a.profile, g1.summary);
     say(`  GATE   ${gateText}`);
     const posed = poseFrames(doc, a.name, r.times);
@@ -559,10 +585,11 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     assertReportInputs([rigSnapshot,mapSnapshot,poseSnapshot]);
     if (shoulder !== null) assertReportInputs(shoulder.snapshots);
     // Every retarget option as resolved: the report's `options`, and with the name the build record's `flags` (#270).
-    const options = { ...(shoulder === null ? {} : { shoulderLift: a.shoulderLiftFile }), minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', floor: a.floor ?? null, raisedByHead: a.raisedByHead === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', ...(a.reduceChains === undefined ? {} : { reduceChains: a.reduceChains }), reduceHip: a.reduceHip ?? 'off', ...(a.reduceKeepPlanted === true ? { reduceKeepPlanted: true } : {}), ...(a.drawOrder !== undefined ? { drawOrder: a.drawOrder } : {}), ...(a.contactKeysFile !== undefined ? { contactKeys: a.contactKeysFile } : {}) };
+    const options = { ...(shoulder === null ? {} : { shoulderLift: a.shoulderLiftFile }), minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', floor: a.floor ?? null, raisedByHead: a.raisedByHead === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', ...(a.reduceChains === undefined ? {} : { reduceChains: a.reduceChains }), reduceHip: a.reduceHip ?? 'off', ...(a.reduceKeepPlanted === true ? { reduceKeepPlanted: true } : {}), ...(a.drawOrder !== undefined ? { drawOrder: a.drawOrder } : {}), ...(a.contactKeysFile !== undefined ? { contactKeys: a.contactKeysFile } : {}), ...(a.clothTrackFile !== undefined ? { clothTrack: a.clothTrackFile } : {}), ...(a.clothWindows !== undefined ? { clothWindows: a.clothWindows.map((w) => `${w.from}-${w.to}`).join(',') } : {}), ...(a.skirtSlots !== undefined ? { skirtSlots: a.skirtSlots } : {}) };
     const reportText = writeReport({
         spec: 'rig-pose-report/1',
         ...(shoulderReport === null ? {} : { shoulderLift: shoulderReport }),
+        ...(clothFit === null ? {} : { clothFit: clothFit.report }),
         rigc,
         rig: input.name,
         animation: a.name,

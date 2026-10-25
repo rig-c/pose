@@ -223,6 +223,23 @@ retarget
                         support is read as without it. On every frame they cover the keys decide, over the
                         vertical speed (#280) and ankle height: none is flight; both, the foot that landed. Malformed
                         keys are refused by name (CONTACT_KEYS). FEET support and stride lines (default: off)
+  --cloth-track <file>  fit the skirt's physics constraints to a reference cloth track (rig-c-cloth-track/0,
+                        rig-c/pose#34): steps the compiled animations at the track's fps through rig-c's core
+                        poser (poseRawAnimationEach with physicsClockStep) over the rig's own values plus
+                        SKIRT_PHYSICS_GRID, drops any candidate whose skirt mesh folds on any stepped frame of
+                        any animation in motion.json (refusing CLOTH_FIT_FOLDS if all fold), scores lag, swing
+                        ratio and overshoot on the retargeted animation against #34's bands, and emits t=0
+                        physics timeline tracks (inertia, strength, damping, mass, mix) onto every animation in
+                        motion.json so switching animations keeps the fitted physics. Prints CLOTH lines and
+                        records clothFit in --report (default: off)
+  --cloth-windows <w>   with --cloth-track: windows in seconds (t0-t1[,t0-t1...]) over which lag, swing ratio
+                        and overshoot are scored (default: the reference track's skirtSwing windows; refused as
+                        CLOTH_FIT_WINDOWS when none are given or recorded, when a window is ≤ 12 frames, or when
+                        a window has no reference hip stroke)
+  --skirt-slots <list>  with --cloth-track: comma-separated slot names whose mesh attachments form the skirt
+                        (default: discovered from mesh slots matching /skirt|bottomwear|dress|hem|kilt|gown/i;
+                        refused as CLOTH_FIT_SLOTS when none match, when a named slot is missing, or when a
+                        named slot has no mesh attachment)
   --idle <name>         the rig's animation read as its idle (default: idle). Every idle track the new
                         animation does not key, on any channel, is listed as IDLE-DROPPED (a blink, a
                         breath); one it keys is IDLE-KEPT-OUT, naming the track that keys it, and so is a
@@ -435,9 +452,24 @@ function legScaleOf(f: Map<string, string>): [number, number] | 'off' {
 const RETARGET_ALIASES = { sequence: 'pose', animation: 'name' } as const;
 
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'reference', 'render', 'parts', 'report', 'camera', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor', 'draw-order', 'contact-keys', 'shoulder-lift'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head', 'reduce-keep-planted', 'verbose', 'summary'], RETARGET_ALIASES);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'reference', 'render', 'parts', 'report', 'camera', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor', 'draw-order', 'contact-keys', 'shoulder-lift', 'cloth-track', 'cloth-windows', 'skirt-slots'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head', 'reduce-keep-planted', 'verbose', 'summary'], RETARGET_ALIASES);
   if (f.has('verbose') && f.has('summary')) throw new Usage('--verbose and --summary are both given; --verbose prints every line in full and --summary one line per measure, so give one');
   if (f.has('reference') && !f.has('build')) throw new Usage(`--reference needs --build: the record it goes in is written beside the build (${PROVENANCE_FILE})`);
+  if (f.has('cloth-windows') && !f.has('cloth-track')) throw new Usage('--cloth-windows is given without --cloth-track; it names the windows --cloth-track fits over');
+  if (f.has('skirt-slots') && !f.has('cloth-track')) throw new Usage('--skirt-slots is given without --cloth-track; it names the skirt slots --cloth-track measures');
+  let clothWindows: RetargetArgs['clothWindows'];
+  if (f.has('cloth-windows')) {
+    const w = parseWindows(f.get('cloth-windows')!);
+    if (typeof w === 'string') throw new Usage(`--cloth-windows is "${f.get('cloth-windows')}": ${w}; it must be t0-t1[,t0-t1...] in seconds`);
+    clothWindows = w;
+  }
+  let skirtSlots: RetargetArgs['skirtSlots'];
+  if (f.has('skirt-slots')) {
+    const raw = f.get('skirt-slots')!;
+    const list = raw.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+    if (list.length === 0) throw new Usage(`--skirt-slots is "${raw}"; it must be one or more comma-separated slot names`);
+    skirtSlots = list;
+  }
   const bends = f.get('bends') ?? 'refuse';
   if (bends !== 'refuse' && bends !== 'clamp') throw new Usage(`--bends is "${bends}"; it must be refuse or clamp`);
   const switchAt = f.get('switch-at') ?? 'first';
@@ -487,6 +519,9 @@ function retargetArgs(argv: string[]): RetargetArgs {
     ...(drawOrder !== undefined ? { drawOrder: 'depth' as const } : {}),
     ...(f.has('shoulder-lift') ? { shoulderLiftFile: f.get('shoulder-lift')! } : {}),
     ...(f.has('contact-keys') ? { contactKeysFile: f.get('contact-keys')! } : {}),
+    ...(f.has('cloth-track') ? { clothTrackFile: f.get('cloth-track')! } : {}),
+    ...(clothWindows !== undefined ? { clothWindows } : {}),
+    ...(skirtSlots !== undefined ? { skirtSlots } : {}),
   };
 }
 

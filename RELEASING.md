@@ -260,6 +260,9 @@ Every flag `parseFlags` reads in `cli.ts`, once. `test/promise.test.ts` holds th
 | `retarget` | `--draw-order` | courtesy | — | (rig-c/pose#304) |
 | `retarget` | `--contact-keys` | courtesy | — | (rig-c/pose#303) |
 | `retarget` | `--shoulder-lift` | courtesy | — | Supplied calibration file; #408 |
+| `retarget` | `--cloth-track` | courtesy | — | (rig-c/pose#34) |
+| `retarget` | `--cloth-windows` | courtesy | — | (rig-c/pose#34) |
+| `retarget` | `--skirt-slots` | courtesy | — | (rig-c/pose#34) |
 | `retarget` | `--verbose` | courtesy | — | |
 | `retarget` | `--summary` | courtesy | — | |
 | `retarget` | `--sequence` | promised | X 1 | alias of `--pose` |
@@ -335,6 +338,7 @@ Every key `rig-pose-report/1` can carry, once: the keys `src/run.ts` writes, and
 | `switchBinds` | courtesy | — | only when the map binds a set (rig-c/pose#360) |
 | `drawOrder` | courtesy | — | (rig-c/pose#304; `layout` and `groups`, the forearms against the trunk, rig-c/pose#346) |
 | `shoulderLift` | courtesy | — | Only with --shoulder-lift; supplied inputs, signed frame readings and independent world landing (#408) |
+| `clothFit` | courtesy | — | only with `--cloth-track` (rig-c/pose#34) |
 | `contactKeys` | courtesy | — | only with `--contact-keys` (rig-c/pose#303) |
 | `reach` | courtesy | — | |
 | `reachOrigin` | courtesy | — | only when the map has a `reach` chain (rig-c/pose#282) |
@@ -600,6 +604,18 @@ coordinates on flips and shear remain promised.
 | `idleDropped[].target` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
 | `idleDropped[].target.kind` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
 | `idleDropped[].target.name` | courtesy | Existing internal clean/idle diagnostic; no recorded promised reader |
+| `options.clothTrack`, `options.clothWindows`, `options.skirtSlots` | courtesy | Opt-in physics fit; no recorded promised reader (#34) |
+| `clothFit.candidate`, `clothFit.checks`, `clothFit.constraints`, `clothFit.constraints.*` | courtesy | Opt-in physics fit; no recorded promised reader (#34) |
+| `clothFit.constraints.*.bone`, `clothFit.constraints.*.damping`, `clothFit.constraints.*.inertia`, `clothFit.constraints.*.link` | courtesy | Opt-in physics fit; no recorded promised reader (#34) |
+| `clothFit.constraints.*.mass`, `clothFit.constraints.*.mix`, `clothFit.constraints.*.strength`, `clothFit.evaluated` | courtesy | Opt-in physics fit; no recorded promised reader (#34) |
+| `clothFit.family`, `clothFit.foldFree`, `clothFit.folds`, `clothFit.folds.frames` | courtesy | Opt-in physics fit; no recorded promised reader (#34) |
+| `clothFit.folds.worstTriangles`, `clothFit.maxLinkDeg`, `clothFit.passes`, `clothFit.score` | courtesy | Opt-in physics fit; no recorded promised reader (#34) |
+| `clothFit.slots`, `clothFit.windows`, `clothFit.windows.*`, `clothFit.windows.*.bands` | courtesy | Opt-in physics fit; no recorded promised reader (#34) |
+| `clothFit.windows.*.bands.lag`, `clothFit.windows.*.bands.overshoot`, `clothFit.windows.*.bands.swingRatio`, `clothFit.windows.*.fitted` | courtesy | Opt-in physics fit; no recorded promised reader (#34) |
+| `clothFit.windows.*.fitted.lag`, `clothFit.windows.*.fitted.overshoot`, `clothFit.windows.*.fitted.swingRatio`, `clothFit.windows.*.frames` | courtesy | Opt-in physics fit; no recorded promised reader (#34) |
+| `clothFit.windows.*.pass`, `clothFit.windows.*.pass.lag`, `clothFit.windows.*.pass.overshoot`, `clothFit.windows.*.pass.swingRatio` | courtesy | Opt-in physics fit; no recorded promised reader (#34) |
+| `clothFit.windows.*.reference`, `clothFit.windows.*.reference.lag`, `clothFit.windows.*.reference.overshoot`, `clothFit.windows.*.reference.swingRatio` | courtesy | Opt-in physics fit; no recorded promised reader (#34) |
+| `clothFit.windows.*.t` | courtesy | Opt-in physics fit; no recorded promised reader (#34) |
 
 ### Problem codes and line tags
 
@@ -611,7 +627,7 @@ Promised codes, with their use:
 
 The #408 codes `SHOULDER_LIFT_CONFIG`, `SHOULDER_LIFT_INPUT`, `SHOULDER_LIFT_CALIBRATION`, `SHOULDER_LIFT_JOINT`, `SHOULDER_LIFT_LOOP`, `SHOULDER_LIFT_RIG`, `SHOULDER_LIFT_COMPOSITION` and `SHOULDER_LIFT_LANDS` are courtesy. They refuse a requested reading as unknown; no successful zero replaces missing evidence. Optional `rig-pose-retarget/1` input `inputs.shoulderLift` and its `configuration`, `rest`, `painting` path/sha256 identities are courtesy. Existing input and exit promises remain unchanged.
 
-Every other code is courtesy (`CLOTH_SLOT`, `CLOTH_ANIMATION`, `CLOTH_HIP`, `CLOTH_FRAMES`, `CLOTH_EMPTY_FRAME`, `CLOTH_WINDOW`, rig-c/pose#34; `FIGURE_SCALE_RECORD` (#404, malformed external figure-scale record), `SET_KEY_DRAWN`, rig-c/pose#355; `MAP_ALT_BIND`, `SET_BIND_FRAMES` and `SET_BIND_OVERLAP`, rig-c/pose#360; and rig-c/pose#346's `MAP_LAYOUT`, `LAYOUT_JSON`, `LAYOUT_SPEC`, `LAYOUT_SHAPE`, `LAYOUT_RIG_SHA`, `LAYOUT_SETS_SHA`, `LAYOUT_SETUP`, `LAYOUT_ADJACENCY`, `LAYOUT_MISSING`, `LAYOUT_UNBOUND`, `LAYOUT_BINDING_UNKNOWN` and `LAYOUT_BINDING_BONES`, among them). That a refusal always carries some code is promised; which code it carries is promised only for the codes above.
+Every other code is courtesy (`CLOTH_SLOT`, `CLOTH_ANIMATION`, `CLOTH_HIP`, `CLOTH_FRAMES`, `CLOTH_EMPTY_FRAME`, `CLOTH_WINDOW`, `CLOTH_FIT_SLOTS`, `CLOTH_FIT_CONSTRAINTS`, `CLOTH_FIT_WINDOWS`, `CLOTH_FIT_FOLDS`, rig-c/pose#34; `FIGURE_SCALE_RECORD` (#404, malformed external figure-scale record), `SET_KEY_DRAWN`, rig-c/pose#355; `MAP_ALT_BIND`, `SET_BIND_FRAMES` and `SET_BIND_OVERLAP`, rig-c/pose#360; and rig-c/pose#346's `MAP_LAYOUT`, `LAYOUT_JSON`, `LAYOUT_SPEC`, `LAYOUT_SHAPE`, `LAYOUT_RIG_SHA`, `LAYOUT_SETS_SHA`, `LAYOUT_SETUP`, `LAYOUT_ADJACENCY`, `LAYOUT_MISSING`, `LAYOUT_UNBOUND`, `LAYOUT_BINDING_UNKNOWN` and `LAYOUT_BINDING_BONES`, among them). That a refusal always carries some code is promised; which code it carries is promised only for the codes above.
 
 Promised line tags, with their use:
 
