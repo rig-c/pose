@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.1.0](https://github.com/rig-c/pose/compare/v1.0.2...v1.1.0) (2026-10-25)
+
+
+### Features
+
+* **clean:** warn about undeclared figure-scale drift ([#405](https://github.com/rig-c/pose/issues/405)) ([84bd77a](https://github.com/rig-c/pose/commit/84bd77a729a97121880004b56562944bd0f89107))
+* **cloth:** rig-pose cloth, a measured cloth-track instrument (rig-c-cloth-track/0) ([#419](https://github.com/rig-c/pose/issues/419)) ([5a3c7ae](https://github.com/rig-c/pose/commit/5a3c7ae1c410f082c822660c946ca1f37b3db9dc)), closes [#34](https://github.com/rig-c/pose/issues/34)
+* **demo:** show the dance beside its source skeleton ([#407](https://github.com/rig-c/pose/issues/407)) ([8ebf365](https://github.com/rig-c/pose/commit/8ebf36569c5ef77534d4ea362a04106a7df4e6fd))
+* **engines:** raise the declared Bun floor to 1.4.0 ([#414](https://github.com/rig-c/pose/issues/414)) ([ec8b408](https://github.com/rig-c/pose/commit/ec8b408d27859a78dae2f7f4ece06bb21e074772))
+* **retarget:** fit the skirt's physics to a measured cloth track (--cloth-track) ([#420](https://github.com/rig-c/pose/issues/420)) ([96879a9](https://github.com/rig-c/pose/commit/96879a94d3a7918c27bd3b66d9c1c12907e277a9))
+* **retarget:** read calibrated shoulder elevation relative to rest ([#409](https://github.com/rig-c/pose/issues/409)) ([6581da5](https://github.com/rig-c/pose/commit/6581da5bd03a8f08e0f3494665b70dc1c8395ac3))
+
+
+### Bug Fixes
+
+* **shoulder-lift:** bound the span-normalised estimate's error over the whole input box ([#418](https://github.com/rig-c/pose/issues/418)) ([2d84356](https://github.com/rig-c/pose/commit/2d84356acf7e52032f7068b55310fa33e2c652c2))
+* **shoulder-lift:** estimate the lift span-normalised ([#416](https://github.com/rig-c/pose/issues/416)) ([f48839c](https://github.com/rig-c/pose/commit/f48839c8a0e350455a7bf892257c155e84dcd9de)), closes [#415](https://github.com/rig-c/pose/issues/415)
+
 ## [1.0.2](https://github.com/rig-c/pose/compare/v1.0.1...v1.0.2) (2026-10-23)
 
 
