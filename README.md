@@ -113,7 +113,7 @@ The full list, each limit resting on the open issue that holds it, is [What it d
 - **Turn the body.** It works in 2D only: a segment pointing at the camera foreshortens, and the rig cannot. The legs and the trunk can be scaled (`--leg-scale`), and a body turned past what a stretch can show is drawn by switching to a set the map declares.
 - **Read depth where limbs cross.** Which limb passes in front of the torso, the skirt or the head is not read from the picture; depth comes from foreshortening alone.
 - **Blinks, mouth shapes, hands and fingers.** No eyelid, mouth or finger key is written; body-18 has no hand points and the rig has no bones for them yet.
-- **Track the camera from the video, or fit cloth physics to it.** A zoom or a pan is read from the sequence's `camera` field, written by the repository's `tools/` scripts, which are not shipped. A skirt's physics is the rig's own.
+- **Track the camera from the video.** A zoom or a pan is read from the sequence's `camera` field, written by the repository's `tools/` scripts, which are not shipped.
 
 ## Requirements
 

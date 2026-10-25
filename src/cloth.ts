@@ -19,7 +19,7 @@ import { pointAt, readMap, resolveMap, type JointMap } from './map.ts';
 import { makeOutDirs, planOutDirs } from './outdir.ts';
 import { personTrack, readPoseSequence, type PoseSequence } from './pose.ts';
 import { Problems, Refusal } from './problems.ts';
-import { hipOf, wrap } from './retarget.ts';
+import { hipOf, holdLine, wrap, type Hold } from './retarget.ts';
 import { baseMotionOf, gate, readBuild, resolveRig, restOf, slotsOf } from './rigc.ts';
 
 const DEG = 180 / Math.PI;
@@ -560,21 +560,47 @@ export function measureRigCloth(
   );
 }
 
-/** Hold a joint's missing/unplaced frames from the nearest good frame (last good, or first good before it). */
-function holdJointTrack(seq: PoseSequence, track: ReturnType<typeof personTrack>, joint: 'r_hip' | 'l_hip'): Pt[] | null {
-  const raw: Array<Pt | null> = track.map((joints, i) => {
+/**
+ * Hold a joint's missing/unplaced frames in camera-normalised space from the nearest good frame
+ * (last good, or first good before it), recording each held span, then apply each frame's own camera transform.
+ */
+function holdJointTrack(
+  seq: PoseSequence,
+  track: ReturnType<typeof personTrack>,
+  joint: 'r_hip' | 'l_hip',
+): { at: Pt[]; holds: Hold[] } | null {
+  const raw: Array<Pt | string> = track.map((joints) => {
     const j = joints[joint];
-    if (j === undefined || j.state === 'missing' || j.at === undefined) return null;
+    if (j === undefined || j.state === 'missing') return 'missing';
+    if (j.at === undefined) return `${j.state} without a position`;
+    return [j.at[0], j.at[1]];
+  });
+  const firstGood = raw.findIndex((x): x is Pt => typeof x !== 'string');
+  if (firstGood < 0) return null;
+  let last = firstGood;
+  let span: Hold | null = null;
+  const holds: Hold[] = [];
+  const normAt: Pt[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const v = raw[i]!;
+    if (typeof v !== 'string') {
+      normAt.push(v);
+      last = i;
+      span = null;
+      continue;
+    }
+    normAt.push(raw[last]! as Pt);
+    if (span !== null && span.source === last && span.why === v) span.to = i;
+    else {
+      span = { point: joint, from: i, to: i, source: last, why: v };
+      holds.push(span);
+    }
+  }
+  const at: Pt[] = normAt.map((pt, i) => {
     const cam = seq.camera?.[i];
-    return cam === undefined ? [j.at[0], j.at[1]] : [cam.s * j.at[0] + cam.tx, cam.s * j.at[1] + cam.ty];
+    return cam === undefined ? [pt[0], pt[1]] : [cam.s * pt[0] + cam.tx, cam.s * pt[1] + cam.ty];
   });
-  const firstGood = raw.find((x): x is Pt => x !== null);
-  if (firstGood === undefined) return null;
-  let last: Pt = firstGood;
-  return raw.map((x) => {
-    if (x !== null) last = x;
-    return last;
-  });
+  return { at, holds };
 }
 
 /** Measure a cloth track from isolated skirt PNG frames and a pose sequence (Mode 2). */
@@ -584,7 +610,7 @@ export function measureFramesCloth(
   poseWhere: string,
   framesWhere: string,
   opts: { person?: string; alphaMin: number; windows?: readonly ClothWindow[]; plant?: ClothPlant },
-): { doc: ClothTrackDocument; windows: ClothSwingWindow[] } {
+): { doc: ClothTrackDocument; windows: ClothSwingWindow[]; holds: Hold[] } {
   const p = new Problems();
   const track = personTrack(seq, opts.person, poseWhere);
   const n = seq.frames.length;
@@ -598,6 +624,7 @@ export function measureFramesCloth(
     p.add('CLOTH_HIP', `${poseWhere}: ${rHips === null && lHips === null ? '"r_hip" and "l_hip" have positions' : rHips === null ? '"r_hip" has a position' : '"l_hip" has a position'} on no frame`);
     p.throwIfAny();
   }
+  const holds: Hold[] = [...rHips!.holds, ...lHips!.holds];
 
   const rawFrames: RawFrame[] = [];
   plates.forEach(({ name, plate }, i) => {
@@ -611,8 +638,8 @@ export function measureFramesCloth(
       p.add('CLOTH_EMPTY_FRAME', `${name} (frame ${i}, t=${t.toFixed(3)}s) has no pixel with alpha ≥ ${opts.alphaMin} (or colour distance ≥ ${opts.alphaMin} from an opaque border background)`);
       return;
     }
-    const rHip = rHips![i]!;
-    const lHip = lHips![i]!;
+    const rHip = rHips!.at[i]!;
+    const lHip = lHips!.at[i]!;
     const hipX = 0.5 * (rHip[0] + lHip[0]);
     const hipY = 0.5 * (rHip[1] + lHip[1]);
     const hipW = Math.hypot(lHip[0] - rHip[0], lHip[1] - rHip[1]);
@@ -640,7 +667,7 @@ export function measureFramesCloth(
   const dts = times.slice(1).map((t, i) => t - times[i]!);
   const fps = dts.length === 0 ? 24 : Number((1 / median(dts)).toFixed(3));
 
-  return buildClothTrack(
+  const built = buildClothTrack(
     rawFrames,
     {
       subject: basename(framesWhere),
@@ -653,6 +680,7 @@ export function measureFramesCloth(
     p,
     opts.plant,
   );
+  return { ...built, holds };
 }
 
 /** `rig-pose cloth` end to end: read inputs, measure, print `CLOTH` lines, write `rig-c-cloth-track/0`. */
@@ -671,7 +699,7 @@ export function runCloth(a: ClothArgs, say: (l: string) => void): ClothTrackDocu
   }
   p.throwIfAny();
 
-  let res: { doc: ClothTrackDocument; windows: ClothSwingWindow[] };
+  let res: { doc: ClothTrackDocument; windows: ClothSwingWindow[]; holds?: Hold[] };
   if (a.kind === 'rig') {
     const map = readMap(readFileSync(a.map, 'utf8'), a.map);
     const loaded = loadCompiledRig(a.rig, p);
@@ -706,12 +734,15 @@ export function runCloth(a: ClothArgs, say: (l: string) => void): ClothTrackDocu
       }
     }
     p.throwIfAny();
-    res = measureFramesCloth(plates, seq, a.pose, a.frames, {
+    const framesRes = measureFramesCloth(plates, seq, a.pose, a.frames, {
       person: a.person,
       alphaMin: a.alphaMin,
       windows: a.windows,
     });
+    res = framesRes;
     say(`rig-pose cloth: ${res.doc.frames_count} frame(s) at ${res.doc.fps} fps from ${a.frames} + ${a.pose} (alpha ≥ ${a.alphaMin}); median hip width ${res.doc.hipWidth.median.toFixed(1)} ${res.doc.hipWidth.unit}`);
+    const times = seq.frames.map((f) => f.t);
+    for (const h of framesRes.holds) say(`  HOLD   ${holdLine(h, times)}`);
   }
 
   const hipXs = res.doc.frames.map((f) => f.hip_x);

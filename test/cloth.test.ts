@@ -895,4 +895,100 @@ describe('rig-pose cloth (#34): Controls A & B, public stand-in reference, and p
     ).toThrow('CLOTH_HIP');
     expect(median([1, 2, 3])).toBe(2);
   }, 60_000);
+
+  test('Mode 2 hip holds: prints HOLD lines per held span joint by joint (P1) and holds in camera-normalised space before applying each frame camera (P2)', () => {
+    const dir = tempDir();
+    const framesDir = join(dir, 'frames-cam');
+    mkdirSync(framesDir, { recursive: true });
+    const plate = new Plate(400, 600);
+    plate.rect(180, 300, 40, 80, [70, 110, 190, 255]);
+    const plates3: Array<{ name: string; plate: Plate }> = [];
+    for (let i = 0; i < 3; i++) {
+      const p = join(framesDir, `f${String(i).padStart(2, '0')}.png`);
+      plate.writePng(p);
+      plates3.push({ name: p, plate });
+    }
+
+    // P2 exact control: stationary normalised hip midpoint at x = 10 (`r_hip` at x = 0, `l_hip` at x = 20, hipW = 20),
+    // camera translations tx = 0, 100, 200 on frames 0, 1, 2, with the middle sample (frame 1) missing.
+    // Holding in camera-normalised space and then applying each frame's camera must yield picture hip_x = 10, 110, 210 (not 10, 10, 210).
+    const camPosePath = join(dir, 'cam-hold.pose.json');
+    const makeFrameJoints = (rAt: Pt | null, lAt: Pt | null) => ({
+      nose: { state: 'observed' as const, at: [10, 120] as Pt, score: 0.99 },
+      neck: { state: 'observed' as const, at: [10, 150] as Pt, score: 0.99 },
+      r_hip: rAt === null ? { state: 'missing' as const } : { state: 'observed' as const, at: rAt, score: 0.99 },
+      l_hip: lAt === null ? { state: 'missing' as const } : { state: 'observed' as const, at: lAt, score: 0.99 },
+    });
+    const camSeqText = JSON.stringify({
+      spec: 'rig-pose-sequence/1',
+      space: { units: 'picture-px', origin: 'top-left', y: 'down' },
+      width: 400,
+      height: 600,
+      source: 'cam-hold-control',
+      cameraSource: 'hand',
+      camera: [
+        { s: 1, tx: 0, ty: 0, inliers: 50 },
+        { s: 1, tx: 100, ty: 0, inliers: 50 },
+        { s: 1, tx: 200, ty: 0, inliers: 50 },
+      ],
+      frames: [
+        { t: 0, people: [{ id: 'a', joints: makeFrameJoints([0, 300], [20, 300]) }] },
+        { t: Number((1 / FPS).toFixed(5)), people: [{ id: 'a', joints: makeFrameJoints(null, null) }] },
+        { t: Number((2 / FPS).toFixed(5)), people: [{ id: 'a', joints: makeFrameJoints([0, 300], [20, 300]) }] },
+      ],
+    });
+    writeFileSync(camPosePath, camSeqText);
+    const camSeq = readPoseSequence(camSeqText, camPosePath);
+    const camRes = measureFramesCloth(plates3, camSeq, camPosePath, framesDir, { alphaMin: 16 });
+    const picHipXs = camRes.doc.frames.map((f) => f.hip_x * camRes.doc.hipWidth.median + camRes.doc.origin[0]);
+    expect(picHipXs[0]).toBeCloseTo(10, 5);
+    expect(picHipXs[1]).toBeCloseTo(110, 5);
+    expect(picHipXs[2]).toBeCloseTo(210, 5);
+    expect(camRes.holds).toEqual([
+      { point: 'r_hip', from: 1, to: 1, source: 0, why: 'missing' },
+      { point: 'l_hip', from: 1, to: 1, source: 0, why: 'missing' },
+    ]);
+
+    // P1 control: missing hip spans print exact HOLD lines, joint by joint, before the track is written.
+    const frames6Dir = join(dir, 'frames-6');
+    mkdirSync(frames6Dir, { recursive: true });
+    for (let i = 0; i < 6; i++) plate.writePng(join(frames6Dir, `f${String(i).padStart(2, '0')}.png`));
+    const spanPosePath = join(dir, 'span-hold.pose.json');
+    writeFileSync(
+      spanPosePath,
+      JSON.stringify({
+        spec: 'rig-pose-sequence/1',
+        space: { units: 'picture-px', origin: 'top-left', y: 'down' },
+        width: 400,
+        height: 600,
+        source: 'span-hold-control',
+        frames: [
+          // frame 0: l_hip missing (held from first good frame 1)
+          { t: 0, people: [{ id: 'a', joints: makeFrameJoints([185, 300], null) }] },
+          // frame 1: r_hip missing (held from frame 0), l_hip good
+          { t: Number((1 / FPS).toFixed(5)), people: [{ id: 'a', joints: makeFrameJoints(null, [215, 300]) }] },
+          // frame 2: both good
+          { t: Number((2 / FPS).toFixed(5)), people: [{ id: 'a', joints: makeFrameJoints([185, 300], [215, 300]) }] },
+          // frames 3–4: r_hip missing for a 2-frame span (held from frame 2)
+          { t: Number((3 / FPS).toFixed(5)), people: [{ id: 'a', joints: makeFrameJoints(null, [215, 300]) }] },
+          { t: Number((4 / FPS).toFixed(5)), people: [{ id: 'a', joints: makeFrameJoints(null, [215, 300]) }] },
+          // frame 5: both good
+          { t: Number((5 / FPS).toFixed(5)), people: [{ id: 'a', joints: makeFrameJoints([185, 300], [215, 300]) }] },
+        ],
+      }),
+    );
+    const outSpan = join(dir, 'span.cloth.json');
+    const lines: string[] = [];
+    runCloth({ kind: 'frames', frames: frames6Dir, pose: spanPosePath, alphaMin: 16, out: outSpan }, (l) => lines.push(l));
+    const holdLines = lines.filter((l) => l.startsWith('  HOLD   '));
+    expect(holdLines).toEqual([
+      '  HOLD   point "r_hip" frame 1 (t=0.042s): missing; held frame 0\'s value',
+      '  HOLD   point "r_hip" frames 3–4 (t=0.125–0.167s): missing; held frame 2\'s value',
+      '  HOLD   point "l_hip" frame 0 (t=0.000s): missing; held frame 1\'s value',
+    ]);
+    const lastHoldIdx = lines.findLastIndex((l) => l.startsWith('  HOLD   '));
+    const wroteIdx = lines.findIndex((l) => l.startsWith('  wrote '));
+    expect(lastHoldIdx).toBeGreaterThan(0);
+    expect(wroteIdx).toBeGreaterThan(lastHoldIdx);
+  });
 });
