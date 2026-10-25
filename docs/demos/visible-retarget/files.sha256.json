@@ -4,23 +4,23 @@
   "files": [
     {
       "path": "README.md",
-      "bytes": 12106,
-      "sha256": "cce11667a9a480dcba2f64af9e6b8005ce80fee4a4b2d57553d46f96346ee542"
+      "bytes": 13426,
+      "sha256": "31e3d2da7c9ff6682613f678447afe465cd8c89c3fbd20e146f721493b6f9487"
     },
     {
       "path": "docs/REFERENCE.md",
-      "bytes": 231808,
-      "sha256": "fe371e8b2dde51fa9a217bfbd765e26e2555852559ed57a68957e662f0e153d0"
+      "bytes": 249562,
+      "sha256": "1f34e307f4a4d551efbd68a5b1a927eab1dce310c959a7af1eadc203468f40c4"
     },
     {
       "path": "docs/demos/visible-retarget/README.md",
-      "bytes": 8538,
-      "sha256": "364e53cf0b28e09659fe4b238b4448d2dafb45dbc6eab749d2b48fe73dca51a7"
+      "bytes": 9570,
+      "sha256": "dd8546c25137563bce13d5cb67604aba583d6a28e4ed712f225b7de23509a93a"
     },
     {
       "path": "docs/demos/visible-retarget/contact-sheet.png",
-      "bytes": 123710,
-      "sha256": "2e26feb7c46d52b413be1b7ae0762e2fbf57c2d8c069d6d72d85d4af3a0bb2a5"
+      "bytes": 119914,
+      "sha256": "99b7b2c206d1139b1d8cefae51cf07bcc79954949dce7325a5ee3bdb954d5eb6"
     },
     {
       "path": "docs/demos/visible-retarget/diagnostics.txt",
@@ -39,13 +39,13 @@
     },
     {
       "path": "docs/demos/visible-retarget/pose-dance.png",
-      "bytes": 35967,
-      "sha256": "15389a8f1ac0667e63a8f9e1af2db4c5232e99c79a83df28ef15584264402d72"
+      "bytes": 36301,
+      "sha256": "30788e1f98ba1aa288bee71e2b8eec3ab912202909b5622dcb1b43cc1beb954e"
     },
     {
       "path": "docs/demos/visible-retarget/record.json",
-      "bytes": 8881,
-      "sha256": "d681ded402eb00d11ea35767880494f467b9684aa50946d4b018599ecba669af"
+      "bytes": 8903,
+      "sha256": "b53e86d0ffe67792faa0f0dae0e3a61edb0ec8c39416beda07934fc6270c58e5"
     },
     {
       "path": "docs/demos/visible-retarget/sampling.json",
@@ -54,8 +54,8 @@
     },
     {
       "path": "docs/demos/visible-retarget/verification.json",
-      "bytes": 8647,
-      "sha256": "935f6cb522e853e34a6423dec50f2a00b8f237e5d488c4f886b4acbec20d2731"
+      "bytes": 12012,
+      "sha256": "e54c46138b76d3966c1abef5ca4c48505fe02c8f684ea7ca84decc38b1225aa9"
     },
     {
       "path": "tools/visible-retarget-check.ts",
@@ -64,8 +64,8 @@
     },
     {
       "path": "tools/visible-retarget.py",
-      "bytes": 27075,
-      "sha256": "e06b4a83433fe44c89359bbe499687785f8e7b8a3d8b924c8d72519102da2628"
+      "bytes": 30673,
+      "sha256": "cd05b0b33ddcd74565925e6570059fa1268b61bced6eda231f198d2f08ff56d4"
     },
     {
       "path": "tools/visible-retarget.requirements.txt",

@@ -15,6 +15,7 @@ import json
 import math
 import re
 import shutil
+import statistics
 import subprocess
 import sys
 import urllib.parse
@@ -29,6 +30,7 @@ MAP = '9dca5394f6c0cf9cc72e2456b53b41adf898b963a6081d9f6f9b3c2ad6191096'
 SEQUENCE = '8713172431674a57caa8d7c3f452a05bf46ec8079ca368bb4cd9df7952c2edfd'
 FRAME_COUNT, FPS, SIZE = 391, 30, (600, 540)
 PANELS = ((12, 54, 282, 416), (306, 54, 282, 416))
+RIG_BODY_PX, RIG_GROUND_Y, SCALE_HALF_WINDOW = 188.98, 379.90, 2
 EDGES = [('r_shoulder','r_elbow'),('r_elbow','r_wrist'),('l_shoulder','l_elbow'),('l_elbow','l_wrist'),('r_hip','r_knee'),('r_knee','r_ankle'),('l_hip','l_knee'),('l_knee','l_ankle'),('r_shoulder','l_shoulder'),('r_hip','l_hip'),('r_shoulder','r_hip'),('l_shoulder','l_hip'),('neck','nose'),('nose','r_eye'),('nose','l_eye'),('r_eye','r_ear'),('l_eye','l_ear')]
 
 
@@ -133,6 +135,43 @@ def project(point, view, panel):
     scale = min(width / view['width'], height / view['height'])
     return (x + (width - view['width'] * scale) / 2 + (point[0] - view['x']) * scale,
             y + (height - view['height'] * scale) / 2 + (point[1] - view['y']) * scale)
+
+
+def body_length(joints):
+    require(all(k in joints for k in ('neck', 'r_hip', 'l_hip', 'r_ankle', 'l_ankle')), 'SOURCE_SCALE', 'body scale requires scored neck, hips and ankles')
+    hx, hy = (joints['r_hip'][0] + joints['l_hip'][0]) / 2, (joints['r_hip'][1] + joints['l_hip'][1]) / 2
+    return (math.hypot(joints['neck'][0] - hx, joints['neck'][1] - hy) +
+            (math.hypot(joints['r_hip'][0] - joints['r_ankle'][0], joints['r_hip'][1] - joints['r_ankle'][1]) +
+             math.hypot(joints['l_hip'][0] - joints['l_ankle'][0], joints['l_hip'][1] - joints['l_ankle'][1])) / 2)
+
+
+def smooth_series(values, half_width=SCALE_HALF_WINDOW):
+    return [sum(values[max(0, i - half_width):min(len(values), i + half_width + 1)]) /
+            (min(len(values), i + half_width + 1) - max(0, i - half_width))
+            for i in range(len(values))]
+
+
+def normalize_source_display(frames, panel=PANELS[0], half_width=SCALE_HALF_WINDOW):
+    require(len(frames) > 0, 'SOURCE_SCALE', 'no sampled source frames to normalize')
+    lengths = [body_length(f) for f in frames]
+    grounds = [max(f['r_ankle'][1], f['l_ankle'][1]) for f in frames]
+    centers = [(f['r_hip'][0] + f['l_hip'][0]) / 2 for f in frames]
+    require(all(l > 0 for l in lengths), 'SOURCE_SCALE', 'positive per-frame body length required')
+    ref_l, ref_g, ref_cx = statistics.median(lengths), statistics.median(grounds), statistics.median(centers)
+    smooth_l, smooth_g = smooth_series(lengths, half_width), smooth_series(grounds, half_width)
+    normalized = [{n: (ref_cx + (p[0] - ref_cx) * (ref_l / sl), ref_g + (p[1] - sg) * (ref_l / sl)) for n, p in f.items()}
+                  for f, sl, sg in zip(frames, smooth_l, smooth_g)]
+    xs = [p[0] for f in normalized for p in f.values()]
+    mid_x = (min(xs) + max(xs)) / 2
+    x0, y0, width, height = panel
+    scale = RIG_BODY_PX / ref_l
+    view = {'x': mid_x - (width / 2) / scale, 'y': ref_g - (RIG_GROUND_Y - y0) / scale, 'width': width / scale, 'height': height / scale}
+    projected = [{n: project(p, view, panel) for n, p in f.items()} for f in normalized]
+    require(all(x0 < p[0] < x0 + width and y0 < p[1] < y0 + height for f in projected for p in f.values()), 'SOURCE_VIEW', 'normalized source view cropped a joint')
+    drawn_l = [body_length(f) for f in projected]
+    require((max(drawn_l) - min(drawn_l)) / min(drawn_l) <= .05 and abs(statistics.median(drawn_l) - RIG_BODY_PX) / RIG_BODY_PX <= .05,
+            'SOURCE_SCALE_BAR', 'normalized source body length exceeded the 5% bar')
+    return normalized, view
 
 
 def native_digest(render):
@@ -241,22 +280,25 @@ def compose(corpus, replay, media, reuse_diagnostic=None):
     stages, diagnostics = stage_record(corpus, replay, render, diagnostic_log)
     media.mkdir(parents=True)
     (media / 'diagnostics.txt').write_text(diagnostics)
-    view = source_view(frames)
     font = ImageFont.load_default(size=13)
     small = ImageFont.load_default(size=11)
     frame_dir = media / 'frames'
     frame_dir.mkdir()
     sampling = []
+    raw_samples = []
+    for i in range(FRAME_COUNT):
+        joints, alignment = sample(times, frames, i / FPS)
+        raw_samples.append(joints)
+        sampling.append({'renderFrame': i, **alignment})
+    display_samples, view = normalize_source_display(raw_samples, PANELS[0])
     sheet_indices = [0, 30, 90, 170, 220, 338, 374, 390]
     thumbs = []
     native = (metadata['viewport']['pixelWidth'], metadata['viewport']['pixelHeight'])
-    for i in range(FRAME_COUNT):
-        joints, alignment = sample(times, frames, i / FPS)
-        sampling.append({'renderFrame': i, **alignment})
+    for i, joints in enumerate(display_samples):
         canvas = Image.new('RGB', SIZE, (245, 246, 248))
         draw = ImageDraw.Draw(canvas)
         draw.text((12, 8), 'Dance retarget: source pose beside the rig', fill='#152233', font=font)
-        draw.text((12, 30), 'Source pose (camera-normalized)', fill='#273646', font=small)
+        draw.text((12, 30), 'Source pose (scale-normalized, display only)', fill='#273646', font=small)
         draw.text((306, 30), 'Rig', fill='#273646', font=small)
         for x, y, w, h in PANELS:
             draw.rectangle((x, y, x + w - 1, y + h - 1), fill=(232, 232, 232), outline='#aab0b8')
@@ -333,8 +375,14 @@ def selftest(out):
     seq['frames'][1]['t']=0;write_json(path,seq)
     refused=subprocess.run(['bun',str(ROOT/'tools/visible-retarget-check.ts'),str(path)],capture_output=True,text=True)
     require(refused.returncode != 0 and 'POSE_TIME' in refused.stderr, 'TEST_TIME_REFUSAL', 'real reader did not reject duplicate times')
-    write_json(out/'selftest.json',{'realReaderValid':True,'interpolation':True,'endpoints':True,'fixedViewport':True,'missingJointNotInvented':True,'outOfTimeRefused':True,'realReaderBadTimeRefused':True})
-    print('VISIBLE_RETARGET_SELFTEST PASS: real-reader, alignment/endpoints, fixed view, missing joints, planted bad time',flush=True)
+    zoom_frames = [{'neck': (500, 900 - 350 * z + d), 'r_hip': (460, 900 + d), 'l_hip': (540, 900 + d), 'r_ankle': (460, 900 + 550 * z + d), 'l_ankle': (540, 900 + 550 * z + d)}
+                   for z, d in [(1.0, 0), (1.01, 10), (1.02, 20), (1.03, 30), (1.04, 40)]]
+    norm_zoom, zoom_view = normalize_source_display(zoom_frames, PANELS[0])
+    proj_zoom = [{n: project(p, zoom_view, PANELS[0]) for n, p in f.items()} for f in norm_zoom]
+    require(abs(statistics.median([body_length(f) for f in proj_zoom]) - RIG_BODY_PX) < 1e-6 and abs(statistics.median([max(f['r_ankle'][1], f['l_ankle'][1]) for f in proj_zoom]) - RIG_GROUND_Y) < 1e-6,
+            'TEST_SCALE_MATCH', 'normalized fixture did not match rig body length and ground line')
+    write_json(out/'selftest.json',{'realReaderValid':True,'interpolation':True,'endpoints':True,'fixedViewport':True,'missingJointNotInvented':True,'outOfTimeRefused':True,'realReaderBadTimeRefused':True,'scaleNormalizedToRig':True})
+    print('VISIBLE_RETARGET_SELFTEST PASS: real-reader, alignment/endpoints, fixed view, scale normalization, missing joints, planted bad time',flush=True)
 
 
 def main():

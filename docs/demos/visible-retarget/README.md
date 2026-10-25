@@ -68,12 +68,24 @@ unscored or below 0.3 at either endpoint is omitted. Real-reader fixtures
 plant interpolation, endpoint, missing-joint and invalid-time cases.
 `sampling.json` records every pair and weight.
 
-Each panel keeps one view for the whole take: full scored-joint bounds with
-5% padding for the source, accepted world viewport for the rig. These
-independent picture/world views compare timing, not geometric error. Camera
-normalization is never reapplied. Both time bases include 0 and 13 seconds;
-391/30 encoded seconds is 13.033333… because the final sample is displayed for
-one frame. There is no loop attribute or loop-seam claim.
+Each panel keeps one fixed view for the whole take: a scale-normalized source
+viewport for the left panel (`Source pose (scale-normalized, display only)`),
+and the accepted world viewport for the rig (`Rig`). Because the source
+sequence's camera normalization removes camera translation but not camera zoom,
+`compose` normalizes the displayed source skeleton per frame (display only; the
+source sequence, retarget, rig and captured rig frames are unchanged) using the
+body-length measure
+`L_body = |neck - mid_hip| + 0.5 * (|r_hip - r_ankle| + |l_hip - l_ankle|)`
+(with `mid_hip = 0.5 * (r_hip + l_hip)`) and lower-ankle ground anchor
+`max(r_ankle.y, l_ankle.y)`, both smoothed over time with a 5-frame centered
+moving average (`±2` frames at 30 fps) and scaled around the take-median hip
+center and smoothed ground line. The fixed source viewport maps the take-median
+body length to the rig's posed median `L_body` (`188.98 px`) and the ground
+anchor to the rig's lower ankle bone (`y = 379.90 px`), keeping per-frame drawn
+`L_body` variation at `3.05%` (`(max - min) / median`; `3.12%` `(max - min) / min`,
+`0.00%` smoothed). Both time bases include 0 and 13 seconds; 391/30 encoded
+seconds is 13.033333… because the final sample is displayed for one frame.
+There is no loop attribute or loop-seam claim.
 
 ## Stage provenance and limits
 
@@ -105,15 +117,18 @@ hand-passed v3 FOLD269/391 is a diagnostic, not a gate. This repair reuses that
 immutable diagnostic and native PNG digest; it performs no native render,
 build, retarget, generation or hand work.
 
-All 391 frames retain byte-identical figure-panel pixels. Every non-media
-record field, sampling byte and diagnostic byte remains exact. The title,
-panel labels and timestamp are the only text in the video pixels; version,
-non-loop and diagnostic details remain in this documentation and records.
-The native target stays `b75fc5696ac468f3ea9f58cc892d79389d66bf6ce7aeb31428f95350b9121029`.
-MP4 is 793,736 bytes, SHA-256
-`e71f26c35edd370a54e41eb718273b01d875118ff1c89d07914657e3a2c82eb8`;
-WebM is 603,729 bytes, SHA-256
-`bffcfa985f9a87286d232ec7e9130431b0060f960e760e14ac1e47f0204a8137`.
+All 391 frames retain byte-identical right-panel (`Rig`) pixels
+(`e5b4b859b5c420dd014a1d6db2aae7eeece0707f9b3097762e8635a69bb41914`), while
+the left panel draws the constant-scale source skeleton (#421). Every sampling
+byte, diagnostic byte and non-viewport/non-media record field remains exact.
+The title, panel labels and timestamp are the only text in the video pixels;
+version, non-loop and diagnostic details remain in this documentation and
+records. The native target stays
+`b75fc5696ac468f3ea9f58cc892d79389d66bf6ce7aeb31428f95350b9121029`.
+MP4 is 727,843 bytes, SHA-256
+`4d63d9cab7f38c72851b29317e8a633fa9e29ab536e3c9fb2b6d3b3e7a269268`;
+WebM is 570,358 bytes, SHA-256
+`fab211560303caec9ba4fc08eec3bfde6ef31af2a65fb4c4b93a200c10e51861`.
 Small media are handed to the separate site sibling; no unlanded site URL is
 claimed. [Revised contact sheet](contact-sheet.png).
 

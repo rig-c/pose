@@ -40,10 +40,10 @@
     "width": 600,
     "height": 540,
     "sourceViewport": {
-      "x": 16.004000000000005,
-      "y": 20.19149999999999,
-      "width": 1071.972,
-      "height": 1816.067
+      "x": -221.95208383529007,
+      "y": -143.53706534862113,
+      "width": 1547.7785591540694,
+      "height": 2283.247803574797
     },
     "panels": [
       [
@@ -440,20 +440,20 @@
   "ffmpeg": "ffmpeg version 7.0.2-static https://johnvansickle.com/ffmpeg/  Copyright (c) 2000-2024 the FFmpeg developers",
   "media": {
     "pose-dance.mp4": {
-      "bytes": 793736,
-      "sha256": "e71f26c35edd370a54e41eb718273b01d875118ff1c89d07914657e3a2c82eb8"
+      "bytes": 727843,
+      "sha256": "4d63d9cab7f38c72851b29317e8a633fa9e29ab536e3c9fb2b6d3b3e7a269268"
     },
     "pose-dance.webm": {
-      "bytes": 603729,
-      "sha256": "bffcfa985f9a87286d232ec7e9130431b0060f960e760e14ac1e47f0204a8137"
+      "bytes": 570358,
+      "sha256": "fab211560303caec9ba4fc08eec3bfde6ef31af2a65fb4c4b93a200c10e51861"
     },
     "pose-dance.png": {
-      "bytes": 35967,
-      "sha256": "15389a8f1ac0667e63a8f9e1af2db4c5232e99c79a83df28ef15584264402d72"
+      "bytes": 36301,
+      "sha256": "30788e1f98ba1aa288bee71e2b8eec3ab912202909b5622dcb1b43cc1beb954e"
     },
     "contact-sheet.png": {
-      "bytes": 123710,
-      "sha256": "2e26feb7c46d52b413be1b7ae0762e2fbf57c2d8c069d6d72d85d4af3a0bb2a5"
+      "bytes": 119914,
+      "sha256": "99b7b2c206d1139b1d8cefae51cf07bcc79954949dce7325a5ee3bdb954d5eb6"
     },
     "diagnostics.txt": {
       "bytes": 7061,
