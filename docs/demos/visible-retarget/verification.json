@@ -120,7 +120,7 @@
     "${OUTPUT}/media-diagnostic"
   ],
   "commandNormalization": "Only exact private immutable-cache/output/project prefixes replaced with named placeholders; flags and values unchanged.",
-  "currentMediaVerification": "pixelCopyRepair",
+  "currentMediaVerification": "scaleNormalizationRepair",
   "pixelCopyRepair": {
     "scope": "HQ-requested pixel copy only; prior measurements accepted, unchanged and reused",
     "novaRun": "20261024T081706Z-0e6f1ab57c064e949fe451df8d102e13",
@@ -235,5 +235,97 @@
     "recoveredArtifactBytes": 1993788,
     "nativeFramesOrFullGeometryRecovered": false,
     "fullSuite": "Not rerun for pixel copy; prior type/lint/pack proof retained; reader controls/actual composition/pixel+semantic checks used"
+  },
+  "scaleNormalizationRepair": {
+    "issue": 421,
+    "scope": "Display-only constant body-scale normalization of the source skeleton in PANELS[0]; rig panel pixels, source sequence, retarget, rig and native render frames unchanged",
+    "novaRun": "20261025T170306Z-06b8917edeef496581f7aa1b16ce1596",
+    "status": "passed",
+    "exitCode": 0,
+    "processQuiescent": true,
+    "rawResultSHA256": "44b6678badbbbe84fd36e804cdc2a589a7ceaee4aba883424a48b66c1ec2da07",
+    "evidenceManifestSHA256": "8d6472ed6c9cec23f94b79d03f99043691addf3bfe2d324f3da7a594b743635b",
+    "inputSHA256": "9ce69722e13e05b45077453c3ab440a11d535601a84a29a6a7f4922dfb7c14ec",
+    "compositorSHA256": "cd05b0b33ddcd74565925e6570059fa1268b61bced6eda231f198d2f08ff56d4",
+    "budget": {
+      "memory.max": "6442450944",
+      "memory.swap.max": "0",
+      "cpu.max": "400000 100000",
+      "affinity": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    "steps": [
+      {
+        "step": "reader-controls",
+        "exitCode": 0
+      },
+      {
+        "step": "scale-compose",
+        "exitCode": 0
+      }
+    ],
+    "measure": {
+      "name": "L_body = |neck - mid_hip| + 0.5 * (|r_hip - r_ankle| + |l_hip - l_ankle|)",
+      "smoothing": "5-frame centered moving average (half_width=2 at 30 fps) on L_body and lower-ankle ground y = max(r_ankle.y, l_ankle.y)",
+      "calibration": "C1 bone-to-bone match to rig posed median L_body = 188.98 px and lower ankle bone y = 379.90 px",
+      "drawnLBodyMinPx": 184.81,
+      "drawnLBodyMedianPx": 188.98,
+      "drawnLBodyMaxPx": 190.58,
+      "drawnVariationOverMedianPercent": 3.05,
+      "drawnVariationOverMinPercent": 3.12,
+      "smoothedVariationPercent": 0.0,
+      "rigMatchDiffPercent": 0.0
+    },
+    "pixelAndSemanticProof": {
+      "status": "PASS",
+      "framesCompared": 391,
+      "rigPanelBox": [
+        306,
+        54,
+        588,
+        470
+      ],
+      "leftPanelBox": [
+        12,
+        54,
+        294,
+        470
+      ],
+      "all391RigPanelPixelsIdentical": true,
+      "rigPanelPixelSHA256": "e5b4b859b5c420dd014a1d6db2aae7eeece0707f9b3097762e8635a69bb41914",
+      "leftPanelPixelSHA256": "75bea29c39d48507203fb4470c90efdf58f759fb56bdee5afe3c8363258f9536",
+      "onlyLeftColumnChanged": true,
+      "inputManifestRowsVerified": 209,
+      "immutableCacheFilesUnchanged": 1536,
+      "acceptedNativeFramesSHA256": "b75fc5696ac468f3ea9f58cc892d79389d66bf6ce7aeb31428f95350b9121029",
+      "samplingAndDiagnosticBytesExactlyEqual": true,
+      "nativeRenderCalls": 0,
+      "newRetargetGenerationOrHandWork": false,
+      "sourceUnchanged": true
+    },
+    "approvedPixelCopy": {
+      "title": "Dance retarget: source pose beside the rig",
+      "left": "Source pose (scale-normalized, display only)",
+      "right": "Rig",
+      "footer": "Timestamp only"
+    },
+    "actualComposeCommand": [
+      "tools/visible-retarget.py",
+      "compose",
+      "--source",
+      "${PRIOR_VALIDATED_RUN}/output/source/dancer",
+      "--replay",
+      "${ACCEPTED_REPLAY}",
+      "--reuse-diagnostic",
+      "${PRIOR_VALIDATED_RUN}/output/media-diagnostic",
+      "--out",
+      "${SCALE_REPAIR_RUN}/media"
+    ],
+    "reusedDiagnostic": "Prior measured accepted v3 FOLD diagnostic and native PNG digest reused read-only; zero native render calls.",
+    "recoveredArtifactBytes": 1891674
   }
 }
