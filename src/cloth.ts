@@ -993,7 +993,10 @@ export function discoverSkirtPhysics(
   const declaredSlots = doc.slots.map((s) => s.name);
   const boneParent = new Map<string, string | null>(doc.bones.map((b) => [b.name, b.parent ?? null]));
   const boneIndex = new Map<string, number>(doc.bones.map((b, i) => [b.name, i]));
-  const mappedBones = new Set<string>(map.chains.flatMap((c) => c.bones));
+  const mappedBones = new Set<string>([
+    ...map.chains.flatMap((c) => c.bones),
+    ...(map.translate !== null ? [map.translate.bone] : []),
+  ]);
 
   // Map each slot to its mesh attachments and the bones that move them.
   const slotMeshBones = new Map<string, Set<string>>();
@@ -1022,7 +1025,7 @@ export function discoverSkirtPhysics(
     physicsByBone.set(c.bone, [...(physicsByBone.get(c.bone) ?? []), c]);
   }
   const hasPhysicsOnOrAbove = (bone: string): boolean => {
-    for (let cur: string | null = bone; cur !== null; cur = boneParent.get(cur) ?? null) {
+    for (let cur: string | null = bone; cur !== null && !mappedBones.has(cur); cur = boneParent.get(cur) ?? null) {
       if (physicsByBone.has(cur)) return true;
     }
     return false;
@@ -1063,22 +1066,21 @@ export function discoverSkirtPhysics(
   }
 
   // Collect all bones bound to the chosen skirt slots, then include every rotate > 0 physics constraint on those bones
-  // or in the same unmapped physics chain above/below them.
+  // or in the same unmapped physics chain above/below them, stopping at mapped bones.
   const directBones = new Set<string>();
   for (const s of slots) {
     for (const b of slotMeshBones.get(s) ?? []) directBones.add(b);
   }
   const chainBones = new Set<string>();
   for (const b of directBones) {
-    for (let cur: string | null = b; cur !== null; cur = boneParent.get(cur) ?? null) {
-      if (physicsByBone.has(cur) && !mappedBones.has(cur)) chainBones.add(cur);
+    for (let cur: string | null = b; cur !== null && !mappedBones.has(cur); cur = boneParent.get(cur) ?? null) {
+      if (physicsByBone.has(cur)) chainBones.add(cur);
     }
   }
-  // Include any descendant physics bone under a discovered chain bone.
+  // Include any descendant physics bone under a discovered chain bone, stopping at mapped bones.
   for (const c of allPhysics) {
-    if (mappedBones.has(c.bone)) continue;
-    for (let cur: string | null = c.bone; cur !== null; cur = boneParent.get(cur) ?? null) {
-      if (chainBones.has(cur) || directBones.has(cur)) {
+    for (let cur: string | null = c.bone; cur !== null && !mappedBones.has(cur); cur = boneParent.get(cur) ?? null) {
+      if (chainBones.has(cur)) {
         chainBones.add(c.bone);
         break;
       }
@@ -1097,7 +1099,7 @@ export function discoverSkirtPhysics(
   const constrainedBones = new Set(matched.map((c) => c.bone));
   const withLinks = matched.map((record) => {
     let link = 0;
-    for (let cur = boneParent.get(record.bone) ?? null; cur !== null; cur = boneParent.get(cur) ?? null) {
+    for (let cur = boneParent.get(record.bone) ?? null; cur !== null && !mappedBones.has(cur); cur = boneParent.get(cur) ?? null) {
       if (constrainedBones.has(cur)) link++;
     }
     return { record, link };

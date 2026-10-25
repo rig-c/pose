@@ -1008,7 +1008,7 @@ describe('rig-pose cloth (#34): Controls A & B, public stand-in reference, and p
 function makeThreeLinkSkirtRig(
   dir: string,
   entry: { root: SkirtPhysicsLinkParams; lower: SkirtPhysicsLinkParams },
-  opts?: { pinchMiddleRow?: boolean; includeConstraints?: boolean },
+  opts?: { pinchMiddleRow?: boolean; includeConstraints?: boolean; withHairPhysics?: boolean },
 ): { rigDir: string; rigPath: string; mapPath: string } {
   const rigDir = join(dir, 'rig');
   mkdirSync(join(rigDir, 'images'), { recursive: true });
@@ -1031,7 +1031,13 @@ function makeThreeLinkSkirtRig(
     skirtBones.push({ name: `${col.prefix}1`, parent: `${col.prefix}0`, x: linkLen, y: 0, rotation: 0, length: linkLen });
     skirtBones.push({ name: `${col.prefix}2`, parent: `${col.prefix}1`, x: linkLen, y: 0, rotation: 0, length: linkLen });
   }
-  const bones = [...waveRig.bones, ...skirtBones];
+  const hairBones: Array<Record<string, unknown>> = opts?.withHairPhysics
+    ? [
+        { name: 'hair_0', parent: 'head', x: 0, y: 10, rotation: -90, length: linkLen },
+        { name: 'hair_1', parent: 'hair_0', x: linkLen, y: 0, rotation: 0, length: linkLen },
+      ]
+    : [];
+  const bones = [...waveRig.bones, ...skirtBones, ...hairBones];
   const slots = [{ name: 'bottomwear', bone: 'hip', attachment: 'bottomwear' }];
 
   // 4 rows (r = 0..3 at y_down = 0, 20, 40, 60) x 3 columns (c = 0..2 at x = -12, 0, +12):
@@ -1088,6 +1094,21 @@ function makeThreeLinkSkirtRig(
         });
       }
     }
+    if (opts?.withHairPhysics) {
+      for (const bone of ['hair_0', 'hair_1'] as const) {
+        constraints.push({
+          type: 'physics',
+          name: `${bone}_phys`,
+          bone,
+          rotate: 1,
+          inertia: 0.4,
+          strength: 180,
+          damping: 0.96,
+          mass: 1,
+          mix: 0.8,
+        });
+      }
+    }
   }
 
   const rigPath = join(rigDir, 'rig.json');
@@ -1140,6 +1161,23 @@ function makeThreeLinkSkirtRig(
                   { t: 1.0, v: [1, 1] },
                 ],
               },
+              ...(opts?.withHairPhysics
+                ? [
+                    {
+                      physics: 'hair_0_phys',
+                      property: 'inertia',
+                      keys: [{ t: 0, v: [0.42] }],
+                    },
+                    {
+                      physics: 'hair_1_phys',
+                      property: 'strength',
+                      keys: [
+                        { t: 0, v: [185] },
+                        { t: 1.0, v: [195] },
+                      ],
+                    },
+                  ]
+                : []),
             ],
           },
         },
@@ -1220,13 +1258,22 @@ describe('retarget --cloth-track (#34): known-answer control, fold plants, and r
       () => {},
     );
 
-    // 2. Now build a candidate rig starting with untuned setup physics (not matching `knownEntry`) and run `retarget --cloth-track`:
+    // 2. Now build a candidate rig starting with untuned setup physics (not matching `knownEntry`) and a hair physics chain
+    // under `hip -> chest -> neck -> head -> hair_0 -> hair_1` (while row 0 of `bottomwear` is weighted to `hip`),
+    // and run `retarget --cloth-track`:
     const untuned: SkirtPhysicsGridEntry = {
       family: 'uniform',
       root: { inertia: 0.25, strength: 220, damping: 0.9, mass: 1, mix: 0.3 },
       lower: { inertia: 0.25, strength: 220, damping: 0.9, mass: 1, mix: 0.3 },
     };
-    const candRig = makeThreeLinkSkirtRig(join(dir, 'cand'), untuned);
+    const candRig = makeThreeLinkSkirtRig(join(dir, 'cand'), untuned, { withHairPhysics: true });
+    const candInitialMotion = JSON.parse(readFileSync(join(candRig.rigDir, 'motion.json'), 'utf8')) as {
+      animations: { idle: { tracks: Array<Record<string, unknown>> } };
+    };
+    const expectedIdleHairTracks = candInitialMotion.animations.idle.tracks.filter(
+      (tr) => typeof tr.physics === 'string' && tr.physics.startsWith('hair_'),
+    );
+    expect(expectedIdleHairTracks.length).toBe(2);
     const outMotion = join(dir, 'cand', 'fitted.motion.json');
     const outReport = join(dir, 'cand', 'fitted.report.json');
     const outBuild = join(dir, 'cand', 'build');
@@ -1291,39 +1338,61 @@ describe('retarget --cloth-track (#34): known-answer control, fold plants, and r
     // Verify RELEASING.md surface classification for every field in the emitted report (including clothFit and options.clothTrack):
     expect(auditReport(report, releasing())).toEqual([]);
 
-    // Verify that EVERY animation in `motion.json` (`idle` AND `dance`) carries the 45 t=0 physics timeline tracks (9 constraints * 5 properties):
+    // Verify that EVERY animation in `motion.json` (`idle` AND `dance`) carries the 45 t=0 skirt physics timeline tracks (9 constraints * 5 properties),
+    // and leaves the hair physics tracks on `idle` byte-identical (writing no hair physics tracks onto `dance`):
     const writtenMotion = JSON.parse(readFileSync(outMotion, 'utf8')) as {
       animations: Record<string, { tracks: Array<{ physics?: string; property: string; keys: Array<{ t: number; v: number[] }> }> }>;
     };
     expect(Object.keys(writtenMotion.animations).sort()).toEqual(['dance', 'idle']);
     for (const animName of ['idle', 'dance']) {
-      const physTracks = writtenMotion.animations[animName]!.tracks.filter((tr) => typeof tr.physics === 'string');
-      expect(physTracks.length).toBe(9 * 5);
-      for (const tr of physTracks) {
+      const skirtPhysTracks = writtenMotion.animations[animName]!.tracks.filter(
+        (tr) => typeof tr.physics === 'string' && tr.physics.startsWith('skirt_'),
+      );
+      expect(skirtPhysTracks.length).toBe(9 * 5);
+      for (const tr of skirtPhysTracks) {
         expect(tr.keys.length).toBe(1);
         expect(tr.keys[0]!.t).toBe(0);
         expect(Array.isArray(tr.keys[0]!.v)).toBe(true);
         expect(tr.keys[0]!.v.length).toBe(1);
       }
     }
+    const writtenIdleHairTracks = writtenMotion.animations.idle!.tracks.filter(
+      (tr) => typeof tr.physics === 'string' && tr.physics.startsWith('hair_'),
+    );
+    expect(JSON.stringify(writtenIdleHairTracks)).toBe(JSON.stringify(expectedIdleHairTracks));
+    const writtenDanceHairTracks = writtenMotion.animations.dance!.tracks.filter(
+      (tr) => typeof tr.physics === 'string' && tr.physics.startsWith('hair_'),
+    );
+    expect(writtenDanceHairTracks).toEqual([]);
 
-    // 3. Search/emitter parity with a `wind` track present on the roots (Defect 1):
+    // 3. Search/emitter parity with a `wind` track present on the roots (Defect 1), plus a merged hair physics track on `dance`:
     // Rebuild the emitted `motion.json` (`outWindBuild`) and re-measure lag, swingRatio, and overshoot;
-    // they must equal `windReport.clothFit.windows[w].fitted` exactly.
+    // they must equal `windReport.clothFit.windows[w].fitted` exactly, and discovery + emission must leave hair tracks byte-identical.
     // Give the wind keys an oscillating wave so omitting them during search changes lag and swingRatio by > 0.02:
+    const expectedDanceHairTrack = {
+      physics: 'hair_0_phys',
+      property: 'damping',
+      keys: [
+        { t: 0, v: [0.96] },
+        { t: 3.5, v: [0.94] },
+      ],
+    };
     const windTracksPath = join(dir, 'wind.tracks.json');
     writeFileSync(
       windTracksPath,
       JSON.stringify({
         spec: 'rig-pose-tracks/1',
-        tracks: ['skirt_r0_phys', 'skirt_c0_phys', 'skirt_l0_phys'].map((physics) => ({
-          physics,
-          property: 'wind',
-          keys: Array.from({ length: 15 }, (_, k) => ({
-            t: Number((k * 0.5).toFixed(5)),
-            v: [k % 2 === 0 ? 400 : -400],
+        tracks: [
+          ...['skirt_r0_phys', 'skirt_c0_phys', 'skirt_l0_phys'].map((physics) => ({
+            physics,
+            property: 'wind',
+            keys: Array.from({ length: 15 }, (_, k) => ({
+              t: Number((k * 0.5).toFixed(5)),
+              v: [k % 2 === 0 ? 400 : -400],
+            })),
           })),
-        })),
+          expectedDanceHairTrack,
+        ],
       }),
     );
     const outWindMotion = join(dir, 'cand', 'wind.motion.json');
@@ -1360,6 +1429,31 @@ describe('retarget --cloth-track (#34): known-answer control, fold plants, and r
     };
     const rebuiltDoc = readBuild(outWindBuild);
     const rebuiltMap = readMap(readFileSync(candRig.mapPath, 'utf8'), candRig.mapPath);
+    const discovered = discoverSkirtPhysics(rebuiltDoc, rebuiltMap, undefined, outWindBuild);
+    expect(discovered.constraints.map((c) => c.record.name)).toEqual([
+      'skirt_r0_phys',
+      'skirt_r1_phys',
+      'skirt_r2_phys',
+      'skirt_c0_phys',
+      'skirt_c1_phys',
+      'skirt_c2_phys',
+      'skirt_l0_phys',
+      'skirt_l1_phys',
+      'skirt_l2_phys',
+    ]);
+    const writtenWindMotion = JSON.parse(readFileSync(outWindMotion, 'utf8')) as {
+      animations: Record<string, { tracks: Array<Record<string, unknown>> }>;
+    };
+    expect(
+      JSON.stringify(
+        writtenWindMotion.animations.idle!.tracks.filter((tr) => typeof tr.physics === 'string' && tr.physics.startsWith('hair_')),
+      ),
+    ).toBe(JSON.stringify(expectedIdleHairTracks));
+    expect(
+      JSON.stringify(
+        writtenWindMotion.animations.dance!.tracks.filter((tr) => typeof tr.physics === 'string' && tr.physics.startsWith('hair_')),
+      ),
+    ).toBe(JSON.stringify([expectedDanceHairTrack]));
     const rebuiltMeas = measureRigCloth(rebuiltDoc, rebuiltMap, candRig.mapPath, {
       rigWhere: outWindBuild,
       animation: 'dance',
