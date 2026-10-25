@@ -3513,7 +3513,7 @@ interface Anchor {
 }
 
 /** The hips as `place: "by-hip"` reads them: two pose joints (r_hip, l_hip) and the rig's two hip points. */
-interface Hips {
+export interface Hips {
   joints: [string, string];
   points: [string, string];
 }
@@ -3525,7 +3525,7 @@ interface Hips {
  * the two chains that start at r_hip and at l_hip — the legs, whose roots are
  * the hip joints; or why the map names neither.
  */
-function hipOf(map: JointMap): Hips | { problem: string } {
+export function hipOf(map: JointMap): Hips | { problem: string } {
   for (const c of map.chains) {
     for (let k = 0; k + 1 < c.joints.length; k++) {
       const a = c.joints[k]!;
