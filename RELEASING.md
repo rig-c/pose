@@ -179,6 +179,7 @@ No other repository in the org (core, parts, play, adapters, parts-examples, tra
 | `rig-pose pelvis --mode below-cover` (the cues under a cover: hem, thigh roots, an uncovered band; `pelvisSource` "below-cover", the `CUES` and `HIPS-SIGN` lines, rig-c/pose#342) | courtesy | — |
 | `rig-pose compare` | promised | S (the R3 sheet offers it) |
 | `rig-pose convert` | courtesy | — |
+| `rig-pose cloth` (rig-c/pose#34) | courtesy | — |
 | `rig-pose --version`, `--help` | promised | S, X |
 | `rig-pose-sequence/1` (the pose) | promised | S, R, D |
 | `rig-pose-sequence/1.1` (the pose with the pelvis track, `pelvisTilt` and `pelvisSource`, rig-c/pose#288) | courtesy | — |
@@ -191,7 +192,7 @@ No other repository in the org (core, parts, play, adapters, parts-examples, tra
 | `rig-pose-map/1` set field `bind` (a set shown on exactly its bound frames, explicit or cycle-relative; rig-c/pose#360) | courtesy | — |
 | `rig-pose-report/1` (the report) | promised, as below | S, R |
 | `rig-pose-camera/1` (`--camera`) | promised | S |
-| `rig-pose-tracks/1` (`--merge`), `rig-pose-compare/1` (`compare --report`) | courtesy | — |
+| `rig-pose-tracks/1` (`--merge`), `rig-pose-compare/1` (`compare --report`), `rig-c-cloth-track/0` (`cloth --out`, `compare --cloth-reference`/`--cloth-render`, rig-c/pose#34) | courtesy | — |
 | `rig-pose-retarget/1` (`--build`'s `retarget.json`, rig-c/pose#270) | courtesy | — |
 | `rig-pose-shoulder-lift/1` (`retarget --shoulder-lift`, #408), every configuration field documented in docs/REFERENCE.md | courtesy | No recorded promised reader |
 | `rig-pose-figure-scale/1` (`clean`'s `<out>.figure-scale.json`, rig-c/pose#404): `spec`, `inputSHA256`, `sequenceSHA256`, `person`, `cameraDeclared`, and `figureScale` with `source`, `method`, `minScore`, `threshold`, `referencePx`, `scale`, `minFrame`, `maxFrame`, `variation` | courtesy | No recorded promised reader; a separate diagnostic, never a field in the strict pose/cleaned format |
@@ -276,6 +277,17 @@ Every flag `parseFlags` reads in `cli.ts`, once. `test/promise.test.ts` holds th
 | `compare` | `--cloth-windows` | courtesy | — | |
 | `compare` | `--report` | courtesy | — | |
 | `compare` | `--sheet` | courtesy | — | |
+| `cloth` | `--rig` | courtesy | — | (rig-c/pose#34) |
+| `cloth` | `--map` | courtesy | — | (rig-c/pose#34) |
+| `cloth` | `--skirt-slots` | courtesy | — | (rig-c/pose#34) |
+| `cloth` | `--animation` | courtesy | — | (rig-c/pose#34) |
+| `cloth` | `--fps` | courtesy | — | (rig-c/pose#34) |
+| `cloth` | `--frames` | courtesy | — | (rig-c/pose#34) |
+| `cloth` | `--pose` | courtesy | — | (rig-c/pose#34) |
+| `cloth` | `--person` | courtesy | — | (rig-c/pose#34) |
+| `cloth` | `--alpha-min` | courtesy | — | (rig-c/pose#34) |
+| `cloth` | `--windows` | courtesy | — | (rig-c/pose#34) |
+| `cloth` | `--out` | courtesy | — | (rig-c/pose#34) |
 
 ### The report's top-level keys
 
@@ -599,7 +611,7 @@ Promised codes, with their use:
 
 The #408 codes `SHOULDER_LIFT_CONFIG`, `SHOULDER_LIFT_INPUT`, `SHOULDER_LIFT_CALIBRATION`, `SHOULDER_LIFT_JOINT`, `SHOULDER_LIFT_LOOP`, `SHOULDER_LIFT_RIG`, `SHOULDER_LIFT_COMPOSITION` and `SHOULDER_LIFT_LANDS` are courtesy. They refuse a requested reading as unknown; no successful zero replaces missing evidence. Optional `rig-pose-retarget/1` input `inputs.shoulderLift` and its `configuration`, `rest`, `painting` path/sha256 identities are courtesy. Existing input and exit promises remain unchanged.
 
-Every other code is courtesy (`FIGURE_SCALE_RECORD` (#404, malformed external figure-scale record), `SET_KEY_DRAWN`, rig-c/pose#355; `MAP_ALT_BIND`, `SET_BIND_FRAMES` and `SET_BIND_OVERLAP`, rig-c/pose#360; and rig-c/pose#346's `MAP_LAYOUT`, `LAYOUT_JSON`, `LAYOUT_SPEC`, `LAYOUT_SHAPE`, `LAYOUT_RIG_SHA`, `LAYOUT_SETS_SHA`, `LAYOUT_SETUP`, `LAYOUT_ADJACENCY`, `LAYOUT_MISSING`, `LAYOUT_UNBOUND`, `LAYOUT_BINDING_UNKNOWN` and `LAYOUT_BINDING_BONES`, among them). That a refusal always carries some code is promised; which code it carries is promised only for the codes above.
+Every other code is courtesy (`CLOTH_SLOT`, `CLOTH_ANIMATION`, `CLOTH_HIP`, `CLOTH_FRAMES`, `CLOTH_EMPTY_FRAME`, `CLOTH_WINDOW`, rig-c/pose#34; `FIGURE_SCALE_RECORD` (#404, malformed external figure-scale record), `SET_KEY_DRAWN`, rig-c/pose#355; `MAP_ALT_BIND`, `SET_BIND_FRAMES` and `SET_BIND_OVERLAP`, rig-c/pose#360; and rig-c/pose#346's `MAP_LAYOUT`, `LAYOUT_JSON`, `LAYOUT_SPEC`, `LAYOUT_SHAPE`, `LAYOUT_RIG_SHA`, `LAYOUT_SETS_SHA`, `LAYOUT_SETUP`, `LAYOUT_ADJACENCY`, `LAYOUT_MISSING`, `LAYOUT_UNBOUND`, `LAYOUT_BINDING_UNKNOWN` and `LAYOUT_BINDING_BONES`, among them). That a refusal always carries some code is promised; which code it carries is promised only for the codes above.
 
 Promised line tags, with their use:
 
@@ -609,7 +621,7 @@ Promised line tags, with their use:
 
 The #408 `SHOULDER-LIFT` tag is courtesy and explicitly labels evidence `SUPPLIED`.
 
-Every other tag is courtesy (`FIGURE-SCALE` and `CAMERA_UNDECLARED` (#404, an advisory warning, never a refusal), `SWITCH-TURN`, rig-c/pose#355, and `SWITCH-BIND`, rig-c/pose#360, among them).
+Every other tag is courtesy (`CLOTH`, rig-c/pose#34; `FIGURE-SCALE` and `CAMERA_UNDECLARED` (#404, an advisory warning, never a refusal), `SWITCH-TURN`, rig-c/pose#355, and `SWITCH-BIND`, rig-c/pose#360, among them).
 
 ### Imports
 

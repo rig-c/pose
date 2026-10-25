@@ -96,6 +96,15 @@ rig-pose compare --reference ref.pose.json --render render.pose.json --map map.j
 
 Reads the detector's keypoints on the source video and on the rendered motion, on one time base, and lists where they differ per body unit — head, arms, body, legs, cloth — worst first, each with the fix it suggests; `--report` writes it as JSON and `--sheet` draws both skeletons at each finding's worst frame. A finding is not a failure: it exits 0 whenever it compared. Rules and the bars: [Compare](docs/REFERENCE.md#compare-the-rigs-render-against-the-video).
 
+### `rig-pose cloth`
+
+```sh
+rig-pose cloth --rig build --map map.json --skirt-slots bottomwear [--animation dance] [--fps 24] [--windows 3.9-7.4,7.6-11.1] --out render.cloth.json
+rig-pose cloth --frames skirt-frames/ --pose ref.pose.json [--alpha-min 16] [--windows 3.9-7.4,7.6-11.1] --out ref.cloth.json
+```
+
+Measures a skirt's cloth track (`rig-c-cloth-track/0`) from a built rig's posed skirt slots (`--rig`, in rig world units) or from isolated skirt PNG frames beside a pose sequence (`--frames` + `--pose`, in picture px), normalised by the subject's median hip width, ready for `rig-pose compare --cloth-reference` and `--cloth-render`. Rules: [Measuring a cloth track](docs/REFERENCE.md#measuring-a-cloth-track-rig-pose-cloth).
+
 ## What it does not do
 
 The full list, each limit resting on the open issue that holds it, is [What it does not do](docs/REFERENCE.md#what-it-does-not-do) in the reference. In short:

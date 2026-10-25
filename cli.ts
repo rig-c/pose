@@ -14,6 +14,7 @@ import pkg from './package.json' with { type: 'json' };
 import { clean, cleanLine, holdRegions, unheldText, untestedText, HOLD_BLEND, HOLD_MIN_SECONDS, HOLD_REACH, HOLD_SPEED, HOLD_SPEED_WINDOW, LEGS, OCCLUSION_SCORE, OCCLUSION_WINDOW, SPIKE_TRUNKS, SPIKE_WINDOW, windowProblem } from './src/clean.ts';
 import { convertCoco17, DEPTH_GAITS, readPoseSequence, writePoseSequence, type DepthGait } from './src/pose.ts';
 import { FLAT_BAND, SIDE_ON } from './src/depth.ts';
+import { runCloth, type ClothArgs } from './src/cloth.ts';
 import { parseWindows } from './src/compare.ts';
 import { lineOf, Problems, Refusal } from './src/problems.ts';
 import { makeOutDirs, planOutDirs } from './src/outdir.ts';
@@ -30,6 +31,7 @@ Usage:
   rig-pose retarget --rig <rig> --map <map.json> --sequence <pose.json> --out <motion.json> [--animation dance] [flags]
   rig-pose convert --coco <coco17.json> --out <pose.json>
   rig-pose compare --reference <pose.json> --render <pose.json> --map <map.json> [flags]
+  rig-pose cloth (--rig <rig> --map <map.json> --skirt-slots <s1,s2,...> [--animation dance] [--fps 24] | --frames <dir> --pose <pose.json> [--person <id>] [--alpha-min 16]) [--windows <t0-t1,...>] --out <cloth.json>
   rig-pose --version | --help
 
 pelvis (before clean; rig-c/pose#288)
@@ -330,6 +332,24 @@ compare
   while render < 0.4; foot plant render > 0.05 while reference < 0.02 hip widths/frame; eye-line tilt
   > 15 deg; torso length and hip height range under 0.5 x the reference's; cloth outside #34's bands.
   Exit 0 whenever it compared, findings or not.
+
+cloth (rig-c/pose#34)
+  --rig <path>          the built rig (skeleton.model.json, its build directory, or a rig.json / rig directory):
+                        stepped at --fps through rig-c's core poser (Physics.reset at 0, Physics.update per step)
+                        to measure the skirt slots in rig world units
+  --map <map.json>      with --rig: rig-pose-map/1, naming the two hip points (the hip line's "a>b" aim, or the
+                        first bones of the chains starting at r_hip and l_hip) that set the hip width and mid-hip
+  --skirt-slots <list>  with --rig: comma-separated slot names whose drawn attachments form the skirt
+  --animation <name>    with --rig: the animation to step (default: dance)
+  --fps <n>             with --rig: the stepping rate in frames per second (default: 24)
+  --frames <dir>        instead of --rig: one isolated skirt PNG per frame of --pose, in file-name order, the
+                        sequence's picture size, measured in picture px
+  --pose <file>         with --frames: rig-pose-sequence/1 whose r_hip and l_hip set the hip width and mid-hip
+  --person <id>         with --frames: the person to read when --pose holds more than one
+  --alpha-min <1..255>  with --frames: the alpha threshold for skirt pixels (default: 16)
+  --windows <t0-t1,...> optional windows in seconds (named A, B, ...) over which #34's lag, swing ratio and
+                        overshoot are computed (stroke threshold 0.2 hip widths) and written under "skirtSwing"
+  --out <file>          where the rig-c-cloth-track/0 JSON is written, ready for rig-pose compare
 
 Exit codes: 0 written (compare: compared), 1 refused (every reason printed), 2 bad invocation.
 `;
@@ -713,7 +733,41 @@ export function main(argv: string[]): number {
       process.stdout.write(`rig-pose convert: ${seq.frames.length} frame(s) of COCO-17 → body-18; wrote ${out}\n`);
       return 0;
     }
-    process.stderr.write(`rig-pose: unknown command "${cmd}" — the commands are: pelvis, clean, retarget, convert, compare\n`);
+    if (cmd === 'cloth') {
+      const f = parseFlags(rest, ['rig', 'map', 'skirt-slots', 'animation', 'fps', 'frames', 'pose', 'person', 'alpha-min', 'windows', 'out'], []);
+      const out = need(f, 'out');
+      if (f.has('rig') === f.has('frames')) {
+        throw new Usage(f.has('rig') ? '--rig and --frames are both given; measure either a rig (--rig) or isolated PNG frames (--frames), not both' : '--rig <path> (the rig to pose) or --frames <dir> (the skirt PNGs to read) is required');
+      }
+      let windows: ClothArgs['windows'];
+      if (f.has('windows')) {
+        const w = parseWindows(f.get('windows')!);
+        if (typeof w === 'string') throw new Usage(`--windows is "${f.get('windows')}": ${w}; it must be t0-t1[,t0-t1...] in seconds`);
+        windows = w;
+      }
+      if (f.has('rig')) {
+        for (const bad of ['pose', 'person', 'alpha-min']) {
+          if (f.has(bad)) throw new Usage(`--${bad} is given with --rig; --${bad} is a --frames flag`);
+        }
+        const map = need(f, 'map');
+        const rawSlots = need(f, 'skirt-slots');
+        const skirtSlots = rawSlots.split(',').map((s) => s.trim()).filter((s) => s !== '');
+        if (skirtSlots.length === 0) throw new Usage(`--skirt-slots is "${rawSlots}"; it must name one or more slots`);
+        const animation = f.get('animation') ?? 'dance';
+        if (!/^[A-Za-z0-9_.-]+$/.test(animation)) throw new Usage(`--animation is "${animation}"; an animation name here is letters, digits, _ . -`);
+        const fps = num(f, 'fps', 24, (n) => n > 0, 'a number > 0 (frames per second)');
+        runCloth({ kind: 'rig', rig: f.get('rig')!, map, skirtSlots, animation, fps, windows, out }, (l) => process.stdout.write(`${l}\n`));
+        return 0;
+      }
+      for (const bad of ['map', 'skirt-slots', 'animation', 'fps']) {
+        if (f.has(bad)) throw new Usage(`--${bad} is given with --frames; --${bad} is a --rig flag`);
+      }
+      const pose = need(f, 'pose');
+      const alphaMin = num(f, 'alpha-min', 16, (n) => Number.isInteger(n) && n >= 1 && n <= 255, 'a whole number in 1..255');
+      runCloth({ kind: 'frames', frames: f.get('frames')!, pose, person: f.get('person'), alphaMin, windows, out }, (l) => process.stdout.write(`${l}\n`));
+      return 0;
+    }
+    process.stderr.write(`rig-pose: unknown command "${cmd}" — the commands are: pelvis, clean, retarget, convert, compare, cloth\n`);
     return 2;
   } catch (e) {
     if (e instanceof Usage) {

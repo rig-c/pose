@@ -757,6 +757,19 @@ Numbers are rounded to 4 decimals, once, at the writer.
 
 Exit codes: `0` compared, whether it found anything or not, since a finding is not a failure; `1` refused, with every reason printed; `2` bad invocation.
 
+### Measuring a cloth track (`rig-pose cloth`)
+
+```sh
+rig-pose cloth --rig build --map map.json --skirt-slots bottomwear [--animation dance] [--fps 24] [--windows 3.9-7.4,7.6-11.1] --out render.cloth.json
+rig-pose cloth --frames skirt-frames/ --pose ref.pose.json [--person <id>] [--alpha-min 16] [--windows 3.9-7.4,7.6-11.1] --out ref.cloth.json
+```
+
+`rig-pose cloth` ([#34](https://github.com/rig-c/pose/issues/34)) writes a `rig-c-cloth-track/0` file ready for `rig-pose compare --cloth-reference` and `--cloth-render`, in two modes:
+
+- **Mode 1 (`--rig`).** Steps the animation (`--animation`, default `dance`) at `--fps` (default `24`) through rig-c's core poser (`poseRawAnimation` with `reset: 'animation'`: `Physics.reset` at frame 0 and `Physics.update` per `1/fps` step), reads the two hip points named by `--map` (a pelvis chain's `"a>b"` aim on `r_hip → l_hip`, or the origins of the first bones of the two chains starting at `r_hip` and `l_hip`), and measures the world vertices and triangles of every drawn attachment in `--skirt-slots` (`unit: "rig world units"`). On each frame, `skirt_top` and `skirt_bottom` bound the skirt's vertical span (`y` down), `skirt_cx` is the area-weighted centroid x of the skirt's triangles, and the lower half `y >= 0.5 × (skirt_top + skirt_bottom)` gives `hem_l`, `hem_r`, `hem_mid = 0.5 × (hem_l + hem_r)` and `hem_band_cx`.
+- **Mode 2 (`--frames` + `--pose`).** Reads one isolated skirt PNG per frame of `--pose`, in file-name order (`readPlate`), and the person's `r_hip` and `l_hip` from `--pose` (camera de-normalised when `camera` is present; missing frames held from the nearest good frame). Pixels with `alpha >= --alpha-min` (default `16`) define the skirt silhouette; their lower half `y >= skirt_top + 0.5 × (skirt_bottom - skirt_top)` gives `hem_l`, `hem_r`, `hem_mid` and the alpha-weighted `hem_band_cx` (`unit: "picture px"`).
+- Every spatial coordinate is divided by the subject's own median hip width `W_hip`, with origin at the median mid-hip `(median(hip_x), median(hip_y))`, `x` right, `y` down, and rounded to 5 decimals at the writer. With `--windows <t0-t1,...>`, #34's `lag`, `swingRatio`, `overshoot` and `strokes` (at `0.2` hip widths) are computed per window via `compare`'s `clothFigures`, printed on `CLOTH` lines, and written under `skirtSwing`. Refusals (`CLOTH_SLOT`, `CLOTH_ANIMATION`, `CLOTH_HIP`, `CLOTH_FRAMES`, `CLOTH_EMPTY_FRAME`, `CLOTH_WINDOW`) exit `1` and write nothing.
+
 ## Requirements
 
 [Bun](https://bun.sh) ≥ 1.2 on `PATH` — rig-pose, like rig-c, runs its TypeScript sources directly. `rig-c` comes as a dependency. With `@esotericsoftware/spine-core` installed beside it, rig-c's gate runs the spine-core round trip; without it, rig-c's own gate, and the gate's report says which.
