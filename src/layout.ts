@@ -37,8 +37,12 @@
  * - **The rule.** Per frame, the forearm's depth: what its segment adds to the
  *   wrist over the elbow, sign × rest × √(1 − ratio²) px (#281's
  *   `segmentDepth`; + toward the camera). In front of its target where that
- *   depth is toward the camera by at least the tie, behind it otherwise; a frame
- *   on which the segment is not named holds the setup order. The tie is the
+ *   depth is toward the camera by at least the tie, behind it otherwise, for
+ *   adjacent chest targets; an unnamed segment holds setup there. At an explicit
+ *   hip-line target (#434), only nonzero depth at or beyond the signed tie
+ *   decides front or back; inside the tie or unread holds the previous order.
+ *   Leading undecided frames use setup, or the final decided order on a loop.
+ *   An entirely undecided clip retains setup. The tie is the
  *   legs' (#281, #336), scaled to what is read: √(1 − 0.95²) × the forearm's
  *   rest length, what a forearm inside the flat band can hide. The forearm's
  *   own lean is read, not the wrist's depth from the shoulder: the trunk is
@@ -330,7 +334,8 @@ function restLength(track: readonly Joints[], depth: ReadonlyArray<FrameDepth | 
   return vals.length % 2 === 1 ? vals[m]! : (vals[m - 1]! + vals[m]!) / 2;
 }
 
-/** One group's frames: in front, behind (each with its runs), and unread. */
+/** One group's readable frames in the chosen order (including held ties), and unread.
+ * Missing depth can hold an emitted pelvis order but stays unread, outside front/back runs. */
 export interface GroupOrder extends LayoutGroup {
   front: Array<[number, number]>;
   back: Array<[number, number]>;
@@ -377,7 +382,7 @@ export function missingLayoutGroups(map: JointMap, rest: Rest, order: ReadonlyAr
  * its keys are complete statements, so the legs' offsets on a frame are the last key's at or before it. Returns the
  * reading with the merged keys (its pairs, spans and gaps the legs' own) and each group's frames.
  */
-export function keyGroups(legs: DrawOrderReading, resolved: readonly Resolved[], track: readonly Joints[], depth: ReadonlyArray<FrameDepth | undefined>, times: readonly number[], order: ReadonlyArray<{ name: string }>): { reading: DrawOrderReading; groups: GroupOrder[] } {
+export function keyGroups(legs: DrawOrderReading, resolved: readonly Resolved[], track: readonly Joints[], depth: ReadonlyArray<FrameDepth | undefined>, times: readonly number[], order: ReadonlyArray<{ name: string }>, loop = false): { reading: DrawOrderReading; groups: GroupOrder[] } {
   const names = order.map((s) => s.name);
   const groups: GroupOrder[] = [];
   const perFrame: Array<Array<DrawOrderOffset[]>> = [];
@@ -390,11 +395,22 @@ export function keyGroups(legs: DrawOrderReading, resolved: readonly Resolved[],
       const len = drawnOf(j, r.group.depth);
       return d === undefined || len === null ? null : Math.round(segmentDepth(d, len) * 100) / 100;
     });
-    // In front where the forearm leans toward the camera by at least the tie; behind otherwise; unread holds the setup order.
-    const state = z.map((v): 'front' | 'back' | null => (v === null || tie === null ? null : v > 0 && v >= tie ? 'front' : 'back'));
+    // Preserve adjacent chest semantics; only an explicit pelvis target holds undecided depths (#434).
+    const chest = z.map((v): 'front' | 'back' | null => (v === null || tie === null ? null : v > 0 && v >= tie ? 'front' : 'back'));
+    const pass = (start: 'front' | 'back'): Array<'front' | 'back'> => {
+      let chosen = start;
+      return z.map((v) => {
+        if (v !== null && tie !== null && v !== 0 && Math.abs(v) >= tie) chosen = v > 0 ? 'front' : 'back';
+        return chosen;
+      });
+    };
+    const first = r.pelvis ? pass(r.group.setup === 'after' ? 'front' : 'back') : chest;
+    const state = r.pelvis && loop && first.length > 0 ? pass(first[first.length - 1]!) : first;
+    // Held missing depth is an order decision, never a measured front/back frame in the report.
+    const reported = state.map((s, f) => z[f] === null || tie === null ? null : s);
     states.push(state);
     perFrame.push(state.map((s) => (!r.group.keyed || r.pelvis || s === null ? [] : s === 'front' ? r.front : r.back)));
-    groups.push({ ...r.group, tie, front: runsOf(state.map((s) => s === 'front')), back: runsOf(state.map((s) => s === 'back')), frames: { front: state.filter((s) => s === 'front').length, back: state.filter((s) => s === 'back').length, unread: state.filter((s) => s === null).length }, depthPx: z });
+    groups.push({ ...r.group, tie, front: runsOf(reported.map((s) => s === 'front')), back: runsOf(reported.map((s) => s === 'back')), frames: { front: reported.filter((s) => s === 'front').length, back: reported.filter((s) => s === 'back').length, unread: reported.filter((s) => s === null).length }, depthPx: z });
   }
   const sorted = [...legs.keys].sort((a, b) => a.frame - b.frame);
   const legAt = (f: number): DrawOrderOffset[] => [...sorted].reverse().find((k) => k.frame <= f)?.offsets ?? [];
