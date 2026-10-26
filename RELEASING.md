@@ -238,7 +238,7 @@ Every flag `parseFlags` reads in `cli.ts`, once. `test/promise.test.ts` holds th
 | `retarget` | `--switch-tolerance` | courtesy | — | |
 | `retarget` | `--switch-min` | courtesy | — | |
 | `retarget` | `--switch-at` | courtesy | — | |
-| `retarget` | `--profile` | promised | D | |
+| `retarget` | `--profile` | promised | D | `spine` \| `rig-play` (`spine-html` kept as a deprecated alias for `rig-play` through 1.x; rig-c/pose#429) |
 | `retarget` | `--build` | promised | X 8, D | |
 | `retarget` | `--reference` | courtesy | — | with `--build`: echoed into `retarget.json` (rig-c/pose#270); not `compare --reference` |
 | `retarget` | `--render` | promised | X 2 | |

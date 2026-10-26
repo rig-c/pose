@@ -282,7 +282,8 @@ retarget
                         peak moves each boundary to the frame within ±switch-min/2 where the chains it
                         changes turn fastest, among those that newly show a set only on frames within
                         2 × the switch tolerance of its key skeleton (it stays when none qualifies)
-  --profile spine|spine-html  rigc's gate profile (default: spine, rigc's own default)
+  --profile spine|rig-play  rigc's gate profile (default: spine, rigc's own default; spine-html is a
+                        deprecated alias for rig-play through 1.x)
   --build <dir>         keep the gated build (skeleton.json, .atlas, .model.json) here, with the record of
                         what made it beside it: retarget.json (rig-pose-retarget/1 — both versions, each input
                         as given with its sha256, the sequence's source, every option as resolved; rig-c/pose#270)
@@ -474,13 +475,16 @@ function retargetArgs(argv: string[]): RetargetArgs {
   if (bends !== 'refuse' && bends !== 'clamp') throw new Usage(`--bends is "${bends}"; it must be refuse or clamp`);
   const switchAt = f.get('switch-at') ?? 'first';
   if (switchAt !== 'peak' && switchAt !== 'first') throw new Usage(`--switch-at is "${switchAt}"; it must be peak or first`);
-  const profile = f.get('profile') ?? 'spine';
-  if (profile !== 'spine' && profile !== 'spine-html') throw new Usage(`--profile is "${profile}"; it must be spine or spine-html`);
+  const rawProfile = f.get('profile') ?? 'spine';
+  if (rawProfile !== 'spine' && rawProfile !== 'rig-play' && rawProfile !== 'spine-html') {
+    throw new Usage(`--profile is "${rawProfile}"; it must be spine or rig-play`);
+  }
+  const profile: RetargetArgs['profile'] = rawProfile === 'spine' ? 'spine' : 'rig-play';
   const drawOrder = f.get('draw-order');
   if (drawOrder !== undefined && drawOrder !== 'depth') throw new Usage(`--draw-order is "${drawOrder}"; it must be depth (the order is keyed from the sequence's depth, rig-c/pose#304)`);
   const name = f.get('name') ?? 'dance';
   if (!/^[A-Za-z0-9_.-]+$/.test(name)) throw new Usage(`${argv.includes('--name') || !argv.includes('--animation') ? '--name' : '--animation'} is "${name}"; an animation name here is letters, digits, _ . -`);
-  return {
+  const parsed: RetargetArgs = {
     rig: need(f, 'rig'),
     map: need(f, 'map'),
     pose: need(f, 'pose', 'sequence'),
@@ -523,6 +527,10 @@ function retargetArgs(argv: string[]): RetargetArgs {
     ...(clothWindows !== undefined ? { clothWindows } : {}),
     ...(skirtSlots !== undefined ? { skirtSlots } : {}),
   };
+  if (rawProfile === 'spine-html') {
+    process.stderr.write('rig-pose: --profile spine-html is deprecated and reads as --profile rig-play, the same rules; it is accepted through 1.x — pass --profile rig-play\n');
+  }
+  return parsed;
 }
 
 /** --stance (rig-c/pose#60): off unless given, and only with --plant-feet. */

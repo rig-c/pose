@@ -115,3 +115,73 @@ describe('retarget: --sequence and --animation are --pose and --name (#243)', ()
     }
   });
 });
+
+describe('retarget: --profile rig-play and deprecated alias spine-html (#429)', () => {
+  const DEPRECATION = 'rig-pose: --profile spine-html is deprecated and reads as --profile rig-play, the same rules; it is accepted through 1.x — pass --profile rig-play\n';
+
+  test('control: --profile rig-play builds green, and --profile spine-html builds the same bytes with one deprecation line on stderr', () => {
+    const d1 = mkdtempSync(join(tmpdir(), 'rig-pose-profile-rig-play-'));
+    const d2 = mkdtempSync(join(tmpdir(), 'rig-pose-profile-spine-html-'));
+    try {
+      const b1 = join(d1, 'build');
+      const b2 = join(d2, 'build');
+      const r1 = wave(CLI, ['--sequence', POSE, '--profile', 'rig-play', '--build', b1]);
+      expect(r1.status, r1.stdout + r1.stderr).toBe(0);
+      expect(r1.stderr).toBe('');
+      expect(r1.stdout).toContain('  GATE   rigc build --profile rig-play: green — ');
+      expect(sha(r1.out)).toBe(WAVE_SHA256);
+
+      const r2 = wave(CLI, ['--sequence', POSE, '--profile', 'spine-html', '--build', b2]);
+      expect(r2.status, r2.stdout + r2.stderr).toBe(0);
+      expect(r2.stderr).toBe(DEPRECATION);
+      expect(r2.stdout).toContain('  GATE   rigc build --profile rig-play: green — ');
+      const rep1 = r1.out.replace(/\.json$/, '.report.json');
+      const rep2 = r2.out.replace(/\.json$/, '.report.json');
+      expect(readFileSync(r2.out)).toEqual(readFileSync(r1.out));
+      expect(readFileSync(rep2)).toEqual(readFileSync(rep1));
+      expect(readFileSync(join(b2, 'retarget.json'))).toEqual(readFileSync(join(b1, 'retarget.json')));
+      expect(readFileSync(join(b2, 'skeleton.model.json'))).toEqual(readFileSync(join(b1, 'skeleton.model.json')));
+
+      const report = JSON.parse(readFileSync(rep1, 'utf8')) as { options: { profile: string } };
+      expect(report.options.profile).toBe('rig-play');
+      const prov = JSON.parse(readFileSync(join(b1, 'retarget.json'), 'utf8')) as { flags: { profile: string } };
+      expect(prov.flags.profile).toBe('rig-play');
+    } finally {
+      rmSync(d1, { recursive: true, force: true });
+      rmSync(d2, { recursive: true, force: true });
+    }
+  }, SLOW * 2);
+
+  test('planted: an unknown --profile is refused by name with exit 2, beside a mutant that drops the check', () => {
+    const r = wave(CLI, ['--sequence', POSE, '--profile', 'unknown-profile']);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toBe('rig-pose retarget: --profile is "unknown-profile"; it must be spine or rig-play (rig-pose --help)\n');
+    expect(existsSync(r.out)).toBe(false);
+
+    const help = spawnSync(process.execPath, [CLI, 'retarget', '--help'], { encoding: 'utf8' });
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain('  --profile spine|rig-play  rigc\'s gate profile (default: spine, rigc\'s own default; spine-html is a');
+
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const src = readFileSync(join(ROOT, 'cli.ts'), 'utf8');
+      const from = '  if (rawProfile === \'spine-html\') {\n    process.stderr.write(\'rig-pose: --profile spine-html is deprecated and reads as --profile rig-play, the same rules; it is accepted through 1.x — pass --profile rig-play\\n\');\n  }\n';
+      expect(src).toContain(from);
+      writeFileSync(join(d, 'cli.ts'), src.replace(from, ''));
+      const m = wave(join(d, 'cli.ts'), ['--sequence', POSE, '--profile', 'spine-html']);
+      expect(m.status).toBe(0);
+      expect(m.stderr).not.toBe(DEPRECATION);
+
+      const checkBlock = '  if (rawProfile !== \'spine\' && rawProfile !== \'rig-play\' && rawProfile !== \'spine-html\') {\n    throw new Usage(`--profile is "${rawProfile}"; it must be spine or rig-play`);\n  }\n';
+      expect(src).toContain(checkBlock);
+      writeFileSync(join(d, 'cli.ts'), src.replace(checkBlock, ''));
+      const mUnknown = wave(join(d, 'cli.ts'), ['--sequence', POSE, '--profile', 'unknown-profile']);
+      expect(mUnknown.status).not.toBe(2);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW * 2);
+});

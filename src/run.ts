@@ -57,7 +57,7 @@ export interface RetargetArgs extends RetargetOptions {
   baseMotion?: string;
   /** Passed to rigc build as --images: the directory the rig spec's images resolve in, when rig.json's own `images` does not point there (a copied rig). */
   images?: string;
-  profile: 'spine' | 'spine-html';
+  profile: 'spine' | 'rig-play';
   /** Keep the gated build here. */
   build?: string;
   /**
