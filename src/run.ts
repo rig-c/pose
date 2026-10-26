@@ -313,7 +313,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       });
       const resolved = resolveGroups(layout, map.layout ?? [], map, rest, doc0.slots, legRuns);
       resolved.problems.throwIfAny();
-      const keyed = keyGroups(legOrder, resolved.groups, frames, seq.frames.map((x) => x.depth), r.times, doc0.slots);
+      const keyed = keyGroups(legOrder, resolved.groups, frames, seq.frames.map((x) => x.depth), r.times, doc0.slots, seq.cleaned!.params.loop);
       drawOrder = keyed.reading;
       layoutGroups = keyed.groups;
     }
