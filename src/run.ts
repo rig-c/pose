@@ -301,9 +301,15 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     let layoutGroups: GroupOrder[] | null = null;
     if (legOrder !== null && layout !== null) {
       const names = doc0.slots.map((x) => x.name);
-      const legRuns = legOrder.pairs.filter((x) => x.keyed).map((x): [number, number] => {
-        const ix = [...x.slots.a, ...x.slots.b].map((n) => names.indexOf(n));
-        return [Math.min(...ix), Math.max(...ix)];
+      const legRuns = legOrder.pairs.filter((x) => x.keyed).flatMap((x): Array<[number, number]> => {
+        const ix = [...x.slots.a, ...x.slots.b].map((n) => names.indexOf(n)).sort((u, v) => u - v);
+        const runs: Array<[number, number]> = [];
+        for (const i of ix) {
+          const last = runs[runs.length - 1];
+          if (last !== undefined && i === last[1] + 1) last[1] = i;
+          else runs.push([i, i]);
+        }
+        return runs;
       });
       const resolved = resolveGroups(layout, map.layout ?? [], map, rest, doc0.slots, legRuns);
       resolved.problems.throwIfAny();

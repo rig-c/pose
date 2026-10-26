@@ -16,10 +16,12 @@
  *   its slots are the slots on those bones, and an alternate set's slot on none
  *   of them goes with the limb whose chain the set depicts, when it depicts one
  *   of the two (a set keeps its own switch and takes the order of the limb it
- *   replaces). A pair is keyed when its slots overlap in the rig's draw order:
- *   together they fill one unbroken run of the setup order. A slot of anything
- *   else drawn between them would be re-layered by the swap — that is changing
- *   the setup order, not keying the pair — so the pair is not keyed and the line
+ *   replaces). A pair's slots are partitioned into maximal contiguous runs of
+ *   the setup order (rig-c/pose#424): when every contiguous run carries slots of
+ *   both limbs, each run is swapped in place without touching any non-pair slot
+ *   drawn between runs. When a contiguous run carries only one limb's slots, a
+ *   swap would cross the non-pair slots between the runs — that is changing the
+ *   setup order, not keying the pair — so the pair is not keyed and the line
  *   counts the slots between them first, then names them as far as the line's
  *   cap allows (#324; the report's `why` and `between` carry every one).
  * - **The gap (#324).** Per pair, keyed or not, the leg depth gap |depth a −
@@ -28,12 +30,12 @@
  *   from) — against the tie, and the frames that passed it: the `DRAWGAP` line
  *   and the report's `drawOrder.gaps`.
  * - **The rule.** On each frame the limb whose depth is the lower (farther from
- *   the camera) is drawn behind: its slots first in the pair's run, in their
- *   setup order, then the other's — when the two depths differ by at least
- *   #281's tie: the depth a limb can hold while both its segments read flat,
- *   √(1 − 0.95²) × (upper + lower ÷ 2) of its rest lengths, the smaller limb's of
- *   the two (a flat segment carries no depth, so closer than that the band
- *   cannot tell them). A frame inside the tie, or where either limb is not
+ *   the camera) is drawn behind: in each contiguous run of the pair, its slots
+ *   first in their setup order, then the other's — when the two depths differ by
+ *   at least #281's tie: the depth a limb can hold while both its segments read
+ *   flat, √(1 − 0.95²) × (upper + lower ÷ 2) of its rest lengths, the smaller
+ *   limb's of the two (a flat segment carries no depth, so closer than that the
+ *   band cannot tell them). A frame inside the tie, or where either limb is not
  *   ordered, holds the order before; before the first decided frame, the setup
  *   order — or, on a looped sequence, the order the clip ends in, held across
  *   the seam. A key is written where the order changes, and none while it is the
@@ -41,23 +43,27 @@
  *   shows on (0 on frame 0), the rule the switches' attachment keys follow
  *   (`keyAtFrame` in `switch.ts`): a key exactly on a frame time is a tie the
  *   render breaks a frame late about half the time (rig-c/pose#325).
- * - **By the joint the gait names** (rig-c/pose#336, the owner's two
- *   statements). On a sequence cleaned with `--depth walk` the pair is ordered
- *   by each leg's ankle depth (the hip at 0, plus the thigh's, plus the shin's:
- *   `limbJointDepths`' end) — in a walk the lifted foot is behind the supporting
- *   leg; with `--depth run` by the knee depth (the thigh's: its middle) — in a
- *   run the lifted leg is in front, its knee protruding. The limb mean cannot
- *   say either: a lifted leg's thigh forward and shin back cancel in it, and a
- *   walk's flat thigh leaves it at most half a shin (35 px on the fixtures),
- *   under the limb tie. The tie is scaled to the joint, what a flat chain can
- *   hold there: √(1 − 0.95²) × thigh at the knee, × (thigh + shin) at the
- *   ankle, the smaller leg's. Measured depth names no gait and keeps the limb
- *   mean and its tie (#304).
+ * - **By the joint the gait names** (rig-c/pose#336, rig-c/pose#424, the owner's
+ *   two statements). On a sequence cleaned with `--depth walk` the pair is
+ *   ordered by each leg's ankle depth under the walk rule (#424): when a leg's
+ *   shin folds back (`dl.sign !== 0`), both segments fold in the shin's sense
+ *   (`dl.sign × (|thigh| + |shin|)`), and when the thigh sits inside the flat
+ *   band (`du.sign === 0`) while the whole leg's foreshortening ratio is under
+ *   `WALK_FLAT_THIGH_LEG_RATIO` (`0.94`), the thigh's geometric tilt folds in
+ *   the shin's sense as well (0 when the shin reads flat) — in a walk the lifted
+ *   foot is behind the supporting leg; with `--depth run` by the knee depth (the
+ *   thigh's: its middle) — in a run the lifted leg is in front, its knee
+ *   protruding. The limb mean cannot say either: a lifted leg's thigh forward
+ *   and shin back cancel in it, and a walk's flat thigh leaves it at most half a
+ *   shin (35 px on the fixtures), under the limb tie. The tie is scaled to the
+ *   joint, what a flat chain can hold there: √(1 − 0.95²) × thigh at the knee,
+ *   × (thigh + shin) at the ankle, the smaller leg's. Measured depth names no
+ *   gait and keeps the limb mean and its tie (#304).
  *
  * Pure: no clock, no randomness, no disk.
  */
 import type { Body18 } from './joints.ts';
-import { FLAT_BAND, LIMBS, limbJointDepths, type FrameLayers, type Limb } from './depth.ts';
+import { FLAT_BAND, LIMBS, limbJointDepths, segmentDepth, type FrameLayers, type Limb } from './depth.ts';
 import { knownSetsOf, type JointMap, type Rest, type RigSets } from './map.ts';
 import { DEPTH_SEGMENTS, type DepthGait, type DepthSegment, type FrameDepth, type Joint } from './pose.ts';
 import { keyAtFrame } from './switch.ts';
@@ -71,6 +77,16 @@ export const ORDER_JOINT: Record<DepthGait, LegJoint> = { walk: 'ankle', run: 'k
 export type LegJoint = 'knee' | 'ankle';
 /** The DRAWORDER line's cap, characters (the span list is cut to it; the report carries every span). */
 export const DRAW_ORDER_LINE_MAX = 260;
+/**
+ * Whole-leg foreshortening ceiling below which a flat-band walk thigh (`du.sign === 0`) adds its geometric tilt
+ * to the shin's backward fold (rig-c/pose#424): `FLAT_BAND[0] - 0.01 = 0.94`. On #348's 38-frame walk stride,
+ * the lifted left-step swing peak on frames 8–10 has `l_thigh` just inside the flat band (`0.951–0.960`) with
+ * whole-leg ratio `0.9303–0.9388 < 0.94`, while near-level stance frames 7 (`r_ank_y − l_ank_y = +2.7 px`,
+ * `legRatio = 0.9423`) and 17 (`−2.7 px`, `legRatio = 0.9478`) stay above `0.94`; at `0.95` (`FLAT_BAND[0]`),
+ * frames 7 (`96.71 px`) and 17 (`89.00 px`) cross the `87.27 px` ankle tie and flip 60 of 380 frames (`f=7, 17–21`
+ * per cycle) against the gait phase (`320/380` phase frames and `290/300` lifted frames instead of `380/380` and `300/300`).
+ */
+export const WALK_FLAT_THIGH_LEG_RATIO = 0.94;
 
 export interface DrawOrderOffset {
   slot: string;
@@ -212,9 +228,25 @@ function resolvePair(pairLimbs: readonly [Limb, Limb], map: JointMap, rest: Rest
   const idx = [...a, ...b].map((n) => names.indexOf(n)).sort((x, y) => x - y);
   const lo = idx[0]!;
   const hi = idx[idx.length - 1]!;
+  // Partition (a ∪ b) into maximal contiguous setup-order runs (rig-c/pose#424):
+  // when every contiguous run carries both limbs' slots, each run swaps in place without touching non-leg slots between runs.
+  const runs: Array<[number, number]> = [];
+  for (const i of idx) {
+    const last = runs[runs.length - 1];
+    if (last !== undefined && i === last[1] + 1) last[1] = i;
+    else runs.push([i, i]);
+  }
+  const ras = runs.map(([rLo, rHi]) => names.slice(rLo, rHi + 1).filter((n) => slotsA.has(n)));
+  const rbs = runs.map(([rLo, rHi]) => names.slice(rLo, rHi + 1).filter((n) => slotsB.has(n)));
   const between = names.slice(lo, hi + 1).filter((n) => !slotsA.has(n) && !slotsB.has(n));
-  if (between.length > 0) return { ...none(betweenWhy(between, between.length)), pair: { ...pair, why: betweenWhy(between, between.length), between } };
-  return { pair: { ...pair, keyed: true }, lo, hi, aBehind: arrangement(names, lo, a, b), bBehind: arrangement(names, lo, b, a) };
+  if (runs.some((_, m) => ras[m]!.length === 0 || rbs[m]!.length === 0)) {
+    return { ...none(betweenWhy(between, between.length)), pair: { ...pair, why: betweenWhy(between, between.length), between } };
+  }
+  const arrangeRuns = (first: readonly string[][], second: readonly string[][]): DrawOrderOffset[] =>
+    runs
+      .flatMap(([rLo], m) => arrangement(names, rLo, first[m]!, second[m]!))
+      .sort((x, y) => names.indexOf(x.slot) - names.indexOf(y.slot));
+  return { pair: { ...pair, keyed: true }, lo, hi, aBehind: arrangeRuns(ras, rbs), bBehind: arrangeRuns(rbs, ras) };
 }
 
 /** The not-keyed reason for slots drawn between the pair: the count first, then the first `shown` of the list (#324). */
@@ -264,6 +296,32 @@ function tieOf(track: readonly Joints[], depth: ReadonlyArray<FrameDepth | undef
 
 const round = (x: number, k: number): number => Math.round(x * 10 ** k) / 10 ** k;
 
+/**
+ * A walk leg's ankle depth on one frame, px (+ toward the camera), unrounded (rig-c/pose#424):
+ * in a walk, the lifted foot goes behind the supporting leg (#336), so both segments of a leg
+ * whose shin folds back contribute in the shin's sense rather than the thigh's run-rule forward sense.
+ * When the thigh sits inside the flat band while the leg as a whole is foreshortened below
+ * `WALK_FLAT_THIGH_LEG_RATIO` (`0.94`), its geometric tilt folds with the shin as well.
+ */
+function walkAnkleDepth(joints: Joints, depth: FrameDepth, limb: Limb): number | null {
+  const [upper, lower] = LIMBS[limb];
+  const du = depth[upper];
+  const dl = depth[lower];
+  const [up, uq] = DEPTH_SEGMENTS[upper];
+  const [lp, lq] = DEPTH_SEGMENTS[lower];
+  const [ua, ub, la, lb] = [joints[up], joints[uq], joints[lp], joints[lq]];
+  if (du === undefined || dl === undefined || !(du.ratio > 0) || !(dl.ratio > 0)) return null;
+  if (ua?.at === undefined || ub?.at === undefined || la?.at === undefined || lb?.at === undefined) return null;
+  if (ua.state === 'missing' || ub.state === 'missing' || la.state === 'missing' || lb.state === 'missing') return null;
+  if (dl.sign === 0) return 0;
+  const lu = Math.hypot(ub.at[0] - ua.at[0], ub.at[1] - ua.at[1]);
+  const ll = Math.hypot(lb.at[0] - la.at[0], lb.at[1] - la.at[1]);
+  const legRatio = (lu + ll) / (lu / du.ratio + ll / dl.ratio);
+  const r = Math.min(du.ratio, 1);
+  const th = du.sign !== 0 ? Math.abs(segmentDepth(du, lu)) : legRatio < WALK_FLAT_THIGH_LEG_RATIO ? (lu / du.ratio) * Math.sqrt(Math.max(0, 1 - r * r)) : 0;
+  return dl.sign * (th + Math.abs(segmentDepth(dl, ll)));
+}
+
 /** One pair's leg depth gap against its tie over the frames (the rule's own test: unequal and at least the tie). */
 function gapOf(pair: DrawOrderPair, zs: ReadonlyArray<Partial<Record<Limb, number>>>, leg: number | null): DrawOrderGap {
   const tie = pair.tie ?? 0;
@@ -307,8 +365,12 @@ export function drawOrderFromDepth(layers: readonly FrameLayers[], track: readon
       : track.map((j, i) => {
           const z: Partial<Record<Limb, number>> = {};
           for (const limb of new Set(DRAW_ORDER_PAIRS.flat())) {
-            const d = depth[i] === undefined ? null : limbJointDepths(j, depth[i]!, limb);
-            const v = d === null ? null : by === 'knee' ? d.mid : d.end;
+            const v =
+              depth[i] === undefined
+                ? null
+                : by === 'knee'
+                  ? (limbJointDepths(j, depth[i]!, limb)?.mid ?? null)
+                  : walkAnkleDepth(j, depth[i]!, limb);
             if (v !== null) z[limb] = Math.round(v * 100) / 100;
           }
           return z;
