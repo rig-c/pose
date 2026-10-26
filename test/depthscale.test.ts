@@ -4,21 +4,23 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { poseRawAnimation } from 'rig-c/core';
-import { trueJointOrder } from '../examples/walk/make-depth.ts';
+import { walkAnkleDepth } from '../src/draworder.ts';
 import { readDepthScale, scaleDepth, depthFeetOf, footScaleTracks, depthScaleLine, type DepthScaleSide } from '../src/depthscale.ts';
 import { retarget } from '../src/retarget.ts';
 import { readMap } from '../src/map.ts';
 import { gate, readBuild, restOf } from '../src/rigc.ts';
 import { measureLanding, measureDepthScaleLanding, landed } from '../src/verify.ts';
-import { DEPTH_OPTIONS, writeDepthRig, depthInput } from './depthscale-fixture.ts';
+import { DEPTH_OPTIONS, writeDepthRig, depthInput, leadInput } from './depthscale-fixture.ts';
 
 function phaseFailures(rows: DepthScaleSide[]): string[] {
-  const f = depthInput();
-  return f.cycle.flatMap((frame,i) => {
-    const order = trueJointOrder(frame,'ankle');
-    if (order === 0) return [];
-    const delta = rows[0]!.values[i]! - rows[1]!.values[i]!;
-    return Math.sign(delta) === order ? [] : [`DEPTH_SCALE_PHASE frame ${i}: true order ${order}, right-left scale ${delta}`];
+  const f = leadInput();
+  return rows.flatMap((row, side) => {
+    const signed = f.track.map((j, i) => Math.abs(walkAnkleDepth(j, f.depths[i]!, `${row.side}_leg`)!) * f.leads[i]! * (side === 0 ? 1 : -1));
+    const extreme = { min: Math.min(...signed), max: Math.max(...signed) };
+    return signed.flatMap((z, i) => {
+      const expected = scaleDepth(z, extreme, [1, 1.48]).value;
+      return Math.abs(row.values[i]! - expected) < 1e-12 ? [] : [`DEPTH_SCALE_FOOT_SIGN ${row.side} frame ${i}: expected ${expected}, found ${row.values[i]}`];
+    });
   });
 }
 describe('#437 foot-only derived perspective', () => {
@@ -30,21 +32,29 @@ describe('#437 foot-only derived perspective', () => {
     expect(scaleDepth(-30,{min:-20,max:0},[1,1.48])).toEqual({value:1,clamped:true});
     expect(scaleDepth(-5,{min:-5,max:-5},[0.8,1.4])).toEqual({value:1,clamped:false});
   });
-  test('synthetic frontal walk phase control and actual affine-sign mutant red by name', async () => {
-    const f=depthInput();
+  test('per-foot analytical control and actual old-sign / inverted-lead mutants red by name', async () => {
+    const f=leadInput();
     expect(phaseFailures(readDepthScale(f.track,f.depths,'walk',[1,1.48]))).toEqual([]);
     mkdirSync(join(import.meta.dir,'../node_modules/.cache'),{recursive:true});
     const dir=mkdtempSync(join(import.meta.dir,'../node_modules/.cache/depth437-mutant-'));
     try {
       cpSync(join(import.meta.dir,'../src'),join(dir,'src'),{recursive:true});
-      const path=join(dir,'src/depthscale.ts'), source=readFileSync(path,'utf8');
-      expect(source.split('(z - extreme.min)')).toHaveLength(2);
-      writeFileSync(path,source.replace('(z - extreme.min)','(extreme.max - z)'));
-      const mutant=await import(path) as {readDepthScale:typeof readDepthScale};
-      const failures=phaseFailures(mutant.readDepthScale(f.track,f.depths,'walk',[1,1.48]));
-      expect(failures.length).toBeGreaterThan(0);
-      expect(failures[0]).toStartWith('DEPTH_SCALE_PHASE');
-      console.log(`DEPTH_SCALE_PHASE mutant: ${failures.length} named failures; control 0`);
+      const source=readFileSync(join(dir,'src/depthscale.ts'),'utf8');
+      const edits = [
+        ['old-sign', 'Math.abs(value) * (side === \'r\' ? sign : -sign)', 'value'],
+        ['inverted-lead', 'delta > 0 ? 1 : -1', 'delta > 0 ? -1 : 1'],
+        ['inverted-affine', '(z - extreme.min)', '(extreme.max - z)'],
+      ];
+      for (const [name, before, after] of edits) {
+        expect(source.split(before!)).toHaveLength(2);
+        const path=join(dir,`src/depthscale-${name}.ts`);
+        writeFileSync(path,source.replace(before!,after!));
+        const mutant=await import(path) as {readDepthScale:typeof readDepthScale};
+        const failures=phaseFailures(mutant.readDepthScale(f.track,f.depths,'walk',[1,1.48]));
+        expect(failures.length).toBeGreaterThan(0);
+        expect(failures[0]).toStartWith('DEPTH_SCALE_FOOT_SIGN');
+        console.log(`DEPTH_SCALE_FOOT_SIGN ${name}: ${failures.length} named failures; control 0`);
+      }
     } finally {rmSync(dir,{recursive:true,force:true});}
   });
   test('source refusal vs explicit derived unread/zero-span fallback, named lines and exact 1', () => {

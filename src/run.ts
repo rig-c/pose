@@ -200,7 +200,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     if (reading.status === 'unknown') throw new Refusal(reading.problems);
     return { config, reading, snapshots: [configuration, restInput, painting], inputs: { configuration: configuration.identity, rest: restInput.identity, painting: painting.identity } };
   })();
-  const depthScale = a.depthScale === undefined ? null : readDepthScale(frames, seq.frames.map(f => f.depth), seq.cleaned!.params.depth?.gait, a.depthScale);
+  const depthScale = a.depthScale === undefined ? null : readDepthScale(frames, seq.frames.map(f => f.depth), seq.cleaned!.params.depth?.gait, a.depthScale, seq.cleaned!.params.loop);
   if (depthScale !== null) {
     const old = forwardShinFrames(frames, seq.frames);
     if (old.length > 0) refuse([{ code: 'DEPTH_RECLEAN', text: depthRecleanText(a.pose, seq.cleaned!.params.depth?.gait ?? null, old) }]);

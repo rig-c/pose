@@ -1,4 +1,4 @@
-/** Perspective from existing derived depth (#437); no depth is inferred here. */
+/** Foot perspective from existing derived magnitude (#437) and picture-y lead (#440). */
 import type { CompiledDocument } from 'rig-c/core';
 import { ORIGIN_TOLERANCE } from './verify.ts';
 import type { Body18 } from './joints.ts';
@@ -21,6 +21,10 @@ export interface DepthScaleSide {
   clampedFrames: number[];
   unreadFrames: number[];
   values: number[];
+  signSource: 'ankle-picture-y' | 'derived';
+  /** Picture pixels; null when the gait does not use the ankle lead or its unit is unread. */
+  tie: number | null;
+  tiedFrames: number[];
 }
 export function depthScaleRefusal(code: string, text: string): never { throw new Refusal([{ code, text: `--depth-scale: ${text}` }]); }
 export function depthScaleLimits(limits: readonly number[]): void {
@@ -33,10 +37,49 @@ export function scaleDepth(z: number, extreme: { min: number; max: number }, lim
   const value = Math.min(limits[1], Math.max(limits[0], raw));
   return { value, clamped: value !== raw };
 }
-export function readDepthScale(track: ReadonlyArray<Partial<Record<Body18, Joint>>>, frames: ReadonlyArray<FrameDepth | undefined> | undefined, gait: DepthGait | undefined, limits: [number, number]): DepthScaleSide[] {
+/**
+ * Picture-y lead for an above-feet camera (#440): +1 right nearer, -1 left.
+ * The caller supplies the tie in picture pixels; no support threshold is
+ * silently reused. Ties and unread ankles hold the preceding decision. On a
+ * loop that includes the last decision across the seam; without a preceding
+ * decision (including an all-tie clip), the sign stays unread, never guessed.
+ */
+export function ankleLeadSigns(track: ReadonlyArray<Partial<Record<Body18, Joint>>>, tie: number, loop: boolean): Array<-1 | 1 | null> {
+  if (!Number.isFinite(tie) || tie < 0) depthScaleRefusal('DEPTH_SCALE_SOURCE', `ankle picture-y tie ${tie} must be finite and nonnegative`);
+  const decisions = track.map((joints): -1 | 1 | null => {
+    const r = joints.r_ankle, l = joints.l_ankle;
+    if (r?.at === undefined || l?.at === undefined || r.state === 'missing' || l.state === 'missing' || !Number.isFinite(r.at[1]) || !Number.isFinite(l.at[1])) return null;
+    const delta = r.at[1] - l.at[1];
+    return Math.abs(delta) <= tie ? null : delta > 0 ? 1 : -1;
+  });
+  let prior: -1 | 1 | null = null;
+  if (loop) for (const sign of decisions) if (sign !== null) prior = sign;
+  return decisions.map(sign => prior = sign ?? prior);
+}
+/** HQ's #440 band, in FEET's mean of the two median picture hip-to-ankle lengths. */
+export const FOOT_LEAD_TIE = 0.01;
+export function footLeadTie(track: ReadonlyArray<Partial<Record<Body18, Joint>>>): number | null {
+  const lengths = SIDES.map(side => {
+    const values = track.flatMap(joints => {
+      const hip = joints[`${side}_hip`], ankle = joints[`${side}_ankle`];
+      if (hip?.at === undefined || ankle?.at === undefined || hip.state === 'missing' || ankle.state === 'missing') return [];
+      const length = Math.hypot(hip.at[0] - ankle.at[0], hip.at[1] - ankle.at[1]);
+      return Number.isFinite(length) && length > 0 ? [length] : [];
+    });
+    return values.length === 0 ? null : percentile(values, 0.5);
+  });
+  return lengths[0] === null || lengths[1] === null ? null : FOOT_LEAD_TIE * (lengths[0]! + lengths[1]!) / 2;
+}
+export function readDepthScale(track: ReadonlyArray<Partial<Record<Body18, Joint>>>, frames: ReadonlyArray<FrameDepth | undefined> | undefined, gait: DepthGait | undefined, limits: [number, number], loop = false): DepthScaleSide[] {
   depthScaleLimits(limits);
   if (gait === undefined || frames === undefined || frames.length !== track.length) depthScaleRefusal('DEPTH_SCALE_SOURCE', 'requires the derived-depth provenance and gait written by clean --depth walk|run');
   const selected = gait === 'walk' ? 'ankle' : 'knee';
+  const tie = gait === 'walk' ? footLeadTie(track) : null;
+  const signs = tie === null ? track.map(() => null) : ankleLeadSigns(track, tie, loop);
+  const tiedFrames = tie === null ? [] : track.flatMap((joints, i) => {
+    const r = joints.r_ankle, l = joints.l_ankle;
+    return r?.at !== undefined && l?.at !== undefined && r.state !== 'missing' && l.state !== 'missing' && Math.abs(r.at[1] - l.at[1]) <= tie ? [i] : [];
+  });
   return SIDES.map(side => {
     const zs = track.map((joints, frame): number | null => {
       const depth = frames[frame];
@@ -45,14 +88,17 @@ export function readDepthScale(track: ReadonlyArray<Partial<Record<Body18, Joint
         if (d !== undefined && (d.source !== 'derived' || !Number.isFinite(d.ratio) || !(d.ratio > 0) || ![-1, 0, 1].includes(d.sign))) depthScaleRefusal('DEPTH_SCALE_SOURCE', `frame ${frame} segment "${name}" must carry valid derived depth; found ${JSON.stringify(d)}`);
       }
       const value = depth === undefined ? null : selected === 'ankle' ? walkAnkleDepth(joints, depth, `${side}_leg`) : limbJointDepths(joints, depth, `${side}_leg`)?.mid;
-      return value === null || value === undefined || !Number.isFinite(value) ? null : value;
+      if (value === null || value === undefined || !Number.isFinite(value)) return null;
+      if (gait !== 'walk') return value;
+      const sign = signs[frame];
+      return sign === null || sign === undefined ? null : Math.abs(value) * (side === 'r' ? sign : -sign);
     });
     const finite = zs.filter((z): z is number => z !== null);
     const depth = { min: finite.length === 0 ? null : Math.min(...finite), max: finite.length === 0 ? null : Math.max(...finite) };
     const status = finite.length === 0 ? 'unread' : depth.min === depth.max ? 'zero-span' : 'scaled';
     const mapped = zs.map(z => z === null || depth.min === null || depth.max === null ? { value: 1, clamped: false } : scaleDepth(z, { min: depth.min, max: depth.max }, limits));
     const values = mapped.map(x => x.value);
-    return { side, joint: selected, depth, limits, status, scale: { min: Math.min(...values), median: percentile(values, 0.5), max: Math.max(...values) }, unreadFrames: zs.flatMap((z,i) => z === null ? [i] : []), clampedFrames: mapped.flatMap((x, i) => x.clamped ? [i] : []), values };
+    return { side, joint: selected, depth, limits, status, scale: { min: Math.min(...values), median: percentile(values, 0.5), max: Math.max(...values) }, unreadFrames: zs.flatMap((z,i) => z === null ? [i] : []), clampedFrames: mapped.flatMap((x, i) => x.clamped ? [i] : []), values, signSource: gait === 'walk' ? 'ankle-picture-y' : 'derived', tie, tiedFrames };
   });
 }
 /** Locate the shoe by anatomical attachment, never a bone-name substring. */
@@ -84,7 +130,8 @@ export function depthFeetOf(doc: CompiledDocument, rest: Rest, map: JointMap): R
 }
 export function depthScaleLine(row: DepthScaleSide): string {
   const note = row.status === 'unread' ? 'DEPTH_SCALE_UNREAD: no readable depth; scale 1 on every frame' : row.status === 'zero-span' ? 'DEPTH_SCALE_ZERO_SPAN: depth span is zero; scale 1 on every frame' : row.unreadFrames.length > 0 ? `DEPTH_SCALE_UNREAD: scale 1 on unread frames ${row.unreadFrames.join(',')}` : 'affine clip extrema';
-  return `${row.side} ${row.joint} depth ${row.depth.min ?? 'unread'}..${row.depth.max ?? 'unread'} px (+ toward camera), foot perspective min ${row.scale.min.toFixed(6)} median ${row.scale.median.toFixed(6)} max ${row.scale.max.toFixed(6)}; range ${row.limits.join(',')}; clamped frames ${row.clampedFrames.length === 0 ? 'none' : row.clampedFrames.join(',')}; ${note}; grows from ankle, sole follows`;
+  const sign = row.signSource === 'derived' ? 'derived sign' : `ankle picture-y lead, tie ${FOOT_LEAD_TIE} FEET leg (${row.tie ?? 'unread'} px), ${row.tiedFrames.length} frames inside band`;
+  return `${row.side} ${row.joint} depth ${row.depth.min ?? 'unread'}..${row.depth.max ?? 'unread'} px (+ toward camera), foot perspective min ${row.scale.min.toFixed(6)} median ${row.scale.median.toFixed(6)} max ${row.scale.max.toFixed(6)}; range ${row.limits.join(',')}; clamped frames ${row.clampedFrames.length === 0 ? 'none' : row.clampedFrames.join(',')}; ${note}; ${sign}; grows from ankle, sole follows`;
 }
 
 /** Foot-only dense keys, independent of the existing leg solve and reducer. */

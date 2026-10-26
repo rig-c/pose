@@ -3,7 +3,8 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Plate } from 'rig-c/plate';
 import { depthCycle, depthDoc } from '../examples/walk/make-depth.ts';
-import { readPoseSequence, personTrack } from '../src/pose.ts';
+import { readPoseSequence, personTrack, type FrameDepth, type Joint } from '../src/pose.ts';
+import type { Body18 } from '../src/joints.ts';
 import { deriveDepth } from '../src/depth.ts';
 import type { RetargetOptions } from '../src/retarget.ts';
 export const DEPTH_OPTIONS: RetargetOptions = { minScore: 0.3, short: 'off', flip: 'off', bends: 'refuse', bendTolerance: 5, switchTolerance: 30, switchMin: 0, switchAt: 'first' };
@@ -28,5 +29,21 @@ export function depthInput(gait: 'walk' | 'run' = 'walk') {
   const track = personTrack(sequence, 'a', 'synthetic');
   const depths = deriveDepth(track).frames;
   return { cycle, sequence, track, depths, times: sequence.frames.map(f => f.t) };
+}
+
+/** Analytical reader control, not a replacement for the 3D generator or consumer. */
+export function leadInput() {
+  const deltas = [8, 6, 0, -8, -6, 0, 8, -8];
+  const leads = [1, 1, 1, -1, -1, -1, 1, -1];
+  const point = (x: number, y: number): Joint => ({ state: 'observed', at: [x, y], score: 1 });
+  const track = deltas.map((delta): Partial<Record<Body18, Joint>> => ({
+    r_hip: point(0, 0), r_knee: point(0, 50), r_ankle: point(0, 100 + delta / 2),
+    l_hip: point(20, 0), l_knee: point(20, 50), l_ankle: point(20, 100 - delta / 2),
+  }));
+  const depths: FrameDepth[] = deltas.map((_, i) => ({
+    r_thigh: { ratio: 0.9, sign: 1, source: 'derived' }, r_shin: { ratio: 0.7 + i * 0.01, sign: -1, source: 'derived' },
+    l_thigh: { ratio: 0.9, sign: 1, source: 'derived' }, l_shin: { ratio: 0.8 - i * 0.01, sign: -1, source: 'derived' },
+  }));
+  return { track, depths, leads };
 }
 
