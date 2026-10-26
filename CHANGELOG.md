@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/rig-c/pose/compare/v1.2.0...v1.2.1) (2026-10-26)
+
+
+### Bug Fixes
+
+* **retarget:** sign --depth-scale's foot depth by which foot leads, so the planted foot grows at the widest stride ([#441](https://github.com/rig-c/pose/issues/441)) ([c0e5306](https://github.com/rig-c/pose/commit/c0e5306eac0364caec616a4f5c15509ce9bfc3f1)), closes [#440](https://github.com/rig-c/pose/issues/440)
+
 ## [1.2.0](https://github.com/rig-c/pose/compare/v1.1.2...v1.2.0) (2026-10-26)
 
 
