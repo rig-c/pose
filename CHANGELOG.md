@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/rig-c/pose/compare/v1.1.2...v1.2.0) (2026-10-26)
+
+
+### Features
+
+* **retarget:** --depth-scale, a perspective scale on the foot from derived depth ([#438](https://github.com/rig-c/pose/issues/438)) ([ca16ab3](https://github.com/rig-c/pose/commit/ca16ab3471c8269b36172bc855bdc803fa406c9b)), closes [#437](https://github.com/rig-c/pose/issues/437)
+
 ## [1.1.2](https://github.com/rig-c/pose/compare/v1.1.1...v1.1.2) (2026-10-26)
 
 
