@@ -83,7 +83,7 @@ import type { ArtRange, AttachmentKey, ByHip, Raised, ReachShort, SetRuns, SlotT
 import { bindProblems, clampArt, coveredChains, isRaised, keyAtFrame, keyDrawnProblems, measureArt, overflow, phaseGroupProblems, RAISED_WRIST_EYES, RANGE_SLACK, reachLimit, runsOf, selectSwitches, switchBinds, twoBone } from './switch.ts';
 import type { BlendHold, Closure, Feet, Floor, LegScale, LegSegmentRatio, PathPose, Posing, Side, Stance } from './legs.ts';
 import { contactKeysOf, type ContactKeys } from './contacts.ts';
-import { figureScaleOf, freeAnkleShiftOf, holdBlend, isLegSegment, legScaleOf, legsOf, pathFrom, percentile, plantHip, posePath, rootOf, scaleSupport, shiftOver, SIDES, stanceOf, stanceRangeOf, STRAIGHT_PERCENTILE, supportsOf, tipOf, unshortenStanceShin } from './legs.ts';
+import { figureScaleOf, freeAnkleShiftOf, holdBlend, holdSupportingFloor, isLegSegment, legScaleOf, legsOf, pathFrom, percentile, plantHip, posePath, rootOf, scaleSupport, shiftOver, SIDES, stanceOf, stanceRangeOf, STRAIGHT_PERCENTILE, supportsOf, tipOf, unshortenStanceShin } from './legs.ts';
 import type { BodyReading, FaceReading, YawSetSwitch } from './face.ts';
 import { readBody, readFace, readFaceAngles, selectYawSets } from './face.ts';
 
@@ -1411,6 +1411,16 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     const hip = planted.hip;
     floor = planted.floor;
     closure = planted.closure;
+    // #425: a supported in-place walk keeps the source's vertical path. The
+    // supporting leg is solved back onto the same floor below. Flights,
+    // unscaled legs and clips whose scales already clamp keep the old path.
+    const sourceHeight = inPlace && opts.gait === 'walk' && legScaleOn && floor !== null
+      && feet!.support.every((side) => side !== null)
+      && legScale.every((seg) => seg.low.length === 0 && seg.high.length === 0);
+    if (sourceHeight) {
+      const first = hip[0]![1];
+      for (let i = 0; i < n; i++) hip[i]![1] = first + poseTravel[i]![1] - poseTravel[0]![1];
+    }
     const L = (legs as { legs: Record<Side, { chain: Chain; ankleBone: string }> }).legs;
     // #133: on a frame where the supporting leg asks under --leg-scale's floor, its scalex follows the asked
     // value down to #95's bound so the ankle stays on #85's floor; the free leg keeps the configured clamp.
@@ -1447,9 +1457,14 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     const ankleSeries = { r: series.get('r_ankle')!, l: series.get('l_ankle')! };
     const lower = stanceRangeOf(ankleSeries, { r: series.get('r_hip')!, l: series.get('l_hip')! }, inPlace, continuousScale);
     blendHold = holdBlend(planted.blends, n, posedFeet, lower);
-    const beforeBlendX = blendHold.stretch.map((b, i) => (b === null ? 0 : posedFeet(i).ankle[b.side][0]));
-    stretchChain(blendHold.stretch);
-    blendHold.stretch.forEach((b, i) => {
+    const supportHold = sourceHeight ? holdSupportingFloor(feet!, floor!.y, posedFeet, lower) : blendHold;
+    if (sourceHeight) {
+      for (const over of supportHold.over) p.add('LEGS_STRETCH', `source hip height, supporting ${over.side} leg frames ${over.frames[0]}–${over.frames[1]}: floor hold needs ${over.needed === null ? 'unavailable geometry' : `stretch ${over.needed}`} past the existing bounds; ${over.left} world units left to the floor`);
+      p.throwIfAny();
+    }
+    const beforeBlendX = supportHold.stretch.map((b, i) => (b === null ? 0 : posedFeet(i).ankle[b.side][0]));
+    stretchChain(supportHold.stretch);
+    supportHold.stretch.forEach((b, i) => {
       if (b === null) return;
       const dx = beforeBlendX[i]! - posedFeet(i).ankle[b.side][0];
       hip[i]![0] += dx;
@@ -1461,7 +1476,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       stance = stanceOf(feet!, ankleSeries, opts.stance, legScaleOn ? unshortenStanceShin(scales, L, posedFeet, lower) : posedFeet, secondsOf, lower);
       // The supporting leg (the blend's) and the free leg (the stance's) are different chains on a frame.
       for (let i = 0; i < n; i++) {
-        const b = blendHold.stretch[i];
+        const b = supportHold.stretch[i];
         if (b !== null && b !== undefined && stance.stretch[i]?.side === b.side) p.add('LEGS_STRETCH', `frame ${i}: chain "${L[b.side].chain.name}" is stretched both as the supporting leg of a blend (k ${b.k}) and as the free leg of --stance (k ${stance.stretch[i]!.k}); one chain takes one stretch`);
       }
       p.throwIfAny();

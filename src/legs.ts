@@ -1799,6 +1799,20 @@ export interface BlendHold {
 }
 
 /**
+ * #425: with the source driving a walk's hip height, every supporting leg
+ * must reach the floor. Use the blend hold's geometry and existing bounds,
+ * but keep this solve separate from the report's blend-only reading.
+ */
+export function holdSupportingFloor(feet: Pick<Feet, 'support'>, floor: number, posed: (i: number) => StancePosed, lower?: StanceLower): Pick<BlendHold, 'stretch' | 'over'> {
+  const frames: BlendFrame[] = [];
+  feet.support.forEach((side, frame) => {
+    if (side !== null) frames.push({ frame, side, y: floor });
+  });
+  const held = holdBlend(frames, feet.support.length, posed, lower);
+  return { stretch: held.stretch, over: held.over };
+}
+
+/**
  * The supporting foot does not leave the floor during a blend (rig-c/pose#85).
  * On a blend frame the hip is between the old derivation and the new, so the
  * supporting ankle is off the y its plant holds. Its leg is stretched along its

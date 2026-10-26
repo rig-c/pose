@@ -3742,7 +3742,7 @@ describe('#47: --leg-scale and --plant-feet', () => {
         cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
         cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
         const path = join(d, 'src', 'retarget.ts');
-        const from = '    stretchChain(blendHold.stretch);\n';
+        const from = '    stretchChain(supportHold.stretch);\n';
         const before = readFileSync(path, 'utf8');
         expect(before.split(from)).toHaveLength(2);
         writeFileSync(path, before.replace(from, ''));
