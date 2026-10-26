@@ -921,3 +921,43 @@ export function measureShoulderLanding(doc: CompiledDocument, animation: string,
   });
   return out;
 }
+
+/** #437: compare against a separately posed neutral shoe at the same ankle.
+ * X/Y targets are q times the neutral world axes (including existing leg shear),
+ * in units of setup length. No inverse solve's result supplies these targets.
+ */
+export function measureDepthScaleLanding(doc: CompiledDocument, animation: string, times: readonly number[], rows: readonly import('./depthscale.ts').DepthScaleSide[], feet: Record<'r' | 'l', import('./depthscale.ts').DepthFoot>): Landing[] {
+  const names = new Set(Object.values(feet).map(f => f.bone));
+  const neutral: CompiledDocument = { ...doc, animations: doc.animations.map(a => a.name !== animation ? a : { ...a, timelines: { ...a.timelines, bones: a.timelines.bones.map(b => !names.has(b.name) ? b : { ...b, timelines: b.timelines.filter(t => t.kind !== 'scalex' && t.kind !== 'scaley') }) } }) };
+  const steps = times.slice(1).map((t,i) => t - times[i]!);
+  const reset = 'animation' as const;
+  const actual = poseRawAnimation(doc, animation, steps, {}, reset), baseline = poseRawAnimation(neutral, animation, steps, {}, reset);
+  const setup = new Map(poseRawSetup(doc).bones.map(b => [b.name,b]));
+  const out: Landing[] = [];
+  for (const row of rows) {
+    const f = feet[row.side], s0 = setup.get(f.bone)!;
+    const measures = ['x', 'y', 'ankle', 'sole'] as const;
+    for (const measure of measures) {
+      let worst = -1, frame = 0;
+      actual.forEach((pose,i) => {
+        const b = pose.bones.find(b => b.name === f.bone)!, n = baseline[i]!.bones.find(b => b.name === f.bone)!, q = row.values[i]!;
+        let error: number;
+        if (measure === 'x') error = Math.abs(Math.hypot(b.a,b.c) - q * Math.hypot(n.a,n.c)) / Math.hypot(s0.a,s0.c);
+        else if (measure === 'y') error = Math.abs(Math.hypot(b.b,b.d) - q * Math.hypot(n.b,n.d)) / Math.hypot(s0.b,s0.d);
+        else if (measure === 'ankle') {
+          const shin = pose.bones.find(b => b.name === f.parent)!;
+          const length = doc.bones.find(b => b.name === f.parent)!.length ?? 0;
+          error = Math.hypot(b.worldX - shin.worldX - shin.a * length, b.worldY - shin.worldY - shin.c * length);
+        }
+        else {
+          const y = (p: typeof pose) => p.drawn.filter(d => f.slots.includes(d.slot)).flatMap(d => d.vertices.filter((_,k) => k % 2 === 1));
+          const ys = y(pose), ns = y(baseline[i]!);
+          error = ys.length === 0 && ns.length === 0 ? 0 : ys.length === 0 || ns.length === 0 ? Infinity : Math.abs(Math.min(...ys) - (n.worldY + q * (Math.min(...ns) - n.worldY)));
+        }
+        if (error > worst) { worst = error; frame = i; }
+      });
+      out.push({ bone: `${f.bone}:${measure}`, kind: measure === 'x' || measure === 'y' ? 'scale' : 'foot', worst, frame, tolerance: measure === 'x' || measure === 'y' ? SCALE_TOLERANCE : ORIGIN_TOLERANCE });
+    }
+  }
+  return out;
+}

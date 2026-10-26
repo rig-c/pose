@@ -246,6 +246,7 @@ Every flag `parseFlags` reads in `cli.ts`, once. `test/promise.test.ts` holds th
 | `retarget` | `--report` | promised | S, X 13 | |
 | `retarget` | `--camera` | promised | S, X 4 | |
 | `retarget` | `--leg-scale` | promised | S, X 13 | |
+| `retarget` | `--depth-scale` | courtesy | — | #437; no recorded 1.0 reader |
 | `retarget` | `--idle` | courtesy | — | |
 | `retarget` | `--merge` | courtesy | — | |
 | `retarget` | `--reduce` | promised | S, X 2 | |
@@ -345,6 +346,7 @@ Every key `rig-pose-report/1` can carry, once: the keys `src/run.ts` writes, and
 | `byHip` | courtesy | — | |
 | `body` | courtesy | — | |
 | `legScale` | courtesy | — | |
+| `depthScale` | courtesy | — | #437; per-side perspective reading |
 | `pivot` | courtesy | — | |
 | `pelvis` | courtesy | — | |
 | `layers` | courtesy | — | only when the sequence carries depth (rig-c/pose#281) |
@@ -481,6 +483,9 @@ coordinates on flips and shear remain promised.
 | `flips[].times` | promised | R |
 | `flips[].clipped`, `flips[].h`, `flips[].jump`, `flips[].step` | courtesy | No recorded promised reader |
 | `flips[].turns`, `flips[].turns[].frame`, `flips[].turns[].jump`, `flips[].turns[].t` | courtesy | No recorded promised reader |
+| `depthScale[].side`, `depthScale[].joint`, `depthScale[].depth`, `depthScale[].depth.min`, `depthScale[].depth.max` | courtesy | No recorded promised reader (#437) |
+| `depthScale[].scale`, `depthScale[].scale.min`, `depthScale[].scale.median`, `depthScale[].scale.max` | courtesy | No recorded promised reader (#437) |
+| `depthScale[].limits`, `depthScale[].clampedFrames`, `depthScale[].unreadFrames`, `depthScale[].status`, `depthScale[].bone`, `options.depthScale` | courtesy | No recorded promised reader (#437) |
 | `legScale[].bone`, `legScale[].chain`, `legScale[].clamped`, `legScale[].clamped[].asked` | courtesy | No recorded promised reader |
 | `legScale[].clamped[].asked.max`, `legScale[].clamped[].asked.min`, `legScale[].clamped[].frames`, `legScale[].clamped[].limit` | courtesy | No recorded promised reader |
 | `legScale[].clamped[].times`, `legScale[].free`, `legScale[].free.above`, `legScale[].free.below` | courtesy | No recorded promised reader |
@@ -637,7 +642,7 @@ Promised line tags, with their use:
 
 The #408 `SHOULDER-LIFT` tag is courtesy and explicitly labels evidence `SUPPLIED`.
 
-Every other tag is courtesy (`CLOTH`, rig-c/pose#34; `FIGURE-SCALE` and `CAMERA_UNDECLARED` (#404, an advisory warning, never a refusal), `SWITCH-TURN`, rig-c/pose#355, and `SWITCH-BIND`, rig-c/pose#360, among them).
+Every other tag is courtesy (`DEPTH-SCALE` (#437), `CLOTH`, rig-c/pose#34; `FIGURE-SCALE` and `CAMERA_UNDECLARED` (#404, an advisory warning, never a refusal), `SWITCH-TURN`, rig-c/pose#355, and `SWITCH-BIND`, rig-c/pose#360, among them).
 
 ### Imports
 

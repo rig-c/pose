@@ -303,7 +303,7 @@ const round = (x: number, k: number): number => Math.round(x * 10 ** k) / 10 ** 
  * When the thigh sits inside the flat band while the leg as a whole is foreshortened below
  * `WALK_FLAT_THIGH_LEG_RATIO` (`0.94`), its geometric tilt folds with the shin as well.
  */
-function walkAnkleDepth(joints: Joints, depth: FrameDepth, limb: Limb): number | null {
+export function walkAnkleDepth(joints: Joints, depth: FrameDepth, limb: Limb): number | null {
   const [upper, lower] = LIMBS[limb];
   const du = depth[upper];
   const dl = depth[lower];
