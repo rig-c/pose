@@ -486,6 +486,7 @@ coordinates on flips and shear remain promised.
 | `depthScale[].side`, `depthScale[].joint`, `depthScale[].depth`, `depthScale[].depth.min`, `depthScale[].depth.max` | courtesy | No recorded promised reader (#437) |
 | `depthScale[].scale`, `depthScale[].scale.min`, `depthScale[].scale.median`, `depthScale[].scale.max` | courtesy | No recorded promised reader (#437) |
 | `depthScale[].limits`, `depthScale[].clampedFrames`, `depthScale[].unreadFrames`, `depthScale[].status`, `depthScale[].bone`, `options.depthScale` | courtesy | No recorded promised reader (#437) |
+| `depthScale[].signSource`, `depthScale[].tie`, `depthScale[].tiedFrames` | courtesy | Walk-only picture-y sign and explicit height band (#440); run keeps derived knee sign |
 | `legScale[].bone`, `legScale[].chain`, `legScale[].clamped`, `legScale[].clamped[].asked` | courtesy | No recorded promised reader |
 | `legScale[].clamped[].asked.max`, `legScale[].clamped[].asked.min`, `legScale[].clamped[].frames`, `legScale[].clamped[].limit` | courtesy | No recorded promised reader |
 | `legScale[].clamped[].times`, `legScale[].free`, `legScale[].free.above`, `legScale[].free.below` | courtesy | No recorded promised reader |
