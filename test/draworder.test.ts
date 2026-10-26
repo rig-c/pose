@@ -695,3 +695,80 @@ describe('rig-c/pose#324: why nothing keyed — the slot count first, and the le
     expect(linesOf(off.ran, 'DRAWGAP')).toEqual([]);
   }, SLOW);
 });
+
+describe('rig-c/pose#424: contiguous leg runs separated by non-leg slots, and a walk leg foreshortened across thigh and shin', () => {
+  test('two contiguous leg runs with a non-leg slot between them: each run swaps in place, and the non-leg slot is never moved', () => {
+    const seq = readPoseSequence(readFileSync(cleaned(FIXTURES.walk(), 'walk', tempDir(), 'walk'), 'utf8'), 'walk');
+    const track = personTrack(seq, undefined, 'run');
+    const layers = track.map((j, i) => layersOf(j, seq.frames[i]!.depth!));
+    const base = readMap(readFileSync(MAP, 'utf8'), MAP);
+    const wave = JSON.parse(readFileSync(WAVE, 'utf8')) as { bones: Array<{ name: string; parent?: string }> };
+    const rest = new Map(wave.bones.map((b) => [b.name, { parent: b.parent ?? null }])) as unknown as Rest;
+    // Run 1 (indices 0..3): leg_r0, leg_r1, leg_l0, leg_l1. Index 4: non-leg torso. Run 2 (indices 5..6): shoe_top_r, shoe_top_l on the shin bones.
+    const order = [
+      { name: 'leg_r0', bone: 'leg_r0' },
+      { name: 'leg_r1', bone: 'leg_r1' },
+      { name: 'leg_l0', bone: 'leg_l0' },
+      { name: 'leg_l1', bone: 'leg_l1' },
+      { name: 'torso', bone: 'chest' },
+      { name: 'shoe_top_r', bone: 'leg_r1' },
+      { name: 'shoe_top_l', bone: 'leg_l1' },
+    ];
+    const setup = order.map((s) => s.name);
+    const d = drawOrderFromDepth(layers, track, seq.frames.map((f) => f.depth), seq.frames.map((f) => f.t), base, rest, order, undefined, true, 'walk');
+    expect(d.pairs[0]!.keyed).toBe(true);
+    expect(d.pairs[0]!.slots).toEqual({ a: ['leg_r0', 'leg_r1', 'shoe_top_r'], b: ['leg_l0', 'leg_l1', 'shoe_top_l'] });
+    expect(d.keys.length).toBeGreaterThan(0);
+    for (const k of d.keys) {
+      expect((k.offsets ?? []).some((o) => o.slot === 'torso')).toBe(false);
+      const applied = applyKey(setup, k);
+      // The non-leg slot between the two runs stays at its exact setup index (4) on every key.
+      expect(applied[4]).toBe('torso');
+      const rBehind = applied.slice(0, 4).join(',') === 'leg_r0,leg_r1,leg_l0,leg_l1' && applied.slice(5, 7).join(',') === 'shoe_top_r,shoe_top_l';
+      const lBehind = applied.slice(0, 4).join(',') === 'leg_l0,leg_l1,leg_r0,leg_r1' && applied.slice(5, 7).join(',') === 'shoe_top_l,shoe_top_r';
+      expect(rBehind || lBehind).toBe(true);
+    }
+  });
+
+  test('walk foreshortening split across thigh and shin: the lifted foot is drawn behind (not cancelled by the thigh\'s run-rule forward sign), and a flipped shin sign makes it red', () => {
+    const seq = readPoseSequence(readFileSync(cleaned(FIXTURES.walk(), 'walk', tempDir(), 'walk'), 'utf8'), 'walk');
+    const track = personTrack(seq, undefined, 'run');
+    const base = readMap(readFileSync(MAP, 'utf8'), MAP);
+    const wave = JSON.parse(readFileSync(WAVE, 'utf8')) as { bones: Array<{ name: string; parent?: string }> };
+    const rest = new Map(wave.bones.map((b) => [b.name, { parent: b.parent ?? null }])) as unknown as Rest;
+    const order = SETUP.map((n) => ({ name: n, bone: n === 'torso' ? 'chest' : n }));
+    // Split each lifted walk leg's foreshortening across both thigh (ratio 0.86, sign +1) and shin (ratio 0.85, sign -1):
+    // under `limbJointDepths.end`, +|z_thigh| and -|z_shin| cancel inside the ankle tie; under the walk rule, both fold the ankle back.
+    const splitDepth = seq.frames.map((f) => {
+      const d = structuredClone(f.depth!);
+      for (const side of ['r', 'l'] as const) {
+        const sh = d[`${side}_shin`];
+        if (sh !== undefined && sh.sign !== 0) {
+          d[`${side}_thigh`] = { ratio: 0.86, sign: 1, source: 'derived' };
+          d[`${side}_shin`] = { ratio: 0.85, sign: -1, source: 'derived' };
+        }
+      }
+      return d;
+    });
+    const layers = track.map((j, i) => layersOf(j, splitDepth[i]!));
+    const walkOut = drawOrderFromDepth(layers, track, splitDepth, seq.frames.map((f) => f.t), base, rest, order, undefined, true, 'walk');
+    const walkBehind = behindPerFrame(SETUP, walkOut.keys, seq.frames.map((f) => f.t));
+    expect(liftedOrder(seq, walkBehind, FIXTURES.walk(), 'behind').misses).toEqual([]);
+    // On a run (ordered at the knee), the same foreshortened thigh (sign +1) draws the lifted leg in front.
+    const runOut = drawOrderFromDepth(layers, track, splitDepth, seq.frames.map((f) => f.t), base, rest, order, undefined, true, 'run');
+    const runBehind = behindPerFrame(SETUP, runOut.keys, seq.frames.map((f) => f.t));
+    expect(liftedOrder(seq, runBehind, FIXTURES.walk(), 'front').misses).toEqual([]);
+    // Planted sign flip: flipping the lifted shin's sign to +1 puts the lifted foot in front and makes the walk bar red.
+    const flippedDepth = splitDepth.map((d) => {
+      const next = structuredClone(d);
+      for (const side of ['r', 'l'] as const) {
+        const sh = next[`${side}_shin`];
+        if (sh !== undefined && sh.sign !== 0) sh.sign = 1;
+      }
+      return next;
+    });
+    const flippedOut = drawOrderFromDepth(layers, track, flippedDepth, seq.frames.map((f) => f.t), base, rest, order, undefined, true, 'walk');
+    const flippedBehind = behindPerFrame(SETUP, flippedOut.keys, seq.frames.map((f) => f.t));
+    expect(liftedOrder(seq, flippedBehind, FIXTURES.walk(), 'behind').misses.length).toBeGreaterThan(0);
+  });
+});
