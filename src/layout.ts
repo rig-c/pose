@@ -16,8 +16,11 @@
  *   `sets.json` beside it, or none when there is none (`LAYOUT_SETS_SHA`), its
  *   `setup_slots` the rig's slots in order (`LAYOUT_SETUP`). The producer's
  *   adjacency is not taken as proof: pose reads each placement's blocks in the
- *   rig's compiled draw order again, and a block that is not one unbroken run
- *   next to its target is refused (`LAYOUT_ADJACENCY`).
+ *   rig's compiled draw order again. Blocks must be unbroken and adjacent, except
+ *   explicitly bound forearms against a mapped hip-line target (#431). Those
+ *   may be separated and share an identical target; their declared setup side
+ *   must still match. Only the forearms move, preserving every other slot
+ *   pair's relative order (including the legs).
  * - **The binding.** The map names each group's depth source explicitly, in
  *   `"layout": [{ "limb", "parts", "depth", "against" }]`: `limb` and `parts`
  *   the placement's own (exactly), `depth` the body-18 segment whose depth the
@@ -46,7 +49,11 @@
  *   order changes, half a frame before the frame it shows on, as the legs'
  *   (`keyAtFrame`). The legs' keys are complete statements, and a group's run
  *   is kept apart from a keyed leg pair's (else the group is not keyed), so
- *   the two merge into one timeline.
+ *   the two merge into one timeline. For an explicit hip-line target, the trunk
+ *   includes pelvis art (#431): the map's consecutive r_hip/l_hip joints identify
+ *   its bone, not a slot name. Nonadjacent forearms compose over the legs' total
+ *   order and are encoded once against setup. No layout means an explicit
+ *   not-keyed reading, with no target guessed.
  *
  * Pure but for `readLayout`, which reads the files beside the rig.
  */
@@ -153,8 +160,8 @@ export function readLayout(rig: string): Layout | null {
 }
 
 /** Each placement's adjacency, read again in the rig's compiled draw order: problems by name (the producer's word is not taken). */
-function adjacencyProblems(p: Problems, layout: Layout, names: readonly string[]): void {
-  const seen = new Map<string, string>();
+function adjacencyProblems(p: Problems, layout: Layout, names: readonly string[], pelvis: ReadonlySet<string>): void {
+  const seen = new Map<string, LayoutPlacement>();
   for (const pl of layout.placements) {
     const where = `${layout.path}: ${groupName(pl)} ${pl.before !== undefined ? `before ${targetText(pl.before)}` : `after ${targetText(pl.after!)}`}`;
     const idx = (ns: readonly string[]) => ns.map((n) => names.indexOf(n));
@@ -163,11 +170,17 @@ function adjacencyProblems(p: Problems, layout: Layout, names: readonly string[]
     const missing = [...pl.slots, ...pl.target_slots].filter((n) => !names.includes(n));
     if (missing.length > 0) p.add('LAYOUT_ADJACENCY', `${where}: slot(s) ${missing.map((n) => `"${n}"`).join(', ')} are not in the rig's draw order`);
     else if (!run(s) || !run(t)) p.add('LAYOUT_ADJACENCY', `${where}: its ${run(s) ? 'target' : 'group'} slots (${(run(s) ? pl.target_slots : pl.slots).join(', ')}) are not one unbroken run of the rig's draw order`);
-    else if (pl.before !== undefined ? s[s.length - 1]! + 1 !== t[0] : t[t.length - 1]! + 1 !== s[0]) p.add('LAYOUT_ADJACENCY', `${where}: the group is not drawn immediately ${pl.before !== undefined ? 'before' : 'after'} its target in the rig's draw order`);
+    else if (pl.before !== undefined ? s[s.length - 1]! + 1 !== t[0] : t[t.length - 1]! + 1 !== s[0]) {
+      // #431: only an explicitly bound hip-line target may be separated from its forearm.
+      // The declared setup side must still be true; no other adjacency rule is relaxed.
+      const separated = pl.before !== undefined ? s[s.length - 1]! < t[0]! : t[t.length - 1]! < s[0]!;
+      if (!separated || !pl.target_slots.every((n) => pelvis.has(n))) p.add('LAYOUT_ADJACENCY', `${where}: the group is not drawn immediately ${pl.before !== undefined ? 'before' : 'after'} its target in the rig's draw order`);
+    }
     for (const n of [...pl.slots, ...pl.target_slots]) {
       const other = seen.get(n);
-      if (other !== undefined) p.add('LAYOUT_ADJACENCY', `${where}: slot "${n}" is also in ${other}; placements are disjoint`);
-      else seen.set(n, groupName(pl));
+      const sharedPelvis = other !== undefined && pl.target_slots.includes(n) && other.target_slots.includes(n) && !pl.slots.includes(n) && !other.slots.includes(n) && sameList(pl.target_slots, other.target_slots) && pl.target_slots.every((x) => pelvis.has(x));
+      if (other !== undefined && !sharedPelvis) p.add('LAYOUT_ADJACENCY', `${where}: slot "${n}" is also in ${groupName(other)}; placements are disjoint except for an identical hip-line target`);
+      else seen.set(n, pl);
     }
   }
 }
@@ -178,8 +191,8 @@ export interface LayoutGroup {
   parts: string[];
   depth: LayoutDepth;
   against: LayoutAgainst;
-  /** Where the producer put the group at setup: before (behind) or after (in front of) its target. */
-  setup: 'before' | 'after';
+  /** Where the producer put the group at setup; null when no layout declares a target. */
+  setup: 'before' | 'after' | null;
   slots: string[];
   target: string[];
   keyed: boolean;
@@ -194,6 +207,8 @@ interface Resolved {
   back: DrawOrderOffset[];
   lo: number;
   hi: number;
+  /** #431: move only the declared forearm; keep all other slots' relative order. */
+  pelvis?: boolean;
 }
 
 /** The run lo.. with `behind`'s slots first: each moved slot's offset from its setup index. */
@@ -243,7 +258,6 @@ export function bindingProblems(layout: Layout | null, bindings: readonly Layout
 export function resolveGroups(layout: Layout, bindings: readonly LayoutBinding[], map: JointMap, rest: Rest, order: ReadonlyArray<{ name: string; bone: string }>, legRuns: ReadonlyArray<[number, number]>): { groups: Resolved[]; problems: Problems } {
   const p = new Problems();
   const names = order.map((s) => s.name);
-  adjacencyProblems(p, layout, names);
   const boneOf = new Map(order.map((s) => [s.name, s.bone]));
   const mapped = new Map(map.chains.flatMap((c) => c.bones.map((b) => [b, c] as const)));
   /** The first chain-mapped bone at or above `bone`, and its chain. */
@@ -254,6 +268,10 @@ export function resolveGroups(layout: Layout, bindings: readonly LayoutBinding[]
     }
     return null;
   };
+  // Anatomy comes from explicit consecutive hip joints, never from a chain, slot or bone name.
+  const hipBones = new Set(map.chains.flatMap((c) => c.bones.filter((_, i) => (c.joints[i] === 'r_hip' && c.joints[i + 1] === 'l_hip') || (c.joints[i] === 'l_hip' && c.joints[i + 1] === 'r_hip'))));
+  const pelvisSlots = new Set(order.filter((s) => hipBones.has(owner(s.bone)?.bone ?? '')).map((s) => s.name));
+  adjacencyProblems(p, layout, names, pelvisSlots);
   const groups: Resolved[] = [];
   for (const pl of layout.placements) {
     const b = bindings.find((x) => x.limb === pl.limb && sameList(x.parts, pl.parts))!;
@@ -282,12 +300,13 @@ export function resolveGroups(layout: Layout, bindings: readonly LayoutBinding[]
     const hi = Math.max(...s, ...t);
     const setup = pl.before !== undefined ? 'before' : 'after';
     const group: LayoutGroup = { limb: pl.limb, parts: [...pl.parts], depth: b.depth, against: b.against, setup, slots: [...pl.slots], target: [...pl.target_slots], keyed: true, tie: null };
-    const leg = legRuns.find(([a, z]) => a <= hi && lo <= z);
+    const pelvis = pl.target_slots.every((n) => pelvisSlots.has(n));
+    const leg = legRuns.find(([a, z]) => pelvis ? [...s, ...t].some((i) => a <= i && i <= z) : a <= hi && lo <= z);
     if (leg !== undefined) {
       group.keyed = false;
       group.why = `its run (setup slots ${lo}–${hi}) overlaps a keyed leg pair's (${leg[0]}–${leg[1]}), and one key cannot order both`;
     }
-    groups.push({ group, lo, hi, front: arrangement(names, lo, pl.target_slots, pl.slots), back: arrangement(names, lo, pl.slots, pl.target_slots) });
+    groups.push({ group, lo, hi, front: arrangement(names, lo, pl.target_slots, pl.slots), back: arrangement(names, lo, pl.slots, pl.target_slots), ...(pelvis ? { pelvis: true } : {}) });
   }
   return { groups, problems: p };
 }
@@ -331,6 +350,28 @@ const runsOf = (on: readonly boolean[]): Array<[number, number]> => {
   return out;
 };
 
+/** #431: absent layout is an explicit not-keyed reading, never a guessed target or depth source. */
+export function missingLayoutGroups(map: JointMap, rest: Rest, order: ReadonlyArray<{ name: string; bone: string }>, frames: number): GroupOrder[] {
+  const mapped = new Set(map.chains.flatMap((c) => c.bones));
+  return LAYOUT_DEPTHS.flatMap((depth) => {
+    const bone = segmentBone(map, depth);
+    if (bone === null) return [];
+    const own = (name: string): boolean => {
+      for (let b: string | null = name; b !== null; b = rest.get(b)?.parent ?? null) {
+        if (b === bone) return true;
+        if (mapped.has(b)) return false;
+      }
+      return false;
+    };
+    const slots = order.filter((s) => own(s.bone)).map((s) => s.name);
+    if (slots.length === 0) return [];
+    const limb = map.chains.find((c) => c.bones.includes(bone))!.name;
+    return [{ limb, parts: [], depth, against: 'trunk' as const, setup: null, slots, target: [], keyed: false, tie: null,
+      why: 'no limb layout; rig-parts rig writes layout.json beside rig.json from the config limb layout; bind its depth in the map layout',
+      front: [], back: [], frames: { front: 0, back: 0, unread: frames }, depthPx: Array<number | null>(frames).fill(null) }];
+  });
+}
+
 /**
  * The groups' order per frame, merged with the legs' keys into one timeline. `legs` is `drawOrderFromDepth`'s reading;
  * its keys are complete statements, so the legs' offsets on a frame are the last key's at or before it. Returns the
@@ -340,6 +381,7 @@ export function keyGroups(legs: DrawOrderReading, resolved: readonly Resolved[],
   const names = order.map((s) => s.name);
   const groups: GroupOrder[] = [];
   const perFrame: Array<Array<DrawOrderOffset[]>> = [];
+  const states: Array<Array<'front' | 'back' | null>> = [];
   for (const r of resolved) {
     const rest = restLength(track, depth, r.group.depth);
     const tie = rest === null ? null : Math.round(TIE_PER_LENGTH * rest * 100) / 100;
@@ -350,7 +392,8 @@ export function keyGroups(legs: DrawOrderReading, resolved: readonly Resolved[],
     });
     // In front where the forearm leans toward the camera by at least the tie; behind otherwise; unread holds the setup order.
     const state = z.map((v): 'front' | 'back' | null => (v === null || tie === null ? null : v > 0 && v >= tie ? 'front' : 'back'));
-    perFrame.push(state.map((s) => (!r.group.keyed || s === null ? [] : s === 'front' ? r.front : r.back)));
+    states.push(state);
+    perFrame.push(state.map((s) => (!r.group.keyed || r.pelvis || s === null ? [] : s === 'front' ? r.front : r.back)));
     groups.push({ ...r.group, tie, front: runsOf(state.map((s) => s === 'front')), back: runsOf(state.map((s) => s === 'back')), frames: { front: state.filter((s) => s === 'front').length, back: state.filter((s) => s === 'back').length, unread: state.filter((s) => s === null).length }, depthPx: z });
   }
   const sorted = [...legs.keys].sort((a, b) => a.frame - b.frame);
@@ -358,7 +401,42 @@ export function keyGroups(legs: DrawOrderReading, resolved: readonly Resolved[],
   const keys: DrawOrderReading['keys'] = [];
   let last = '[]';
   for (let f = 0; f < times.length; f++) {
-    const offs = [...legAt(f), ...perFrame.flatMap((g) => g[f] ?? [])].sort((x, y) => names.indexOf(x.slot) - names.indexOf(y.slot));
+    let offs = [...legAt(f), ...perFrame.flatMap((g) => g[f] ?? [])].sort((x, y) => names.indexOf(x.slot) - names.indexOf(y.slot));
+    if (resolved.some((r) => r.pelvis && r.group.keyed)) {
+      // Decode the legs' complete statement first, then compose all forearms in one total order.
+      // Only forearms that must cross their target move; all non-forearm slots keep their relative order.
+      const placed: Array<string | undefined> = Array(names.length).fill(undefined);
+      for (const o of offs) placed[names.indexOf(o.slot) + o.offset] = o.slot;
+      const moved = new Set(offs.map((o) => o.slot));
+      const remaining = names.filter((n) => !moved.has(n));
+      let total = placed.map((n) => n ?? remaining.shift()!);
+      const targets = new Map<string, number[]>();
+      resolved.forEach((r, i) => {
+        if (!r.pelvis || !r.group.keyed) return;
+        const id = JSON.stringify(r.group.target);
+        targets.set(id, [...(targets.get(id) ?? []), i]);
+      });
+      for (const indexes of targets.values()) {
+        const target = resolved[indexes[0]!]!.group.target;
+        const before: string[] = [];
+        const after: string[] = [];
+        for (const i of [...indexes].sort((a, b) => names.indexOf(resolved[a]!.group.slots[0]!) - names.indexOf(resolved[b]!.group.slots[0]!))) {
+          const r = resolved[i]!;
+          const state = states[i]![f];
+          const own = r.group.slots.map((n) => total.indexOf(n));
+          const ts = target.map((n) => total.indexOf(n));
+          if (state === 'front' && Math.min(...own) < Math.max(...ts)) after.push(...r.group.slots);
+          if (state === 'back' && Math.max(...own) > Math.min(...ts)) before.push(...r.group.slots);
+        }
+        if (before.length + after.length === 0) continue;
+        const moving = new Set([...before, ...after]);
+        total = total.filter((n) => !moving.has(n));
+        total.splice(Math.min(...target.map((n) => total.indexOf(n))), 0, ...before);
+        total.splice(Math.max(...target.map((n) => total.indexOf(n))) + 1, 0, ...after);
+      }
+      // Re-encode once against setup: one offset per slot, no collisions or out-of-range destinations.
+      offs = names.flatMap((slot, i) => total.indexOf(slot) === i ? [] : [{ slot, offset: total.indexOf(slot) - i }]);
+    }
     const text = JSON.stringify(offs);
     if (text === last) continue;
     last = text;
@@ -379,6 +457,7 @@ const spanText = (runs: ReadonlyArray<[number, number]>): string => runs.map(([a
 /** The group lines: one per group, keyed or not, cut to 260 characters (the report's `drawOrder.groups` carries every run). */
 export function groupLines(groups: readonly GroupOrder[], keys: readonly DrawOrderKey[], prefix = 'DRAWORDER '): string[] {
   return groups.map((g) => {
+    if (!g.keyed && g.target.length === 0) return `${prefix}${g.limb} / ${g.against} by ${g.depth} not keyed: ${g.why}`.slice(0, LINE_MAX);
     const head = `${prefix}${groupName(g)} by ${g.depth} against the ${g.against} ("${g.target.join('", "')}", the group ${g.setup} it at setup; tie ${g.tie === null ? 'none' : `${g.tie} px`})`;
     if (!g.keyed) return `${head} not keyed: ${g.why}`.slice(0, LINE_MAX);
     const tail = `; behind on ${g.frames.back}, unread on ${g.frames.unread}; ${keys.length} key(s) in the timeline`;
@@ -390,6 +469,6 @@ export function groupLines(groups: readonly GroupOrder[], keys: readonly DrawOrd
 }
 
 /** The report's `drawOrder.groups` and `drawOrder.layout`: each group without its per-frame depth list. */
-export function groupsReport(layout: Layout, groups: readonly GroupOrder[]): { layout: { path: string; sha256: string }; groups: Array<Omit<GroupOrder, 'depthPx'>> } {
-  return { layout: { path: layout.path, sha256: layout.sha256 }, groups: groups.map(({ depthPx: _d, ...g }) => g) };
+export function groupsReport(layout: Layout | null, groups: readonly GroupOrder[]): { layout?: { path: string; sha256: string }; groups: Array<Omit<GroupOrder, 'depthPx'>> } {
+  return { ...(layout === null ? {} : { layout: { path: layout.path, sha256: layout.sha256 } }), groups: groups.map(({ depthPx: _d, ...g }) => g) };
 }
