@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.2](https://github.com/rig-c/pose/compare/v1.1.1...v1.1.2) (2026-10-26)
+
+
+### Bug Fixes
+
+* **draworder:** hold a forearm's order against the hip while it reads flat or inside the tie ([#435](https://github.com/rig-c/pose/issues/435)) ([3734cea](https://github.com/rig-c/pose/commit/3734cead8b40bde7a29a00d2e92aeda0e2fb0f54)), closes [#434](https://github.com/rig-c/pose/issues/434)
+
 ## [1.1.1](https://github.com/rig-c/pose/compare/v1.1.0...v1.1.1) (2026-10-26)
 
 
