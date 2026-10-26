@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.1.1](https://github.com/rig-c/pose/compare/v1.1.0...v1.1.1) (2026-10-26)
+
+
+### Bug Fixes
+
+* **cli:** accept --profile rig-play, core's current name, and keep spine-html as a deprecated alias ([#430](https://github.com/rig-c/pose/issues/430)) ([ed5166b](https://github.com/rig-c/pose/commit/ed5166b8a92025509b4c5d2a57e27fd1f5278f54))
+* **demo:** draw the dance demo's source skeleton at a constant body scale ([#421](https://github.com/rig-c/pose/issues/421)) ([#422](https://github.com/rig-c/pose/issues/422)) ([57e1413](https://github.com/rig-c/pose/commit/57e1413f4f300cd5e465cfe5cf26a259a67b745f))
+* **draworder:** key a forearm over the hip-borne bottomwear when it reads in front, and name an unkeyed forearm pair ([#433](https://github.com/rig-c/pose/issues/433)) ([eb2fa4d](https://github.com/rig-c/pose/commit/eb2fa4d6b5581b112500a9681e2a750c7b9729fa)), closes [#431](https://github.com/rig-c/pose/issues/431)
+* **draworder:** key a walk's lifted leg behind the supporting leg ([#428](https://github.com/rig-c/pose/issues/428)) ([03460d5](https://github.com/rig-c/pose/commit/03460d52ce3e5571040d340117d01e16d8334864))
+* **retarget:** preserve source walk hip height through planting ([#426](https://github.com/rig-c/pose/issues/426)) ([02d6a98](https://github.com/rig-c/pose/commit/02d6a984685ff14492bf75af4bf7a5274ce947bf))
+
 ## [1.1.0](https://github.com/rig-c/pose/compare/v1.0.2...v1.1.0) (2026-10-25)
 
 
