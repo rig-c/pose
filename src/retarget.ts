@@ -163,6 +163,8 @@ export interface RetargetOptions extends SwitchOptions {
   short: number | 'off';
   /** Leg segments scaled along their x axis by picture length over straight length, clamped to [min, max] (`legs.ts`); 'off' (the default) scales nothing. */
   legScale?: [number, number] | 'off';
+  /** Foot-only perspective, applied by run after the existing leg solve. */
+  depthScale?: [number, number];
   /** The hip derived from the supporting foot (`legs.ts`); false (the default) moves it by the pose's travel. */
   plantFeet?: boolean;
   /** With plantFeet: a free ankle within this many leg lengths of the floor plants both feet, its leg stretched to reach it (`legs.ts` stanceOf, #60); 'off' (the default) plants one. */

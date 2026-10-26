@@ -568,8 +568,8 @@ const MUTATIONS: Mutation[] = [
   {
     name: 'the landing check poses frame 0 as the setup pose',
     file: 'src/verify.ts',
-    from: "poseRawAnimation(doc, animation, steps, {}, 'animation')",
-    to: "poseRawAnimation(doc, animation, steps, {}, 'setup')",
+    from: "const poses = poseRawAnimation(doc, animation, steps, {}, 'animation');",
+    to: "const poses = poseRawAnimation(doc, animation, steps, {}, 'setup');",
   },
 ];
 

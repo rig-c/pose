@@ -32,6 +32,8 @@ import { contactKeysLines, readContactKeys } from './contacts.ts';
 import { readShoulderConfig, readShoulderSignal, shoulderRigGuard, shoulderLocal, shoulderMatrix, shoulderOrigin, type ShoulderReading } from './shoulderlift.ts';
 import { measureShoulderLanding } from './verify.ts';
 import { pointAt, pointParts, partBone } from './map.ts';
+import { depthFeetOf, depthScaleLine, readDepthScale, footScaleTracks } from './depthscale.ts';
+import { measureDepthScaleLanding } from './verify.ts';
 import { scalePairWarning } from './scalepair.ts';
 import { emitPhysicsTracks, fitSkirtPhysics, type ClothFitResult } from './cloth.ts';
 import type { ClothWindow } from './compare.ts';
@@ -198,6 +200,11 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     if (reading.status === 'unknown') throw new Refusal(reading.problems);
     return { config, reading, snapshots: [configuration, restInput, painting], inputs: { configuration: configuration.identity, rest: restInput.identity, painting: painting.identity } };
   })();
+  const depthScale = a.depthScale === undefined ? null : readDepthScale(frames, seq.frames.map(f => f.depth), seq.cleaned!.params.depth?.gait, a.depthScale);
+  if (depthScale !== null) {
+    const old = forwardShinFrames(frames, seq.frames);
+    if (old.length > 0) refuse([{ code: 'DEPTH_RECLEAN', text: depthRecleanText(a.pose, seq.cleaned!.params.depth?.gait ?? null, old) }]);
+  }
   const times = seq.frames.map((f) => f.t);
 
   const scratch = mkdtempSync(join(tmpdir(), 'rig-pose-'));
@@ -217,6 +224,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       shoulderRigGuard(shoulder.config, rest, map, doc0);
       if (a.raisedByHead) throw new Refusal([{ code: 'SHOULDER_LIFT_COMPOSITION', text: 'unknown — --raised-by-head is a positional solve; shoulder translation requires a jointly approved solve' }]);
     }
+    const depthFeet = depthScale === null ? null : depthFeetOf(doc0, rest, map);
     const r = retarget(rest, map, frames, times, { ...a, ...(seq.travel !== undefined ? { travel: seq.travel } : {}), ...(seq.cleaned!.params.loop ? { loop: true } : {}), ...(seq.pelvisSource !== undefined ? { pelvis: { source: seq.pelvisSource, tilt: seq.frames.map((f) => f.pelvisTilt ?? null) } } : {}), ...(contactKeys !== null ? { contactKeys } : {}), ...(seq.cleaned!.params.depth !== undefined ? { gait: seq.cleaned!.params.depth.gait } : {}) }, slots, input.sets);
     if (fragment.length > 0 && ((r.face?.sets?.length ?? 0) > 0 || (r.body?.sets?.length ?? 0) > 0)) {
       const known = knownSetsOf(map, input.sets);
@@ -287,6 +295,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     }
     for (const e of r.artRange) say(`  ART-RANGE ${artRangeLine(e, r.times)}`);
     // #287: a range that clamps no frame says so once, on the last segment's line (the line count stays one per segment).
+    if (depthScale !== null) for (const row of depthScale) say(`  DEPTH-SCALE ${depthScaleLine(row)}`);
     const noClamp = legScaleNoClamp(r.legScale);
     r.legScale.forEach((l, k) => say(`  LEG-SCALE ${legScaleLine(l, r.times, r.feet?.legLength ?? null, r.rigLeg)}${k === r.legScale.length - 1 && noClamp !== null ? `; ${noClamp}` : ''}`));
     for (const l of r.legScale) for (const s of l.support ?? []) say(`  LEG-SCALE ${supportScaleLine(l, s, r.times)}`);
@@ -369,6 +378,10 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       const scales = reduced.rows.some((x) => x.kind === 'scale') ? `; scalex keys ${sum('scale', 'before')} → ${sum('scale', 'after')} within ${SCALE_REDUCE} of the setup length` : '';
       say(`  REDUCE rotate keys ${sum('angle', 'before')} → ${sum('angle', 'after')} (${(sum('angle', 'before') / sum('angle', 'after')).toFixed(2)}×) within ${a.reduce}°${chainsText(a.reduceChains)}${scales}${a.reduceHip === undefined ? '; the hip stays dense (no --reduce-hip)' : ''}`);
     }
+
+    // #437: shoes are leaves. Append only their dense local uniform scale keys
+    // after the existing leg solver/reducer; no ankle or leg key is changed.
+    if (depthScale !== null && depthFeet !== null) r.animation.tracks.push(...footScaleTracks(depthScale, depthFeet, r.times));
 
     // #275: reduction fits the N distinct frames; only then append the closing interval's endpoint.
     if (seq.cleaned!.params.loop) closeAnimationLoop(r.animation, slots);
@@ -511,8 +524,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     const drift: AnkleDrift[] = [];
     // #251: with --reduce-keep-planted, each ankle is held apart on its support frames, which were kept dense.
     const support = a.reduce !== undefined && a.reduceKeepPlanted === true && r.feet !== null ? supportFrames(r.feet.supports) : undefined;
-    const landings = measureLanding(doc, a.name, map, r, posed, support).map((l) => {
-      if (a.reduce === undefined) return l;
+    const landings = [...measureLanding(doc, a.name, map, r, posed, support), ...(depthScale === null || depthFeet === null ? [] : measureDepthScaleLanding(doc, a.name, r.times, depthScale, depthFeet))].map((l) => {
+      if (a.reduce === undefined || (depthFeet !== null && Object.values(depthFeet).some(f => l.bone.startsWith(`${f.bone}:`)))) return l;
       // #283: a chain's own tolerance is added as the run's is; the sum is rounded only under a per-chain --reduce.
       if (l.kind === 'angle') return { ...l, tolerance: a.reduceChains === undefined ? l.tolerance + a.reduce : Number((l.tolerance + reduceOf!(l.bone)).toPrecision(12)) };
       if (l.kind === 'origin' && a.reduceHip !== undefined) return { ...l, tolerance: l.tolerance + a.reduceHip };
@@ -566,7 +579,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     if (feetReading !== null) {
       for (const l of posedFeetLines(feetReading)) say(`  FEET   ${l}`);
     }
-    const shear = r.scales.size === 0 ? [] : measureShear(doc, posed, r.scales.keys());
+    const shear = r.scales.size === 0 && depthFeet === null ? [] : measureShear(doc, posed, [...r.scales.keys(), ...(depthFeet === null ? [] : Object.values(depthFeet).map(f => f.bone))]);
     for (const x of shear) say(`  SHEAR  bone "${x.bone}": art sheared up to ${x.shear.toFixed(2)}° (frame ${x.frame}); world x axis ${x.x[0].toFixed(3)} … ${x.x[1].toFixed(3)}, y axis ${x.y[0].toFixed(3)} … ${x.y[1].toFixed(3)} of setup — a scaled bone, or one under it; a reading${shearRemedy(x, rest, shear)}`);
 
     const dts = r.times.slice(1).map((t, i) => t - r.times[i]!).sort((x, y) => x - y);
@@ -592,7 +605,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     assertReportInputs([rigSnapshot,mapSnapshot,poseSnapshot]);
     if (shoulder !== null) assertReportInputs(shoulder.snapshots);
     // Every retarget option as resolved: the report's `options`, and with the name the build record's `flags` (#270).
-    const options = { ...(shoulder === null ? {} : { shoulderLift: a.shoulderLiftFile }), minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', floor: a.floor ?? null, raisedByHead: a.raisedByHead === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', ...(a.reduceChains === undefined ? {} : { reduceChains: a.reduceChains }), reduceHip: a.reduceHip ?? 'off', ...(a.reduceKeepPlanted === true ? { reduceKeepPlanted: true } : {}), ...(a.drawOrder !== undefined ? { drawOrder: a.drawOrder } : {}), ...(a.contactKeysFile !== undefined ? { contactKeys: a.contactKeysFile } : {}), ...(a.clothTrackFile !== undefined ? { clothTrack: a.clothTrackFile } : {}), ...(a.clothWindows !== undefined ? { clothWindows: a.clothWindows.map((w) => `${w.from}-${w.to}`).join(',') } : {}), ...(a.skirtSlots !== undefined ? { skirtSlots: a.skirtSlots } : {}) };
+    const options = { ...(shoulder === null ? {} : { shoulderLift: a.shoulderLiftFile }), minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', ...(a.depthScale === undefined ? {} : { depthScale: a.depthScale }), plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', floor: a.floor ?? null, raisedByHead: a.raisedByHead === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', ...(a.reduceChains === undefined ? {} : { reduceChains: a.reduceChains }), reduceHip: a.reduceHip ?? 'off', ...(a.reduceKeepPlanted === true ? { reduceKeepPlanted: true } : {}), ...(a.drawOrder !== undefined ? { drawOrder: a.drawOrder } : {}), ...(a.contactKeysFile !== undefined ? { contactKeys: a.contactKeysFile } : {}), ...(a.clothTrackFile !== undefined ? { clothTrack: a.clothTrackFile } : {}), ...(a.clothWindows !== undefined ? { clothWindows: a.clothWindows.map((w) => `${w.from}-${w.to}`).join(',') } : {}), ...(a.skirtSlots !== undefined ? { skirtSlots: a.skirtSlots } : {}) };
     const reportText = writeReport({
         spec: 'rig-pose-report/1',
         ...(shoulderReport === null ? {} : { shoulderLift: shoulderReport }),
@@ -653,6 +666,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
               ...(r.body.yaw === undefined ? {} : { yaw: { bone: r.body.yaw.bone, limits: r.body.yaw.limits, knee: r.body.yaw.knee, read: r.body.yaw.read, mapped: r.body.yaw.mapped, scale: r.body.yaw.scale, corr: r.body.yaw.corr } }),
               ...(r.body.sets === undefined ? {} : { sets: r.body.sets }),
             },
+        ...(depthScale === null || depthFeet === null ? {} : { depthScale: depthScale.map(({ values: _values, ...row }) => ({ ...row, bone: depthFeet[row.side].bone })) }),
         legScale: r.legScale.map(({ scale: _scale, asked: _asked, picture: _picture, ...rest }) => rest),
         pivot: r.pivot,
         pelvis: r.pelvis,

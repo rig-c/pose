@@ -162,6 +162,11 @@ retarget
                         before choosing min. A bone under a scaled one is keyed through its parent's scale
                         (default: off; 0.8,1.05 is the card's range, rig-c/pose#47, read off a dance whose leg
                         picture length ran 0.86–1.18 of its median — not a walk's)
+  --depth-scale <min,max>
+                        foot-only perspective from clean --depth walk|run (+ toward camera); 0 < min <= 1 <= max.
+                        Walk uses ankle depth, run knee depth; affine clip extrema per side (zero span: 1). Requires
+                        a foot bone at each ankle; scales x/y about its ankle, the sole follows. Keeps the anatomical
+                        ankle. DEPTH-SCALE reports per-side min/median/max and clamped frames (default: off).
   --plant-feet          the hip is placed so the supporting foot stays where it took support: the lower ankle
                         in the picture, changing after the other has been 0.02 leg lengths lower for 0.1 s,
                         blended over 3 frames; a jump (both ankles and mid_hip 0.05 leg lengths above their
@@ -446,6 +451,13 @@ function legScaleOf(f: Map<string, string>): [number, number] | 'off' {
   return [parts[0]!, parts[1]!];
 }
 
+function depthScaleOf(f: Map<string, string>): [number, number] {
+  const v = f.get('depth-scale')!;
+  const parts = v.split(',').map(x => x.trim() === '' ? NaN : Number(x));
+  if (parts.length !== 2 || !parts.every(Number.isFinite) || !(parts[0]! > 0 && parts[0]! <= 1 && parts[1]! >= 1)) throw new Usage(`--depth-scale is "${v}"; expected min,max with 0 < min <= 1 <= max`);
+  return [parts[0]!, parts[1]!];
+}
+
 /**
  * rig-c/pose#243: the names the rest of the toolchain uses for the same inputs — `rigc render --animation`,
  * and the exam grader's `--sequence` — accepted beside this command's own.
@@ -453,7 +465,7 @@ function legScaleOf(f: Map<string, string>): [number, number] | 'off' {
 const RETARGET_ALIASES = { sequence: 'pose', animation: 'name' } as const;
 
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'reference', 'render', 'parts', 'report', 'camera', 'leg-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor', 'draw-order', 'contact-keys', 'shoulder-lift', 'cloth-track', 'cloth-windows', 'skirt-slots'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head', 'reduce-keep-planted', 'verbose', 'summary'], RETARGET_ALIASES);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'reference', 'render', 'parts', 'report', 'camera', 'leg-scale', 'depth-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor', 'draw-order', 'contact-keys', 'shoulder-lift', 'cloth-track', 'cloth-windows', 'skirt-slots'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head', 'reduce-keep-planted', 'verbose', 'summary'], RETARGET_ALIASES);
   if (f.has('verbose') && f.has('summary')) throw new Usage('--verbose and --summary are both given; --verbose prints every line in full and --summary one line per measure, so give one');
   if (f.has('reference') && !f.has('build')) throw new Usage(`--reference needs --build: the record it goes in is written beside the build (${PROVENANCE_FILE})`);
   if (f.has('cloth-windows') && !f.has('cloth-track')) throw new Usage('--cloth-windows is given without --cloth-track; it names the windows --cloth-track fits over');
@@ -499,6 +511,7 @@ function retargetArgs(argv: string[]): RetargetArgs {
     flip: flipOf(f),
     short: shortOf(f),
     legScale: legScaleOf(f),
+    ...(f.has('depth-scale') ? { depthScale: depthScaleOf(f) } : {}),
     plantFeet: f.has('plant-feet'),
     stance: stanceOf(f),
     ...floorOf(f),
