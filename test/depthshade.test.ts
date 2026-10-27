@@ -5,7 +5,7 @@ import { clean, savitzkyGolay } from '../src/clean.ts';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readMap } from '../src/map.ts';
-import { mergeProblems, readIdle, type RigcTrack } from '../src/idle.ts';
+import { mergeProblems, readIdle, sampleNumericTrack, type RigcTrack } from '../src/idle.ts';
 import { readPoseSequence, type FrameDepth, type Joint } from '../src/pose.ts';
 import type { Limb } from '../src/depth.ts';
 const point=(y:number):Joint=>({state:'observed',at:[0,y]});
@@ -148,6 +148,79 @@ describe('#446 continuous held-sign depth with actual clean windows',()=>{
    expect(probs[0]!.text).toContain('channel "rgb"');
    expect(probs[0]!.text).toContain('slot "thigh" rgb');
   }
+ });
+ test('#451 between-key interpolation: shade linear × idle stepped, coincident named ease, and Bézier at ¼, ½, ¾ of every union span',()=>{
+  const easings={soft:[.25,.1,.25,1],quick:[.42,0,.58,1]};
+  const checkSpanSamples=(folded:RigcTrack,shade:RigcTrack,idleLoop:RigcTrack,width:6|7,rgbTol:number,idleTol:number|((spanIdx:number)=>number)):{spans:number;times:number;samples:number}=>{
+   const keys=folded.keys;
+   let spans=0,times=0,samples=0;
+   for(let i=0;i<keys.length-1;i++){
+    const t0=keys[i]!.t,t1=keys[i+1]!.t;
+    const tol=typeof idleTol==='function'?idleTol(i):idleTol;
+    spans++;
+    for(const frac of [.25,.5,.75]){
+     const t=+(t0+(t1-t0)*frac).toFixed(6);
+     times++;
+     const actual=sampleNumericTrack(folded,t,width,easings);
+     const expRgb=sampleNumericTrack(shade,t,3,easings);
+     const expIdle=sampleNumericTrack(idleLoop,t,width,easings).slice(3);
+     for(let c=0;c<3;c++){
+      samples++;
+      expect(Math.abs(actual[c]!-expRgb[c]!)).toBeLessThanOrEqual(rgbTol);
+     }
+     for(let c=3;c<width;c++){
+      samples++;
+      expect(Math.abs(actual[c]!-expIdle[c-3]!)).toBeLessThanOrEqual(tol);
+     }
+    }
+   }
+   return {spans,times,samples};
+  };
+  // 1) shade linear × idle stepped (Reviewer example: RGB 1 at t=0 -> 0 at t=0.5 reads 0.5 at t=0.25; plus stepped jumps at t=0.75 and t=1)
+  const shadeStepped:RigcTrack={slot:'thigh',property:'rgb',keys:[{t:0,v:[1,.8,.6]},{t:.5,v:[0,.2,.4]},{t:1,v:[0,.2,.4]}]};
+  const steppedRgba2:RigcTrack={slot:'thigh',property:'rgba2',keys:[{t:0,v:[.9,.8,.7,.25,.1,.2,.3],ease:'stepped'},{t:.75,v:[.8,.7,.6,.75,.4,.5,.6],ease:'stepped'},{t:1,v:[.9,.8,.7,.25,.1,.2,.3]}]};
+  const steppedRgb2:RigcTrack={slot:'thigh',property:'rgb2',keys:[{t:0,v:[.9,.8,.7,.1,.2,.3],ease:'stepped'},{t:.75,v:[.8,.7,.6,.4,.5,.6],ease:'stepped'},{t:1,v:[.9,.8,.7,.1,.2,.3]}]};
+  const loopSteppedRgba2=readIdle('idle','dance',{duration:1,tracks:[steppedRgba2]},[],1.5,{groups:{},easings},()=>undefined,true).carriedTracks[0]!;
+  const foldedSteppedRgba2=readIdle('idle','dance',{duration:1,tracks:[steppedRgba2]},[shadeStepped],1.5,{groups:{},easings},()=>undefined,true).carriedTracks[0]!;
+  expect(sampleNumericTrack(foldedSteppedRgba2,.25,7,easings).slice(0,3)).toEqual([.5,.5,.5]);
+  expect(checkSpanSamples(foldedSteppedRgba2,shadeStepped,loopSteppedRgba2,7,0,0)).toEqual({spans:4,times:12,samples:84});
+  const loopSteppedRgb2=readIdle('idle','dance',{duration:1,tracks:[steppedRgb2]},[],1.5,{groups:{},easings},()=>undefined,true).carriedTracks[0]!;
+  const foldedSteppedRgb2=readIdle('idle','dance',{duration:1,tracks:[steppedRgb2]},[shadeStepped],1.5,{groups:{},easings},()=>undefined,true).carriedTracks[0]!;
+  expect(checkSpanSamples(foldedSteppedRgb2,shadeStepped,loopSteppedRgb2,6,0,0)).toEqual({spans:4,times:12,samples:72});
+  // A non-flat stepped jump on the same union span as moving shade RGB is refused by name rather than emitting a wrong curve.
+  const jumpOverMoving:RigcTrack={slot:'thigh',property:'rgba2',keys:[{t:0,v:[.9,.8,.7,.25,.1,.2,.3],ease:'stepped'},{t:.5,v:[.8,.7,.6,.75,.4,.5,.6]},{t:1,v:[.9,.8,.7,.25,.1,.2,.3]}]};
+  const refusedStepped=readIdle('idle','dance',{duration:1,tracks:[jumpOverMoving]},[shadeStepped],1.5,{groups:{},easings},()=>undefined,true);
+  expect(refusedStepped.carriedTracks).toEqual([]);
+  expect(refusedStepped.dropped[0]!.notCarried).toContain('no per-channel "stepped" curve');
+  expect(refusedStepped.ownTracks).toEqual([shadeStepped]);
+  // 2) shade linear × idle named ease with coincident key times (t = 0, 0.5, 1)
+  const shadeCoincident:RigcTrack={slot:'thigh',property:'rgb',keys:[{t:0,v:[1,.8,.6]},{t:.5,v:[.2,.4,.8]},{t:1,v:[.6,.2,.4]}]};
+  const namedRgba2:RigcTrack={slot:'thigh',property:'rgba2',keys:[{t:0,v:[.9,.8,.7,.25,.1,.2,.3],ease:'soft'},{t:.5,v:[.8,.7,.6,.75,.4,.5,.6],ease:'quick'},{t:1,v:[.9,.8,.7,.25,.1,.2,.3]}]};
+  const namedRgb2:RigcTrack={slot:'thigh',property:'rgb2',keys:[{t:0,v:[.9,.8,.7,.1,.2,.3],ease:'soft'},{t:.5,v:[.8,.7,.6,.4,.5,.6],ease:'quick'},{t:1,v:[.9,.8,.7,.1,.2,.3]}]};
+  const loopNamedRgba2=readIdle('idle','dance',{duration:1,tracks:[namedRgba2]},[],1.5,{groups:{},easings},()=>undefined,true).carriedTracks[0]!;
+  const foldedNamedRgba2=readIdle('idle','dance',{duration:1,tracks:[namedRgba2]},[shadeCoincident],1.5,{groups:{},easings},()=>undefined,true).carriedTracks[0]!;
+  expect(checkSpanSamples(foldedNamedRgba2,shadeCoincident,loopNamedRgba2,7,0,0)).toEqual({spans:3,times:9,samples:63});
+  const loopNamedRgb2=readIdle('idle','dance',{duration:1,tracks:[namedRgb2]},[],1.5,{groups:{},easings},()=>undefined,true).carriedTracks[0]!;
+  const foldedNamedRgb2=readIdle('idle','dance',{duration:1,tracks:[namedRgb2]},[shadeCoincident],1.5,{groups:{},easings},()=>undefined,true).carriedTracks[0]!;
+  expect(checkSpanSamples(foldedNamedRgb2,shadeCoincident,loopNamedRgb2,6,0,0)).toEqual({spans:3,times:9,samples:54});
+  // 3) shade linear × idle Bézier (both split and unsplit spans)
+  const shadeBezier:RigcTrack={slot:'thigh',property:'rgb',keys:[{t:0,v:[1,.7,.4]},{t:.25,v:[.6,.5,.8]},{t:.75,v:[.2,.9,.2]},{t:1,v:[.8,.3,.6]}]};
+  const bezierRgba2:RigcTrack={slot:'thigh',property:'rgba2',keys:[
+   {t:0,v:[.9,.8,.7,.25,.1,.2,.3],curve:[.2,.9,.3,.8,.2,.8,.3,.7,.2,.7,.3,.6,.15,.3,.35,.7,.15,.15,.35,.35,.15,.25,.35,.45,.15,.35,.35,.55]},
+   {t:.5,v:[.8,.7,.6,.75,.4,.5,.6],curve:[.65,.8,.85,.9,.65,.7,.85,.8,.65,.6,.85,.7,.65,.7,.85,.3,.65,.35,.85,.15,.65,.45,.85,.25,.65,.55,.85,.35]},
+   {t:1,v:[.9,.8,.7,.25,.1,.2,.3]},
+  ]};
+  const bezierRgb2:RigcTrack={slot:'thigh',property:'rgb2',keys:[
+   {t:0,v:[.9,.8,.7,.1,.2,.3],curve:[.2,.9,.3,.8,.2,.8,.3,.7,.2,.7,.3,.6,.15,.15,.35,.35,.15,.25,.35,.45,.15,.35,.35,.55]},
+   {t:.5,v:[.8,.7,.6,.4,.5,.6],curve:[.65,.8,.85,.9,.65,.7,.85,.8,.65,.6,.85,.7,.65,.35,.85,.15,.65,.45,.85,.25,.65,.55,.85,.35]},
+   {t:1,v:[.9,.8,.7,.1,.2,.3]},
+  ]};
+  const loopBezierRgba2=readIdle('idle','dance',{duration:1,tracks:[bezierRgba2]},[],1.5,{groups:{},easings},()=>undefined,true).carriedTracks[0]!;
+  const foldedBezierRgba2=readIdle('idle','dance',{duration:1,tracks:[bezierRgba2]},[shadeBezier],1.5,{groups:{},easings},()=>undefined,true).carriedTracks[0]!;
+  expect(checkSpanSamples(foldedBezierRgba2,shadeBezier,loopBezierRgba2,7,0,i=>i===4?0:1e-6)).toEqual({spans:5,times:15,samples:105});
+  const loopBezierRgb2=readIdle('idle','dance',{duration:1,tracks:[bezierRgb2]},[],1.5,{groups:{},easings},()=>undefined,true).carriedTracks[0]!;
+  const foldedBezierRgb2=readIdle('idle','dance',{duration:1,tracks:[bezierRgb2]},[shadeBezier],1.5,{groups:{},easings},()=>undefined,true).carriedTracks[0]!;
+  expect(checkSpanSamples(foldedBezierRgb2,shadeBezier,loopBezierRgb2,6,0,i=>i===4?0:1e-6)).toEqual({spans:5,times:15,samples:90});
  });
 });
 
