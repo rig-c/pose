@@ -148,7 +148,11 @@ export interface YawSet {
 }
 export interface FaceAxis {
   bone: string;
+  slider?: string;
   range: [number, number];
+  rangeStated?: boolean;
+  sliderTrack?: string;
+  sliderWindow?: [number, number];
   sets?: YawSet[];
 }
 export interface FaceMap {
@@ -169,6 +173,20 @@ export interface JointMap {
   /** rig-c/pose#346: each layout group's depth source, bound explicitly (`src/layout.ts`); read only with `--draw-order depth`. */
   layout?: LayoutBinding[];
 }
+
+/** A slider constraint from the compiled rig (`rig-c/pose#454`). */
+export interface RigSlider {
+  name: string;
+  animation: string;
+  duration: number;
+  bone: string | null;
+  property: string | null;
+  from: number;
+  to: number;
+  scale: number;
+  range: [number, number];
+}
+export type RigSliders = ReadonlyMap<string, RigSlider>;
 
 /** An alternate attachment set from `sets.json` (`rig-parts-sets/1`, `rig-c/pose#173`). */
 export interface RigSet {
@@ -369,10 +387,74 @@ export function bodyYawSets(body: BodyMap | undefined): YawSet[] | undefined {
   return body?.sets ?? body?.yaw?.sets;
 }
 
+function readAxis(
+  p: Problems,
+  aw: string,
+  label: string,
+  ax: Record<string, unknown>,
+  allowSets: boolean,
+  shapeCode: 'MAP_FACE_SHAPE' | 'MAP_BODY_SHAPE',
+  boneCode: 'MAP_FACE_BONE' | 'MAP_BODY_BONE',
+  rangeCode: 'MAP_FACE_RANGE' | 'MAP_BODY_RANGE',
+): { axis?: FaceAxis; sets?: YawSet[] } {
+  refuseUnknownKeys(p, 'MAP_KEYS', aw, ax, allowSets ? ['bone', 'slider', 'range', 'sets'] : ['bone', 'slider', 'range']);
+  const sets = allowSets && 'sets' in ax ? readYawSets(p, `${aw} "sets"`, ax.sets, shapeCode) : undefined;
+  const hasBone = 'bone' in ax;
+  const hasSlider = 'slider' in ax;
+  const hasRange = 'range' in ax;
+  const hasAxis = hasBone || hasSlider || hasRange || !('sets' in ax);
+  if (!hasAxis) return { ...(sets === undefined ? {} : { sets }) };
+  let bone: string | null = null;
+  let slider: string | undefined;
+  if (hasBone && hasSlider) {
+    p.add(boneCode, `${aw} (${label}) names both "bone" ("${String(ax.bone)}") and "slider" ("${String(ax.slider)}"); state one or the other, never both`);
+  } else if (hasSlider) {
+    if (typeof ax.slider === 'string' && ax.slider !== '') {
+      slider = ax.slider;
+      bone = ax.slider;
+    } else {
+      p.add(boneCode, `${aw} (${label}) "slider" is ${typeName(ax.slider)}; it must name a slider`);
+    }
+  } else {
+    if (typeof ax.bone === 'string' && ax.bone !== '') {
+      bone = ax.bone;
+    } else {
+      p.add(boneCode, `${aw} "bone" is ${typeName(ax.bone)}; it must name a bone`);
+    }
+  }
+  if (hasRange || !hasSlider) {
+    const v = ax.range;
+    if (!Array.isArray(v) || v.length !== 2 || !v.every((x) => typeof x === 'number' && Number.isFinite(x)) || (v[0] as number) > 0 || (v[1] as number) < 0 || (v[0] as number) >= (v[1] as number)) {
+      p.add(rangeCode, `${aw} "range" is ${JSON.stringify(v)}; it must be [min, max], two finite numbers of degrees with min ≤ 0 ≤ max and min < max`);
+      return {};
+    }
+    if (bone === null) return {};
+    return {
+      axis: {
+        bone,
+        ...(slider === undefined ? {} : { slider }),
+        range: [v[0] as number, v[1] as number],
+        rangeStated: true,
+        ...(sets === undefined ? {} : { sets }),
+      },
+    };
+  }
+  if (bone === null) return {};
+  return {
+    axis: {
+      bone,
+      ...(slider === undefined ? {} : { slider }),
+      range: [-15, 15],
+      rangeStated: false,
+      ...(sets === undefined ? {} : { sets }),
+    },
+  };
+}
+
 function readFaceMap(p: Problems, where: string, raw: unknown): FaceMap | undefined {
   const fw = `${where} "face"`;
   if (!isObject(raw)) {
-    p.add('MAP_FACE_SHAPE', `${fw} is ${typeName(raw)}; it is { yaw?: { bone, range: [min, max], sets? }, pitch?: { bone, range: [min, max] }, sets? }`);
+    p.add('MAP_FACE_SHAPE', `${fw} is ${typeName(raw)}; it is { yaw?: { bone | slider, range?: [min, max], sets? }, pitch?: { bone | slider, range?: [min, max] }, sets? }`);
     return undefined;
   }
   refuseUnknownKeys(p, 'MAP_KEYS', fw, raw, ['yaw', 'pitch', 'sets']);
@@ -390,24 +472,12 @@ function readFaceMap(p: Problems, where: string, raw: unknown): FaceMap | undefi
     const aw = `${fw} "${axis}"`;
     const ax = raw[axis];
     if (!isObject(ax)) {
-      p.add('MAP_FACE_SHAPE', `${aw} is ${typeName(ax)}; it is { bone, range: [min, max] }`);
+      p.add('MAP_FACE_SHAPE', `${aw} is ${typeName(ax)}; it is { bone | slider, range?: [min, max] }`);
       continue;
     }
-    refuseUnknownKeys(p, 'MAP_KEYS', aw, ax, axis === 'yaw' ? ['bone', 'range', 'sets'] : ['bone', 'range']);
-    const sets = axis === 'yaw' && 'sets' in ax ? readYawSets(p, `${aw} "sets"`, ax.sets, 'MAP_FACE_SHAPE') : undefined;
-    const hasBoneOrRange = 'bone' in ax || 'range' in ax || !('sets' in ax);
-    if (hasBoneOrRange) {
-      const bone = typeof ax.bone === 'string' && ax.bone !== '' ? ax.bone : null;
-      if (bone === null) p.add('MAP_FACE_BONE', `${aw} "bone" is ${typeName(ax.bone)}; it must name a bone`);
-      const v = ax.range;
-      if (!Array.isArray(v) || v.length !== 2 || !v.every((x) => typeof x === 'number' && Number.isFinite(x)) || (v[0] as number) > 0 || (v[1] as number) < 0 || (v[0] as number) >= (v[1] as number)) {
-        p.add('MAP_FACE_RANGE', `${aw} "range" is ${JSON.stringify(v)}; it must be [min, max], two finite numbers of degrees with min ≤ 0 ≤ max and min < max`);
-      } else if (bone !== null) {
-        out[axis] = { bone, range: [v[0] as number, v[1] as number], ...(sets === undefined ? {} : { sets }) };
-      }
-    } else if (sets !== undefined) {
-      out.sets = sets;
-    }
+    const read = readAxis(p, aw, `"face.${axis}"`, ax, axis === 'yaw', 'MAP_FACE_SHAPE', 'MAP_FACE_BONE', 'MAP_FACE_RANGE');
+    if (read.axis !== undefined) out[axis] = read.axis;
+    else if (read.sets !== undefined) out.sets = read.sets;
   }
   return out;
 }
@@ -415,7 +485,7 @@ function readFaceMap(p: Problems, where: string, raw: unknown): FaceMap | undefi
 function readBodyMap(p: Problems, where: string, raw: unknown): BodyMap | undefined {
   const bw = `${where} "body"`;
   if (!isObject(raw)) {
-    p.add('MAP_BODY_SHAPE', `${bw} is ${typeName(raw)}; it is { yaw?: { bone, range: [min, max] }, sets?: [{ set, above }] }`);
+    p.add('MAP_BODY_SHAPE', `${bw} is ${typeName(raw)}; it is { yaw?: { bone | slider, range?: [min, max] }, sets?: [{ set, above }] }`);
     return undefined;
   }
   refuseUnknownKeys(p, 'MAP_KEYS', bw, raw, ['yaw', 'sets']);
@@ -432,24 +502,12 @@ function readBodyMap(p: Problems, where: string, raw: unknown): BodyMap | undefi
     const aw = `${bw} "yaw"`;
     const ax = raw.yaw;
     if (!isObject(ax)) {
-      p.add('MAP_BODY_SHAPE', `${aw} is ${typeName(ax)}; it is { bone, range: [min, max] }`);
+      p.add('MAP_BODY_SHAPE', `${aw} is ${typeName(ax)}; it is { bone | slider, range?: [min, max] }`);
       return undefined;
     }
-    refuseUnknownKeys(p, 'MAP_KEYS', aw, ax, ['bone', 'range', 'sets']);
-    const sets = 'sets' in ax ? readYawSets(p, `${aw} "sets"`, ax.sets, 'MAP_BODY_SHAPE') : undefined;
-    const hasBoneOrRange = 'bone' in ax || 'range' in ax || !('sets' in ax);
-    if (hasBoneOrRange) {
-      const bone = typeof ax.bone === 'string' && ax.bone !== '' ? ax.bone : null;
-      if (bone === null) p.add('MAP_BODY_BONE', `${aw} "bone" is ${typeName(ax.bone)}; it must name a bone`);
-      const v = ax.range;
-      if (!Array.isArray(v) || v.length !== 2 || !v.every((x) => typeof x === 'number' && Number.isFinite(x)) || (v[0] as number) > 0 || (v[1] as number) < 0 || (v[0] as number) >= (v[1] as number)) {
-        p.add('MAP_BODY_RANGE', `${aw} "range" is ${JSON.stringify(v)}; it must be [min, max], two finite numbers of degrees with min ≤ 0 ≤ max and min < max`);
-        return undefined;
-      }
-      if (bone !== null) out.yaw = { bone, range: [v[0] as number, v[1] as number], ...(sets === undefined ? {} : { sets }) };
-    } else if (sets !== undefined) {
-      out.sets = sets;
-    }
+    const read = readAxis(p, aw, '"body.yaw"', ax, true, 'MAP_BODY_SHAPE', 'MAP_BODY_BONE', 'MAP_BODY_RANGE');
+    if (read.axis !== undefined) out.yaw = read.axis;
+    else if (read.sets !== undefined) out.sets = read.sets;
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
@@ -864,10 +922,12 @@ export function knownSetsOf(map: JointMap, rigSets: RigSets = new Map()): Map<st
 }
 
 /** Check every name the map gives against the rig; every miss is named. */
-export function resolveMap(map: JointMap, rest: Rest, where: string, slots: RigSlots = new Map(), rigSets: RigSets = new Map()): void {
+export function resolveMap(map: JointMap, rest: Rest, where: string, slots: RigSlots = new Map(), rigSets: RigSets = new Map(), sliders: RigSliders = new Map()): void {
   const p = new Problems();
   const all = [...rest.keys()];
   const listed = all.length <= 40 ? all.join(', ') : `${all.slice(0, 40).join(', ')} … (${all.length} in all)`;
+  const allSliders = [...sliders.keys()];
+  const listedSliders = allSliders.length === 0 ? 'none' : allSliders.join(', ');
   const owner = new Map<string, string>();
   for (const c of map.chains) {
     c.bones.forEach((b, k) => {
@@ -931,34 +991,55 @@ export function resolveMap(map: JointMap, rest: Rest, where: string, slots: RigS
       p.add('MAP_REACH', `chain "${c.name}" — bone "${b}" reaches from its posed origin, but it does not descend from the translated bone "${t.bone}"; its origin would not travel with the anchor`);
     }
   }
+  const resolveAxis = (ax: FaceAxis, label: string): void => {
+    if (ax.slider !== undefined) {
+      const sl = sliders.get(ax.slider) ?? [...sliders.values()].find((s) => s.bone === ax.slider);
+      if (sl === undefined) {
+        p.add('MAP_SLIDER_EXISTS', `${label} — slider "${ax.slider}" is not in the rig; its sliders are ${listedSliders}`);
+        return;
+      }
+      ax.slider = sl.name;
+      if (sl.bone !== null) {
+        ax.bone = sl.bone;
+        if (!ax.rangeStated) {
+          ax.range = [sl.range[0], sl.range[1]];
+        } else {
+          ax.range = [Math.max(sl.range[0], ax.range[0]), Math.min(sl.range[1], ax.range[1])];
+        }
+      } else {
+        ax.bone = sl.name;
+        ax.sliderTrack = sl.name;
+        ax.sliderWindow = [0, sl.duration];
+        if (!ax.rangeStated) {
+          const half = sl.duration > 0 ? Math.round((sl.duration / (2 * 0.0625)) * 1e6) / 1e6 : 15;
+          ax.range = [-half, half];
+        }
+        const key = `slider:${sl.name}`;
+        const prev = owner.get(key);
+        if (prev !== undefined) p.add('MAP_BONE_ONCE', `slider "${sl.name}" is in ${prev} and in ${label}; a slider carries one time track`);
+        owner.set(key, label);
+        return;
+      }
+    }
+    if (!rest.has(ax.bone)) {
+      p.add('MAP_BONE_EXISTS', `${label} — bone "${ax.bone}" is not in the rig; its bones are ${listed}`);
+      return;
+    }
+    const prev = owner.get(ax.bone);
+    if (prev !== undefined) p.add('MAP_BONE_ONCE', `bone "${ax.bone}" is in ${prev.startsWith('"') ? prev : `chain "${prev}"`} and in ${label}; a bone carries one rotate track`);
+    owner.set(ax.bone, label);
+    const o = rest.get(ax.bone)!;
+    if (Math.hypot(o.a, o.c) < 1e-9) p.add('MAP_AIM_LENGTH', `${label} — bone "${ax.bone}" has a collapsed x axis at setup (scale 0)`);
+  };
   if (map.face !== undefined) {
     for (const axis of ['yaw', 'pitch'] as const) {
       const ax = map.face[axis];
       if (ax === undefined) continue;
-      const label = `"face.${axis}"`;
-      if (!rest.has(ax.bone)) {
-        p.add('MAP_BONE_EXISTS', `${label} — bone "${ax.bone}" is not in the rig; its bones are ${listed}`);
-        continue;
-      }
-      const prev = owner.get(ax.bone);
-      if (prev !== undefined) p.add('MAP_BONE_ONCE', `bone "${ax.bone}" is in ${prev.startsWith('"') ? prev : `chain "${prev}"`} and in ${label}; a bone carries one rotate track`);
-      owner.set(ax.bone, label);
-      const o = rest.get(ax.bone)!;
-      if (Math.hypot(o.a, o.c) < 1e-9) p.add('MAP_AIM_LENGTH', `${label} — bone "${ax.bone}" has a collapsed x axis at setup (scale 0)`);
+      resolveAxis(ax, `"face.${axis}"`);
     }
   }
   if (map.body?.yaw !== undefined) {
-    const ax = map.body.yaw;
-    const label = '"body.yaw"';
-    if (!rest.has(ax.bone)) {
-      p.add('MAP_BONE_EXISTS', `${label} — bone "${ax.bone}" is not in the rig; its bones are ${listed}`);
-    } else {
-      const prev = owner.get(ax.bone);
-      if (prev !== undefined) p.add('MAP_BONE_ONCE', `bone "${ax.bone}" is in ${prev.startsWith('"') ? prev : `chain "${prev}"`} and in ${label}; a bone carries one rotate track`);
-      owner.set(ax.bone, label);
-      const o = rest.get(ax.bone)!;
-      if (Math.hypot(o.a, o.c) < 1e-9) p.add('MAP_AIM_LENGTH', `${label} — bone "${ax.bone}" has a collapsed x axis at setup (scale 0)`);
-    }
+    resolveAxis(map.body.yaw, '"body.yaw"');
   }
   const knownSets = knownSetsOf(map, rigSets);
   const allSets = [...knownSets.keys()];

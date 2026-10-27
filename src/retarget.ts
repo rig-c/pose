@@ -346,10 +346,15 @@ export interface MotionTrack {
   property: 'rotate' | 'translate' | 'scalex' | 'scaley';
   keys: MotionKey[];
 }
+export interface SliderTrack {
+  slider: string;
+  property: 'time' | 'mix';
+  keys: MotionKey[];
+}
 export interface Animation {
   duration: number;
   /** The bone tracks, then any slot `attachment` tracks the switches add (`switch.ts`). */
-  tracks: Array<MotionTrack | SlotTrack>;
+  tracks: Array<MotionTrack | SlotTrack | SliderTrack>;
 }
 
 /** A line across the body turned: short in the picture, or reversed, long enough to be a pose (the demand for a turned-body drawing). */
@@ -3120,7 +3125,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
   }
 
   // Keys: the bone's turn less the turn of the nearest mapped bone above it.
-  const tracks: Array<MotionTrack | SlotTrack> = [];
+  const tracks: Array<MotionTrack | SlotTrack | SliderTrack> = [];
   for (const c of map.chains) {
     for (const b of c.bones) {
       const above = mappedAbove(b);
@@ -3194,6 +3199,10 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     for (const axis of ['yaw', 'pitch'] as const) {
       const ax = face[axis];
       if (ax === undefined) continue;
+      if (ax.sliderTrack !== undefined) {
+        tracks.push({ slider: ax.sliderTrack, property: 'time', keys: ax.keys.map((v, i) => ({ t: keyTimes[i]!, v: [v] })) });
+        continue;
+      }
       const rest0 = restAngle(rest, ax.bone, 'x');
       const above = mappedAbove(ax.bone);
       targets.set(ax.bone, ax.keys.map((v, i) => wrap(rest0 + (above === null ? 0 : turn(above, i)) + v)));
@@ -3220,10 +3229,14 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
       body = readBody(map.body, rSh, lSh, rHip, lHip, neck, !inPlace && n > 25 ? continuousScale : null, faceYaw);
       const bodyAx = body.yaw;
       if (bodyAx !== undefined) {
-        const rest0 = restAngle(rest, bodyAx.bone, 'x');
-        const above = mappedAbove(bodyAx.bone);
-        targets.set(bodyAx.bone, bodyAx.keys.map((v, i) => wrap(rest0 + (above === null ? 0 : turn(above, i)) + v)));
-        tracks.push({ bone: bodyAx.bone, property: 'rotate', keys: bodyAx.keys.map((v, i) => ({ t: keyTimes[i]!, v: [v] })) });
+        if (bodyAx.sliderTrack !== undefined) {
+          tracks.push({ slider: bodyAx.sliderTrack, property: 'time', keys: bodyAx.keys.map((v, i) => ({ t: keyTimes[i]!, v: [v] })) });
+        } else {
+          const rest0 = restAngle(rest, bodyAx.bone, 'x');
+          const above = mappedAbove(bodyAx.bone);
+          targets.set(bodyAx.bone, bodyAx.keys.map((v, i) => wrap(rest0 + (above === null ? 0 : turn(above, i)) + v)));
+          tracks.push({ bone: bodyAx.bone, property: 'rotate', keys: bodyAx.keys.map((v, i) => ({ t: keyTimes[i]!, v: [v] })) });
+        }
       }
       const bSets = bodyYawSets(map.body);
       if (bSets !== undefined) body.sets = selectYawSets(body.read.rawYaw, bSets, keyTimes, opts.switchMin);
@@ -3369,7 +3382,7 @@ export function closeAnimationLoop(animation: Animation, slots: RigSlots): void 
 }
 
 /** rig-c/pose#288: the pelvis bone's source, from the chain, the track and the keys written. */
-function pelvisReadingOf(chain: Chain | null, given: RetargetOptions['pelvis'], track: ReadonlyArray<number | null> | null, fromTrack: string | null, tracks: ReadonlyArray<MotionTrack | SlotTrack>): PelvisReading | null {
+function pelvisReadingOf(chain: Chain | null, given: RetargetOptions['pelvis'], track: ReadonlyArray<number | null> | null, fromTrack: string | null, tracks: ReadonlyArray<MotionTrack | SlotTrack | SliderTrack>): PelvisReading | null {
   if (chain === null && given === undefined) return null;
   const bone = chain?.bones[0] ?? null;
   const keys = bone === null ? null : tracks.find((tr): tr is MotionTrack => 'bone' in tr && tr.bone === bone && tr.property === 'rotate');
@@ -3431,7 +3444,7 @@ const r4 = (v: number) => {
  * track, or a translate track other than the anchor's (its travel is in the
  * target too) — and, when there are any, its aim's departure from the pair.
  */
-function reachReadings(rest: Rest, map: JointMap, tracks: ReadonlyArray<MotionTrack | SlotTrack>, aims: ReadonlyMap<string, { aim: number[]; pair: number[]; length: number }>, anchor: string | null): ReachReading[] {
+function reachReadings(rest: Rest, map: JointMap, tracks: ReadonlyArray<MotionTrack | SlotTrack | SliderTrack>, aims: ReadonlyMap<string, { aim: number[]; pair: number[]; length: number }>, anchor: string | null): ReachReading[] {
   const out: ReachReading[] = [];
   if (anchor === null) return out;
   const a0 = rest.get(anchor)!;

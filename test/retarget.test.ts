@@ -134,6 +134,8 @@ interface RigOpts {
   extraSlots?: Array<Record<string, unknown>>;
   /** A sets.json (`rig-parts-sets/1`) to write beside rig.json. */
   sets?: Record<string, unknown>;
+  /** Optional constraints array for rig.json. */
+  constraints?: Array<Record<string, unknown>>;
 }
 
 /** Write `<dir>/rig/rig.json` and its images; returns the rig directory. */
@@ -170,7 +172,7 @@ function writeRig(dir: string, o: RigOpts = {}): string {
     slots.push({ name: 'ghost', bone: 'chest', attachment: 'ghost' });
     skin.ghost = { ghost: { image: 'ghost.png' } };
   }
-  writeFileSync(join(rigDir, 'rig.json'), JSON.stringify({ spec: 'rigc-rig/1', name: 'stick', images: 'images', skeleton: { width: 400, height: 600 }, bones, slots, skins: { default: skin } }, null, 2));
+  writeFileSync(join(rigDir, 'rig.json'), JSON.stringify({ spec: 'rigc-rig/1', name: 'stick', images: 'images', skeleton: { width: 400, height: 600 }, bones, slots, ...(o.constraints === undefined ? {} : { constraints: o.constraints }), skins: { default: skin } }, null, 2));
   if (o.motion !== undefined) writeFileSync(join(rigDir, 'motion.json'), JSON.stringify(o.motion, null, 2));
   if (o.sets !== undefined) writeFileSync(join(rigDir, 'sets.json'), JSON.stringify(o.sets, null, 2));
   return rigDir;
@@ -11266,6 +11268,474 @@ describe('#283: a per-chain --reduce holds the legs against slide while the trun
       const miss = fails(m.ran).filter((l) => l.includes('POSE_LANDS') && /bone "leg_[rl][01]" aim .* the tolerance is 0\.21°/.test(l));
       expect(miss.length).toBeGreaterThan(0);
       console.log(`  mutant "#283 chain tolerance dropped": ${miss[0]!.slice(0, 200)}`);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, SLOW);
+});
+
+describe('face and body dial sliders (rig-c/pose#454)', () => {
+  function dialRigOpts(): RigOpts {
+    return {
+      bones: (bs) => [
+        ...bs,
+        { name: 'head', parent: 'neck', x: 0, y: 20 },
+        { name: 'yaw_dial', parent: 'root', x: 0, y: 0 },
+        { name: 'pitch_dial', parent: 'root', x: 0, y: 0 },
+        { name: 'body_yaw_dial', parent: 'root', x: 0, y: 0 },
+      ],
+      constraints: [
+        {
+          name: 'yaw',
+          type: 'slider',
+          animation: 'turn',
+          bone: 'yaw_dial',
+          property: 'rotate',
+          from: -15,
+          to: 0,
+          scale: 0.0625,
+          local: true,
+          additive: true,
+          mix: 1,
+        },
+        {
+          name: 'pitch',
+          type: 'slider',
+          animation: 'tilt',
+          bone: 'pitch_dial',
+          property: 'rotate',
+          from: -12,
+          to: 0,
+          scale: 0.0625,
+          local: true,
+          additive: true,
+          mix: 1,
+        },
+        {
+          name: 'body_yaw',
+          type: 'slider',
+          animation: 'body_turn',
+          bone: 'body_yaw_dial',
+          property: 'rotate',
+          from: -20,
+          to: 0,
+          scale: 0.0625,
+          local: true,
+          additive: true,
+          mix: 1,
+        },
+      ],
+      motion: {
+        spec: 'rigc-motion/1',
+        archetype: 'stick',
+        cut: 'stick',
+        easings: {},
+        animations: {
+          turn: {
+            duration: 1.875,
+            loop: false,
+            tracks: [
+              {
+                bone: 'head',
+                property: 'translate',
+                keys: [
+                  { t: 0, v: [-6, 0] },
+                  { t: 0.9375, v: [0, 0] },
+                  { t: 1.875, v: [6, 0] },
+                ],
+              },
+            ],
+          },
+          tilt: {
+            duration: 1.5,
+            loop: false,
+            tracks: [
+              {
+                bone: 'head',
+                property: 'translate',
+                keys: [
+                  { t: 0, v: [0, 5] },
+                  { t: 0.75, v: [0, 0] },
+                  { t: 1.5, v: [0, -5] },
+                ],
+              },
+            ],
+          },
+          body_turn: {
+            duration: 2.5,
+            loop: false,
+            tracks: [
+              {
+                bone: 'chest',
+                property: 'translate',
+                keys: [
+                  { t: 0, v: [-4, 0] },
+                  { t: 1.25, v: [0, 0] },
+                  { t: 2.5, v: [4, 0] },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    };
+  }
+
+  function fourWayTurnPose(scale = 1): Record<string, unknown> {
+    const N = 25;
+    const DT = 1 / 24;
+    const m: Motion = { ...BASE, n: N, dt: DT, hip: () => [0, 0], trunk: () => 90, rt: () => -90, rs: () => -90, lt: () => -90, ls: () => -90 };
+    return poseDoc(m, (i, j) => {
+      const neck = (j.neck as { at: Pt }).at;
+      const midEye: Pt = [neck[0], neck[1] - 35];
+      const dEye = 12;
+      const dEar = 24;
+      j.r_eye = { state: 'observed', at: [midEye[0] - dEye / 2, midEye[1]], score: 0.95 };
+      j.l_eye = { state: 'observed', at: [midEye[0] + dEye / 2, midEye[1]], score: 0.95 };
+      j.r_ear = { state: 'observed', at: [midEye[0] - dEar / 2, midEye[1] + 5], score: 0.95 };
+      j.l_ear = { state: 'observed', at: [midEye[0] + dEar / 2, midEye[1] + 5], score: 0.95 };
+
+      // Segments of 5 frames:
+      // 0..4: neutral (yaw 0°, pitch 0°, body 0°)
+      // 5..9: turn left (yaw -12° * scale, body -45°)
+      // 10..14: turn right (yaw +12° * scale, body +45°)
+      // 15..19: pitch up (pitch -9° * scale)
+      // 20..24: pitch down (pitch +9° * scale)
+      const rawYaw = i >= 5 && i <= 9 ? -12 * scale : i >= 10 && i <= 14 ? 12 * scale : 0;
+      const rawPitch = i >= 15 && i <= 19 ? -9 * scale : i >= 20 && i <= 24 ? 9 * scale : 0;
+      const ty = Math.tan(rawYaw * RAD);
+      const tp = Math.tan(rawPitch * RAD);
+      j.nose = { state: 'observed', at: [midEye[0] - (ty * dEye) / 1.25, midEye[1] + 5 + tp * dEye], score: 0.95 };
+
+      const bDeg = i >= 5 && i <= 9 ? -45 * scale : i >= 10 && i <= 14 ? 45 * scale : 0;
+      const c = Math.cos(Math.min(80, Math.abs(bDeg)) * RAD);
+      for (const [r, l] of [['r_shoulder', 'l_shoulder'], ['r_hip', 'l_hip']] as const) {
+        const a = j[r]!.at as Pt;
+        const b = j[l]!.at as Pt;
+        const mx = (a[0] + b[0]) / 2;
+        const half = ((b[0] - a[0]) / 2) * c;
+        j[r] = { ...j[r]!, at: [mx - half, a[1]] };
+        j[l] = { ...j[l]!, at: [mx + half, b[1]] };
+      }
+      if (bDeg !== 0) {
+        const sign = bDeg > 0 ? 1 : -1;
+        j.neck = { ...j.neck!, at: [neck[0] - 4 * sign, neck[1]] };
+      }
+    });
+  }
+
+  test('refuses by name when a map names both bone and slider, a malformed slider, a slider the rig lacks, or a duplicate slider', () => {
+    const badMaps: Array<{ map: Record<string, unknown>; code: string; text: string }> = [
+      {
+        map: { ...baseMap(), face: { yaw: { bone: 'yaw_dial', slider: 'yaw', range: [-15, 15] } } },
+        code: 'MAP_FACE_BONE',
+        text: '"face.yaw"',
+      },
+      {
+        map: { ...baseMap(), face: { pitch: { bone: 'pitch_dial', slider: 'pitch', range: [-12, 12] } } },
+        code: 'MAP_FACE_BONE',
+        text: '"face.pitch"',
+      },
+      {
+        map: { ...baseMap(), body: { yaw: { bone: 'body_yaw_dial', slider: 'body_yaw', range: [-20, 20] } } },
+        code: 'MAP_BODY_BONE',
+        text: '"body.yaw"',
+      },
+      {
+        map: { ...baseMap(), face: { yaw: { slider: '' } } },
+        code: 'MAP_FACE_BONE',
+        text: '"face.yaw"',
+      },
+      {
+        map: { ...baseMap(), body: { yaw: { slider: '' } } },
+        code: 'MAP_BODY_BONE',
+        text: '"body.yaw"',
+      },
+      {
+        map: { ...baseMap(), face: { yaw: { slider: 'no_such_slider' } } },
+        code: 'MAP_SLIDER_EXISTS',
+        text: 'slider "no_such_slider" is not in the rig',
+      },
+      {
+        map: { ...baseMap(), body: { yaw: { slider: 'missing_body_slider' } } },
+        code: 'MAP_SLIDER_EXISTS',
+        text: 'slider "missing_body_slider" is not in the rig',
+      },
+      {
+        map: { ...baseMap(), face: { yaw: { slider: 'yaw' }, pitch: { slider: 'yaw' } } },
+        code: 'MAP_BONE_ONCE',
+        text: 'yaw_dial',
+      },
+      {
+        map: { ...baseMap(), face: { yaw: { slider: 'yaw' } }, body: { yaw: { bone: 'yaw_dial', range: [-15, 15] } } },
+        code: 'MAP_BONE_ONCE',
+        text: 'yaw_dial',
+      },
+    ];
+    for (const { map, code, text } of badMaps) {
+      const c = setup({ rig: dialRigOpts(), map });
+      const r = retarget(c);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain(code);
+      expect(r.stderr).toContain(text);
+    }
+  }, SLOW);
+
+  test('synthetic 4-way turn (left, right, up, down) keys face.yaw, face.pitch, and body.yaw sliders in their own ranges with the right sign and order, matching dial-bone keys', () => {
+    const pose = fourWayTurnPose(1);
+    const rig = dialRigOpts();
+
+    const cSlider = setup({
+      rig,
+      map: {
+        ...baseMap(),
+        face: { yaw: { slider: 'yaw' }, pitch: { slider: 'pitch' } },
+        body: { yaw: { slider: 'body_yaw' } },
+      },
+      pose,
+    });
+    const cDialName = setup({
+      rig,
+      map: {
+        ...baseMap(),
+        face: { yaw: { slider: 'yaw_dial' }, pitch: { slider: 'pitch_dial' } },
+        body: { yaw: { slider: 'body_yaw_dial' } },
+      },
+      pose,
+    });
+    const cBone = setup({
+      rig,
+      map: {
+        ...baseMap(),
+        face: {
+          yaw: { bone: 'yaw_dial', range: [-15, 15] },
+          pitch: { bone: 'pitch_dial', range: [-12, 12] },
+        },
+        body: {
+          yaw: { bone: 'body_yaw_dial', range: [-20, 20] },
+        },
+      },
+      pose,
+    });
+
+    const rSlider = retarget(cSlider, ['--bends', 'clamp']);
+    expect(rSlider.stderr).toBe('');
+    expect(rSlider.status).toBe(0);
+    expect(linesOf(rSlider, 'FACE')[0]).toContain('mapped yaw → slider "yaw" [-15, 15]°');
+    expect(linesOf(rSlider, 'FACE')[0]).toContain('pitch → slider "pitch" [-12, 12]°');
+    expect(linesOf(rSlider, 'BODY')[0]).toContain('mapped yaw → slider "body_yaw" [-20, 20]°');
+
+    const rDialName = retarget(cDialName, ['--bends', 'clamp']);
+    expect(rDialName.stderr).toBe('');
+    expect(rDialName.status).toBe(0);
+
+    const rBone = retarget(cBone, ['--bends', 'clamp']);
+    expect(rBone.stderr).toBe('');
+    expect(rBone.status).toBe(0);
+
+    // Identical motion output between slider and bone with matching range.
+    const mSlider = readFileSync(cSlider.out, 'utf8');
+    const mDialName = readFileSync(cDialName.out, 'utf8');
+    const mBone = readFileSync(cBone.out, 'utf8');
+    expect(mSlider).toBe(mBone);
+    expect(mDialName).toBe(mBone);
+
+    const parsed = JSON.parse(mSlider) as {
+      animations: { dance: { tracks: Array<{ bone?: string; property: string; keys: Array<{ t: number; v: number[] }> }> } };
+    };
+    const trackVals = (bone: string) =>
+      parsed.animations.dance.tracks.find((tr) => tr.bone === bone && tr.property === 'rotate')!.keys.map((k) => k.v[0]!);
+    const yawKeys = trackVals('yaw_dial');
+    const pitchKeys = trackVals('pitch_dial');
+    const bodyKeys = trackVals('body_yaw_dial');
+
+    // Right sign and order across neutral (f2), left (f7), right (f12), up (f17), down (f22):
+    expect(Math.abs(yawKeys[2]!)).toBeLessThan(1);
+    expect(yawKeys[7]!).toBeLessThan(-8);
+    expect(yawKeys[12]!).toBeGreaterThan(8);
+    expect(yawKeys[7]!).toBeLessThan(yawKeys[2]!);
+    expect(yawKeys[2]!).toBeLessThan(yawKeys[12]!);
+
+    expect(Math.abs(pitchKeys[2]!)).toBeLessThan(1);
+    expect(pitchKeys[17]!).toBeLessThan(-6);
+    expect(pitchKeys[22]!).toBeGreaterThan(6);
+    expect(pitchKeys[17]!).toBeLessThan(pitchKeys[2]!);
+    expect(pitchKeys[2]!).toBeLessThan(pitchKeys[22]!);
+
+    expect(Math.abs(bodyKeys[2]!)).toBeLessThan(2);
+    expect(bodyKeys[7]!).toBeLessThan(-8);
+    expect(bodyKeys[12]!).toBeGreaterThan(8);
+    expect(bodyKeys[7]!).toBeLessThan(bodyKeys[2]!);
+    expect(bodyKeys[2]!).toBeLessThan(bodyKeys[12]!);
+
+    // Posed build moves the head bone through the turn/tilt sliders in the right order:
+    const doc = loadBuild(cSlider.build);
+    const posed = poseRawAnimation(doc, 'dance', Array.from({ length: 24 }, () => 1 / 24), {}, 'animation').map((p) => byName(p.bones));
+    const headX = (f: number) => posed[f]!.get('head')!.worldX - posed[f]!.get('neck')!.worldX;
+    const headY = (f: number) => posed[f]!.get('head')!.worldY - posed[f]!.get('neck')!.worldY;
+    expect(headX(7)).toBeLessThan(headX(2) - 2);
+    expect(headX(12)).toBeGreaterThan(headX(2) + 2);
+    expect(headY(17)).toBeGreaterThan(headY(2) + 2);
+    expect(headY(22)).toBeLessThan(headY(2) - 2);
+  }, SLOW);
+
+  test('stays within slider ranges on extreme turns and public head-turn fixtures (#138, #334), and keeps fixtures without slider byte-identical', () => {
+    const rig = dialRigOpts();
+    // 1. Extreme 3x synthetic turns stay strictly within [-15, 15], [-12, 12], [-20, 20].
+    const cExtreme = setup({
+      rig,
+      map: {
+        ...baseMap(),
+        face: { yaw: { slider: 'yaw' }, pitch: { slider: 'pitch' } },
+        body: { yaw: { slider: 'body_yaw' } },
+      },
+      pose: fourWayTurnPose(3.5),
+    });
+    const rExtreme = retarget(cExtreme, ['--bends', 'clamp']);
+    expect(rExtreme.stderr).toBe('');
+    expect(rExtreme.status).toBe(0);
+    const mExtreme = JSON.parse(readFileSync(cExtreme.out, 'utf8')) as {
+      animations: { dance: { tracks: Array<{ bone?: string; property: string; keys: Array<{ t: number; v: number[] }> }> } };
+    };
+    const valsOf = (m: typeof mExtreme, bone: string) =>
+      m.animations.dance.tracks.find((tr) => tr.bone === bone && tr.property === 'rotate')!.keys.map((k) => k.v[0]!);
+    for (const v of valsOf(mExtreme, 'yaw_dial')) {
+      expect(v).toBeGreaterThanOrEqual(-15);
+      expect(v).toBeLessThanOrEqual(15);
+    }
+    for (const v of valsOf(mExtreme, 'pitch_dial')) {
+      expect(v).toBeGreaterThanOrEqual(-12);
+      expect(v).toBeLessThanOrEqual(12);
+    }
+    for (const v of valsOf(mExtreme, 'body_yaw_dial')) {
+      expect(v).toBeGreaterThanOrEqual(-20);
+      expect(v).toBeLessThanOrEqual(20);
+    }
+
+    // 2. Public monotone head-turn fixture (#138): yaw sweeps -30° → +30°, pitch sweeps -15° → +15°.
+    const publicSweep = poseDoc(BASE, (i, joints) => {
+      const neck = (joints.neck as { at: Pt }).at;
+      const midEye: Pt = [neck[0], neck[1] - 35];
+      const dEye = 12;
+      const dEar = 24;
+      joints.r_eye = { state: 'observed', at: [midEye[0] - dEye / 2, midEye[1]], score: 0.95 };
+      joints.l_eye = { state: 'observed', at: [midEye[0] + dEye / 2, midEye[1]], score: 0.95 };
+      joints.r_ear = { state: 'observed', at: [midEye[0] - dEar / 2, midEye[1] + 5], score: 0.95 };
+      joints.l_ear = { state: 'observed', at: [midEye[0] + dEar / 2, midEye[1] + 5], score: 0.95 };
+      const yawDeg = -30 + (60 * i) / (BASE.n - 1);
+      const pitchDeg = -15 + (30 * i) / (BASE.n - 1);
+      const ty = Math.tan(yawDeg * RAD);
+      const tp = Math.tan(pitchDeg * RAD);
+      joints.nose = { state: 'observed', at: [midEye[0] - (ty * dEye) / 1.25, midEye[1] + 5 + tp * dEye], score: 0.95 };
+    });
+    const cSweep = setup({
+      rig,
+      map: { ...baseMap(), face: { yaw: { slider: 'yaw' }, pitch: { slider: 'pitch' } } },
+      pose: publicSweep,
+    });
+    const rSweep = retarget(cSweep, ['--bends', 'clamp']);
+    expect(rSweep.stderr).toBe('');
+    expect(rSweep.status).toBe(0);
+    const mSweep = JSON.parse(readFileSync(cSweep.out, 'utf8')) as typeof mExtreme;
+    const sweepYaw = valsOf(mSweep, 'yaw_dial');
+    const sweepPitch = valsOf(mSweep, 'pitch_dial');
+    expect(sweepYaw[0]).toBeCloseTo(-15, 2);
+    expect(sweepYaw[sweepYaw.length - 1]).toBeCloseTo(15, 2);
+    expect(sweepPitch[0]).toBeCloseTo(-12, 2);
+    expect(sweepPitch[sweepPitch.length - 1]).toBeCloseTo(12, 2);
+    for (let i = 1; i < sweepYaw.length; i++) {
+      expect(sweepYaw[i]!).toBeGreaterThan(sweepYaw[i - 1]!);
+      expect(sweepPitch[i]!).toBeGreaterThan(sweepPitch[i - 1]!);
+    }
+
+    // 3. Existing public fixtures without slider (examples/wave and examples/walk) remain byte-identical.
+    for (const ex of ['wave', 'walk'] as const) {
+      const d1 = tempDir();
+      const d2 = tempDir();
+      const out1 = join(d1, 'motion.json');
+      const out2 = join(d2, 'motion.json');
+      const rigPath = join(ROOT, 'examples', 'wave', 'rig');
+      const mapPath = join(ROOT, 'examples', ex, 'map.json');
+      const posePath = join(ROOT, 'examples', ex, 'pose.json');
+      const run1 = cli(['retarget', '--rig', rigPath, '--map', mapPath, '--pose', posePath, '--out', out1]);
+      const run2 = cli(['retarget', '--rig', rigPath, '--map', mapPath, '--pose', posePath, '--out', out2]);
+      expect(run1.status).toBe(0);
+      expect(run2.status).toBe(0);
+      expect(readFileSync(out1).equals(readFileSync(out2))).toBe(true);
+    }
+  }, SLOW);
+
+  test('time-driven slider (bone: null) keys { slider, property: "time" } in [0, duration] with the right sign and order, and mutant flipping slider range fails sign/order', () => {
+    const pose = fourWayTurnPose(1);
+    const baseRig = dialRigOpts();
+    const timeRig: RigOpts = {
+      ...baseRig,
+      constraints: [
+        { name: 'yaw_time', type: 'slider', animation: 'turn', additive: true, mix: 1 },
+        { name: 'pitch_time', type: 'slider', animation: 'tilt', additive: true, mix: 1 },
+      ],
+    };
+    const cTime = setup({
+      rig: timeRig,
+      map: {
+        ...baseMap(),
+        face: { yaw: { slider: 'yaw_time' }, pitch: { slider: 'pitch_time' } },
+      },
+      pose,
+    });
+    const rTime = retarget(cTime, ['--bends', 'clamp']);
+    expect(rTime.stderr).toBe('');
+    expect(rTime.status).toBe(0);
+    const mTime = JSON.parse(readFileSync(cTime.out, 'utf8')) as {
+      animations: { dance: { tracks: Array<{ slider?: string; property: string; keys: Array<{ t: number; v: number[] }> }> } };
+    };
+    const yawTime = mTime.animations.dance.tracks.find((tr) => tr.slider === 'yaw_time' && tr.property === 'time')!.keys.map((k) => k.v[0]!);
+    const pitchTime = mTime.animations.dance.tracks.find((tr) => tr.slider === 'pitch_time' && tr.property === 'time')!.keys.map((k) => k.v[0]!);
+    for (const v of yawTime) {
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(1.875);
+    }
+    for (const v of pitchTime) {
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(1.5);
+    }
+    // Neutral at midpoint (0.9375s / 0.75s), left < neutral < right, up < neutral < down:
+    expect(yawTime[7]!).toBeLessThan(0.9375 - 0.3);
+    expect(Math.abs(yawTime[2]! - 0.9375)).toBeLessThan(0.1);
+    expect(yawTime[12]!).toBeGreaterThan(0.9375 + 0.3);
+    expect(pitchTime[17]!).toBeLessThan(0.75 - 0.25);
+    expect(Math.abs(pitchTime[2]! - 0.75)).toBeLessThan(0.1);
+    expect(pitchTime[22]!).toBeGreaterThan(0.75 + 0.25);
+
+    // Mutant: flipping the mapped dial sign in face.ts reverses left/right and up/down order.
+    mkdirSync(MUTANTS, { recursive: true });
+    const d = mkdtempSync(join(MUTANTS, 'm454-'));
+    try {
+      cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
+      cpSync(join(ROOT, 'cli.ts'), join(d, 'cli.ts'));
+      cpSync(join(ROOT, 'package.json'), join(d, 'package.json'));
+      const path = join(d, 'src', 'face.ts');
+      const from = 'const degs = raw.map((x) => (x < 0 ? -mapKneeSide(-x, limNeg, peakNeg) : mapKneeSide(x, limPos, peakPos)));';
+      const before = readFileSync(path, 'utf8');
+      expect(before.split(from)).toHaveLength(2);
+      writeFileSync(path, before.replace(from, 'const degs = raw.map((x) => -(x < 0 ? -mapKneeSide(-x, limNeg, peakNeg) : mapKneeSide(x, limPos, peakPos)));'));
+
+      const cMut = setup({
+        rig: dialRigOpts(),
+        map: {
+          ...baseMap(),
+          face: { yaw: { slider: 'yaw' }, pitch: { slider: 'pitch' } },
+        },
+        pose,
+      });
+      const rMut = retarget(cMut, ['--bends', 'clamp'], join(d, 'cli.ts'));
+      expect(rMut.status).toBe(0);
+      const mMut = JSON.parse(readFileSync(cMut.out, 'utf8')) as {
+        animations: { dance: { tracks: Array<{ bone?: string; property: string; keys: Array<{ t: number; v: number[] }> }> } };
+      };
+      const mutYaw = mMut.animations.dance.tracks.find((tr) => tr.bone === 'yaw_dial' && tr.property === 'rotate')!.keys.map((k) => k.v[0]!);
+      expect(mutYaw[7]!).toBeGreaterThan(0);
+      expect(mutYaw[12]!).toBeLessThan(0);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }

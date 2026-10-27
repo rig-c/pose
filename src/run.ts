@@ -18,7 +18,7 @@ import { convertCoco17, personTrack, readPoseSequence, TRAVEL_IN_PLACE, type Cam
 import { isObject, lineOf, parseJson, Problems, Refusal, type Problem } from './problems.ts';
 import { boneIdentity, droppedLine, keptOutLine, mergeProblems, readFragment, readIdle, targetOf, trackLabel, type IdleReading, type RigcTrack, type Target } from './idle.ts';
 import { closeAnimationLoop, bendGroupLine, bendGroups, bendLine, endOnLine, flipLine, holdLine, nodLine, pelvisLine, rangeLine, reachCostLine, reachOriginLine, reachOriginWarn, retarget, shortLine, turnLine, type MotionTrack, type RetargetOptions, type ScaleBand, type ScaleFit } from './retarget.ts';
-import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, readBuild, resolveRig, restOf, seamRender, slotsOf } from './rigc.ts';
+import { attachmentBones, baseMotionOf, buildInto, rigcVersion, folds, gate, readBuild, resolveRig, restOf, seamRender, slidersOf, slotsOf } from './rigc.ts';
 import { partsPath, projectSeams, readSeamDoc, readSeamPairs, seamLines, type SeamPair } from './seams.ts';
 import { artRangeLine, chainsMoving, phaseLines, raisedLine, RAISED_WITHIN, reachLine, switchBindLines, switchLine, switchMinLines, switchTurnLines, uncoveredFolds } from './switch.ts';
 import { jitterLine, landed, type FeetReading, type JitterRow, type Landing, measureFeet, measureJitter, measureLanding, measurePosture, measureShear, poseFrames, postureLines } from './verify.ts';
@@ -236,7 +236,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     const rigc = rigcVersion();
     const rest = restOf(doc0);
     const slots = slotsOf(doc0);
-    resolveMap(map, rest, a.map, slots, input.sets);
+    const sliders = slidersOf(doc0);
+    resolveMap(map, rest, a.map, slots, input.sets, sliders);
 
     if (shoulder !== null) {
       shoulderRigGuard(shoulder.config, rest, map, doc0);
@@ -433,9 +434,9 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       const mapped = [
         ...map.chains.flatMap((c) => c.bones),
         ...(map.translate === null ? [] : [map.translate.bone]),
-        ...(map.face?.yaw === undefined ? [] : [map.face.yaw.bone]),
-        ...(map.face?.pitch === undefined ? [] : [map.face.pitch.bone]),
-        ...(map.body?.yaw === undefined ? [] : [map.body.yaw.bone]),
+        ...(map.face?.yaw === undefined || map.face.yaw.sliderTrack !== undefined ? [] : [map.face.yaw.bone]),
+        ...(map.face?.pitch === undefined || map.face.pitch.sliderTrack !== undefined ? [] : [map.face.pitch.bone]),
+        ...(map.body?.yaw === undefined || map.body.yaw.sliderTrack !== undefined ? [] : [map.body.yaw.bone]),
       ];
       const below = new Map<string, string[]>();
       for (const m of new Set(mapped)) {
