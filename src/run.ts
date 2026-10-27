@@ -11,6 +11,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { knownSetsOf, readMap, resolveMap, type JointMap, type Rest } from './map.ts';
 import { cleanLine, cleanSummaryLine, inferredSource } from './clean.ts';
 import { depthLine, depthRecleanText, forwardShinFrames, layersOf, type FrameLayers } from './depth.ts';
+import { orderFromSwing, swingLines } from './swing.ts';
 import { drawGapLines, drawOrderFromDepth, drawOrderKeys, drawOrderLines, type DrawOrderReading } from './draworder.ts';
 import { bindingProblems, groupLines, groupsReport, keyGroups, missingLayoutGroups, readLayout, resolveGroups, type GroupOrder } from './layout.ts';
 import { convertCoco17, personTrack, readPoseSequence, TRAVEL_IN_PLACE, type CameraFrame } from './pose.ts';
@@ -329,6 +330,9 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     if (legOrder !== null && layout === null) layoutGroups = missingLayoutGroups(map, rest, doc0.slots, r.times.length);
     if (legOrder !== null) for (const l of [...drawOrderLines(legOrder), ...drawGapLines(legOrder)]) say(`  ${l}`);
     if (layoutGroups !== null && drawOrder !== null) for (const l of groupLines(layoutGroups, drawOrder.keys)) say(`  ${l}`);
+    const authoredOrder = orderFromSwing(drawOrder, map, rest, doc0.slots, slots, r.shown, r.slotSets, r.times);
+    drawOrder = authoredOrder.reading;
+    for (const line of swingLines(authoredOrder.swings)) say(`  SWING  ${line}`);
     if (r.pivot !== null) say(`  PIVOT  bone "${r.pivot.bone}"'s origin is ${r.pivot.distance.toFixed(2)} units (${r.pivot.hipWidths.toFixed(3)} hip widths) from its thigh roots' midpoint (${r.pivot.roots.join(' + ')}): dx ${r.pivot.offset[0].toFixed(2)}, dy ${r.pivot.offset[1].toFixed(2)}, at setup — the pivot every hip turn swings the legs about`);
     if (r.feet !== null) {
       const f = r.feet;
@@ -674,7 +678,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         ...(layers !== null ? { layers: layers.map((l, frame) => ({ frame, order: l.order, depth: l.depth })) } : {}),
         // Only with --draw-order depth (#304). A key's `t` here is its frame's time, the report's clock (#214); the
         // motion's key is written half a frame before it (#325).
-        ...(drawOrder !== null ? { drawOrder: { source: 'depth', pairs: drawOrder.pairs, keys: drawOrder.keys.map((k) => ({ ...k, t: r.times[k.frame]! })), spans: drawOrder.spans, gaps: drawOrder.gaps ?? [], ...(layoutGroups !== null ? groupsReport(layout, layoutGroups) : {}) } } : {}),
+        ...(drawOrder !== null ? { drawOrder: { source: authoredOrder.swings.length === 0 ? 'depth' : a.drawOrder === 'depth' ? 'depth+authored' : 'authored', ...(authoredOrder.swings.length === 0 ? {} : { authored: authoredOrder.swings }), pairs: drawOrder.pairs, keys: drawOrder.keys.map((k) => ({ ...k, t: r.times[k.frame]! })), spans: drawOrder.spans, gaps: drawOrder.gaps ?? [], ...(layoutGroups !== null ? groupsReport(layout, layoutGroups) : {}) } } : {}),
         // Only with --contact-keys (#303).
         ...(r.feet?.contactKeys !== undefined && contactKeysSnapshot !== null ? { contactKeys: { path: a.contactKeysFile, sha256: createHash('sha256').update(contactKeysSnapshot).digest('hex'), keys: r.feet.contactKeys.keys.length, from: r.feet.contactKeys.from, changed: r.feet.contactKeys.changed, kept: r.feet.contactKeys.kept, unreached: r.feet.contactKeys.unreached } } : {}),
         stance: r.stance === null ? null : { tolerance: r.stance.tolerance, release: r.stance.release, minSeconds: r.stance.minSeconds, bounds: r.stance.bounds, ...(r.stance.range === undefined ? {} : { range: r.stance.range }), runs: r.stance.runs, over: r.stance.over },

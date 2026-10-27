@@ -242,6 +242,8 @@ export interface Switches {
   offsetTracks: MotionTrack[];
   /** Per switched or hidden slot, what it shows on each frame (null: nothing). */
   shown: Map<string, Array<string | null>>;
+  /** Final source-set ownership per slot, only when an authored swing needs it. */
+  slotSets?: Map<string, Array<string | null>>;
   /** Per set, its distance on each frame, degrees. */
   distances: Map<string, number[]>;
   /** Per chain, the behind-the-torso set spans (including same-set gap holds, #136) for `clampArt`. */
@@ -933,13 +935,19 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
     for (const b of Object.keys(a.offsets)) if (!boneOrder.includes(b)) boneOrder.push(b);
   }
   const shown = new Map<string, Array<string | null>>();
+  const slotSets = map.alternates.some(a => a.swing !== undefined) ? new Map<string, Array<string | null>>() : undefined;
+  const markSet = (slot: string, frame: number, set: string): void => {
+    if (slotSets === undefined) return;
+    if (!slotSets.has(slot)) slotSets.set(slot, Array<string | null>(n).fill(null));
+    slotSets.get(slot)![frame] = set;
+  };
   const moved = new Map<string, Array<[number, number]>>();
   for (const sw of switches) {
     const values: Array<[string, string | null]> = [...Object.entries(sw.slots), ...sw.hides.map((h): [string, null] => [h, null])];
     for (const [s, v] of values) {
       if (!shown.has(s)) shown.set(s, Array.from({ length: n }, () => slots.get(s)!.setup));
       const row = shown.get(s)!;
-      for (let i = sw.frames[0]; i <= sw.frames[1]; i++) row[i] = v;
+      for (let i = sw.frames[0]; i <= sw.frames[1]; i++) { row[i] = v; markSet(s, i, sw.set); }
     }
     for (const [b, o] of Object.entries(sw.offsets)) {
       if (!moved.has(b)) moved.set(b, Array.from({ length: n }, (): [number, number] => [0, 0]));
@@ -1021,7 +1029,7 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
           if (blocked[i]) continue;
           cArr[i] = prevSet;
           for (const [s, sc] of layer.slotChain) {
-            if (sc === cn && shown.has(s)) shown.get(s)![i] = prevSet.slots[s] ?? null;
+            if (sc === cn && shown.has(s)) { shown.get(s)![i] = prevSet.slots[s] ?? null; markSet(s, i, prevSet.name); }
           }
         }
       }
@@ -1319,11 +1327,11 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
         if (blocked[i]) continue;
         for (const [s, cn] of layer.slotChain) {
           const a = cPick.get(cn)?.[i] ?? null;
-          if (a !== null) shown.get(s)![i] = a.slots[s] ?? null;
+          if (a !== null) { shown.get(s)![i] = a.slots[s] ?? null; markSet(s, i, a.name); }
         }
         if (layer.torsoSlot !== null && shown.has(layer.torsoSlot)) {
           const picked = (switchingChains.length > 0 ? switchingChains : chains).map((cn) => cPick.get(cn)![i]);
-          if (picked.every((a) => a !== null)) shown.get(layer.torsoSlot)![i] = picked[0]!.slots[layer.torsoSlot] ?? slots.get(layer.torsoSlot)!.setup;
+          if (picked.every((a) => a !== null)) { shown.get(layer.torsoSlot)![i] = picked[0]!.slots[layer.torsoSlot] ?? slots.get(layer.torsoSlot)!.setup; markSet(layer.torsoSlot, i, picked[0]!.name); }
         }
       }
     }
@@ -1347,8 +1355,8 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
   for (const sw of switches) {
     if (sw.bound !== true) continue;
     for (let i = sw.frames[0]; i <= sw.frames[1]; i++) {
-      for (const [sl, v] of Object.entries(sw.slots)) shown.get(sl)![i] = v;
-      for (const h of sw.hides) shown.get(h)![i] = null;
+      for (const [sl, v] of Object.entries(sw.slots)) { shown.get(sl)![i] = v; markSet(sl, i, sw.set); }
+      for (const h of sw.hides) { shown.get(h)![i] = null; markSet(h, i, sw.set); }
     }
   }
   const slotTracks: SlotTrack[] = [];
@@ -1378,7 +1386,7 @@ export function selectSwitches(map: JointMap, targets: ReadonlyMap<string, reado
     for (let k = 0; k + 1 < keys.length; k++) keys[k]!.ease = 'stepped';
     offsetTracks.push({ bone: b, property: 'translate', keys });
   }
-  return { switches, runs, slotTracks, offsetTracks, shown, distances, chainHolds };
+  return { switches, runs, slotTracks, offsetTracks, shown, distances, chainHolds, ...(slotSets === undefined ? {} : { slotSets }) };
 }
 
 /** Per chain, the frames on which a switch of a set depicting it shows: its art was painted for that pose. */
