@@ -36,6 +36,7 @@ import { pointAt, pointParts, partBone } from './map.ts';
 import { depthFeetOf, depthScaleLine, readDepthScale, footScaleTracks } from './depthscale.ts';
 import { measureDepthScaleLanding } from './verify.ts';
 import { scalePairWarning } from './scalepair.ts';
+import { shadeLimit, selectShadeChains, shadeSlots, readDepthShade, depthShadeTracks, shadeReconstruction } from './depthshade.ts';
 import { emitPhysicsTracks, fitSkirtPhysics, type ClothFitResult } from './cloth.ts';
 import type { ClothWindow } from './compare.ts';
 
@@ -100,6 +101,10 @@ export interface RetargetArgs extends RetargetOptions {
   output?: 'default' | 'verbose' | 'summary';
   /** `--draw-order depth` (rig-c/pose#304): key the animation's draw order from the sequence's depth. Absent: no draw-order key, the output as before. */
   drawOrder?: 'depth';
+  /** #446: optional light RGB shade from derived depth; absent keeps output bytes. */
+  depthShade?: number;
+  /** #446: exact mapped limb chain names; absent shades anatomical legs only. */
+  depthShadeChains?: string[];
   /** `--contact-keys` (rig-c/pose#303): the hand contact keys' file, `rig-pose-contact-keys/1`. Absent: the support as read, the output as before. */
   contactKeysFile?: string;
 }
@@ -110,6 +115,8 @@ export interface RunResult {
 }
 
 export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunResult {
+  if (a.depthShadeChains !== undefined && a.depthShade === undefined) throw new Refusal([{ code: 'DEPTH_SHADE_CHAINS', text: '--depth-shade-chains needs --depth-shade' }]);
+  if (a.depthShade !== undefined) shadeLimit(a.depthShade);
   const lines: string[] = [];
   const output = a.output ?? 'default';
   /** A line every mode prints: the run line, the summary lines, the `wrote` lines. */
@@ -154,6 +161,8 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
   const fragment = a.merge === undefined ? [] : readFragment(parseJson(readFileSync(a.merge, 'utf8'), a.merge, 'MERGE_JSON'), a.merge);
   const mapSnapshot = readReportInput(a.map), poseSnapshot = readReportInput(a.pose);
   const map = readMap(mapSnapshot.bytes.toString('utf8'), a.map);
+  const shadeSelection = a.depthShade === undefined ? null : selectShadeChains(map, a.depthShadeChains);
+  const shadeSources = shadeSelection === null ? null : shadeSlots(map, map.chains.flatMap(c => c.bones.map(bone => ({ name: bone, bone }))), shadeSelection);
   // #283: each chain --reduce names must be the map's; a bone takes its chain's tolerance (the tighter, if two chains name it).
   let reduceOf = a.reduce === undefined ? null : reduceTolerances(map, a.reduce, a.reduceChains, a.map);
   const poseText = poseSnapshot.bytes.toString('utf8');
@@ -202,10 +211,18 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     return { config, reading, snapshots: [configuration, restInput, painting], inputs: { configuration: configuration.identity, rest: restInput.identity, painting: painting.identity } };
   })();
   const depthScale = a.depthScale === undefined ? null : readDepthScale(frames, seq.frames.map(f => f.depth), seq.cleaned!.params.depth?.gait, a.depthScale, seq.cleaned!.params.loop);
-  if (depthScale !== null) {
-    const old = forwardShinFrames(frames, seq.frames);
+  if (depthScale !== null || shadeSources !== null) {
+    // Shade reads only selected leg sides; existing depth-scale checking is unchanged.
+    const checked = depthScale !== null ? seq.frames : seq.frames.map(f => ({ depth: {
+      ...(shadeSources!.has('r_leg') && f.depth?.r_shin !== undefined ? { r_shin: f.depth.r_shin } : {}),
+      ...(shadeSources!.has('l_leg') && f.depth?.l_shin !== undefined ? { l_shin: f.depth.l_shin } : {}),
+    } }));
+    const old = forwardShinFrames(frames, checked);
     if (old.length > 0) refuse([{ code: 'DEPTH_RECLEAN', text: depthRecleanText(a.pose, seq.cleaned!.params.depth?.gait ?? null, old) }]);
   }
+  // Source/map refusals precede any expensive build. Pseudo slot names here
+  // identify only mapped limbs; actual gated rig slots are resolved below.
+  if (a.depthShade !== undefined) readDepthShade(frames, seq.frames.map(f => f.depth), seq.cleaned!.params, a.depthShade, shadeSources!);
   const times = seq.frames.map((f) => f.t);
 
   const scratch = mkdtempSync(join(tmpdir(), 'rig-pose-'));
@@ -393,7 +410,17 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     // The idle against the new animation (#43 item 2): what it drops, and with --carry-idle, looped back in.
     const groups = (isObject(base.groups) ? base.groups : {}) as Record<string, string[]>;
     const easings = (isObject(base.easings) ? base.easings : {}) as Record<string, number[]>;
-    const own = r.animation.tracks as unknown as RigcTrack[];
+    // Dense slot colour is appended after bone reduction. It owns RGB before
+    // carry/merge examines collisions; its writer closes its loop independently.
+    const shade = a.depthShade === undefined ? null : readDepthShade(frames, seq.frames.map(f => f.depth), seq.cleaned!.params, a.depthShade, shadeSlots(map, doc0.slots, shadeSelection!));
+    const shadeTracks = shade === null ? [] : depthShadeTracks(shade, a.depthShade!, r.times, r.animation.duration, seq.cleaned!.params.loop, new Map(doc0.slots.map(s => [s.name, s.color])));
+    const reconstruction = shade === null ? null : shadeReconstruction(shade, seq.cleaned!.params, shadeSelection!);
+    if (shade !== null) {
+      for (const row of shade) if (row.unreadFrames.length > 0) say(`  DEPTH-SHADE-UNREAD ${row.limb}: multiplier 1 on frames ${row.unreadFrames.join(',')}; no direction guessed`);
+      say(`  DEPTH-SHADE k ${a.depthShade}, ${shadeTracks.length} slot RGB track(s); alpha preserved; held recorded signs and clean SG windows`);
+      for (const row of shade) say(`  DEPTH-SHADE ${row.limb}: ${row.slots.length} mapped slot(s), farthest behind ${row.farthest.toFixed(6)} px, ${row.window}-frame SG, ${row.unreadFrames.length} unread frame(s)${row.farthest === 0 ? '; no far depth, neutral' : ''}`);
+    }
+    const own = (shadeTracks.length === 0 ? r.animation.tracks : [...r.animation.tracks, ...shadeTracks]) as unknown as RigcTrack[];
     const T = r.animation.duration;
     let idle: IdleReading | null = null;
     if (!(idleName in animations)) say(`  IDLE   ${input.motion === null ? 'the rig has no motion spec' : `the rig's motion spec has no animation "idle" (it has ${Object.keys(animations).join(', ') || 'none'})`}; no idle read (--idle names another)`);
@@ -436,7 +463,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       for (const tr of fragment) say(`  MERGE  ${a.merge}: ${trackLabel(tr, groups)}, ${tr.keys.length} key(s) at t=${tr.keys[0]!.t}${tr.keys.length > 1 ? `–${tr.keys[tr.keys.length - 1]!.t}` : ''}s`);
     }
     const added = [...carried, ...fragment];
-    const tracked = added.length === 0 ? r.animation : { ...r.animation, tracks: [...own, ...added] };
+    const tracked = added.length === 0 && shadeTracks.length === 0 ? r.animation : { ...r.animation, tracks: [...own, ...added] };
     // #304: rig-c's one draw-order timeline sits on the animation beside its tracks; written only when keyed.
     const animation = drawOrder === null || drawOrder.keys.length === 0 ? tracked : { ...tracked, drawOrder: drawOrderKeys(drawOrder) };
     let motion = { ...base, animations: { ...animations, [a.name]: animation } };
@@ -609,7 +636,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
     assertReportInputs([rigSnapshot,mapSnapshot,poseSnapshot]);
     if (shoulder !== null) assertReportInputs(shoulder.snapshots);
     // Every retarget option as resolved: the report's `options`, and with the name the build record's `flags` (#270).
-    const options = { ...(shoulder === null ? {} : { shoulderLift: a.shoulderLiftFile }), minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', ...(a.depthScale === undefined ? {} : { depthScale: a.depthScale }), plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', floor: a.floor ?? null, raisedByHead: a.raisedByHead === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', ...(a.reduceChains === undefined ? {} : { reduceChains: a.reduceChains }), reduceHip: a.reduceHip ?? 'off', ...(a.reduceKeepPlanted === true ? { reduceKeepPlanted: true } : {}), ...(a.drawOrder !== undefined ? { drawOrder: a.drawOrder } : {}), ...(a.contactKeysFile !== undefined ? { contactKeys: a.contactKeysFile } : {}), ...(a.clothTrackFile !== undefined ? { clothTrack: a.clothTrackFile } : {}), ...(a.clothWindows !== undefined ? { clothWindows: a.clothWindows.map((w) => `${w.from}-${w.to}`).join(',') } : {}), ...(a.skirtSlots !== undefined ? { skirtSlots: a.skirtSlots } : {}) };
+    const options = { ...(shoulder === null ? {} : { shoulderLift: a.shoulderLiftFile }), minScore: a.minScore, flip: a.flip, short: a.short, bends: a.bends, bendTolerance: a.bendTolerance, switchTolerance: a.switchTolerance, switchMin: a.switchMin, switchAt: a.switchAt, profile: a.profile, legScale: a.legScale ?? 'off', ...(a.depthScale === undefined ? {} : { depthScale: a.depthScale }), ...(a.depthShade === undefined ? {} : { depthShade: a.depthShade, depthShadeChains: shadeSelection!.chains }), plantFeet: a.plantFeet === true, stance: a.stance ?? 'off', floor: a.floor ?? null, raisedByHead: a.raisedByHead === true, idle: idleName, carryIdle: a.carryIdle === true, merge: a.merge ?? null, reduce: a.reduce ?? 'off', ...(a.reduceChains === undefined ? {} : { reduceChains: a.reduceChains }), reduceHip: a.reduceHip ?? 'off', ...(a.reduceKeepPlanted === true ? { reduceKeepPlanted: true } : {}), ...(a.drawOrder !== undefined ? { drawOrder: a.drawOrder } : {}), ...(a.contactKeysFile !== undefined ? { contactKeys: a.contactKeysFile } : {}), ...(a.clothTrackFile !== undefined ? { clothTrack: a.clothTrackFile } : {}), ...(a.clothWindows !== undefined ? { clothWindows: a.clothWindows.map((w) => `${w.from}-${w.to}`).join(',') } : {}), ...(a.skirtSlots !== undefined ? { skirtSlots: a.skirtSlots } : {}) };
     const reportText = writeReport({
         spec: 'rig-pose-report/1',
         ...(shoulderReport === null ? {} : { shoulderLift: shoulderReport }),
@@ -671,6 +698,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
               ...(r.body.sets === undefined ? {} : { sets: r.body.sets }),
             },
         ...(depthScale === null || depthFeet === null ? {} : { depthScale: depthScale.map(({ values: _values, ...row }) => ({ ...row, bone: depthFeet[row.side].bone })) }),
+        ...(shade === null ? {} : { depthShade: { k: a.depthShade, selection: shadeSelection, reconstruction, limbs: shade } }),
         legScale: r.legScale.map(({ scale: _scale, asked: _asked, picture: _picture, ...rest }) => rest),
         pivot: r.pivot,
         pelvis: r.pelvis,
@@ -708,6 +736,7 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
         sequence: { path: a.pose, sha256: poseSnapshot.identity.sha256, source: seq.source },
         name: a.name,
         options,
+        ...(reconstruction === null ? {} : { depthShade: reconstruction }),
         ...(shoulder === null ? {} : { shoulderLift: shoulder.inputs }),
         ...(a.reference === undefined ? {} : { reference: a.reference }),
       }));

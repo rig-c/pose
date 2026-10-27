@@ -167,6 +167,11 @@ retarget
                         Walk uses ankle depth, run knee depth; affine clip extrema per side (zero span: 1). Requires
                         a foot bone at each ankle; scales x/y about its ankle, the sole follows. Keeps the anatomical
                         ankle. DEPTH-SCALE reports per-side min/median/max and clamped frames (default: off).
+  --depth-shade <k>    leg slot RGB shade from clean --depth walk|run; k in [0,1], off unless given.
+  --depth-shade-chains <list>  with --depth-shade: comma-separated mapped arm/leg chain names; default legs.
+                        Mapped arm/leg chain slots only; behind-plane depth normalized per limb over the clip,
+                        holds recorded signs and uses the recorded clean SG windows. Preserves alpha and setup RGB; k=1 is an identity.
+                        Bone --reduce leaves these dense RGB tracks intact. No far depth: no RGB track.
   --plant-feet          the hip is placed so the supporting foot stays where it took support: the lower ankle
                         in the picture, changing after the other has been 0.02 leg lengths lower for 0.1 s,
                         blended over 3 frames; a jump (both ankles and mid_hip 0.05 leg lengths above their
@@ -451,6 +456,19 @@ function legScaleOf(f: Map<string, string>): [number, number] | 'off' {
   return [parts[0]!, parts[1]!];
 }
 
+function depthShadeOf(f: Map<string, string>): number {
+  const raw = f.get('depth-shade')!;
+  const k = Number(raw);
+  if (raw.trim() === '' || !Number.isFinite(k) || k < 0 || k > 1) throw new Usage(`--depth-shade is "${raw}"; expected a finite RGB multiplier in [0, 1]`);
+  return k;
+}
+
+function depthShadeChainsOf(raw: string): string[] {
+  const names = raw.split(',').map(name => name.trim());
+  if (names.some(name => name === '')) throw new Usage(`--depth-shade-chains is "${raw}"; expected nonempty comma-separated map chain names`);
+  return [...new Set(names)];
+}
+
 function depthScaleOf(f: Map<string, string>): [number, number] {
   const v = f.get('depth-scale')!;
   const parts = v.split(',').map(x => x.trim() === '' ? NaN : Number(x));
@@ -465,7 +483,8 @@ function depthScaleOf(f: Map<string, string>): [number, number] {
 const RETARGET_ALIASES = { sequence: 'pose', animation: 'name' } as const;
 
 function retargetArgs(argv: string[]): RetargetArgs {
-  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'reference', 'render', 'parts', 'report', 'camera', 'leg-scale', 'depth-scale', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor', 'draw-order', 'contact-keys', 'shoulder-lift', 'cloth-track', 'cloth-windows', 'skirt-slots'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head', 'reduce-keep-planted', 'verbose', 'summary'], RETARGET_ALIASES);
+  const f = parseFlags(argv, ['rig', 'map', 'pose', 'out', 'name', 'person', 'base-motion', 'images', 'min-score', 'smooth', 'flip', 'short', 'bends', 'bend-tolerance', 'switch-tolerance', 'switch-min', 'switch-at', 'profile', 'build', 'reference', 'render', 'parts', 'report', 'camera', 'leg-scale', 'depth-scale', 'depth-shade', 'depth-shade-chains', 'idle', 'merge', 'reduce', 'reduce-hip', 'stance', 'floor', 'draw-order', 'contact-keys', 'shoulder-lift', 'cloth-track', 'cloth-windows', 'skirt-slots'], ['coco', 'plant-feet', 'carry-idle', 'raised-by-head', 'reduce-keep-planted', 'verbose', 'summary'], RETARGET_ALIASES);
+  if (f.has('depth-shade-chains') && !f.has('depth-shade')) throw new Usage('--depth-shade-chains needs --depth-shade; it selects the mapped limb chains to shade');
   if (f.has('verbose') && f.has('summary')) throw new Usage('--verbose and --summary are both given; --verbose prints every line in full and --summary one line per measure, so give one');
   if (f.has('reference') && !f.has('build')) throw new Usage(`--reference needs --build: the record it goes in is written beside the build (${PROVENANCE_FILE})`);
   if (f.has('cloth-windows') && !f.has('cloth-track')) throw new Usage('--cloth-windows is given without --cloth-track; it names the windows --cloth-track fits over');
@@ -512,6 +531,8 @@ function retargetArgs(argv: string[]): RetargetArgs {
     short: shortOf(f),
     legScale: legScaleOf(f),
     ...(f.has('depth-scale') ? { depthScale: depthScaleOf(f) } : {}),
+    ...(f.has('depth-shade') ? { depthShade: depthShadeOf(f) } : {}),
+    ...(f.has('depth-shade-chains') ? { depthShadeChains: depthShadeChainsOf(f.get('depth-shade-chains')!) } : {}),
     plantFeet: f.has('plant-feet'),
     stance: stanceOf(f),
     ...floorOf(f),
