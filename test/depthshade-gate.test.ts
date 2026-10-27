@@ -117,3 +117,51 @@ test('#446 actual gated RGB, alpha, loop, reduce, k1, collision and deterministi
     green=true;
   }finally{if(green)rmSync(dir,{recursive:true,force:true});else console.log('DEPTH446_FAILED_FIXTURE_RETAINED',dir);}
 },120_000);
+
+test('#451 gated --carry-idle merges idle rgba and rgba2 channel-wise with --depth-shade RGB',()=>{
+  const dir=mkdtempSync(join(tmpdir(),'depth451-gate-'));
+  try {
+    cpSync(join(root,'examples/wave/rig'),join(dir,'rig'),{recursive:true});
+    const rigPath=join(dir,'rig/rig.json');
+    const rig=JSON.parse(readFileSync(rigPath,'utf8')) as {slots:unknown[];skins:Record<string,unknown>};
+    const bones=['leg_r0','leg_r1','leg_l0','leg_l1','sleeve_r0','sleeve_r1','sleeve_l0','sleeve_l1','chest','head'];
+    rig.slots=bones.map(bone=>({name:bone,bone,attachment:'art',color:'80402080',...(bone==='leg_l0'?{dark:'102030'}:{})}));
+    rig.skins={default:Object.fromEntries(bones.map(bone=>[bone,{art:{image:'seg.png',x:1,y:0}}]))};
+    const plate=new Plate(4,4);plate.rect(0,0,4,4,[255,255,255,255]);plate.writePng(join(dir,'rig/seg.png'));
+    writeFileSync(rigPath,JSON.stringify(rig));
+    const raw=readPoseSequence(JSON.stringify(depthDoc(depthCycle('run','back',1),'synthetic depth451')),'synthetic');
+    const seq=clean(raw,{loop:true,legs:1,rest:1,hold:'off',depth:'run'},'a','synthetic').seq;
+    const pose=join(dir,'pose.json');writeFileSync(pose,writePoseSequence(seq));
+    const alphaKeys=[{t:0,v:[.25]},{t:.35,v:[.75],ease:'soft'},{t:1,v:[.25]}];
+    const rgbaKeys=[{t:0,v:[.9,.8,.7,.25]},{t:.35,v:[.8,.7,.6,.75],ease:'soft'},{t:1,v:[.9,.8,.7,.25]}];
+    const rgba2Keys=[{t:0,v:[.9,.8,.7,.25,.1,.2,.3]},{t:.35,v:[.8,.7,.6,.75,.4,.5,.6],ease:'soft'},{t:1,v:[.9,.8,.7,.25,.1,.2,.3]}];
+    const runWithIdle=(label:string,tracks:unknown[],shadeArgs:string[]=['--depth-shade','.8'])=>{
+      writeFileSync(join(dir,'rig/motion.json'),JSON.stringify({spec:'rigc-motion/1',archetype:'wave',cut:'wave',easings:{soft:[.25,.1,.25,1]},animations:{idle:{duration:1,tracks}}}));
+      const out=join(dir,`${label}.json`),build=join(dir,`${label}-build`);
+      const r=spawnSync(process.execPath,[join(root,'cli.ts'),'retarget','--rig',join(dir,'rig'),'--map',join(root,'examples/walk/map.json'),'--pose',pose,'--out',out,'--name','shade','--build',build,...shadeArgs,'--carry-idle'],{encoding:'utf8',cwd:root});
+      expect(r.status,(r.stdout??'')+(r.stderr??'')).toBe(0);
+      return {motion:JSON.parse(readFileSync(out,'utf8')) as Motion,build};
+    };
+    const alphaRef=runWithIdle('alpha-ref',[{slot:'leg_r0',property:'alpha',keys:alphaKeys}]);
+    const unshadedRgba2Ref=runWithIdle('unshaded-rgba2-ref',[{slot:'leg_l0',property:'rgba2',keys:rgba2Keys}],[]);
+    const merged=runWithIdle('merged',[{slot:'leg_r0',property:'rgba',keys:rgbaKeys},{slot:'leg_l0',property:'rgba2',keys:rgba2Keys}]);
+    const refAlphaTrack=alphaRef.motion.animations.shade!.tracks.find(tr=>tr.slot==='leg_r0'&&tr.property==='alpha')!;
+    const mergedAlphaTrack=merged.motion.animations.shade!.tracks.find(tr=>tr.slot==='leg_r0'&&tr.property==='alpha')!;
+    const refRgbTrack=alphaRef.motion.animations.shade!.tracks.find(tr=>tr.slot==='leg_r0'&&tr.property==='rgb')!;
+    const mergedRgbTrack=merged.motion.animations.shade!.tracks.find(tr=>tr.slot==='leg_r0'&&tr.property==='rgb')!;
+    expect(JSON.stringify(mergedAlphaTrack)).toBe(JSON.stringify(refAlphaTrack));
+    expect(JSON.stringify(mergedRgbTrack)).toBe(JSON.stringify(refRgbTrack));
+    const mergedRgba2Track=merged.motion.animations.shade!.tracks.find(tr=>tr.slot==='leg_l0'&&tr.property==='rgba2')!;
+    expect(mergedRgba2Track).toBeDefined();
+    expect(merged.motion.animations.shade!.tracks.some(tr=>tr.slot==='leg_l0'&&tr.property==='rgb')).toBe(false);
+    const refL0Rgb=alphaRef.motion.animations.shade!.tracks.find(tr=>tr.slot==='leg_l0'&&tr.property==='rgb')!;
+    const refL0Rgba2=unshadedRgba2Ref.motion.animations.shade!.tracks.find(tr=>tr.slot==='leg_l0'&&tr.property==='rgba2')!;
+    expect(refL0Rgb.keys).toHaveLength(21);
+    expect(refL0Rgba2.keys).toHaveLength(3);
+    expect(mergedRgba2Track.keys).toHaveLength(22);
+    const mergedByT=new Map(mergedRgba2Track.keys.map(k=>[k.t,k.v as number[]]));
+    expect(JSON.stringify(refL0Rgb.keys.map(k=>({t:k.t,v:mergedByT.get(k.t)!.slice(0,3)})))).toBe(JSON.stringify(refL0Rgb.keys));
+    expect(JSON.stringify(refL0Rgba2.keys.map(k=>({t:k.t,v:mergedByT.get(k.t)!.slice(3,7)})))).toBe(JSON.stringify(refL0Rgba2.keys.map(k=>({t:k.t,v:(k.v as number[]).slice(3,7)}))));
+  }finally{rmSync(dir,{recursive:true,force:true});}
+},120_000);
+

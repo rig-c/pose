@@ -109,6 +109,46 @@ describe('#446 continuous held-sign depth with actual clean windows',()=>{
   const track=depthShadeTracks(read(-1),.812345678,[0],1,true,new Map([['thigh','80402080']]))[0]!;
   expect(track.keys[0]!.v).toEqual([.407766,.203883,.101941]);expect(track.keys.at(-1)!.v).toEqual(track.keys[0]!.v);expect(track.property).toBe('rgb');
  });
+ test('#451 idle rgba/rgba2/rgb2 on a shaded slot merges channel-wise; same-channel collision names slot and channel',()=>{
+  const own=depthShadeTracks(read(-1),.8,[0,.25,.75,1],1,true) as unknown as RigcTrack[];
+  const rgba:RigcTrack={slot:'thigh',property:'rgba',keys:[{t:0,v:[.9,.8,.7,.25],curve:[.2,.9,.3,.8,.2,.8,.3,.7,.2,.7,.3,.6,.2,.25,.3,.75]},{t:.5,v:[.8,.7,.6,.75],ease:'soft'},{t:1,v:[.9,.8,.7,.25]}]};
+  const alphaOnly:RigcTrack={slot:'thigh',property:'alpha',keys:[{t:0,v:[.25],curve:[.2,.25,.3,.75]},{t:.5,v:[.75],ease:'soft'},{t:1,v:[.25]}]};
+  const easings={soft:[.25,.1,.25,1]};
+  const expectedAlpha=readIdle('idle','dance',{duration:1,tracks:[alphaOnly]},[],1.5,{groups:{},easings},()=>undefined,true).carriedTracks[0]!;
+  const idleRgba=readIdle('idle','dance',{duration:1,tracks:[rgba]},own,1.5,{groups:{},easings},()=>undefined,true);
+  expect(idleRgba.keptOut).toEqual([{target:{kind:'slot',name:'thigh'},property:'rgb',reason:'"dance"\'s own slot "thigh" rgb keys it'}]);
+  expect(idleRgba.dropped.map(d=>[d.target,d.property,d.carried?.keys])).toEqual([[{kind:'slot',name:'thigh'},'alpha',expectedAlpha.keys.length]]);
+  expect(JSON.stringify(idleRgba.carriedTracks)).toBe(JSON.stringify([expectedAlpha]));
+  expect(JSON.stringify(idleRgba.ownTracks)).toBe(JSON.stringify(own));
+  const rgba2:RigcTrack={slot:'thigh',property:'rgba2',keys:[{t:0,v:[.9,.8,.7,.25,.1,.2,.3],curve:[.2,.9,.3,.8,.2,.8,.3,.7,.2,.7,.3,.6,.2,.25,.3,.75,.2,.1,.3,.4,.2,.2,.3,.5,.2,.3,.3,.6]},{t:.5,v:[.8,.7,.6,.75,.4,.5,.6],ease:'soft'},{t:1,v:[.9,.8,.7,.25,.1,.2,.3]}]};
+  const expectedLoopRgba2=readIdle('idle','dance',{duration:1,tracks:[rgba2]},[],1.5,{groups:{},easings},()=>undefined,true).carriedTracks[0]!;
+  const idleRgba2=readIdle('idle','dance',{duration:1,tracks:[rgba2]},own,1.5,{groups:{},easings},()=>undefined,true);
+  expect(idleRgba2.keptOut).toEqual([{target:{kind:'slot',name:'thigh'},property:'rgb',reason:'"dance"\'s own slot "thigh" rgb keys it'}]);
+  expect(idleRgba2.carriedTracks.map(t=>t.property)).toEqual(['rgba2']);
+  expect(idleRgba2.ownTracks.map(t=>t.slot)).toEqual(['shin']);
+  const folded=idleRgba2.carriedTracks[0]!;
+  const shadeKeys=own[0]!.keys;
+  expect(shadeKeys).toHaveLength(4);
+  expect(expectedLoopRgba2.keys).toHaveLength(4);
+  expect(folded.keys.map(k=>k.t)).toEqual([0,.25,.5,.75,1,1.5]);
+  const foldedByT=new Map(folded.keys.map(k=>[k.t,k.v as number[]]));
+  expect(JSON.stringify(shadeKeys.map(k=>({t:k.t,v:foldedByT.get(k.t)!.slice(0,3)})))).toBe(JSON.stringify(shadeKeys.map(k=>({t:k.t,v:k.v}))));
+  expect(JSON.stringify(expectedLoopRgba2.keys.map(k=>({t:k.t,v:foldedByT.get(k.t)!.slice(3,7)})))).toBe(JSON.stringify(expectedLoopRgba2.keys.map(k=>({t:k.t,v:(k.v as number[]).slice(3,7)}))));
+  const rgb2:RigcTrack={slot:'thigh',property:'rgb2',keys:[{t:0,v:[.9,.8,.7,.1,.2,.3]},{t:.5,v:[.8,.7,.6,.4,.5,.6]},{t:1,v:[.9,.8,.7,.1,.2,.3]}]};
+  const expectedLoopRgb2=readIdle('idle','dance',{duration:1,tracks:[rgb2]},[],1.5,{groups:{},easings},()=>undefined,true).carriedTracks[0]!;
+  const idleRgb2=readIdle('idle','dance',{duration:1,tracks:[rgb2]},own,1.5,{groups:{},easings},()=>undefined,true);
+  const foldedRgb2ByT=new Map(idleRgb2.carriedTracks[0]!.keys.map(k=>[k.t,k.v as number[]]));
+  expect(JSON.stringify(shadeKeys.map(k=>({t:k.t,v:foldedRgb2ByT.get(k.t)!.slice(0,3)})))).toBe(JSON.stringify(shadeKeys.map(k=>({t:k.t,v:k.v}))));
+  expect(JSON.stringify(expectedLoopRgb2.keys.map(k=>({t:k.t,v:foldedRgb2ByT.get(k.t)!.slice(3,6)})))).toBe(JSON.stringify(expectedLoopRgb2.keys.map(k=>({t:k.t,v:(k.v as number[]).slice(3,6)}))));
+  for(const prop of ['rgb','rgba','rgb2','rgba2']){
+   const probs=mergeProblems([{slot:'thigh',property:prop,keys:[{t:0,v:[1,1,1]}]}],'fragment','dance',own,1,{});
+   expect(probs).toHaveLength(1);
+   expect(probs[0]!.code).toBe('MERGE_CONFLICT');
+   expect(probs[0]!.text).toContain('slot "thigh"');
+   expect(probs[0]!.text).toContain('channel "rgb"');
+   expect(probs[0]!.text).toContain('slot "thigh" rgb');
+  }
+ });
 });
 
 
