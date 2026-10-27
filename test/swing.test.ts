@@ -61,6 +61,74 @@ describe('#444 authored map declarations', () => {
 });
 
 describe('#444 selected art and total slot order', () => {
+  function splitHand(swing: 'back' | 'forward', names: string[]) {
+    const f = fixture([set('chosen', swing, { slots: { backHand: 'chosen' }, hides: ['frontHand'], bind: [[0, 7]] })]);
+    const bones: Record<string, string> = { backHand: 'sleeve_r1', frontHand: 'sleeve_r1', torso: 'chest', thigh: 'leg_r0' };
+    const order = names.map(name => ({ name, bone: bones[name]! }));
+    const slots: RigSlots = new Map(order.map(s => [s.name, { bone: s.bone, setup: 'base', attachments: new Set(['base', 'chosen']) }]));
+    return { ...f, slots, order };
+  }
+
+  test('hidden front art leaves the already-correct back hand behind the torso', () => {
+    const f = splitHand('back', ['backHand', 'torso', 'thigh', 'frontHand']);
+    const sw = selected(f);
+    expect(sw.shown.get('frontHand')).toEqual(Array(8).fill(null));
+    const result = orderFromSwing(null, f.map, f.rest, f.order, f.slots, sw.shown, sw.slotSets, f.times);
+    expect(decode(result.reading, f.order)).toEqual(Array(8).fill(['backHand', 'torso', 'thigh', 'frontHand']));
+    expect(result.reading!.keys).toEqual([]);
+  });
+
+  test('a needed move in either direction moves only visible hand art and preserves all other slot pairs', () => {
+    for (const swing of ['back', 'forward'] as const) {
+      const names = swing === 'back' ? ['torso', 'thigh', 'frontHand', 'backHand'] : ['backHand', 'frontHand', 'torso', 'thigh'];
+      const expected = swing === 'back' ? ['torso', 'backHand', 'thigh', 'frontHand'] : ['frontHand', 'torso', 'thigh', 'backHand'];
+      const f = splitHand(swing, names), sw = selected(f);
+      const result = orderFromSwing(null, f.map, f.rest, f.order, f.slots, sw.shown, sw.slotSets, f.times);
+      for (const total of decode(result.reading, f.order)) {
+        expect(total).toEqual(expected);
+        expect(total.filter(n => n !== 'backHand')).toEqual(names.filter(n => n !== 'backHand'));
+      }
+    }
+  });
+
+  test('an explicit null sample hides setup art until the timeline actually shows it', () => {
+    const f = splitHand('back', ['backHand', 'torso', 'thigh', 'frontHand']), sw = selected(f);
+    const shown = new Map(sw.shown); shown.set('frontHand', [null, ...Array<string>(7).fill('base')]);
+    const result = orderFromSwing(null, f.map, f.rest, f.order, f.slots, shown, sw.slotSets, f.times);
+    const total = decode(result.reading, f.order);
+    expect(total[0]).toEqual(['backHand', 'torso', 'thigh', 'frontHand']);
+    expect(total.slice(1)).toEqual(Array(7).fill(['torso', 'backHand', 'frontHand', 'thigh']));
+  });
+
+  test('untouched setup-visible descendant art joins the hand block without belonging to the selected set', () => {
+    for (const emptyTimeline of [false, true]) {
+      const f = splitHand('back', ['backHand', 'torso', 'thigh', 'frontHand']);
+      const rest = new Map(f.rest); rest.set('hand-tip', { ...rest.get('sleeve_r1')!, parent: 'sleeve_r1' });
+      const order = [...f.order, { name: 'sibling', bone: 'hand-tip' }, { name: 'hiddenSibling', bone: 'hand-tip' }];
+      const slots = new Map(f.slots);
+      slots.set('sibling', { bone: 'hand-tip', setup: 'base', attachments: new Set(['base']) });
+      slots.set('hiddenSibling', { bone: 'hand-tip', setup: null, attachments: new Set(['base']) });
+      const sw = selected({ ...f, slots }), shown = new Map(sw.shown);
+      if (emptyTimeline) shown.set('sibling', []);
+      const result = orderFromSwing(null, f.map, rest, order, slots, shown, sw.slotSets, f.times);
+      expect(decode(result.reading, order)).toEqual(Array(8).fill(['torso', 'backHand', 'sibling', 'thigh', 'frontHand', 'hiddenSibling']));
+    }
+  });
+
+  test('disjoint phase drawings use only the hand art actually selected on each frame', () => {
+    const f = splitHand('back', ['backHand', 'torso', 'thigh', 'frontHand']);
+    const map = fixture([
+      set('back', 'back', { slots: { backHand: 'chosen' }, hides: ['frontHand'], phase: 'right-step' }),
+      set('front', 'forward', { slots: { frontHand: 'chosen' }, hides: ['backHand'], phase: 'left-step' }),
+    ]).map;
+    const sw = selected({ ...f, map }, { phaseSupports: [{ side: 'l', frames: [0, 3] }, { side: 'r', frames: [4, 7] }] });
+    expect(sw.shown.get('backHand')).toEqual(['chosen', 'chosen', 'chosen', 'chosen', null, null, null, null]);
+    expect(sw.shown.get('frontHand')).toEqual([null, null, null, null, 'chosen', 'chosen', 'chosen', 'chosen']);
+    const result = orderFromSwing(null, map, f.rest, f.order, f.slots, sw.shown, sw.slotSets, f.times);
+    expect(result.swings.map(r => r.frames)).toEqual([[[0, 3]], [[4, 7]]]);
+    expect(decode(result.reading, f.order)).toEqual(Array(8).fill(['backHand', 'torso', 'thigh', 'frontHand']));
+  });
+
   test('phase selection ignores min/peak; hands cross their own thigh while all other slot pairs preserve leg order', () => {
     const f = fixture([set('back', 'back', { phase: 'right-step' }), set('front', 'forward', { phase: 'left-step' })]);
     const sw = selected(f, { switchMin: 999, switchAt: 'peak', phaseSupports: [{ side: 'l', frames: [0, 3] }, { side: 'r', frames: [4, 7] }] });

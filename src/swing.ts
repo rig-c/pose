@@ -62,13 +62,18 @@ export function orderFromSwing(base: DrawOrderReading | null, map: JointMap, res
     let total = placed.map(n => n ?? remaining.shift()!);
     const active = resolved.filter(r => r.active[f]).sort((a, b) => names.indexOf(a.row.slots[0]!) - names.indexOf(b.row.slots[0]!));
     for (const { row } of active) {
-      const handAt = row.slots.map(n => total.indexOf(n)), thighAt = row.thigh.map(n => total.indexOf(n));
+      const hand = row.slots.filter(n => {
+        const sample = shown.get(n)?.[f];
+        return (sample === undefined ? slots.get(n)?.setup : sample) != null;
+      });
+      if (hand.length === 0) continue;
+      const handAt = hand.map(n => total.indexOf(n)), thighAt = row.thigh.map(n => total.indexOf(n));
       if (row.swing === 'back' ? Math.max(...handAt) < Math.min(...thighAt) : Math.min(...handAt) > Math.max(...thighAt)) continue;
-      const own = new Set(row.slots);
+      const own = new Set(hand);
       total = total.filter(n => !own.has(n));
       const target = row.thigh.map(n => total.indexOf(n));
       const at = row.swing === 'back' ? Math.min(...target) : Math.max(...target) + 1;
-      total.splice(at, 0, ...row.slots);
+      total.splice(at, 0, ...hand);
     }
     const offs: DrawOrderOffset[] = names.flatMap((slot, i) => total.indexOf(slot) === i ? [] : [{ slot, offset: total.indexOf(slot) - i }]);
     const text = JSON.stringify(offs);
