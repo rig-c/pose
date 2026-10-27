@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/rig-c/pose/compare/v1.3.0...v1.3.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* **idle:** carry an idle rgba/rgba2/rgb2 track channel-wise beside a slot colour track instead of dropping it ([#452](https://github.com/rig-c/pose/issues/452)) ([8510440](https://github.com/rig-c/pose/commit/851044050b7b95f5589f5ab34416f5e6c1efe27d))
+
 ## [1.3.0](https://github.com/rig-c/pose/compare/v1.2.1...v1.3.0) (2026-10-27)
 
 
