@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.0](https://github.com/rig-c/pose/compare/v1.2.1...v1.3.0) (2026-10-27)
+
+
+### Features
+
+* **map:** an authored arm swing — swing: forward|back on arm alternate sets decides the hand's layer ([#448](https://github.com/rig-c/pose/issues/448)) ([1370c36](https://github.com/rig-c/pose/commit/1370c363b73fe400b45ad66f6975cd922b0bcdb2))
+* **retarget:** --depth-shade — a continuous receding-limb shade as a slot RGB track derived from clean --depth ([#450](https://github.com/rig-c/pose/issues/450)) ([8355af6](https://github.com/rig-c/pose/commit/8355af6d0ec9ae6cda8badd4e5af0fe1cde30bcf))
+
 ## [1.2.1](https://github.com/rig-c/pose/compare/v1.2.0...v1.2.1) (2026-10-26)
 
 
