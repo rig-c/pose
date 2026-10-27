@@ -7,6 +7,7 @@
  * hashes and writes. No clock, no host, no path is normalised; a value the run
  * was not given is absent, never derived.
  */
+import type { ShadeReconstruction } from './depthshade.ts';
 import pkg from '../package.json' with { type: 'json' };
 
 /** The record's file name inside the `--build` directory. */
@@ -32,6 +33,8 @@ export interface ProvenanceArgs {
   options: Record<string, unknown>;
   /** `--reference` exactly as given; absent when it was not. */
   reference?: string;
+  /** #446: optional held-sign/SG reconstruction, separate from consumed inputs. */
+  depthShade?: ShadeReconstruction;
   /** #408: every additional consumed input, only on an opted-in run. */
   shoulderLift?: { configuration: ProvenanceInput; rest: ProvenanceInput; painting: ProvenanceInput };
 }
@@ -49,6 +52,7 @@ export function provenanceText(a: ProvenanceArgs): string {
       ...(a.shoulderLift === undefined ? {} : { shoulderLift: a.shoulderLift }),
     },
     flags: { name: a.name, ...a.options },
+    ...(a.depthShade === undefined ? {} : { depthShade: a.depthShade }),
     ...(a.reference === undefined ? {} : { reference: a.reference }),
   };
   return `${JSON.stringify(record, null, 2)}\n`;

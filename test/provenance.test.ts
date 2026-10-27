@@ -147,3 +147,17 @@ describe('retarget --build writes its record, retarget.json (#270)', () => {
     }
   }, SLOW);
 });
+
+// Pure control for the optional reconstruction record; actual CLI/build equality
+// with the report is covered by depthshade-gate.test.ts.
+test('#446 optional reconstruction is recorded separately from flags; absence preserves record shape', async()=>{
+  const {provenanceText}=await import('../src/provenance.ts');
+  const {shadeReconstruction}=await import('../src/depthshade.ts');
+  const args={rigc:'test',rig:{path:'rig',sha256:'a'},map:{path:'map',sha256:'b'},sequence:{path:'pose',sha256:'c',source:'synthetic'},name:'a',options:{depthShade:.8}};
+  const off=JSON.parse(provenanceText(args));expect('depthShade' in off).toBe(false);
+  const selection={mode:'default-legs' as const,requested:null,chains:['leg_r','leg_l']};
+  const reconstruction=shadeReconstruction([],{loop:true,legs:5,rest:7,depth:{gait:'walk'}},selection);
+  const text=provenanceText({...args,depthShade:reconstruction}),on=JSON.parse(text);
+  expect(on.depthShade).toEqual(reconstruction);expect(on.depthShade.selection).toEqual(selection);expect(on.flags).toEqual(off.flags);
+  expect(text).toBe(provenanceText({...args,depthShade:reconstruction}));
+});

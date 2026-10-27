@@ -248,6 +248,8 @@ Every flag `parseFlags` reads in `cli.ts`, once. `test/promise.test.ts` holds th
 | `retarget` | `--camera` | promised | S, X 4 | |
 | `retarget` | `--leg-scale` | promised | S, X 13 | |
 | `retarget` | `--depth-scale` | courtesy | — | #437; no recorded 1.0 reader |
+| `retarget` | `--depth-shade` | courtesy | — | #446; opt-in slot RGB shade; report `depthShade` is courtesy |
+| `retarget` | `--depth-shade-chains` | courtesy | — | #446; exact mapped arm/leg chain CSV, default anatomical leg chains |
 | `retarget` | `--idle` | courtesy | — | |
 | `retarget` | `--merge` | courtesy | — | |
 | `retarget` | `--reduce` | promised | S, X 2 | |
@@ -348,6 +350,7 @@ Every key `rig-pose-report/1` can carry, once: the keys `src/run.ts` writes, and
 | `body` | courtesy | — | |
 | `legScale` | courtesy | — | |
 | `depthScale` | courtesy | — | #437; per-side perspective reading |
+| `depthShade` | courtesy | — | only with `--depth-shade`; signed limb depth, handovers and slot RGB reading (#446) |
 | `pivot` | courtesy | — | |
 | `pelvis` | courtesy | — | |
 | `layers` | courtesy | — | only when the sequence carries depth (rig-c/pose#281) |
@@ -488,6 +491,12 @@ coordinates on flips and shear remain promised.
 | `depthScale[].scale`, `depthScale[].scale.min`, `depthScale[].scale.median`, `depthScale[].scale.max` | courtesy | No recorded promised reader (#437) |
 | `depthScale[].limits`, `depthScale[].clampedFrames`, `depthScale[].unreadFrames`, `depthScale[].status`, `depthScale[].bone`, `options.depthScale` | courtesy | No recorded promised reader (#437) |
 | `depthScale[].signSource`, `depthScale[].tie`, `depthScale[].tiedFrames` | courtesy | Walk-only picture-y sign and explicit height band (#440); run keeps derived knee sign |
+| `options.depthShade`, `depthShade.k`, `depthShade.limbs`, `depthShade.limbs[].limb`, `depthShade.limbs[].slots` | courtesy | No recorded promised reader (#446) |
+| `options.depthShadeChains`, `depthShade.selection`, `depthShade.selection.mode`, `depthShade.selection.requested`, `depthShade.selection.chains` | courtesy | Resolved default/explicit chain selection (#446) |
+| `depthShade.reconstruction.selection`, `depthShade.reconstruction.selection.mode`, `depthShade.reconstruction.selection.requested`, `depthShade.reconstruction.selection.chains` | courtesy | Same selection in report and optional retarget reconstruction provenance (#446) |
+| `depthShade.limbs[].depth`, `depthShade.limbs[].smoothedDepth`, `depthShade.limbs[].farthest`, `depthShade.limbs[].farness` | courtesy | No recorded promised reader (#446) |
+| `depthShade.reconstruction`, `depthShade.reconstruction.method`, `depthShade.reconstruction.stage`, `depthShade.reconstruction.source`, `depthShade.reconstruction.tie`, `depthShade.reconstruction.limbs` | courtesy | Held-sign/SG method and consumed cleaned provenance (#446) |
+| `depthShade.limbs[].window`, `depthShade.limbs[].joints`, `depthShade.limbs[].segments`, `depthShade.limbs[].unreadFrames`, `depthShade.limbs[].unreadSpans`, `depthShade.limbs[].status` | courtesy | Reconstruction diagnostics; segment records include source/held signs, unread spans/reasons and held spans/seed/reason (#446) |
 | `legScale[].bone`, `legScale[].chain`, `legScale[].clamped`, `legScale[].clamped[].asked` | courtesy | No recorded promised reader |
 | `legScale[].clamped[].asked.max`, `legScale[].clamped[].asked.min`, `legScale[].clamped[].frames`, `legScale[].clamped[].limit` | courtesy | No recorded promised reader |
 | `legScale[].clamped[].times`, `legScale[].free`, `legScale[].free.above`, `legScale[].free.below` | courtesy | No recorded promised reader |
@@ -653,3 +662,5 @@ The package promises **no importable API**. Its `exports` exposes only `package.
 Measured: no repository in the org imports `@rig-c/pose` as a module. rig-c.github.io names it in prose and in install lines; rig-c/exam pins it in each round's `package.json` and runs the bin. The `bin` is unaffected. Closing the deep imports is a breaking change, so it lands before 1.0 and not after.
 
 The `SWING` line and `drawOrder.authored` rows are courtesy (rig-c/pose#444); without a declaration they are absent.
+
+The #446 `DEPTH_SHADE_CHAINS` and `DEPTH_SHADE_WINDOW` codes and `DEPTH-SHADE-UNREAD` line are courtesy. Optional `rig-pose-retarget/1` field `depthShade` records the same held-sign/SG reconstruction as the report; no strict pose/cleaned input field is added. Its optional `depthShade.selection` and `flags.depthShadeChains` fields are courtesy under the same selection contract.
