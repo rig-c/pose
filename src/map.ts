@@ -95,6 +95,11 @@ export interface Translate {
 /** The step sides a set may declare as its `phase` (rig-c/pose#286), and the supporting foot each one shows on: left-step: the left foot is stepping; shown while the right foot supports. */
 export const PHASE_SIDE = { 'left-step': 'r', 'right-step': 'l' } as const;
 export type Phase = keyof typeof PHASE_SIDE;
+export type Swing = 'forward' | 'back';
+/** Arm anatomy comes from the complete mapped joint triplet, never a chain name. */
+export function armSide(chain: Chain): 'r' | 'l' | null {
+  return (['r', 'l'] as const).find(side => chain.bones.length === 2 && chain.joints.length === 3 && chain.joints.every((joint, i) => joint === [`${side}_shoulder`, `${side}_elbow`, `${side}_wrist`][i])) ?? null;
+}
 /** An alternate drawing: a set of slots switched together, and the key skeleton it is selected by. */
 export interface AlternateSet {
   name: string;
@@ -126,6 +131,8 @@ export interface AlternateSet {
   anchor?: string[];
   /** `phase` (rig-c/pose#286): the stepping foot the set is drawn for (left-step: the left foot is stepping; shown while the right foot supports); it shows exactly on that supporting foot's `feet.supports` spans, switched on the hand-over. Absent: the angle rule. */
   phase?: Phase;
+  /** Authored hand order against the same-side thigh, only while this set actually shows (#444). */
+  swing?: Swing;
 }
 /**
  * A set's `bind` (rig-c/pose#360), as the map states it: inclusive pose-frame ranges, either explicit (`cycle` null) or
@@ -447,7 +454,7 @@ function readBodyMap(p: Problems, where: string, raw: unknown): BodyMap | undefi
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-const SET_SHAPE = '{ name, slots: { "<slot>": "<attachment>" }, hides?: [slot], chains: [chain], pose: { "<joint>": [x, y] }, drawn?: { "<bone>": deg }, offsets?: { "<bone>": [dx, dy] }, turn?: { "<bone>": [min, max] }, frames?: [[first, last], …], bind?: [[first, last], …] | { cycle, at: [[first, last], …] }, place?: "by-hip", phase?: "left-step" | "right-step" }';
+const SET_SHAPE = '{ name, slots: { "<slot>": "<attachment>" }, hides?: [slot], chains: [chain], pose: { "<joint>": [x, y] }, drawn?: { "<bone>": deg }, offsets?: { "<bone>": [dx, dy] }, turn?: { "<bone>": [min, max] }, frames?: [[first, last], …], bind?: [[first, last], …] | { cycle, at: [[first, last], …] }, place?: "by-hip", phase?: "left-step" | "right-step", swing?: "forward" | "back" }';
 
 /** The joints a wrist is, for `place: "by-hip"`: a chain whose last joint is one of them carries a wrist. */
 export const WRISTS: readonly string[] = ['r_wrist', 'l_wrist'];
@@ -496,7 +503,7 @@ function readAlternates(p: Problems, where: string, raw: unknown, chains: readon
       p.add('MAP_ALT_SHAPE', `${aw} is ${typeName(a)}; a set is ${SET_SHAPE}`);
       return;
     }
-    refuseUnknownKeys(p, 'MAP_KEYS', aw, a, ['name', 'note', 'slots', 'hides', 'chains', 'pose', 'drawn', 'offsets', 'turn', 'frames', 'bind', 'place', 'symmetric', 'support', 'anchor', 'phase']);
+    refuseUnknownKeys(p, 'MAP_KEYS', aw, a, ['name', 'note', 'slots', 'hides', 'chains', 'pose', 'drawn', 'offsets', 'turn', 'frames', 'bind', 'place', 'symmetric', 'support', 'anchor', 'phase', 'swing']);
     const name = typeof a.name === 'string' && a.name !== '' ? a.name : null;
     if (name === null) p.add('MAP_ALT_NAME', `${aw} "name" is ${typeName(a.name)}; it must be a non-empty string`);
     else if (names.has(name)) p.add('MAP_ALT_NAME', `${aw} "name" "${name}" names two sets`);
@@ -742,8 +749,29 @@ function readAlternates(p: Problems, where: string, raw: unknown, chains: readon
         ok = false;
       } else phase = a.phase as Phase;
     }
-    if (ok && name !== null && cs !== null) out.push({ name, slots, hides, chains: cs, pose, drawn, offsets, turn, frames, ...(bind === undefined ? {} : { bind }), ...(place === null ? {} : { place }), ...(symmetric === undefined ? {} : { symmetric }), ...(support === undefined ? {} : { support }), ...(anchor === undefined ? {} : { anchor }), ...(phase === undefined ? {} : { phase }) });
+    let swing: Swing | undefined;
+    if ('swing' in a) {
+      if (a.swing !== 'forward' && a.swing !== 'back') {
+        p.add('MAP_ALT_SWING', `${label} "swing" is ${JSON.stringify(a.swing)}; it must be "forward" or "back", authored for the arm's hand against its same-side thigh`);
+        ok = false;
+      } else {
+        swing = a.swing;
+        for (const cn of cs ?? []) {
+          const chain = chains.find(c => c.name === cn);
+          if (chain === undefined || armSide(chain) === null) {
+            p.add('MAP_ALT_SWING', `${label} "swing": "${swing}" names non-arm chain "${cn}" (${chain?.joints.join(' -> ') ?? 'missing'}); an arm maps exactly shoulder -> elbow -> wrist on one side`);
+            ok = false;
+          }
+        }
+      }
+    }
+    if (ok && name !== null && cs !== null) out.push({ name, slots, hides, chains: cs, pose, drawn, offsets, turn, frames, ...(bind === undefined ? {} : { bind }), ...(place === null ? {} : { place }), ...(symmetric === undefined ? {} : { symmetric }), ...(support === undefined ? {} : { support }), ...(anchor === undefined ? {} : { anchor }), ...(phase === undefined ? {} : { phase }), ...(swing === undefined ? {} : { swing }) });
   });
+  for (let i = 0; i < out.length; i++) for (let j = i + 1; j < out.length; j++) {
+    const a = out[i]!, b = out[j]!;
+    if (a.swing === undefined || a.swing !== b.swing || a.phase === undefined || a.phase !== b.phase) continue;
+    for (const chain of a.chains.filter(c => b.chains.includes(c))) p.add('MAP_SWING_OVERLAP', `sets "${a.name}" and "${b.name}" on chain "${chain}" both declare swing "${a.swing}" on overlapping phase "${a.phase}" (all frames of that supporting-foot phase); keep one declaration per chain and phase`);
+  }
   return out;
 }
 

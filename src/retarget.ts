@@ -493,6 +493,8 @@ export interface Retarget {
   switchBinds: SwitchBind[];
   /** Per switched or hidden slot, what it shows on each frame (null: nothing). */
   shown: Map<string, Array<string | null>>;
+  /** Source-set ownership after every attachment selector, only for authored swing. */
+  slotSets?: Map<string, Array<string | null>>;
   /** Per set, its distance to the pose on each frame, degrees. */
   distances: Map<string, number[]>;
   /** The lines across the body turned long enough to be a pose. */
@@ -3247,7 +3249,13 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
         if (!sw.shown.has(sl)) sw.shown.set(sl, Array.from({ length: n }, () => slots.get(sl)?.setup ?? null));
         const row = sw.shown.get(sl)!;
         for (const [lo, hi] of s.spans) {
-          for (let i = lo; i <= hi; i++) row[i] = v;
+          for (let i = lo; i <= hi; i++) {
+            row[i] = v;
+            if (sw.slotSets !== undefined) {
+              if (!sw.slotSets.has(sl)) sw.slotSets.set(sl, Array<string | null>(n).fill(null));
+              sw.slotSets.get(sl)![i] = s.set;
+            }
+          }
         }
       }
     }
@@ -3327,7 +3335,7 @@ export function retarget(rest: Rest, map: JointMap, frames: ReadonlyArray<Partia
     // distinct frames, before rounding, so microsecond timestamps do not accumulate rounding error.
     animation: { duration: opts.loop === true && n > 1 ? r6((times[n - 1]! - t0) * n / (n - 1)) : keyTimes[n - 1]!, tracks },
     times: keyTimes, targets, origin, holds, bends, short, endOn, flips, scale, scaleFit,
-    switches: sw.switches, switchRuns: sw.runs, switchBinds: switchBinds(map, n), shown: sw.shown, distances: sw.distances, turns, turnsUnread, range, artRange,
+    switches: sw.switches, switchRuns: sw.runs, switchBinds: switchBinds(map, n), shown: sw.shown, ...(sw.slotSets === undefined ? {} : { slotSets: sw.slotSets }), distances: sw.distances, turns, turnsUnread, range, artRange,
     legScale, segments, legStraight, rigLeg, scales, feet, planted: plantOn, stance, floor, blendHold, closure, openDrift, ankles, pivot, raised, byHip, face, body, figureScale, headNod: headNodReading, nodSkipped, reach, reachOrigin, pelvis,
   };
 }

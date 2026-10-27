@@ -189,6 +189,7 @@ No other repository in the org (core, parts, play, adapters, parts-examples, tra
 | `rig-pose-map/1` (the map) | promised | S, X, D |
 | the map's `layout` (each limb-layout group's depth source, read with `--draw-order depth`, rig-c/pose#346) | courtesy | — |
 | `rig-parts-layout/1` (`layout.json` beside `rig.json`, from @rig-c/parts; read with `--draw-order depth`, rig-c/pose#346) | courtesy | — |
+| `rig-pose-map/1` set field `swing` (authored arm hand/thigh order on final displayed art, rig-c/pose#444) | courtesy | — |
 | `rig-pose-map/1` set field `bind` (a set shown on exactly its bound frames, explicit or cycle-relative; rig-c/pose#360) | courtesy | — |
 | `rig-pose-report/1` (the report) | promised, as below | S, R |
 | `rig-pose-camera/1` (`--camera`) | promised | S |
@@ -337,7 +338,7 @@ Every key `rig-pose-report/1` can carry, once: the keys `src/run.ts` writes, and
 | `seamPairs` | courtesy | — | |
 | `switchRuns` | courtesy | — | (rig-c/pose#279; `turned`, rig-c/pose#355) |
 | `switchBinds` | courtesy | — | only when the map binds a set (rig-c/pose#360) |
-| `drawOrder` | courtesy | — | (rig-c/pose#304; `layout` and `groups`, the forearms against the trunk, rig-c/pose#346) |
+| `drawOrder` | courtesy | — | (rig-c/pose#304; `layout` and `groups`, the forearms against the trunk, rig-c/pose#346; `authored`, displayed swing declarations, rig-c/pose#444) |
 | `shoulderLift` | courtesy | — | Only with --shoulder-lift; supplied inputs, signed frame readings and independent world landing (#408) |
 | `clothFit` | courtesy | — | only with `--cloth-track` (rig-c/pose#34) |
 | `contactKeys` | courtesy | — | only with `--contact-keys` (rig-c/pose#303) |
@@ -633,7 +634,7 @@ Promised codes, with their use:
 
 The #408 codes `SHOULDER_LIFT_CONFIG`, `SHOULDER_LIFT_INPUT`, `SHOULDER_LIFT_CALIBRATION`, `SHOULDER_LIFT_JOINT`, `SHOULDER_LIFT_LOOP`, `SHOULDER_LIFT_RIG`, `SHOULDER_LIFT_COMPOSITION` and `SHOULDER_LIFT_LANDS` are courtesy. They refuse a requested reading as unknown; no successful zero replaces missing evidence. Optional `rig-pose-retarget/1` input `inputs.shoulderLift` and its `configuration`, `rest`, `painting` path/sha256 identities are courtesy. Existing input and exit promises remain unchanged.
 
-Every other code is courtesy (`CLOTH_SLOT`, `CLOTH_ANIMATION`, `CLOTH_HIP`, `CLOTH_FRAMES`, `CLOTH_EMPTY_FRAME`, `CLOTH_WINDOW`, `CLOTH_FIT_SLOTS`, `CLOTH_FIT_CONSTRAINTS`, `CLOTH_FIT_WINDOWS`, `CLOTH_FIT_FOLDS`, rig-c/pose#34; `FIGURE_SCALE_RECORD` (#404, malformed external figure-scale record), `SET_KEY_DRAWN`, rig-c/pose#355; `MAP_ALT_BIND`, `SET_BIND_FRAMES` and `SET_BIND_OVERLAP`, rig-c/pose#360; and rig-c/pose#346's `MAP_LAYOUT`, `LAYOUT_JSON`, `LAYOUT_SPEC`, `LAYOUT_SHAPE`, `LAYOUT_RIG_SHA`, `LAYOUT_SETS_SHA`, `LAYOUT_SETUP`, `LAYOUT_ADJACENCY`, `LAYOUT_MISSING`, `LAYOUT_UNBOUND`, `LAYOUT_BINDING_UNKNOWN` and `LAYOUT_BINDING_BONES`, among them). That a refusal always carries some code is promised; which code it carries is promised only for the codes above.
+Every other code is courtesy (`MAP_ALT_SWING`, `MAP_SWING_OVERLAP`, `SWING_ANATOMY`, `SWING_ART`, `SWING_THIGH`, `SWING_OVERLAP` and `SWING_CONFLICT`, rig-c/pose#444; `CLOTH_SLOT`, `CLOTH_ANIMATION`, `CLOTH_HIP`, `CLOTH_FRAMES`, `CLOTH_EMPTY_FRAME`, `CLOTH_WINDOW`, `CLOTH_FIT_SLOTS`, `CLOTH_FIT_CONSTRAINTS`, `CLOTH_FIT_WINDOWS`, `CLOTH_FIT_FOLDS`, rig-c/pose#34; `FIGURE_SCALE_RECORD` (#404, malformed external figure-scale record), `SET_KEY_DRAWN`, rig-c/pose#355; `MAP_ALT_BIND`, `SET_BIND_FRAMES` and `SET_BIND_OVERLAP`, rig-c/pose#360; and rig-c/pose#346's `MAP_LAYOUT`, `LAYOUT_JSON`, `LAYOUT_SPEC`, `LAYOUT_SHAPE`, `LAYOUT_RIG_SHA`, `LAYOUT_SETS_SHA`, `LAYOUT_SETUP`, `LAYOUT_ADJACENCY`, `LAYOUT_MISSING`, `LAYOUT_UNBOUND`, `LAYOUT_BINDING_UNKNOWN` and `LAYOUT_BINDING_BONES`, among them). That a refusal always carries some code is promised; which code it carries is promised only for the codes above.
 
 Promised line tags, with their use:
 
@@ -650,3 +651,5 @@ Every other tag is courtesy (`DEPTH-SCALE` (#437), `CLOTH`, rig-c/pose#34; `FIGU
 The package promises **no importable API**. Its `exports` exposes only `package.json`, so `src/*` cannot be deep-imported. That is the same choice as rig-c/review.
 
 Measured: no repository in the org imports `@rig-c/pose` as a module. rig-c.github.io names it in prose and in install lines; rig-c/exam pins it in each round's `package.json` and runs the bin. The `bin` is unaffected. Closing the deep imports is a breaking change, so it lands before 1.0 and not after.
+
+The `SWING` line and `drawOrder.authored` rows are courtesy (rig-c/pose#444); without a declaration they are absent.
