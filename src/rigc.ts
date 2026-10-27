@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { poseRawSetup, readModel, type CompiledDocument } from 'rig-c/core';
-import type { InheritMode, Rest, RestBone, RigSet, RigSets, RigSlot, RigSlots } from './map.ts';
+import type { InheritMode, Rest, RestBone, RigSet, RigSets, RigSlider, RigSliders, RigSlot, RigSlots } from './map.ts';
 import { isObject, parseJson, Problems, Refusal, typeName } from './problems.ts';
 
 export interface RigInput {
@@ -178,6 +178,31 @@ export function slotsOf(doc: CompiledDocument): RigSlots {
     const attachments = new Set<string>();
     for (const k of doc.skins) for (const name of Object.keys(k.attachments[s.name] ?? {})) attachments.add(name);
     out.set(s.name, { setup: s.setup, attachments, bone: s.bone });
+  }
+  return out;
+}
+
+/** Every slider constraint of the compiled build (`rig-c/pose#454`), with its dial bone and own value range. */
+export function slidersOf(doc: CompiledDocument): RigSliders {
+  const out = new Map<string, RigSlider>();
+  for (const c of doc.constraints ?? []) {
+    if (c.kind !== 'slider' || c.record?.kind !== 'slider') continue;
+    const r = c.record;
+    const duration = r.timelines?.duration ?? 0;
+    const bone = r.bone ?? null;
+    const property = r.property ?? null;
+    const from = r.from ?? 0;
+    const to = r.to ?? 0;
+    const scale = r.scale ?? 1;
+    let range: [number, number];
+    if (bone !== null && Math.abs(scale) > 1e-12) {
+      const a = Math.round((from - to / scale) * 1e6) / 1e6;
+      const b = Math.round((from + (duration - to) / scale) * 1e6) / 1e6;
+      range = a <= b ? [a, b] : [b, a];
+    } else {
+      range = [0, Math.round(duration * 1e6) / 1e6];
+    }
+    out.set(c.name, { name: c.name, animation: r.animation, duration, bone, property, from, to, scale, range });
   }
   return out;
 }

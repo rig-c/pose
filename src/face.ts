@@ -41,6 +41,8 @@ export interface FaceSpan {
 
 export interface FaceAxisReading {
   bone: string;
+  slider?: string;
+  sliderTrack?: string;
   limits: [number, number];
   /** Knee thresholds `[kneeNeg, kneePos]` in degrees (`FACE_KNEE * limits`), inside which mapping is 1:1. */
   knee: [number, number];
@@ -272,9 +274,20 @@ export function mapFaceAxis(raw: readonly number[], axis: FaceAxis): FaceAxisRea
   const peakPos = rawMax;
   const kNeg = rawMin < limits[0] && rawMin < -1e-9 ? limits[0] / rawMin : 1;
   const kPos = rawMax > limits[1] && rawMax > 1e-9 ? limits[1] / rawMax : 1;
-  const keys = raw.map((x) => r3(x < 0 ? -mapKneeSide(-x, limNeg, peakNeg) : mapKneeSide(x, limPos, peakPos)));
+  const degs = raw.map((x) => (x < 0 ? -mapKneeSide(-x, limNeg, peakNeg) : mapKneeSide(x, limPos, peakPos)));
+  const win = axis.sliderWindow;
+  const keys =
+    win === undefined
+      ? degs.map(r3)
+      : degs.map((d) => {
+          const span = limits[1] - limits[0];
+          const u = span > 1e-9 ? (d - limits[0]) / span : 0.5;
+          return r3(win[0] + Math.max(0, Math.min(1, u)) * (win[1] - win[0]));
+        });
   return {
     bone: axis.bone,
+    ...(axis.slider === undefined ? {} : { slider: axis.slider }),
+    ...(axis.sliderTrack === undefined ? {} : { sliderTrack: axis.sliderTrack }),
     limits: [limits[0], limits[1]],
     knee: [r3(FACE_KNEE * limits[0]), r3(FACE_KNEE * limits[1])],
     read: spanOf(raw),
@@ -355,7 +368,8 @@ export function faceLine(f: FaceReading): string {
   for (const name of ['yaw', 'pitch'] as const) {
     const ax = f[name];
     if (ax === undefined) continue;
-    axes.push(`${name} → bone "${ax.bone}" [${ax.limits[0]}, ${ax.limits[1]}]° (knee [${ax.knee[0]}, ${ax.knee[1]}]°): ${sg(ax.mapped.min)}° … ${sg(ax.mapped.max)}° (scale ${ax.scale[0].toFixed(3)}/${ax.scale[1].toFixed(3)}, r=${ax.corr.toFixed(3)})`);
+    const tgt = ax.slider !== undefined ? `slider "${ax.slider}"` : `bone "${ax.bone}"`;
+    axes.push(`${name} → ${tgt} [${ax.limits[0]}, ${ax.limits[1]}]° (knee [${ax.knee[0]}, ${ax.knee[1]}]°): ${sg(ax.mapped.min)}° … ${sg(ax.mapped.max)}° (scale ${ax.scale[0].toFixed(3)}/${ax.scale[1].toFixed(3)}, r=${ax.corr.toFixed(3)})`);
   }
   const mappedPart = axes.length === 0 ? '' : `; mapped ${axes.join(', ')}`;
   return `${joints}: ${readPart}${mappedPart}${formatYawSets(f.sets, f.read.rawYaw)}`;
@@ -610,9 +624,10 @@ export function bodyLine(b: BodyReading): string {
     ? `≥ ${BODY_TURN_DEG}°: none`
     : `≥ ${BODY_TURN_DEG}° on ${b.framesOver45.length} frame(s): ${spans.join(', ')}`;
   const head = `r_shoulder + l_shoulder, r_hip + l_hip (standing shoulder ${b.standing.shoulder.toFixed(1)}px, hip ${b.standing.hip.toFixed(1)}px): read yaw ${sg(b.read.yaw.min)}° … ${sg(b.read.yaw.max)}° (${f1(b.read.yaw.range)}°), opening (frames 0–${openEnd}) ${sg(b.read.opening.min)}° … ${sg(b.read.opening.max)}° (max |yaw| ${f1(openAbs)}°); ${overPart}`;
+  const tgt = b.yaw === undefined ? '' : b.yaw.slider !== undefined ? `slider "${b.yaw.slider}"` : `bone "${b.yaw.bone}"`;
   const mappedPart = b.yaw === undefined
     ? ''
-    : `; mapped yaw → bone "${b.yaw.bone}" [${b.yaw.limits[0]}, ${b.yaw.limits[1]}]° (knee [${b.yaw.knee[0]}, ${b.yaw.knee[1]}]°): ${sg(b.yaw.mapped.min)}° … ${sg(b.yaw.mapped.max)}° (scale ${b.yaw.scale[0].toFixed(3)}/${b.yaw.scale[1].toFixed(3)}, r=${b.yaw.corr.toFixed(3)})`;
+    : `; mapped yaw → ${tgt} [${b.yaw.limits[0]}, ${b.yaw.limits[1]}]° (knee [${b.yaw.knee[0]}, ${b.yaw.knee[1]}]°): ${sg(b.yaw.mapped.min)}° … ${sg(b.yaw.mapped.max)}° (scale ${b.yaw.scale[0].toFixed(3)}/${b.yaw.scale[1].toFixed(3)}, r=${b.yaw.corr.toFixed(3)})`;
   return `${head}${mappedPart}${formatYawSets(b.sets, b.read.rawYaw)}`;
 }
 

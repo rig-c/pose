@@ -68,9 +68,11 @@ export function poseFrames(doc: CompiledDocument, animation: string, times: read
 export function measureLanding(doc: CompiledDocument, animation: string, map: JointMap, r: Retarget, posed = poseFrames(doc, animation, r.times), support?: Record<'r' | 'l', ReadonlySet<number>>): Landing[] {
   const out: Landing[] = [];
   const lengths = new Map(doc.bones.map((b) => [b.name, b.length ?? 0]));
-  const faceBones = new Set([r.face?.yaw?.bone, r.face?.pitch?.bone].filter((b): b is string => b !== undefined));
-  const isFaceSlider = (c: CompiledDocument['constraints'][number]): boolean => c.record?.kind === 'slider' && c.record.bone !== null && faceBones.has(c.record.bone);
-  const hasFaceSliders = faceBones.size > 0 && doc.constraints.some(isFaceSlider);
+  const faceBones = new Set([r.face?.yaw?.bone, r.face?.pitch?.bone, r.body?.yaw?.bone].filter((b): b is string => b !== undefined));
+  const faceSliderTracks = new Set([r.face?.yaw?.sliderTrack, r.face?.pitch?.sliderTrack, r.body?.yaw?.sliderTrack].filter((s): s is string => s !== undefined));
+  const isFaceSlider = (c: CompiledDocument['constraints'][number]): boolean =>
+    c.record?.kind === 'slider' && ((c.record.bone !== null && faceBones.has(c.record.bone)) || faceSliderTracks.has(c.name));
+  const hasFaceSliders = (faceBones.size > 0 || faceSliderTracks.size > 0) && doc.constraints.some(isFaceSlider);
   const hasScaleY = doc.animations.some((a) => a.name === animation && a.timelines.bones.some((b) => b.timelines.some((t) => t.kind === 'scaley')));
   const chainPosed = hasFaceSliders || hasScaleY
     ? poseFrames(
@@ -115,7 +117,7 @@ export function measureLanding(doc: CompiledDocument, animation: string, map: Jo
   if (r.face !== null) {
     for (const axis of ['yaw', 'pitch'] as const) {
       const ax = r.face[axis];
-      if (ax === undefined) continue;
+      if (ax === undefined || ax.sliderTrack !== undefined) continue;
       const asked = r.targets.get(ax.bone)!;
       let worst = -1;
       let frame = 0;
