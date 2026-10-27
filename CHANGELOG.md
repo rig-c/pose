@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/rig-c/pose/compare/v1.3.1...v1.4.0) (2026-10-27)
+
+
+### Features
+
+* **map:** face.yaw / face.pitch / body.yaw may target a rig's slider by name, with the range taken from the slider ([#455](https://github.com/rig-c/pose/issues/455)) ([ea35316](https://github.com/rig-c/pose/commit/ea353160bcbc45d4534908abccf2b37ac855ad57))
+
 ## [1.3.1](https://github.com/rig-c/pose/compare/v1.3.0...v1.3.1) (2026-10-27)
 
 
