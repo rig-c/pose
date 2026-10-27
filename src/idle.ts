@@ -96,6 +96,11 @@ function collisions(track: RigcTrack, keyed: ReadonlyMap<string, string>, groups
   return [...new Set(cellsOf(track, groups).flatMap((c) => (keyed.has(c) ? [keyed.get(c)!] : [])))];
 }
 
+/** The colliding cells (`family:name:channel`) and the labels of the tracks in `keyed` that pose them. */
+function collisionCells(track: RigcTrack, keyed: ReadonlyMap<string, string>, groups: Readonly<Record<string, readonly string[]>>): Array<{ cell: string; by: string }> {
+  return cellsOf(track, groups).flatMap((cell) => (keyed.has(cell) ? [{ cell, by: keyed.get(cell)! }] : []));
+}
+
 export interface IdleDropped {
   target: Target;
   /** A group's members, as the motion spec's `groups` names them. */
@@ -127,14 +132,253 @@ export interface IdleReading {
   notTracks: string[];
   /** With --carry-idle: the looped tracks, in the idle's order. */
   carriedTracks: RigcTrack[];
+  /** With --carry-idle: `newTracks` with any slot `rgb` track folded into a carried `rgba2`/`rgb2` track removed so each channel is keyed once. */
+  ownTracks: RigcTrack[];
 }
 
 const NOT_TRACKS = ['drawOrder', 'events', 'ik', 'transform', 'deform', 'sequence'] as const;
 
+const r6 = (v: number): number => Math.round(v * 1e6) / 1e6;
+/** Two times this close are one time (key times are written to 1e-6 s). */
+const EPS = 1e-7;
+
+const numeric = (v: unknown): v is number[] => Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === 'number' && Number.isFinite(x));
+
+/** Slice channels `[start, end)` from a numeric track's values and raw curves. */
+function sliceTrackChannels(track: RigcTrack, property: string, start: number, end: number): RigcTrack {
+  return {
+    ...track,
+    property,
+    keys: track.keys.map((k) => {
+      const out: RigcKey = { ...k };
+      if (numeric(k.v)) out.v = k.v.slice(start, end);
+      if (Array.isArray(k.curve)) out.curve = k.curve.slice(start * 4, end * 4);
+      return out;
+    }),
+  };
+}
+
+/** Sample a linear/stepped/Bézier numeric track at `t`. */
+export function sampleNumericTrack(track: RigcTrack, t: number, width: number, easings: Readonly<Record<string, readonly number[]>>): number[] {
+  const keys = track.keys;
+  if (keys.length === 0) return Array(width).fill(1) as number[];
+  if (t <= keys[0]!.t + EPS) return [...(keys[0]!.v as number[]).slice(0, width)];
+  const last = keys[keys.length - 1]!;
+  if (t >= last.t - EPS) return [...(last.v as number[]).slice(0, width)];
+  for (let i = 0; i < keys.length - 1; i++) {
+    const a = keys[i]!;
+    const b = keys[i + 1]!;
+    if (Math.abs(t - a.t) <= EPS) return [...(a.v as number[]).slice(0, width)];
+    if (Math.abs(t - b.t) <= EPS) return [...(b.v as number[]).slice(0, width)];
+    if (t > a.t && t < b.t) {
+      const c = cutAt({ ...a }, b, t, easings);
+      if ('v' in c) return c.v.slice(0, width);
+      const va = a.v as number[];
+      const vb = b.v as number[];
+      return va.slice(0, width).map((v0, idx) => r6(v0 + ((t - a.t) / (b.t - a.t)) * (vb[idx]! - v0)));
+    }
+  }
+  return [...(last.v as number[]).slice(0, width)];
+}
+
+/** Split `track` at any extra times so its keys sit on the union of its own times and `extraTimes`, preserving every curve segment. */
+function refineTrackAtTimes(track: RigcTrack, extraTimes: readonly number[], easings: Readonly<Record<string, readonly number[]>>): { track: RigcTrack } | { reason: string } {
+  const keys: RigcKey[] = track.keys.map((k) => ({ ...k, ...(Array.isArray(k.v) ? { v: [...(k.v as number[])] } : {}), ...(Array.isArray(k.curve) ? { curve: [...k.curve] } : {}) }));
+  if (keys.length === 0) return { track: { ...track, keys } };
+  const tFirst = keys[0]!.t;
+  const tLast = keys[keys.length - 1]!.t;
+  const vFirst = [...(keys[0]!.v as number[])];
+  const vLast = [...(keys[keys.length - 1]!.v as number[])];
+  const sorted = [...extraTimes].map(r6).sort((x, y) => x - y);
+  const before: RigcKey[] = [];
+  const after: RigcKey[] = [];
+  for (const rawT of sorted) {
+    const t = r6(rawT);
+    if (t < tFirst - EPS) {
+      if (!before.some((k) => Math.abs(k.t - t) <= EPS)) before.push({ t, v: [...vFirst] });
+      continue;
+    }
+    if (t > tLast + EPS) {
+      if (!after.some((k) => Math.abs(k.t - t) <= EPS)) after.push({ t, v: [...vLast] });
+      continue;
+    }
+    if (keys.some((k) => Math.abs(k.t - t) <= EPS)) continue;
+    const idx = keys.findIndex((k, i) => i < keys.length - 1 && k.t < t - EPS && keys[i + 1]!.t > t + EPS);
+    if (idx < 0) continue;
+    const a = keys[idx]!;
+    const b = keys[idx + 1]!;
+    const va = a.v as number[];
+    const vb = b.v as number[];
+    if (a.ease === 'stepped') {
+      keys.splice(idx + 1, 0, { t, v: [...va], ease: 'stepped' });
+      continue;
+    }
+    let fullCurve: number[] | null = null;
+    if (Array.isArray(a.curve)) fullCurve = [...a.curve];
+    else if (typeof a.ease === 'string') {
+      const h = easings[a.ease];
+      if (h === undefined || h.length !== 4) return { reason: `its easing "${a.ease}" is not in the motion spec's easings` };
+      fullCurve = va.flatMap((v0, c) => [a.t + (b.t - a.t) * h[0]!, v0 + (vb[c]! - v0) * h[1]!, a.t + (b.t - a.t) * h[2]!, v0 + (vb[c]! - v0) * h[3]!]);
+    }
+    if (fullCurve === null) {
+      const vMid = va.map((v0, c) => r6(v0 + ((t - a.t) / (b.t - a.t)) * (vb[c]! - v0)));
+      keys.splice(idx + 1, 0, { t, v: vMid });
+      continue;
+    }
+    const leftCurve: number[] = [];
+    const rightCurve: number[] = [];
+    const vMid: number[] = [];
+    va.forEach((v0, c) => {
+      const [x1, y1, x2, y2] = fullCurve.slice(c * 4, c * 4 + 4) as [number, number, number, number];
+      const bez = (p0: number, p1: number, p2: number, p3: number, s: number) => {
+        const u = 1 - s;
+        return u * u * u * p0 + 3 * u * u * s * p1 + 3 * u * s * s * p2 + s * s * s * p3;
+      };
+      let lo = 0;
+      let hi = 1;
+      for (let i = 0; i < 60; i++) {
+        const mid = (lo + hi) / 2;
+        if (bez(a.t, x1, x2, b.t, mid) < t) lo = mid;
+        else hi = mid;
+      }
+      const s = (lo + hi) / 2;
+      const lerp = (p: number, q: number) => p + (q - p) * s;
+      const splitBoth = (p0: number, p1: number, p2: number, p3: number): [number, number, number, number, number] => {
+        const p01 = lerp(p0, p1);
+        const p12 = lerp(p1, p2);
+        const p23 = lerp(p2, p3);
+        const p012 = lerp(p01, p12);
+        const p123 = lerp(p12, p23);
+        const p0123 = lerp(p012, p123);
+        return [p01, p012, p0123, p123, p23];
+      };
+      const xs = splitBoth(a.t, x1, x2, b.t);
+      const ys = splitBoth(v0, y1, y2, vb[c]!);
+      leftCurve.push(r6(xs[0]), r6(ys[0]), r6(xs[1]), r6(ys[1]));
+      vMid.push(r6(ys[2]));
+      rightCurve.push(r6(xs[3]), r6(ys[3]), r6(xs[4]), r6(ys[4]));
+    });
+    delete a.ease;
+    a.curve = leftCurve;
+    keys.splice(idx + 1, 0, { t, v: vMid, curve: rightCurve });
+  }
+  if (keys.length > 0) {
+    delete keys[keys.length - 1]!.ease;
+    delete keys[keys.length - 1]!.curve;
+  }
+  const allKeys = [...before, ...keys, ...after];
+  if (allKeys.length > 0) {
+    delete allKeys[allKeys.length - 1]!.ease;
+    delete allKeys[allKeys.length - 1]!.curve;
+  }
+  return { track: { ...track, keys: allKeys } };
+}
+
+type SegmentCurve = { kind: 'linear'; flat: boolean } | { kind: 'stepped-jump' } | { kind: 'bezier'; curve: number[] } | { reason: string };
+
+function segmentCurveOf(
+  key: RigcKey,
+  v0: readonly number[],
+  v1: readonly number[],
+  t0: number,
+  dt: number,
+  chStart: number,
+  chEnd: number,
+  easings: Readonly<Record<string, readonly number[]>>,
+): SegmentCurve {
+  const flat = v0.every((x, c) => x === v1[c]);
+  if (key.ease === 'stepped') return flat ? { kind: 'linear', flat: true } : { kind: 'stepped-jump' };
+  if (Array.isArray(key.curve)) return { kind: 'bezier', curve: key.curve.slice(chStart * 4, chEnd * 4) };
+  if (typeof key.ease === 'string') {
+    const h = easings[key.ease];
+    if (h === undefined || h.length !== 4) return { reason: `its easing "${key.ease}" is not in the motion spec's easings` };
+    return {
+      kind: 'bezier',
+      curve: v0.flatMap((c0, c) => {
+        const dv = v1[c]! - c0;
+        return [r6(t0 + dt * h[0]!), r6(c0 + dv * h[1]!), r6(t0 + dt * h[2]!), r6(c0 + dv * h[3]!)];
+      }),
+    };
+  }
+  return { kind: 'linear', flat };
+}
+
+/**
+ * Fold an `own` slot `rgb` track into channels `0..2` of a looped `rgba2` or `rgb2`
+ * track on the union of their key times, keeping each channel group's own interpolation.
+ *
+ * Per rig-c `src/timelines.ts:29-33, 47-54, 915-921` and `src/compile.ts:1176-1181,
+ * 1213-1223, 1580-1594, 1634-1646, 8064-8080, 9722-9754`:
+ * - `rgba2` has 7 channels `[lr,lg,lb,la,dr,dg,db]` (28 raw curve numbers: `0..11` light RGB, `12..27` alpha + dark RGB).
+ * - `rgb2` has 6 channels `[lr,lg,lb,dr,dg,db]` (24 raw curve numbers: `0..11` light RGB, `12..23` dark RGB).
+ * - A named easing (`key.ease` in `motion.easings`) converts to its exact per-channel Bézier (`bezierForChannel`).
+ * - `"stepped"` is key-wide only (`rawCurve` accepts `"stepped"` or `channels * 4` finite numbers): a stepped hold
+ *   (`v0 === v1` on those channels) is flat and equals linear/collinear Bézier; a stepped jump (`v0 !== v1`) where the
+ *   other channel group is flat stays `ease: "stepped"`; a stepped jump coinciding with a moving segment on the other
+ *   channel group cannot be encoded in `rigc-motion/1` and is refused by name.
+ */
+function foldRgbIntoTwoColour(carried: RigcTrack, rgbTrack: RigcTrack, easings: Readonly<Record<string, readonly number[]>>): { track: RigcTrack } | { reason: string } {
+  const idleRefined = refineTrackAtTimes(carried, rgbTrack.keys.map((k) => k.t), easings);
+  if ('reason' in idleRefined) return idleRefined;
+  const rgbRefined = refineTrackAtTimes(rgbTrack, carried.keys.map((k) => k.t), easings);
+  if ('reason' in rgbRefined) return rgbRefined;
+  const idleKeys = idleRefined.track.keys;
+  const rgbKeys = rgbRefined.track.keys;
+  const outKeys: RigcKey[] = [];
+  for (let i = 0; i < idleKeys.length; i++) {
+    const ik = idleKeys[i]!;
+    const rk = rgbKeys[i]!;
+    const t0 = ik.t;
+    const rgb0 = (rk.v as number[]).slice(0, 3);
+    const rest0 = (ik.v as number[]).slice(3);
+    const v = [...rgb0, ...rest0];
+    const inext = idleKeys[i + 1];
+    const rnext = rgbKeys[i + 1];
+    if (inext === undefined || rnext === undefined) {
+      outKeys.push({ t: t0, v });
+      continue;
+    }
+    const t1 = inext.t;
+    const dt = t1 - t0;
+    const rgb1 = (rnext.v as number[]).slice(0, 3);
+    const rest1 = (inext.v as number[]).slice(3);
+    const rgbSeg = segmentCurveOf(rk, rgb0, rgb1, t0, dt, 0, 3, easings);
+    if ('reason' in rgbSeg) return rgbSeg;
+    const restSeg = segmentCurveOf(ik, rest0, rest1, t0, dt, 3, 3 + rest0.length, easings);
+    if ('reason' in restSeg) return restSeg;
+    if (rgbSeg.kind === 'stepped-jump' || restSeg.kind === 'stepped-jump') {
+      const rgbCanStep = rgbSeg.kind === 'stepped-jump' || (rgbSeg.kind === 'linear' && rgbSeg.flat);
+      const restCanStep = restSeg.kind === 'stepped-jump' || (restSeg.kind === 'linear' && restSeg.flat);
+      if (rgbCanStep && restCanStep) {
+        outKeys.push({ t: t0, v, ease: 'stepped' });
+        continue;
+      }
+      return {
+        reason: `its stepped segment [${t0}, ${t1}]s jumps ${carried.property}'s non-rgb channels (${JSON.stringify(rest0)} -> ${JSON.stringify(rest1)}) while rgb moves (${JSON.stringify(rgb0)} -> ${JSON.stringify(rgb1)}), and rigc-motion/1 has no per-channel "stepped" curve`,
+      };
+    }
+    if (rgbSeg.kind === 'linear' && restSeg.kind === 'linear') {
+      outKeys.push({ t: t0, v });
+      continue;
+    }
+    const linearBezier = (v0: readonly number[], v1: readonly number[]): number[] =>
+      v0.flatMap((c0, c) => {
+        const dv = v1[c]! - c0;
+        return [r6(t0 + dt / 3), r6(c0 + dv / 3), r6(t0 + (2 * dt) / 3), r6(c0 + (2 * dv) / 3)];
+      });
+    const rgbCurve = rgbSeg.kind === 'bezier' ? rgbSeg.curve : linearBezier(rgb0, rgb1);
+    const restCurve = restSeg.kind === 'bezier' ? restSeg.curve : linearBezier(rest0, rest1);
+    outKeys.push({ t: t0, v, curve: [...rgbCurve, ...restCurve] });
+  }
+  return { track: { ...carried, keys: outKeys } };
+}
+
 /**
  * The idle against the new animation: every idle track the new one does not
  * key on any channel is dropped (and, with `carry`, looped into it); every one
- * it keys is kept out, naming the track that keys it.
+ * it keys is kept out, naming the track that keys it. A slot `rgba` or `rgba2`/`rgb2`
+ * track whose slot has only `rgb` keyed in `newTracks` merges channel-wise (#451):
+ * `rgb` is kept out while `alpha` (and `dark` on `rgba2`/`rgb2`) stays the idle's.
  */
 export function readIdle(
   name: string,
@@ -158,11 +402,61 @@ export function readIdle(
   const dropped: IdleDropped[] = [];
   const keptOut: IdleKeptOut[] = [];
   const carriedTracks: RigcTrack[] = [];
+  const absorbedOwn = new Set<RigcTrack>();
   for (const tr of tracks) {
     const target = targetOf(tr);
     if (target === null) continue;
-    const hit = collisions(tr, keyed, motion.groups);
-    if (hit.length > 0) {
+    const hitCells = collisionCells(tr, keyed, motion.groups);
+    if (hitCells.length > 0) {
+      // #451: a slot `rgba`, `rgba2` or `rgb2` track whose only collision is `rgb`
+      // keeps its non-colliding `alpha` / `dark` channels instead of losing the whole track.
+      if (target.kind === 'slot' && (tr.property === 'rgba' || tr.property === 'rgba2' || tr.property === 'rgb2')) {
+        const hitChannelNames = [...new Set(hitCells.map((x) => x.cell.split(':')[2]!))];
+        const hitBy = [...new Set(hitCells.map((x) => x.by))];
+        if (hitChannelNames.length === 1 && hitChannelNames[0] === 'rgb') {
+          keptOut.push({ target, property: 'rgb', reason: `"${into}"'s own ${hitBy.join(', ')} keys it` });
+          if (tr.property === 'rgba') {
+            const alphaTr = sliceTrackChannels(tr, 'alpha', 3, 4);
+            const entry: IdleDropped = { target, members: null, property: 'alpha', keys: alphaTr.keys.length, duration: D, carried: null, notCarried: null };
+            if (carry) {
+              const c = loopTrack(alphaTr, D, duration, motion.easings, () => setupOf(target, 'alpha', alphaTr.keys[0]?.v));
+              if ('reason' in c) entry.notCarried = c.reason;
+              else {
+                entry.carried = { keys: c.track.keys.length, cycles: c.cycles, seams: c.seams };
+                carriedTracks.push(c.track);
+              }
+            }
+            dropped.push(entry);
+            continue;
+          }
+          // `rgba2` or `rgb2`: `rigc-motion/1` has no standalone `dark` timeline, so with `carry`
+          // the looped track takes `own`'s `rgb` on channels 0..2 and replaces the standalone `rgb` track.
+          const ownRgb = newTracks.find((o) => {
+            const ot = targetOf(o);
+            return o.property === 'rgb' && ((ot?.kind === 'slot' && ot.name === target.name) || (ot?.kind === 'group' && (motion.groups[ot.name] ?? []).includes(target.name)));
+          });
+          const entry: IdleDropped = { target, members: null, property: tr.property, keys: tr.keys.length, duration: D, carried: null, notCarried: null };
+          if (carry) {
+            const c = loopTrack(tr, D, duration, motion.easings, () => setupOf(target, tr.property, tr.keys[0]?.v));
+            if ('reason' in c) entry.notCarried = c.reason;
+            else if (ownRgb !== undefined && targetOf(ownRgb)?.kind === 'slot') {
+              const folded = foldRgbIntoTwoColour(c.track, ownRgb, motion.easings);
+              if ('reason' in folded) entry.notCarried = folded.reason;
+              else {
+                absorbedOwn.add(ownRgb);
+                entry.carried = { keys: folded.track.keys.length, cycles: c.cycles, seams: c.seams };
+                carriedTracks.push(folded.track);
+              }
+            } else {
+              entry.carried = { keys: c.track.keys.length, cycles: c.cycles, seams: c.seams };
+              carriedTracks.push(c.track);
+            }
+          }
+          dropped.push(entry);
+          continue;
+        }
+      }
+      const hit = [...new Set(hitCells.map((x) => x.by))];
       keptOut.push({ target, property: tr.property, reason: `"${into}"'s own ${hit.join(', ')} keys it` });
       continue;
     }
@@ -190,14 +484,9 @@ export function readIdle(
     dropped.push(entry);
   }
   const notTracks = NOT_TRACKS.filter((k) => idle[k] !== undefined);
-  return { animation: name, duration: D, tracks: tracks.length, dropped, keptOut, notTracks, carriedTracks };
+  const ownTracks = absorbedOwn.size === 0 ? [...newTracks] : newTracks.filter((t) => !absorbedOwn.has(t));
+  return { animation: name, duration: D, tracks: tracks.length, dropped, keptOut, notTracks, carriedTracks, ownTracks };
 }
-
-const r6 = (v: number): number => Math.round(v * 1e6) / 1e6;
-/** Two times this close are one time (key times are written to 1e-6 s). */
-const EPS = 1e-7;
-
-const numeric = (v: unknown): v is number[] => Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === 'number' && Number.isFinite(x));
 
 /**
  * One idle track looped to `T` seconds: its keys repeated every `D` seconds and
@@ -395,8 +684,13 @@ export function mergeProblems(fragment: readonly RigcTrack[], where: string, ani
   const keyed = keyedBy(tracks, groups);
   fragment.forEach((tr, i) => {
     const label = trackLabel(tr, groups);
-    const hit = collisions(tr, keyed, groups);
-    if (hit.length > 0) out.push({ code: 'MERGE_CONFLICT', text: `${where} tracks[${i}] (${label}) — "${animation}" already keys it: ${hit.join(', ')}; a fragment adds a track where nothing keys that target and property, it never replaces one` });
+    const hitCells = collisionCells(tr, keyed, groups);
+    if (hitCells.length > 0) {
+      const hit = [...new Set(hitCells.map((x) => x.by))];
+      const channels = [...new Set(hitCells.map((x) => x.cell.split(':')[2]!))];
+      const channelSuffix = tr.property in SLOT_CHANNELS ? ` (channel ${channels.map((c) => `"${c}"`).join(', ')})` : '';
+      out.push({ code: 'MERGE_CONFLICT', text: `${where} tracks[${i}] (${label}) — "${animation}" already keys it: ${hit.join(', ')}${channelSuffix}; a fragment adds a track where nothing keys that target and property, it never replaces one` });
+    }
     for (const c of cellsOf(tr, groups)) if (!keyed.has(c)) keyed.set(c, `${where} tracks[${i}] (${label})`);
     tr.keys.forEach((k, j) => {
       if (k.t < 0 || k.t > duration) out.push({ code: 'MERGE_TIME', text: `${where} tracks[${i}] (${label}) keys[${j}] at t=${k.t}s is ${k.t < 0 ? 'before 0' : `past "${animation}"'s duration ${duration}s`}; a fragment's times are absolute, from the animation's start, within [0, ${duration}]` });

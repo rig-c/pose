@@ -457,13 +457,14 @@ export function runRetarget(a: RetargetArgs, log: (line: string) => void): RunRe
       for (const n of idle.notTracks) say(`  IDLE-KEPT-OUT "${idleName}"'s ${n} timeline(s): not a track; neither compared nor carried`);
     }
     const carried = idle?.carriedTracks ?? [];
+    const baseOwn = a.carryIdle === true && idle !== null ? idle.ownTracks : own;
     if (fragment.length > 0) {
-      const problems = mergeProblems(fragment, a.merge!, a.name, [...own, ...carried], T, groups);
+      const problems = mergeProblems(fragment, a.merge!, a.name, [...baseOwn, ...carried], T, groups);
       if (problems.length > 0) refuse(problems);
       for (const tr of fragment) say(`  MERGE  ${a.merge}: ${trackLabel(tr, groups)}, ${tr.keys.length} key(s) at t=${tr.keys[0]!.t}${tr.keys.length > 1 ? `–${tr.keys[tr.keys.length - 1]!.t}` : ''}s`);
     }
     const added = [...carried, ...fragment];
-    const tracked = added.length === 0 && shadeTracks.length === 0 ? r.animation : { ...r.animation, tracks: [...own, ...added] };
+    const tracked = added.length === 0 && shadeTracks.length === 0 ? r.animation : { ...r.animation, tracks: [...baseOwn, ...added] };
     // #304: rig-c's one draw-order timeline sits on the animation beside its tracks; written only when keyed.
     const animation = drawOrder === null || drawOrder.keys.length === 0 ? tracked : { ...tracked, drawOrder: drawOrderKeys(drawOrder) };
     let motion = { ...base, animations: { ...animations, [a.name]: animation } };
