@@ -119,6 +119,13 @@ The full list, each limit resting on the open issue that holds it, is [What it d
 
 [Bun](https://bun.sh) ≥ 1.2 on `PATH` — rig-pose, like rig-c, runs its TypeScript sources directly. `rig-c` comes as a dependency. With `@esotericsoftware/spine-core` installed beside it, rig-c's gate runs the spine-core round trip; without it, rig-c's own gate, and the gate's report says which.
 
+Install the scoped package in your project, then run its local command:
+
+```sh
+npm i -D @rig-c/pose
+bun run rig-pose --help
+```
+
 **The supported surface is the `rig-pose` command.** RELEASING.md's *What 1.x promises* lists every flag, report key, problem code and line tag as promised or courtesy, and why. The package exports no importable API: `exports` exposes only `package.json`.
 
 ## Licence
