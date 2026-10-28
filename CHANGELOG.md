@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.1](https://github.com/rig-c/pose/compare/v1.5.0...v1.5.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* **release:** read the packed tarball by its file, not npm's JSON shape, so the alias checks pass under npm 12 and inside npm publish ([#463](https://github.com/rig-c/pose/issues/463)) ([be9d6d1](https://github.com/rig-c/pose/commit/be9d6d148e1f3014e0eb4a6a560489eba3fa43ac)), closes [#462](https://github.com/rig-c/pose/issues/462)
+
 ## [1.5.0](https://github.com/rig-c/pose/compare/v1.4.0...v1.5.0) (2026-10-28)
 
 
