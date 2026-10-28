@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.5.0](https://github.com/rig-c/pose/compare/v1.4.0...v1.5.0) (2026-10-28)
+
+
+### Features
+
+* **release:** publish the convenience alias rig-pose from the same release, like rig-parts and rig-play ([#461](https://github.com/rig-c/pose/issues/461)) ([495944c](https://github.com/rig-c/pose/commit/495944c65b0da1efc9c76d3476921487a29eeed9)), closes [#460](https://github.com/rig-c/pose/issues/460)
+
+
+### Bug Fixes
+
+* **docs:** add the scoped install and local command to the README requirements ([#458](https://github.com/rig-c/pose/issues/458)) ([9148b69](https://github.com/rig-c/pose/commit/9148b69ccc842525578268ee0ee561abac0ee411)), closes [#457](https://github.com/rig-c/pose/issues/457)
+
 ## [1.4.0](https://github.com/rig-c/pose/compare/v1.3.1...v1.4.0) (2026-10-27)
 
 
