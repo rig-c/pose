@@ -40,7 +40,10 @@ a commit message on the branch.
    `scripts/confirm_registry.sh`, which installs the published version into an
    empty directory, runs `rig-pose --version`, then retargets the public wave
    from the install and holds its motion to the pinned bytes
-   (`scripts/smoke_install.sh`, rig-c/pose#260; exit 3 = the registry did not
+   (`scripts/smoke_install.sh`, rig-c/pose#260), then installs `rig-pose` at the
+   same version into a separate empty directory and checks its package name,
+   version, `rig-pose --version` and `rig-pose --help`
+   (`scripts/smoke_alias.sh`; exit 3 = either registry package did not
    serve it in time; re-run the confirmation alone, which publishes nothing,
    with `gh workflow run release.yml -f version=X.Y.Z`).
 
@@ -135,6 +138,70 @@ Settings → Trusted Publisher → GitHub Actions, reads:
 Then Settings → Publishing access → *Require two-factor authentication and
 disallow tokens*. The fields are case-sensitive and not validated on save; a
 typo surfaces only as a refused publish.
+
+### The convenience alias: rig-pose
+
+The scoped package remains `@rig-c/pose`. After its existing gated OIDC publish,
+the **Publish the alias rig-pose** step packs the same checkout with
+`scripts/alias_tarball.ts`, then publishes the tarball with
+`npm publish "$alias_tgz" --provenance --access public` (and the same `rc`
+dist-tag for a prerelease). Only `package.json`'s `name` line changes; the
+version, executable, dependencies, file list and every other byte stay equal.
+Packing never renames the checkout. Publishing a tarball does not run the
+checkout's `prepublishOnly` again: the scoped publish already gated those files.
+
+The pack command checks equality before printing the tarball path. Its
+`compare <scoped.tgz> <alias.tgz>` command checks the same unpacked paths and
+bytes, restoring only the alias's name line for the comparison. `bun run test`
+runs the equality control beside planted byte, missing-file, extra-file and
+manifest differences in `test/alias.test.ts`; a readable difference exits 1,
+and an invocation or unreadable-tarball failure exits 2. Registry confirmation
+installs both names at the requested version; the alias's executable must
+answer `--help` from its empty install.
+
+**First alias publish: owner only, once.** The `rig-pose` trusted publisher
+cannot be configured until that package exists. This change publishes nothing.
+Choose the stable release tag that contains the alias script and whose scoped
+publish has passed; from a clean checkout, the owner runs the following
+sequence, replacing `vX.Y.Z` with that tag:
+
+```sh
+set -euo pipefail
+release_tag=vX.Y.Z
+test -z "$(git status --porcelain)"
+git checkout --detach "$release_tag"
+test -z "$(git status --porcelain)"
+test "$(git describe --tags --exact-match HEAD)" = "$release_tag"
+test "v$(node -p "require('./package.json').version")" = "$release_tag"
+bun install --frozen-lockfile
+alias_out=$(mktemp -d)
+alias_tgz=$(bun scripts/alias_tarball.ts pack --name rig-pose --out "$alias_out")
+npm publish "$alias_tgz"
+```
+
+The last command is plain `npm publish <alias tarball>`: the owner's npm account handles its
+2FA prompt; no token, explicit OTP, or provenance flag is added to this
+one-time account publish. Keep the printed tarball path until it is confirmed.
+On npmjs.com → **rig-pose** → Settings → Trusted Publisher → GitHub Actions,
+enter these case-sensitive fields for this package separately from the scoped
+package's existing publisher:
+
+| Field | Value |
+| --- | --- |
+| Organization or user | `rig-c` |
+| Repository | `pose` |
+| Workflow filename | `release.yml` |
+| Environment name | blank |
+
+Then set Publishing access to **Require two-factor authentication and disallow
+tokens**. The subsequent releases publish both names through this workflow.
+If the first cut stops at the alias step after the scoped package has landed,
+complete this owner bootstrap and rerun confirmation with
+`gh workflow run release.yml -f version=X.Y.Z`; the `tag` dispatch refuses an
+already-published scoped version and is not an alias-only retry. The manual
+first alias publish has no workflow provenance; later OIDC publishes do.
+Install recommendations stay on the scoped name until the first alias publish
+and its empty-install confirmation have been verified in a later change.
 
 **One-time GitHub setting (owner):** Settings → Actions → General → Workflow
 permissions → tick *Allow GitHub Actions to create and approve pull requests*,

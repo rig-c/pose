@@ -184,6 +184,15 @@ jobs:
           case "$(node -p "require('./package.json').version")" in *-*) tag="--tag rc";; esac
           npm publish --provenance --access public $tag
 
+      - name: Publish the alias rig-pose
+        if: ${{ steps.target.outputs.publish == 'true' }}
+        run: |
+          set -euo pipefail
+          alias_tgz="$(bun scripts/alias_tarball.ts pack --name rig-pose --out "$RUNNER_TEMP/pose-alias")"
+          tag=""
+          case "$(node -p "require('./package.json').version")" in *-*) tag="--tag rc";; esac
+          npm publish "$alias_tgz" --provenance --access public $tag
+
       - name: Confirm the published package installs and runs
         if: ${{ steps.target.outputs.publish == 'true' }}
         env:
