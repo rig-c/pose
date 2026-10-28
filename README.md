@@ -126,6 +126,8 @@ npm i -D @rig-c/pose
 bun run rig-pose --help
 ```
 
+`rig-pose` is the same package under its convenience install name, published from the same release with the same files but its `name`: `npm i -D rig-pose` installs it.
+
 **The supported surface is the `rig-pose` command.** RELEASING.md's *What 1.x promises* lists every flag, report key, problem code and line tag as promised or courtesy, and why. The package exports no importable API: `exports` exposes only `package.json`.
 
 ## Licence
