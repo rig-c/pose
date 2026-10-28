@@ -151,11 +151,15 @@ export function compareTarballs(packageTgz: string, aliasTgz: string): AliasComp
   }
 }
 
-/** `npm pack` of a directory into an empty one, returning the one tarball it wrote. */
+/**
+ * Read the tarball npm actually wrote, independent of its stdout JSON shape.
+ * A publish dry-run still needs private test tarballs; override only that pack
+ * setting, keeping the caller's registry, authentication and cache configuration.
+ */
 export function packInto(dir: string, into: string): string {
   mkdirSync(into, { recursive: true });
   const before = new Set(readdirSync(into));
-  const packed = run('npm', ['pack', dir, '--ignore-scripts', '--pack-destination', into, '--loglevel=error'], into);
+  const packed = run('npm', ['pack', dir, '--ignore-scripts', '--dry-run=false', '--pack-destination', into, '--loglevel=error'], into);
   const made = readdirSync(into).filter((f) => f.endsWith('.tgz') && !before.has(f));
   if (packed.status !== 0 || made.length !== 1) {
     throw new AliasTarballError(`\`npm pack ${dir}\` exited ${packed.status} and left ${made.length} new tarball(s); one was required. ${packed.out.trim().slice(0, 2000)}`);

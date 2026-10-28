@@ -1,5 +1,6 @@
 /** The convenience name carries the scoped package's files; every exception is planted. */
 import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { AliasTarballError, packInto } from '../scripts/alias_tarball.ts';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -35,9 +36,7 @@ beforeAll(() => {
   mkdirSync(fixture);
   writeFileSync(join(fixture, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   writeFileSync(join(fixture, 'payload.bin'), Buffer.from([0, 1, 2, 255]));
-  const packed = run('npm', ['pack', fixture, '--ignore-scripts', '--pack-destination', work, '--json']);
-  expect(packed.status, packed.out).toBe(0);
-  primary = join(work, JSON.parse(packed.stdout)[0].filename as string);
+  primary = packInto(fixture, work);
 });
 afterAll(() => rmSync(work, { recursive: true, force: true }));
 
@@ -54,6 +53,48 @@ test('pack control: same files and bytes except the name; source stays unchanged
   expect(same.out).toContain('@rig-c/pose@1.2.3');
   expect(same.out).toContain('2 file(s)');
   console.log(same.out.trim());
+});
+
+// npm supplies these flags to a real lifecycle child, as publish does. The
+// dry-run control must still write the private fixture tarballs, never publish.
+for (const dryRun of [false, true]) {
+  test(`pack under a publish lifecycle${dryRun ? ' with dry-run' : ''} writes and compares real tarballs`, () => {
+    const dir = join(work, dryRun ? 'lifecycle-dry' : 'lifecycle');
+    mkdirSync(dir);
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({
+      name: 'alias-lifecycle-control', version: '1.0.0', private: true,
+      scripts: { prepublishOnly: 'bun probe.ts' },
+    }));
+    writeFileSync(join(dir, 'probe.ts'), `
+      import { packAlias, packInto } from ${JSON.stringify(script)};
+      const primary = packInto(${JSON.stringify(fixture)}, ${JSON.stringify(join(dir, 'primary'))});
+      const made = packAlias('rig-pose', ${JSON.stringify(join(dir, 'alias'))}, primary);
+      console.log('LIFECYCLE_PACK: ' + made.comparison.files + ' files, ' + made.comparison.faults.length + ' faults');
+    `);
+    const flags = ['--provenance', '--access', 'public', ...(dryRun ? ['--dry-run'] : [])];
+    const made = run('npm', ['run', 'prepublishOnly', ...flags], dir);
+    expect(made.status, made.out).toBe(0);
+    expect(made.out).toContain('LIFECYCLE_PACK: 2 files, 0 faults');
+  });
+}
+
+test('pack refuses successful stdout without a tarball and a failed npm by name', () => {
+  const bin = join(work, 'pack-mock-bin');
+  mkdirSync(bin);
+  const npm = join(bin, 'npm');
+  for (const status of [0, 7]) {
+    // A claimed filename (including npm's JSON output) cannot stand in for bytes.
+    writeFileSync(npm, `#!/bin/sh\nprintf '%s\\n' '{"@rig-c/pose":{"filename":"claimed.tgz"}}'\nexit ${status}\n`);
+    chmodSync(npm, 0o755);
+    const previous = process.env.PATH;
+    process.env.PATH = `${bin}:${previous}`;
+    try {
+      expect(() => packInto(fixture, join(work, `no-tarball-${status}`))).toThrow(AliasTarballError);
+      expect(() => packInto(fixture, join(work, `no-tarball-${status}`))).toThrow(`exited ${status} and left 0 new tarball(s); one was required`);
+    } finally {
+      process.env.PATH = previous;
+    }
+  }
 });
 
 for (const kind of ['byte', 'missing', 'extra', 'version', 'format'] as const) {
