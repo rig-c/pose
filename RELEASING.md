@@ -159,6 +159,17 @@ and an invocation or unreadable-tarball failure exits 2. Registry confirmation
 installs both names at the requested version; the alias's executable must
 answer `--help` from its empty install.
 
+The alias tests and pack command read the one new `.tgz` file npm actually
+writes, rather than parsing `npm pack --json`: npm 12 reports an object keyed
+by package name, so an array-only reader fails even outside a lifecycle.
+Internal packs pass `--ignore-scripts --dry-run=false`; a release dry-run still
+needs private test tarballs, with the caller's registry, authentication and
+cache settings preserved. No publish is performed by these packs. A pack that
+fails or leaves anything other than one new tarball exits 2 and names the npm
+exit status and tarball count. The tests include real `prepublishOnly` lifecycle
+controls with the release's provenance/access flags, with and without dry-run,
+and refusals for successful stdout without a tarball and a failed npm command.
+
 **First alias publish: owner only, once.** The `rig-pose` trusted publisher
 cannot be configured until that package exists. This change publishes nothing.
 Choose the stable release tag that contains the alias script and whose scoped
