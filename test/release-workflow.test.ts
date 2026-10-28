@@ -113,7 +113,7 @@ function check(wf: Workflow, scenario: Scenario): void {
   expect(steps[checkoutAt].if).toBe(publishIf);
   expect(steps[checkoutAt].with?.ref).toBe(pinned);
   expect(target['continue-on-error']).toBeUndefined();
-  expect(publishing).toHaveLength(1);
+  expect(publishing).toHaveLength(2);
   expect(publishing[0].if).toBe(publishIf);
   expect(steps.indexOf(publishing[0])).toBeGreaterThan(checkoutAt);
   expect(target.run).toBeString();

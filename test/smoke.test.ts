@@ -21,6 +21,7 @@ test('the smoke pins the wave to the hash test/retarget.test.ts holds', () => {
 });
 
 test('the registry confirmation and CI both run the smoke', () => {
-  expect(read('scripts/confirm_registry.sh')).toContain('exec bash "$(dirname "$0")/smoke_install.sh" "@rig-c/pose@$version" "$version"');
+  expect(read('scripts/confirm_registry.sh')).toContain('bash "$(dirname "$0")/smoke_install.sh" "@rig-c/pose@$version" "$version" || exit 1');
+  expect(read('scripts/confirm_registry.sh')).toContain('exec bash "$(dirname "$0")/smoke_alias.sh" "rig-pose@$version" "$version"');
   expect(read('.github/workflows/ci.yml')).toContain('bash scripts/smoke_mutants.sh "$d"/*.tgz');
 });
