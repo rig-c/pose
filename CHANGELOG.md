@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.2](https://github.com/rig-c/pose/compare/v1.5.1...v1.5.2) (2026-10-28)
+
+
+### Bug Fixes
+
+* **docs:** name rig-pose as the convenience install name now that it is published ([#465](https://github.com/rig-c/pose/issues/465)) ([6a336f5](https://github.com/rig-c/pose/commit/6a336f5146bbfff527a763ed07f712dbbbdb1a2d))
+
 ## [1.5.1](https://github.com/rig-c/pose/compare/v1.5.0...v1.5.1) (2026-10-28)
 
 
