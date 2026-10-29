@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.3](https://github.com/rig-c/pose/compare/v1.5.2...v1.5.3) (2026-10-29)
+
+
+### Bug Fixes
+
+* **deps:** depend on @rig-c/core instead of the literal rig-c, so an install has one core and one rigc bin ([#468](https://github.com/rig-c/pose/issues/468)) ([e5fb3c3](https://github.com/rig-c/pose/commit/e5fb3c3845294e181c45fb2fafdf985008167527))
+
 ## [1.5.2](https://github.com/rig-c/pose/compare/v1.5.1...v1.5.2) (2026-10-28)
 
 
