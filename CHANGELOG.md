@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.4](https://github.com/rig-c/pose/compare/v1.5.3...v1.5.4) (2026-10-29)
+
+
+### Bug Fixes
+
+* **docs:** Bun 1.4 requirement and the published rig-pose alias ([#470](https://github.com/rig-c/pose/issues/470)) ([c8bbc0c](https://github.com/rig-c/pose/commit/c8bbc0c5be558315ef88d65d4f9492c0d08ccbb6))
+
 ## [1.5.3](https://github.com/rig-c/pose/compare/v1.5.2...v1.5.3) (2026-10-29)
 
 
