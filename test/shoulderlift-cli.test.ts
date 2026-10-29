@@ -5,8 +5,8 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statS
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { readModel } from 'rig-c/core';
-import { Plate } from 'rig-c/plate';
+import { readModel } from '@rig-c/core/core';
+import { Plate } from '@rig-c/core/plate';
 import { readPoseSequence, writePoseSequence } from '../src/pose.ts';
 import { poseFrames } from '../src/verify.ts';
 import { shoulderConfig, shoulderSequence } from './shoulderlift.test.ts';
@@ -76,7 +76,7 @@ test('CLI whole minimal chain: clean → config refs → gate → emitted poser/
     const frozen = { motion: sha(out), report: sha(report), provenance: sha(join(build, 'retarget.json')) };
     const again = run(CLI, [...f.args, '--shoulder-lift', f.config, '--out', out, '--build', build, '--report', report]); expect(again.status, again.stderr).toBe(0);
     expect({ motion: sha(out), report: sha(report), provenance: sha(join(build, 'retarget.json')) }).toEqual(frozen);
-    if (process.env.POSE408_EVIDENCE) writeFileSync(join(process.env.POSE408_EVIDENCE, `control-${parent}.json`), JSON.stringify({ report: load(report), provenance: load(join(build, 'retarget.json')), hashes: frozen, expected, core: '2.61.0' }, null, 2));
+    if (process.env.POSE408_EVIDENCE) writeFileSync(join(process.env.POSE408_EVIDENCE, `control-${parent}.json`), JSON.stringify({ report: load(report), provenance: load(join(build, 'retarget.json')), hashes: frozen, expected, core: (JSON.parse(readFileSync(new URL(import.meta.resolve('@rig-c/core/package.json')), 'utf8')) as { version: string }).version }, null, 2));
     console.log(`SHOULDER_CONTROL parentMoving=${parent} exit=0 maxLanding=${reading.landing.worst} bound=.02 emitted=.01`);
   }
 }, 60_000);

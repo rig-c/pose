@@ -117,7 +117,7 @@ The full list, each limit resting on the open issue that holds it, is [What it d
 
 ## Requirements
 
-[Bun](https://bun.sh) ≥ 1.2 on `PATH` — rig-pose, like rig-c, runs its TypeScript sources directly. `rig-c` comes as a dependency. With `@esotericsoftware/spine-core` installed beside it, rig-c's gate runs the spine-core round trip; without it, rig-c's own gate, and the gate's report says which.
+[Bun](https://bun.sh) ≥ 1.2 on `PATH` — rig-pose, like rig-c, runs its TypeScript sources directly. `@rig-c/core` comes as a dependency and provides the `rigc` command. With `@esotericsoftware/spine-core` installed beside it, rig-c's gate runs the spine-core round trip; without it, rig-c's own gate, and the gate's report says which.
 
 Install the scoped package in your project, then run its local command:
 

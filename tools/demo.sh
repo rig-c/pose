@@ -59,7 +59,7 @@ bun "$here/cli.ts" retarget --rig "$rig" --map "$map" --pose "$pose" --out "$out
 
 # 2. The rig at the pose's own frame rate, larger than the gate's reading.
 fps=$(bun -e "const r=JSON.parse(require('fs').readFileSync('$out/report.json','utf8'));const n=r.frames,d=r.duration;console.log(n>1?Math.round((n-1)/d):12)")
-bun "$here/node_modules/rig-c/bin/rigc.cjs" render --candidate "$out/build" --animation "$name" --fps "$fps" --max $((height * 2)) --out "$out/hi" > "$out/render-hi.txt"
+bun "$here/node_modules/@rig-c/core/bin/rigc.cjs" render --candidate "$out/build" --animation "$name" --fps "$fps" --max $((height * 2)) --out "$out/hi" > "$out/render-hi.txt"
 # The set's directory is rigc's to name (\`dance@24fps\` off its default rate): read it from frames.json.
 setdir="$out/hi/$(bun -e "const f=JSON.parse(require('fs').readFileSync('$out/hi/frames.json','utf8'));console.log(f.sets.find(s=>s.animation==='$name').dir)")"
 frames=$(ls "$setdir"/f*.png | wc -l | tr -d ' ')
@@ -111,7 +111,7 @@ const sha=(p)=>c.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 const pkg=(p)=>JSON.parse(fs.readFileSync(p,'utf8')).version;
 fs.writeFileSync('$out/demo.json', JSON.stringify({
   spec: 'rig-pose-demo/1',
-  rigPose: pkg('$here/package.json'), rigC: pkg('$here/node_modules/rig-c/package.json'),
+  rigPose: pkg('$here/package.json'), rigC: pkg('$here/node_modules/@rig-c/core/package.json'),
   rig: '$rig', map: { path: '$map', sha256: sha('$map') }, pose: { path: '$pose', sha256: sha('$pose') },
   left: '${video:+video}' || 'skeleton',
   video: '${video:-}' ? { path: '${video:-}', sha256: sha('${video:-}') } : null, animation: '$name', fps: $fps, frames: $frames,

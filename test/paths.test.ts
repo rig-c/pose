@@ -4,7 +4,7 @@
  * and must make its control red. The public example's motion bytes do not move.
  *
  * Every run's working directory is a fresh temp directory, so the paths in the lines are the
- * relative ones a user types. Mutants are written under node_modules/.cache/ so that `rig-c`
+ * relative ones a user types. Mutants are written under node_modules/.cache/ so that `@rig-c/core`
  * still resolves by walking up.
  */
 import { describe, expect, test } from 'bun:test';

@@ -12,7 +12,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { poseRawSetup, readModel, type CompiledDocument } from 'rig-c/core';
+import { poseRawSetup, readModel, type CompiledDocument } from '@rig-c/core/core';
 import type { InheritMode, Rest, RestBone, RigSet, RigSets, RigSlider, RigSliders, RigSlot, RigSlots } from './map.ts';
 import { isObject, parseJson, Problems, Refusal, typeName } from './problems.ts';
 
@@ -92,13 +92,13 @@ export function baseMotionOf(input: RigInput): Record<string, unknown> {
 
 /**
  * rig-c's own launcher, run under the Bun running this one. It picks rigc's
- * entry the way an install of rig-c does: the spine-core round trip where
- * `@esotericsoftware/spine-core` resolves beside rig-c (this repository's
+ * entry the way an install of @rig-c/core does: the spine-core round trip where
+ * `@esotericsoftware/spine-core` resolves beside @rig-c/core (this repository's
  * development dependency), rigc's own gate over the model document where it
  * does not (an install of this package), and the gate's report says which ran.
  */
 export function rigcCli(): string {
-  return fileURLToPath(import.meta.resolve('rig-c/bin/rigc'));
+  return fileURLToPath(import.meta.resolve('@rig-c/core/bin/rigc'));
 }
 
 export interface RigcRun {

@@ -49,7 +49,7 @@
     "prepublishOnly": "bun run typecheck && bun run lint && bun run test"
   },
   "dependencies": {
-    "rig-c": "^2.60.0"
+    "@rig-c/core": "^2.60.0"
   },
   "devDependencies": {
     "@esotericsoftware/spine-core": "4.3.13",

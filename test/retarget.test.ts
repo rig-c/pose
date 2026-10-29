@@ -4,7 +4,7 @@
  * planted input that must make it fire beside a control that must not.
  *
  * Fixtures are written into a temp directory per test (under os.tmpdir()), and
- * mutants into node_modules/.cache/rig-pose-mutants/ so that `rig-c/...` still
+ * mutants into node_modules/.cache/rig-pose-mutants/ so that `@rig-c/core/...` still
  * resolves by walking up. Both are removed after each test.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -13,8 +13,8 @@ import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { poseRawAnimation, poseRawSetup, readModel, type CompiledDocument, type RawBone } from 'rig-c/core';
-import { Plate } from 'rig-c/plate';
+import { poseRawAnimation, poseRawSetup, readModel, type CompiledDocument, type RawBone } from '@rig-c/core/core';
+import { Plate } from '@rig-c/core/plate';
 import { capShortSteps, holdAcross, holdShort, isAcross, mergeRuns, shortLine, spreadFlips } from '../src/retarget.ts';
 import { clampArt } from '../src/switch.ts';
 import { clean } from '../src/clean.ts';
@@ -29,7 +29,7 @@ import { firstFrames, keysOnFrameTimes, type MotionDoc } from './discrete.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const CLI = join(ROOT, 'cli.ts');
-const RIGC = join(ROOT, 'node_modules', 'rig-c', 'bin', 'rigc.cjs');
+const RIGC = join(ROOT, 'node_modules', '@rig-c', 'core', 'bin', 'rigc.cjs');
 const MUTANTS = join(ROOT, 'node_modules', '.cache', 'rig-pose-mutants');
 const DEG = 180 / Math.PI;
 const RAD = Math.PI / 180;
@@ -2956,7 +2956,7 @@ describe('#43: the older pose name, --images, the rigc version, and why a window
     const report = join(c.dir, 'report.json');
     const r = retarget(c, ['--report', report]);
     expect(r.status).toBe(0);
-    const v = (JSON.parse(readFileSync(join(ROOT, 'node_modules', 'rig-c', 'package.json'), 'utf8')) as { version: string }).version;
+    const v = (JSON.parse(readFileSync(join(ROOT, 'node_modules', '@rig-c', 'core', 'package.json'), 'utf8')) as { version: string }).version;
     expect(linesOf(r, 'RIGC')[0]).toContain(`rig-c ${v}`);
     expect((JSON.parse(readFileSync(report, 'utf8')) as { rigc: { version: string } }).rigc.version).toBe(v);
   }, SLOW);
@@ -10444,7 +10444,7 @@ describe('#216: the seam reading over the declared neighbour pairs, a reading an
     // grouped by hand — not the code under test.
     const fps = (rep.render as { fps: number }).fps;
     const out = join(c.dir, 'seam-check');
-    const g = spawnSync(process.execPath, [join(ROOT, 'node_modules', 'rig-c', 'bin', 'rigc'), 'render', '--candidate', c.build, '--animation', 'dance', '--seam', 'upperarm_r:forearm_r', '--fps', String(fps), '--out', out], { encoding: 'utf8' });
+    const g = spawnSync(process.execPath, [join(ROOT, 'node_modules', '@rig-c', 'core', 'bin', 'rigc'), 'render', '--candidate', c.build, '--animation', 'dance', '--seam', 'upperarm_r:forearm_r', '--fps', String(fps), '--out', out], { encoding: 'utf8' });
     expect(g.status).toBe(0);
     type Hit = { index: number; time: number; px: number; cell: number; box: number[] };
     const setDir = (JSON.parse(readFileSync(join(out, 'frames.json'), 'utf8')) as { sets: Array<{ dir: string; animation: string }> }).sets.find((x) => x.animation === 'dance')!.dir;

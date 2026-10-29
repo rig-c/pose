@@ -27,7 +27,7 @@ import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Plate } from 'rig-c/plate';
+import { Plate } from '@rig-c/core/plate';
 import { depthCycle, depthDoc, TIE, type DepthFrame } from '../examples/walk/make-depth.ts';
 import { segmentDepth } from '../src/depth.ts';
 import type { DrawOrderKey } from '../src/draworder.ts';

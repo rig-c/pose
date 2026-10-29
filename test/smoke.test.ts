@@ -1,6 +1,6 @@
 /**
  * rig-c/pose#260: the install smoke holds the wave to the bytes the tests pin. The smoke itself
- * needs the registry (it installs rig-c), so it runs in CI's `install` job and after a publish, not
+ * needs the registry (it installs @rig-c/core), so it runs in CI's `install` job and after a publish, not
  * here; what this file holds is that the two copies of the pinned figure cannot drift apart, and that
  * the registry confirmation runs the smoke rather than stopping at --version.
  */

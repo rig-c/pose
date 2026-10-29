@@ -836,7 +836,7 @@ With `--cloth-track <ref.cloth.json>` ([#34](https://github.com/rig-c/pose/issue
 
 ## Requirements
 
-[Bun](https://bun.sh) ≥ 1.2 on `PATH` — rig-pose, like rig-c, runs its TypeScript sources directly. `rig-c` comes as a dependency. With `@esotericsoftware/spine-core` installed beside it, rig-c's gate runs the spine-core round trip; without it, rig-c's own gate, and the gate's report says which.
+[Bun](https://bun.sh) ≥ 1.2 on `PATH` — rig-pose, like rig-c, runs its TypeScript sources directly. `@rig-c/core` comes as a dependency and provides the `rigc` command. With `@esotericsoftware/spine-core` installed beside it, rig-c's gate runs the spine-core round trip; without it, rig-c's own gate, and the gate's report says which.
 
 **The supported surface is the `rig-pose` command.** RELEASING.md's *What 1.x promises* lists every flag, report key, problem code and line tag as promised or courtesy, and why. The package exports no importable API: `exports` exposes only `package.json` ([#262](https://github.com/rig-c/pose/issues/262)).
 

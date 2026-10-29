@@ -4,7 +4,7 @@ import { readMap, resolveMap, type AlternateSet, type RigSlots } from '../src/ma
 import { orderFromSwing } from '../src/swing.ts';
 import { selectSwitches, type SwitchOptions } from '../src/switch.ts';
 import type { DrawOrderReading } from '../src/draworder.ts';
-import type { CompiledDocument } from 'rig-c/core';
+import type { CompiledDocument } from '@rig-c/core/core';
 import { restOf } from '../src/rigc.ts';
 import { retarget } from '../src/retarget.ts';
 import type { Joint } from '../src/pose.ts';

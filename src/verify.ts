@@ -8,7 +8,7 @@
  * a guess about which rigs are safe; it is posed, and the distance between the
  * aim each bone reached and the aim the pose asked for is the verdict.
  */
-import { poseRawAnimation, poseRawSetup, type CompiledDocument, type RawBone } from 'rig-c/core';
+import { poseRawAnimation, poseRawSetup, type CompiledDocument, type RawBone } from '@rig-c/core/core';
 import type { Body18 } from './joints.ts';
 import { aimAngle, aimEnds, partBone, pointAt, pointParts, type Chain, type JointMap } from './map.ts';
 import type { HipsInferred, Joint, PelvisFit, Run } from './pose.ts';

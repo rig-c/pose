@@ -7,8 +7,8 @@
  * A cloth finding is a figure over a window with no single frame, so it has no
  * row. Pure: it returns the plate; the caller writes it.
  */
-import { textWidth } from 'rig-c/font5x7';
-import { Plate, type RGBA } from 'rig-c/plate';
+import { textWidth } from '@rig-c/core/font5x7';
+import { Plate, type RGBA } from '@rig-c/core/plate';
 import type { Body18 } from './joints.ts';
 import { positionOf, type Finding, type Frames } from './compare.ts';
 

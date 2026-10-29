@@ -37,11 +37,12 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { poseRawAnimation, poseRawSetup, readModel, type CompiledDocument, type RawBone } from 'rig-c/core';
-import { Plate } from 'rig-c/plate';
+import { poseRawAnimation, poseRawSetup, readModel, type CompiledDocument, type RawBone } from '@rig-c/core/core';
+import { Plate } from '@rig-c/core/plate';
 import { clean } from '../src/clean.ts';
 import { assertReportSurfaces } from './surface.ts';
 import { readPoseSequence, writePoseSequence } from '../src/pose.ts';
@@ -1153,9 +1154,59 @@ interface GateBaseInput {
   body?: string;
   baseRepo?: string;
   baseRef?: string;
+  /** Test-only dependency seed for a synthetic origin with byte-identical manifest and lock. */
+  dependencyFixture?: string;
 }
 
 const DEFAULT_BASE_REPO = 'https://github.com/rig-c/pose.git';
+
+/** Historical sources run with their own frozen dependencies, outside the candidate's ancestors. */
+function installGateBase(tree: string, dependencyFixture?: string): void {
+  const manifest = join(tree, 'package.json');
+  const lock = ['bun.lock', 'bun.lockb'].map((name) => join(tree, name)).find(existsSync);
+  if (!existsSync(manifest) || lock === undefined) {
+    throw new Error('GATE_BASE_UNAVAILABLE: base snapshot requires its own package.json and Bun lockfile');
+  }
+  const hash = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex');
+  const before = [hash(manifest), hash(lock)];
+  if (dependencyFixture !== undefined) {
+    // The synthetic origin is copied from this same source and lock. Keep its
+    // default-suite control offline; a historical base cannot borrow these bytes.
+    const fixtureLock = join(dependencyFixture, lock.endsWith('bun.lockb') ? 'bun.lockb' : 'bun.lock');
+    if (hash(join(dependencyFixture, 'package.json')) !== before[0] || hash(fixtureLock) !== before[1]) {
+      throw new Error('GATE_BASE_UNAVAILABLE: dependency fixture manifest or lock differs from the base');
+    }
+    cpSync(join(dependencyFixture, 'node_modules'), join(tree, 'node_modules'), {
+      recursive: true, verbatimSymlinks: true,
+      filter: (source) => source !== join(dependencyFixture, 'node_modules', '.cache'),
+    });
+  }
+  const install = spawnSync(process.execPath, [
+    'install', '--frozen-lockfile', '--ignore-scripts', ...(dependencyFixture === undefined ? [] : ['--offline']),
+  ], {
+    cwd: tree, encoding: 'utf8', timeout: 45_000,
+    env: {
+      ...process.env, PLAYWRIGHT_SKIP_BROWSER_GC: '1',
+      BUN_INSTALL_CACHE_DIR: join(tree, '.gate-cache', 'bun'),
+      npm_config_cache: join(tree, '.gate-cache', 'npm'),
+    },
+  });
+  if (install.status !== 0) {
+    throw new Error(`GATE_BASE_UNAVAILABLE: base frozen dependency install failed (exit ${install.status}): ${install.error ?? ''} ${install.stdout} ${install.stderr}`);
+  }
+  if (hash(manifest) !== before[0] || hash(lock) !== before[1]) {
+    throw new Error('GATE_BASE_UNAVAILABLE: frozen install changed the base manifest or lockfile');
+  }
+  writeFileSync(join(tree, 'node_modules', '.metadata_never_index'), '');
+  const pkg = JSON.parse(readFileSync(manifest, 'utf8')) as { dependencies?: Record<string, string> };
+  const identities = Object.entries(pkg.dependencies ?? {}).map(([name, range]) => {
+    const installed = join(tree, 'node_modules', name, 'package.json');
+    if (!existsSync(installed)) throw new Error(`GATE_BASE_UNAVAILABLE: base dependency "${name}" was not installed in its snapshot`);
+    const dep = JSON.parse(readFileSync(installed, 'utf8')) as { name: string; version: string };
+    return `${name}@${range} -> ${dep.name}@${dep.version} (package sha256 ${hash(installed)})`;
+  });
+  console.log(`GATE_BASE_DEPENDENCIES: manifest sha256 ${before[0]}; lock sha256 ${before[1]}; ${identities.join('; ')}`);
+}
 
 /** A missing optional base is SKIP; a requested base that cannot be read is red. */
 function withGateBase<T>(read: (cli: string | undefined, claims: string) => T, input: GateBaseInput = {
@@ -1183,8 +1234,7 @@ function withGateBase<T>(read: (cli: string | undefined, claims: string) => T, i
     if (repo.length === 0) {
       throw new Error('GATE_BASE_UNAVAILABLE: GATE_BASE_REPO must be non-empty');
     }
-    mkdirSync(MUTANTS, { recursive: true });
-    const tree = mkdtempSync(join(MUTANTS, 'gate-base-'));
+    const tree = mkdtempSync(join(tmpdir(), 'rig-pose-gate-base-'));
     try {
       const init = spawnSync('git', ['init', '-q'], { cwd: tree, encoding: 'utf8' });
       if (init.status !== 0) {
@@ -1203,6 +1253,7 @@ function withGateBase<T>(read: (cli: string | undefined, claims: string) => T, i
         throw new Error(`GATE_BASE_UNAVAILABLE: cannot checkout base ${ref} from ${repo}: ${checkout.stderr}`);
       }
       rmSync(join(tree, '.git'), { recursive: true, force: true });
+      installGateBase(tree, input.dependencyFixture);
       return withGateBase(read, { cli: join(tree, 'cli.ts'), body });
     } finally {
       rmSync(tree, { recursive: true, force: true });
@@ -1220,14 +1271,15 @@ function withGateBase<T>(read: (cli: string | undefined, claims: string) => T, i
   const mergeBase = mb.stdout.trim();
   const log = spawnSync('git', ['log', '--format=%B', `${mergeBase}..${headSha}`], { cwd: ROOT, encoding: 'utf8' });
   if (log.status !== 0) throw new Error(`GATE_BASE_UNAVAILABLE: cannot read claims for ${mergeBase}..${headSha}: ${log.stderr}`);
-  mkdirSync(MUTANTS, { recursive: true });
-  const tree = mkdtempSync(join(MUTANTS, 'gate-base-'));
+  const tree = mkdtempSync(join(tmpdir(), 'rig-pose-gate-base-'));
   try {
     const archive = spawnSync('git', ['archive', '--format=tar', mergeBase], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024 });
     if (archive.status !== 0) throw new Error(`GATE_BASE_UNAVAILABLE: cannot archive base ${mergeBase}: ${archive.stderr.toString()}`);
     const tar = spawnSync('tar', ['-x', '-C', tree], { input: archive.stdout, encoding: 'utf8' });
     const baseCLI = join(tree, 'cli.ts');
     if (tar.status !== 0 || !existsSync(baseCLI)) throw new Error(`GATE_BASE_UNAVAILABLE: base ${mergeBase} extraction has no usable CLI: ${tar.stderr}`);
+    installGateBase(tree);
+    console.log(`GATE_BASE: comparing all references against merge base ${mergeBase}`);
     return read(baseCLI, `${body}\n${log.stdout}`);
   } finally {
     rmSync(tree, { recursive: true, force: true });
@@ -1282,6 +1334,7 @@ describe('#208: two-reference regression gate and standing continuity assertions
     cpSync(join(ROOT, 'src'), join(originRepo, 'src'), { recursive: true });
     cpSync(join(ROOT, 'cli.ts'), join(originRepo, 'cli.ts'));
     cpSync(join(ROOT, 'package.json'), join(originRepo, 'package.json'));
+    cpSync(join(ROOT, 'bun.lock'), join(originRepo, 'bun.lock'));
     expect(spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: originRepo }).status).toBe(0);
     expect(spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: originRepo }).status).toBe(0);
     expect(spawnSync('git', ['config', 'user.name', 'test'], { cwd: originRepo }).status).toBe(0);
@@ -1297,6 +1350,12 @@ describe('#208: two-reference regression gate and standing continuity assertions
       expect(existsSync(extractedCLI)).toBe(true);
       expect(resolve(extractedCLI)).not.toBe(resolve(CLI));
       expect(claims).toBe('Claim-Track: run hip.translate 2 #410');
+      const snapshot = resolve(extractedCLI, '..');
+      const baseDependency = join(snapshot, 'node_modules', '@rig-c', 'core', 'package.json');
+      expect(realpathSync(baseDependency).startsWith(`${snapshot}/node_modules/`)).toBe(true);
+      expect(realpathSync(join(snapshot, 'node_modules', '.bin', 'rigc')).startsWith(`${snapshot}/node_modules/`)).toBe(true);
+      expect(readFileSync(join(snapshot, 'bun.lock'), 'utf8')).toBe(readFileSync(join(originRepo, 'bun.lock'), 'utf8'));
+      console.log('GATE_BASE_ISOLATION control: separate snapshot dependency installed offline from identical fixture manifest and lock; frozen lock bytes unchanged');
 
       const baseOut = runReference(setupRunRef(tempDir()), extractedCLI);
       const planted: RefRunOutput = { ...baseOut, tracks: structuredClone(baseOut.tracks) };
@@ -1307,8 +1366,23 @@ describe('#208: two-reference regression gate and standing continuity assertions
       expect(unclaimed.failures.some((f) => f.includes('GATE_UNCLAIMED_TRACK: run track "hip.translate"'))).toBe(true);
       const claimed = diffReferenceTracks(baseOut, planted, parseTrackClaims(claims));
       expect(claimed.failures).toEqual([]);
-    }, { baseRepo: originRepo, baseRef: 'refs/heads/main', body: 'Claim-Track: run hip.translate 2 #410' });
+      console.log(`GATE_BASE_TRACK_MUTANT: ${unclaimed.failures.join('; ')}; exact frame claim accepted with ${claimed.failures.length} findings`);
+    }, { baseRepo: originRepo, baseRef: 'refs/heads/main', body: 'Claim-Track: run hip.translate 2 #410', dependencyFixture: ROOT });
     expect(existsSync(extractedCLI)).toBe(false);
+  }, SLOW);
+
+  test('#467: missing or inconsistent base dependencies refuse instead of borrowing the candidate installation', () => {
+    const tree = tempDir();
+    cpSync(join(ROOT, 'package.json'), join(tree, 'package.json'));
+    expect(() => installGateBase(tree)).toThrow('requires its own package.json and Bun lockfile');
+    cpSync(join(ROOT, 'bun.lock'), join(tree, 'bun.lock'));
+    const pkg = JSON.parse(readFileSync(join(tree, 'package.json'), 'utf8')) as { dependencies: Record<string, string> };
+    // This dependency exists in the candidate but disagrees with the snapshot's lock.
+    pkg.dependencies['@rig-c/core'] = '0.0.0';
+    writeFileSync(join(tree, 'package.json'), JSON.stringify(pkg));
+    expect(() => installGateBase(tree, ROOT)).toThrow('dependency fixture manifest or lock differs from the base');
+    expect(existsSync(join(tree, 'node_modules', '@rig-c', 'core'))).toBe(false);
+    console.log('GATE_BASE_ISOLATION mutant: missing lock and mismatched dependency refused; candidate dependency not borrowed');
   }, SLOW);
 
   test('#375 controls: generator ground survives false jump labels, a common vertical shift fails, and run track changes still require claims', () => {

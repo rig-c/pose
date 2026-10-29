@@ -31,7 +31,7 @@ The supported surface is the `rig-pose` command. The package promises no
 importable API: `exports` exposes only `package.json`, so `src/*` cannot be
 deep-imported.
 
-It sits beside the rest of the toolchain: rig-c (`rig-c`, the compiler, the
+It sits beside the rest of the toolchain: rig-c (`@rig-c/core`, the compiler, the
 gate and the poser), `@rig-c/parts` (a rig from a painting), `@rig-c/play` (plays
 a rig in the DOM). A change that belongs in rig-c or @rig-c/parts is filed
 there as an issue, not made here.
@@ -117,7 +117,7 @@ into named failures.
   on purpose: a bone under a scaled leg segment is keyed through its parent's
   posed matrix instead (`legs.ts`, `posePath`), and the landing check holds it
   to its target and its scale like any other.
-- **rig-c's gate runs through its launcher** (`rig-c/bin/rigc`), which picks the
+- **rig-c's gate runs through its launcher** (`@rig-c/core/bin/rigc`), which picks the
   spine-core round trip where `@esotericsoftware/spine-core` resolves (this
   repository's development dependency, as in @rig-c/parts) and rigc's own gate
   where it does not (an install of this package).

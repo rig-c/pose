@@ -44,7 +44,7 @@
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { readModel } from 'rig-c/core';
+import { readModel } from '@rig-c/core/core';
 import { BODY18, type Body18 } from '../src/joints.ts';
 import { pointAt } from '../src/map.ts';
 import { personTrack, POSE_SPEC, POSE_SPACE, readPoseSequence, writePoseSequence, type Joint, type PoseSequence } from '../src/pose.ts';

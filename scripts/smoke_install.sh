@@ -4,28 +4,31 @@
 # wave example, its motion held to the wave's pinned bytes and its report read.
 # A package that answers --version and cannot retarget is not a package.
 #
-#   smoke_install.sh <spec> [expected-version]
+#   smoke_install.sh <spec> [expected-version] [core-spec] [pose-package]
 #     <spec>  what `npm install` takes: a packed tarball, or @rig-c/pose@<version>
 #
 #   exit 0  installed, --version answered, the wave retargeted to the pinned bytes
 #   exit 1  a step failed; the last line names which, with what it got
 #   exit 2  bad invocation
 set -uo pipefail
-spec="${1:-}"; expected="${2:-}"
-if [ -z "$spec" ]; then echo "usage: smoke_install.sh <spec> [expected-version]" >&2; exit 2; fi
+spec="${1:-}"; expected="${2:-}"; core="${3:-}"; pose_package="${4:-@rig-c/pose}"
+if [ -z "$spec" ]; then echo "usage: smoke_install.sh <spec> [expected-version] [core-spec] [pose-package]" >&2; exit 2; fi
 here="$(cd "$(dirname "$0")/.." && pwd)"
 wave="$here/examples/wave"
 # The wave's motion, byte for byte, as test/retarget.test.ts pins it (test/smoke.test.ts holds the two equal).
 WAVE_SHA256=bd1ca2506217c21769169b884a306ad2defabaadecb93abd0572969291aa2e59
 case "$spec" in /*|@*) ;; *) spec="$PWD/$spec" ;; esac
 
-work=$(mktemp -d)
+work=$(mktemp -d "${TMPDIR:-/tmp}/rig-pose-smoke.XXXXXXXX")
 trap 'rm -rf "$work"' EXIT
 cd "$work" || exit 1
 npm init -y > /dev/null
-if ! npm install "$spec" > install.log 2>&1; then
+install=("$spec")
+if [ -n "$core" ]; then install+=("$core"); fi
+if ! npm install "${install[@]}" > install.log 2>&1; then
   cat install.log; echo "SMOKE install: npm install $spec failed"; exit 1
 fi
+node "$here/scripts/check_core.cjs" "$work" "$pose_package" || { echo "SMOKE core: installed graph does not resolve one canonical core and rigc"; exit 1; }
 bin=./node_modules/.bin/rig-pose
 got=$("$bin" --version) || { echo "SMOKE version: rig-pose --version exited non-zero from the install"; exit 1; }
 if [ -n "$expected" ] && [ "$got" != "$expected" ]; then
@@ -34,7 +37,7 @@ fi
 
 # The example is not shipped: it comes from this checkout, and only the package under test runs it.
 cp -R "$wave" wave
-"$bin" retarget --rig wave/rig --map wave/map.json --pose wave/pose.json --out out/motion.json --report out/report.json > retarget.out 2> retarget.err
+"$bin" retarget --rig wave/rig --map wave/map.json --pose wave/pose.json --out out/motion.json --report out/report.json --build out/build > retarget.out 2> retarget.err
 status=$?
 if [ "$status" -ne 0 ]; then
   tail -n 20 retarget.err

@@ -30,7 +30,7 @@
  * polyline, not the cubic. The poser is the judge — run.ts measures the landing
  * of the gated build against the dense targets with the tolerance added.
  */
-import { f32 } from 'rig-c/compile';
+import { f32 } from '@rig-c/core/compile';
 import { poseNoScale } from './legs.ts';
 
 /** A key as the reducer writes it: a time, its values, and a raw curve on the segment to the next key. */
@@ -92,14 +92,14 @@ export interface Reduced {
 // rig-c's evaluation
 // ---------------------------------------------------------------------------
 
-/** rig-c's `BEZIER_SIXTH` (node_modules/rig-c/src/core/animation.ts). */
+/** rig-c's `BEZIER_SIXTH` (node_modules/@rig-c/core/src/core/animation.ts). */
 const BEZIER_SIXTH = 0.16666667;
 /** Pieces of the poser's polyline per Bézier segment — rig-c's `BEZIER_PIECES`. */
 export const REDUCE_PIECES = 10;
 
 /**
  * Copied verbatim from rig-c `src/core/animation.ts` (`bezierPolyline`, not
- * exported by `rig-c/core`): the nine interior points of one channel's Bézier
+ * exported by `@rig-c/core/core`): the nine interior points of one channel's Bézier
  * segment, `[t1, v1, …, t9, v9]`, each float32, by forward differences. The
  * poser is the judge; this copy only lets the fit see what it will see.
  */

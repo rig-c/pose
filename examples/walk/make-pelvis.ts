@@ -72,7 +72,7 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Plate, type RGBA } from 'rig-c/plate';
+import { Plate, type RGBA } from '@rig-c/core/plate';
 import { walkCycle, walkDoc, type WalkFrame } from './make-walk.ts';
 
 export const VARIANTS = ['drawn', 'covered', 'masked', 'dithered', 'dithered-edge', 'dithered-fold', 'dithered-strip', 'sweater', 'sweater-thigh'] as const;

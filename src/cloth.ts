@@ -19,8 +19,8 @@ import {
   readModel,
   type CompiledDocument,
   type RawPose,
-} from 'rig-c/core';
-import { readPlate, type Plate } from 'rig-c/plate';
+} from '@rig-c/core/core';
+import { readPlate, type Plate } from '@rig-c/core/plate';
 import { BARS, CLOTH, CLOTH_SPEC, clothFigures, median, readCloth, type ClothFigures, type ClothWindow } from './compare.ts';
 import { pointAt, readMap, resolveMap, type JointMap } from './map.ts';
 import { makeOutDirs, planOutDirs } from './outdir.ts';
