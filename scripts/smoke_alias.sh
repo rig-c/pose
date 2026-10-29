@@ -7,7 +7,7 @@ if [ -z "$spec" ] || [ -z "$expected" ]; then
   echo "usage: smoke_alias.sh <spec> <expected-version>" >&2; exit 2
 fi
 case "$spec" in /*|rig-pose@*) ;; *) spec="$PWD/$spec" ;; esac
-work=$(mktemp -d)
+work=$(mktemp -d "${TMPDIR:-/tmp}/rig-pose-smoke.XXXXXXXX")
 trap 'rm -rf "$work"' EXIT
 cd "$work"
 npm init -y > /dev/null

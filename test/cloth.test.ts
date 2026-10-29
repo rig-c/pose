@@ -21,7 +21,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { Plate, readPlate, type RGBA } from 'rig-c/plate';
+import { Plate, readPlate, type RGBA } from '@rig-c/core/plate';
 import { clean } from '../src/clean.ts';
 import {
   buildClothTrack,

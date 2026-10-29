@@ -10,7 +10,7 @@
  *
  * Synthetic frames only: the same call writes the same bytes.
  */
-import { Plate, type RGBA } from 'rig-c/plate';
+import { Plate, type RGBA } from '@rig-c/core/plate';
 import { readPelvis, type PelvisMode } from '../../src/pelvis.ts';
 import { readPoseSequence } from '../../src/pose.ts';
 import { bandEdgeMid, bandTilt, drawFrame, foldTilt, VARIANTS, variantCycle, type Variant } from './make-pelvis.ts';

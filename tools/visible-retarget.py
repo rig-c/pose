@@ -213,7 +213,7 @@ def verify_replay(corpus, replay):
 
 def diagnostic_render(corpus, replay, out):
     require(not out.exists(), 'OUTPUT_EXISTS', 'diagnostic output must be new')
-    core = replay / 'work/runtime/node_modules/rig-c/cli.ts'
+    core = replay / 'work/runtime/node_modules/@rig-c/core/cli.ts'
     run_command('v3-fold-render', ['bun', str(core), 'render', '--candidate', str(replay / 'build'), '--animation', 'zero-two-r3-hand', '--fps', '30', '--folds', '--viewport-from', str(corpus / 'accepted-dance/viewport.json'), '--out', str(out)], ROOT, out.parent / 'logs')
     metadata = json.loads((out / 'frames.json').read_text())
     sets = [s for s in metadata['sets'] if s['animation'] == 'zero-two-r3-hand']
@@ -335,7 +335,7 @@ def compose(corpus, replay, media, reuse_diagnostic=None):
     require(abs(float(metadata_video['format']['duration']) - FRAME_COUNT / FPS) < .002, 'MEDIA_DURATION', 'encoded duration differs from inclusive 391-frame take')
     write_json(media / 'ffprobe.json', metadata_video)
     runtime = {'bun': subprocess.check_output(['bun', '--version'], text=True).strip(), 'node': subprocess.check_output(['node', '--version'], text=True).strip(), 'python': sys.version.split()[0]}
-    for package, version in [('@rig-c/pose', '1.0.1'), ('rig-c', '2.67.2'), ('@esotericsoftware/spine-core', '4.3.13')]:
+    for package, version in [('@rig-c/pose', '1.0.1'), ('@rig-c/core', '2.67.2'), ('@esotericsoftware/spine-core', '4.3.13')]:
         installed = json.loads((replay / 'work/runtime/node_modules' / package / 'package.json').read_text())['version']
         require(installed == version, 'RUNTIME_PIN', f'{package}: {installed}, expected {version}')
         runtime[package] = installed

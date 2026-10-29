@@ -1,5 +1,5 @@
 /** Foot perspective from existing derived magnitude (#437) and picture-y lead (#440). */
-import type { CompiledDocument } from 'rig-c/core';
+import type { CompiledDocument } from '@rig-c/core/core';
 import { ORIGIN_TOLERANCE } from './verify.ts';
 import type { Body18 } from './joints.ts';
 import type { Joint, FrameDepth, DepthGait } from './pose.ts';

@@ -25,7 +25,7 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Plate, readPlate } from 'rig-c/plate';
+import { Plate, readPlate } from '@rig-c/core/plate';
 import { depthDoc, FIXTURES, trueJointOrder, type DepthFrame } from '../examples/walk/make-depth.ts';
 import { layersOf, limbJointDepths } from '../src/depth.ts';
 import { drawOrderFromDepth, drawOrderLines, type DrawOrderKey } from '../src/draworder.ts';

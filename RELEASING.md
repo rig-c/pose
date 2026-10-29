@@ -48,8 +48,8 @@ a commit message on the branch.
    with `gh workflow run release.yml -f version=X.Y.Z`).
 
 Before any of that, every pull request's `install` job packs the branch, runs
-the same smoke on the tarball, and plants two failures beside it
-(`scripts/smoke_mutants.sh`): a `src` module left out of the tarball must go
+the same smoke on the tarball alone and beside the canonical core, and plants three failures beside it
+(`scripts/smoke_mutants.sh`): a duplicate legacy core must go red at the installed graph check; a `src` module left out of the tarball must go
 red at `--version`, and the gate's launcher resolved by a name the install does
 not have must go red at the retarget — a failure `--version` alone passes.
 

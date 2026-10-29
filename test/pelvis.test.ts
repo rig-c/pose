@@ -21,7 +21,7 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { poseRawAnimation, readModel, type RawBone } from 'rig-c/core';
+import { poseRawAnimation, readModel, type RawBone } from '@rig-c/core/core';
 import { bandTilt, drawFrame, PALETTE_STEP, pelvisTilt, tiltedCycle, variantCycle, writePelvisFixture, type Variant } from '../examples/walk/make-pelvis.ts';
 import { walkDoc } from '../examples/walk/make-walk.ts';
 import { clean } from '../src/clean.ts';

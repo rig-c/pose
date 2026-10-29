@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Plate } from 'rig-c/plate';
+import { Plate } from '@rig-c/core/plate';
 import { readMap, type Rest } from '../src/map.ts';
 import type { Layout } from '../src/layout.ts';
 import type { FrameDepth, Joint } from '../src/pose.ts';

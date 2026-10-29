@@ -19,7 +19,7 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { poseRawAnimation, readModel, type RawBone } from 'rig-c/core';
+import { poseRawAnimation, readModel, type RawBone } from '@rig-c/core/core';
 import { tiltedCycle } from '../examples/walk/make-pelvis.ts';
 import { walkDoc } from '../examples/walk/make-walk.ts';
 

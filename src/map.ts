@@ -65,7 +65,7 @@
  * distance (`PHASE_SIDE`).
  * `switch.ts` decides when each one shows.
  */
-import type { RawBone } from 'rig-c/core';
+import type { RawBone } from '@rig-c/core/core';
 import { POINT_NAMES } from './joints.ts';
 import { readLayoutBindings, type LayoutBinding } from './layoutmap.ts';
 import { isObject, parseJson, Problems, refuseUnknownKeys, typeName } from './problems.ts';

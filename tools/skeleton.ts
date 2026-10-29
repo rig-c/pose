@@ -19,7 +19,7 @@
  */
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Plate } from 'rig-c/plate';
+import { Plate } from '@rig-c/core/plate';
 import type { Body18 } from '../src/joints.ts';
 import { DEPTH_SEGMENTS, DEPTH_SEGMENT_NAMES, personTrack, readPoseSequence, type FrameDepth, type Joint } from '../src/pose.ts';
 

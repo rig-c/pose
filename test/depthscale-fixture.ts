@@ -1,7 +1,7 @@
 /** Synthetic source-only fixture for #437; no reference art. */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { Plate } from 'rig-c/plate';
+import { Plate } from '@rig-c/core/plate';
 import { depthCycle, depthDoc } from '../examples/walk/make-depth.ts';
 import { readPoseSequence, personTrack, type FrameDepth, type Joint } from '../src/pose.ts';
 import type { Body18 } from '../src/joints.ts';

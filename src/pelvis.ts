@@ -48,7 +48,7 @@
  */
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { readPlate, type Plate } from 'rig-c/plate';
+import { readPlate, type Plate } from '@rig-c/core/plate';
 import type { Body18 } from './joints.ts';
 import { personTrack, readPoseSequence, writePoseSequence, type Joint, type PelvisSource, type PoseSequence } from './pose.ts';
 import { isObject, parseJson, Problems, refuseUnknownKeys, typeName } from './problems.ts';

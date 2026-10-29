@@ -32,8 +32,8 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { readModel } from 'rig-c/core';
-import { Plate, type RGBA } from 'rig-c/plate';
+import { readModel } from '@rig-c/core/core';
+import { Plate, type RGBA } from '@rig-c/core/plate';
 import type { Body18 } from '../src/joints.ts';
 import { figureScaleOf, plantHip, type Feet, type Side } from '../src/legs.ts';
 import { readMap, pointAt } from '../src/map.ts';

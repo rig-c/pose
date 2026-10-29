@@ -43,7 +43,7 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
-import { poseRawAnimation, type CompiledDocument, type RawBone } from 'rig-c/core';
+import { poseRawAnimation, type CompiledDocument, type RawBone } from '@rig-c/core/core';
 import { isBody18, VIRTUAL } from '../src/joints.ts';
 import type { Body18 } from '../src/joints.ts';
 import { readMap, type Chain, type JointMap, type Rest } from '../src/map.ts';

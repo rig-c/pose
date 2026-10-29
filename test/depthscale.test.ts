@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync, cpSync, mkdirSync, rmSync } f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { poseRawAnimation } from 'rig-c/core';
+import { poseRawAnimation } from '@rig-c/core/core';
 import { walkAnkleDepth } from '../src/draworder.ts';
 import { readDepthScale, scaleDepth, depthFeetOf, footScaleTracks, depthScaleLine, type DepthScaleSide } from '../src/depthscale.ts';
 import { retarget } from '../src/retarget.ts';

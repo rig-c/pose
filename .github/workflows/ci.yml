@@ -61,7 +61,7 @@ jobs:
 
   # rig-c/pose#260: the package as npm would pack it, installed into an empty
   # directory and used there — --version, then a retarget of the public wave to
-  # its pinned bytes — beside two planted failures that must each go red at the
+  # its pinned bytes — beside three planted failures that must each go red at the
   # step named (scripts/smoke_mutants.sh). The registry confirmation after a
   # publish runs the same smoke (scripts/confirm_registry.sh).
   install:

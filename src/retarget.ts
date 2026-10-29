@@ -71,7 +71,7 @@
  * What this cannot know is held to account afterwards: `verify.ts` poses the
  * gated build with rig-c's poser and measures where each bone landed.
  */
-import { screenToSpineDegrees } from 'rig-c/transform';
+import { screenToSpineDegrees } from '@rig-c/core/transform';
 import type { Body18 } from './joints.ts';
 import { isBody18, VIRTUAL } from './joints.ts';
 import type { Chain, JointMap, Rest, RigSets, RigSlots } from './map.ts';

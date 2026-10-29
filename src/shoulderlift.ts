@@ -1,5 +1,5 @@
 /** #408: supplied, calibrated bilateral shoulder elevation. Pure; no IO or held substitutes. */
-import type { CompiledDocument, RawBone } from 'rig-c/core';
+import type { CompiledDocument, RawBone } from '@rig-c/core/core';
 import { partBone, pointAt, pointParts, type JointMap, type Rest } from './map.ts';
 import type { Joint, PoseSequence } from './pose.ts';
 import { personTrack } from './pose.ts';

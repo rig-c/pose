@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { openTrack, type CompiledDocument } from 'rig-c/core';
+import { openTrack, type CompiledDocument } from '@rig-c/core/core';
 import { clean } from '../src/clean.ts';
 import { readMap } from '../src/map.ts';
 import { personTrack, readPoseSequence, writePoseSequence } from '../src/pose.ts';
