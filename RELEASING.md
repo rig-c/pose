@@ -170,8 +170,8 @@ exit status and tarball count. The tests include real `prepublishOnly` lifecycle
 controls with the release's provenance/access flags, with and without dry-run,
 and refusals for successful stdout without a tarball and a failed npm command.
 
-**First alias publish: owner only, once.** The `rig-pose` trusted publisher
-cannot be configured until that package exists. This change publishes nothing.
+**First alias publish (done at 1.5.1; kept for reference).** The `rig-pose`
+trusted publisher could not be configured until that package existed.
 Choose the stable release tag that contains the alias script and whose scoped
 publish has passed; from a clean checkout, the owner runs the following
 sequence, replacing `vX.Y.Z` with that tag:
@@ -211,8 +211,9 @@ complete this owner bootstrap and rerun confirmation with
 `gh workflow run release.yml -f version=X.Y.Z`; the `tag` dispatch refuses an
 already-published scoped version and is not an alias-only retry. The manual
 first alias publish has no workflow provenance; later OIDC publishes do.
-Install recommendations stay on the scoped name until the first alias publish
-and its empty-install confirmation have been verified in a later change.
+The first alias publish was made by hand at 1.5.1, and later releases publish
+the alias through trusted publishing (1.5.2 and 1.5.3 carry provenance), so
+`rig-pose` is a supported install name.
 
 **One-time GitHub setting (owner):** Settings → Actions → General → Workflow
 permissions → tick *Allow GitHub Actions to create and approve pull requests*,
