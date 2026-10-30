@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/rig-c/pose/compare/v1.5.4...v1.6.0) (2026-10-30)
+
+
+### Features
+
+* **extract:** read body-18 landmarks from an authored animation through core's poser ([#472](https://github.com/rig-c/pose/issues/472)) ([#473](https://github.com/rig-c/pose/issues/473)) ([cf4a3d5](https://github.com/rig-c/pose/commit/cf4a3d5ed0defd4d2e8bc4331e6b8440abde4811))
+
 ## [1.5.4](https://github.com/rig-c/pose/compare/v1.5.3...v1.5.4) (2026-10-29)
 
 
