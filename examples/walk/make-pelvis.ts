@@ -60,7 +60,7 @@
  *   through the left hip toward a foreshortened knee `RAISED_KNEE` from it (the l_knee keypoint
  *   moved there) — so the
  *   shorts' boundary beside it runs along the thigh, not across it (rig-c/pose#342). The planted
- *   case rig-c/pose#349 will read: `below-cover` reads such a thigh's outline as the hem today.
+ *   case: `below-cover` reads such a thigh's outline as the hem (rig-c/pose#349, closed as not planned).
  *
  * Every frame is drawn from formulae (no randomness, no clock): the same call
  * writes the same bytes.
