@@ -1,21 +1,21 @@
 {
   "algorithm": "sha256",
-  "scope": "Actual source/record/still files; excludes this manifest. Large handoff videos are hash references in record.json, not claimed present files.",
+  "scope": "Actual source/record/still/GIF files; excludes this manifest. Uncommitted recipe-output videos remain explicit hash references, not claimed present files.",
   "files": [
     {
       "path": "README.md",
-      "bytes": 13426,
-      "sha256": "31e3d2da7c9ff6682613f678447afe465cd8c89c3fbd20e146f721493b6f9487"
+      "bytes": 14687,
+      "sha256": "611a562257bc8c4864cfec6b4c8ee5be8cb93bad2b9c66bcf622c757f49c336e"
     },
     {
       "path": "docs/REFERENCE.md",
-      "bytes": 249562,
-      "sha256": "1f34e307f4a4d551efbd68a5b1a927eab1dce310c959a7af1eadc203468f40c4"
+      "bytes": 278316,
+      "sha256": "8871d6e95347fcfea424f43b64122ca01b2ad840c89f669cc6c369df28cab184"
     },
     {
       "path": "docs/demos/visible-retarget/README.md",
-      "bytes": 9570,
-      "sha256": "dd8546c25137563bce13d5cb67604aba583d6a28e4ed712f225b7de23509a93a"
+      "bytes": 12596,
+      "sha256": "1c9a49bc9f3343aee5a071d57e286bbd14123095934fb343af9b68ab89334a77"
     },
     {
       "path": "docs/demos/visible-retarget/contact-sheet.png",
@@ -44,8 +44,8 @@
     },
     {
       "path": "docs/demos/visible-retarget/record.json",
-      "bytes": 8903,
-      "sha256": "b53e86d0ffe67792faa0f0dae0e3a61edb0ec8c39416beda07934fc6270c58e5"
+      "bytes": 9044,
+      "sha256": "8f6884604b13c96ff9a6177feef9e563af6b8ce277b681b4fcc6b7d022515934"
     },
     {
       "path": "docs/demos/visible-retarget/sampling.json",
@@ -54,8 +54,8 @@
     },
     {
       "path": "docs/demos/visible-retarget/verification.json",
-      "bytes": 12012,
-      "sha256": "e54c46138b76d3966c1abef5ca4c48505fe02c8f684ea7ca84decc38b1225aa9"
+      "bytes": 26163,
+      "sha256": "fa3ee005e7e98c903b202b73351ed0a194e1ec6e7b862d35512bf80458e31680"
     },
     {
       "path": "tools/visible-retarget-check.ts",
@@ -64,13 +64,71 @@
     },
     {
       "path": "tools/visible-retarget.py",
-      "bytes": 30673,
-      "sha256": "cd05b0b33ddcd74565925e6570059fa1268b61bced6eda231f198d2f08ff56d4"
+      "bytes": 30685,
+      "sha256": "4f8b062c9883429e69fb856f295fa9f424362bc4d014bbffc301408320af4f33"
     },
     {
       "path": "tools/visible-retarget.requirements.txt",
       "bytes": 15,
       "sha256": "e2fe85b176ffadb6e1b3c300a6a40b327305d7d53b5cd3861b250ed1c05c3075"
+    },
+    {
+      "path": "docs/demos/visible-retarget/pose-dance.gif",
+      "bytes": 3537444,
+      "sha256": "d3a9f1b256fea6546372021b663bd067a3c8efd27218d2754d73c457b8c6f4cf"
+    }
+  ],
+  "derivations": [
+    {
+      "input": {
+        "name": "pose-dance.mp4",
+        "bytes": 727843,
+        "sha256": "4d63d9cab7f38c72851b29317e8a633fa9e29ab536e3c9fb2b6d3b3e7a269268",
+        "source": "https://raw.githubusercontent.com/rig-c/rig-c.github.io/989cebbd6733a58142923cec96fe2333da08194a/assets/docs/pose-dance.mp4",
+        "scope": "Existing recipe output, verified against record.json; not a committed MP4 in this repository."
+      },
+      "output": {
+        "path": "docs/demos/visible-retarget/pose-dance.gif",
+        "bytes": 3537444,
+        "sha256": "d3a9f1b256fea6546372021b663bd067a3c8efd27218d2754d73c457b8c6f4cf"
+      },
+      "settings": {
+        "fps": 15,
+        "width": 600,
+        "height": 540,
+        "palette": {
+          "max_colors": 128,
+          "stats_mode": "full",
+          "dither": "bayer",
+          "bayer_scale": 5,
+          "diff_mode": "rectangle"
+        },
+        "loop": 0,
+        "sizeLimitBytes": 5000000,
+        "input": "pose-dance.mp4",
+        "inputSHA256": "4d63d9cab7f38c72851b29317e8a633fa9e29ab536e3c9fb2b6d3b3e7a269268",
+        "filter": "fps=15,scale=600:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128:stats_mode=full[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+        "declaredBeforeEncoding": true
+      },
+      "command": [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-threads",
+        "4",
+        "-filter_complex_threads",
+        "1",
+        "-i",
+        "pose-dance.mp4",
+        "-filter_complex",
+        "fps=15,scale=600:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128:stats_mode=full[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+        "-an",
+        "-loop",
+        "0",
+        "out/pose-dance.gif"
+      ]
     }
   ]
 }
