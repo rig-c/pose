@@ -382,7 +382,7 @@
       "Detector-based compare"
     ],
     "loop": false,
-    "loopSeam": "N/A — not a loop"
+    "loopSeam": "N/A \u2014 not a loop"
   },
   "encodeCommand": [
     "ffmpeg",
@@ -462,6 +462,10 @@
     "sampling.json": {
       "bytes": 54293,
       "sha256": "0101b54d558480385e6d707bcebb0a7061a93edf7679c3d676d1198ce314f7fd"
+    },
+    "pose-dance.gif": {
+      "bytes": 3537444,
+      "sha256": "d3a9f1b256fea6546372021b663bd067a3c8efd27218d2754d73c457b8c6f4cf"
     }
   }
 }

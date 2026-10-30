@@ -3,7 +3,7 @@
 This recipe shows the accepted v3 Zero Two dance on the public dancer beside
 its source skeleton at **600×540**. It consumes existing accepted art and
 motion, authoring no pose, rig, repair or key. This is a **13-second take, not
-a loop**. HQ owns site publication in a separate sibling PR; this delivery
+a loop**; the GIF repeats playback of that take. HQ owns site publication in a separate sibling PR; this delivery
 preserves the site's swing assets and Play consumer.
 
 ![Source skeleton and accepted v3 rig](pose-dance.png)
@@ -85,7 +85,8 @@ anchor to the rig's lower ankle bone (`y = 379.90 px`), keeping per-frame drawn
 `L_body` variation at `3.05%` (`(max - min) / median`; `3.12%` `(max - min) / min`,
 `0.00%` smoothed). Both time bases include 0 and 13 seconds; 391/30 encoded
 seconds is 13.033333… because the final sample is displayed for one frame.
-There is no loop attribute or loop-seam claim.
+The MP4/WebM presentation has no loop attribute or loop-seam claim. The README
+GIF separately repeats playback of the take.
 
 ## Stage provenance and limits
 
@@ -129,6 +130,16 @@ MP4 is 727,843 bytes, SHA-256
 `4d63d9cab7f38c72851b29317e8a633fa9e29ab536e3c9fb2b6d3b3e7a269268`;
 WebM is 570,358 bytes, SHA-256
 `fab211560303caec9ba4fc08eec3bfde6ef31af2a65fb4c4b93a200c10e51861`.
+GIF is 3,537,444 bytes, SHA-256
+`d3a9f1b256fea6546372021b663bd067a3c8efd27218d2754d73c457b8c6f4cf`.
+Its 196 frames use 60/70 ms GIF delays (13.07 seconds per playback), retain
+600×540 pixels, and repeat indefinitely. The first declared encoding met the
+5,000,000-byte cap; no reduced-width or lower-palette alternative was needed.
+
+| Added media verification | Bytes | Frames / playback | Result |
+| --- | ---: | --- | --- |
+| README GIF | 3,537,444 | 196 / 13.07 s; loops playback | Within 5 MB; input/output hashes recorded |
+
 Small media are handed to the separate site sibling; no unlanded site URL is
 claimed. [Revised contact sheet](contact-sheet.png).
 
@@ -158,3 +169,43 @@ verification.json (`actualPipelineCommand`, `actualDiagnosticCommand`). Named
 workspace/cache placeholders replace only private path prefixes; flags and
 values are unchanged. The later actual composition command and reuse proof
 are recorded in `pixelCopyRepair`. The default public command needs no cache.
+
+## Animated README hero
+
+The hero uses the committed **v3** take. Public dancer v4 was accepted in
+[examples#71](https://github.com/rig-c/examples/issues/71#issuecomment-6395384506),
+separately from the producer. Its replay writes `render-receipt.json`; the
+current `compose --replay` reader requires `reproduction.json`, version `v3`,
+and the exact v3 compiled/native hashes above. The real reader refused the
+public v4 receipt layout before composition. Supporting v4 needs a separate
+recipe update; this presentation does not relabel v3 or change the site's video.
+
+The GIF input is the existing recipe's `pose-dance.mp4`, verified against
+[record.json](record.json). Before encoding, the settings were fixed at
+**15 fps, 600 px wide, 128 palette colours**, a full-clip palette, Bayer dither
+(scale 5), and rectangle difference mode. Run in the Nova pool from the
+recipe's media output directory (FFmpeg/ffprobe required):
+
+```sh
+ffprobe -v error -show_streams -show_format -of json pose-dance.mp4
+ffmpeg -hide_banner -loglevel error -y -threads 4 -filter_complex_threads 1 \
+  -i pose-dance.mp4 \
+  -filter_complex 'fps=15,scale=600:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128:stats_mode=full[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle' \
+  -an -loop 0 pose-dance.gif
+```
+
+The take is not a motion loop. `-loop 0` repeats the GIF's playback, including
+the visible end-to-start cut; it does not repair the take's seam. Input/output
+SHA-256 and the recorded command are in [files.sha256.json](files.sha256.json);
+[verification.json](verification.json) records the GIF and local README check.
+Actual GitHub branch rendering remains HQ's check after push.
+
+The local rendered README was checked on the Nova pool in Firefox 157.0
+(Playwright 1.64.1), at 600×540 displayed pixels. Captured GIF frames
+6 → 62 → 191 → 11 confirm motion and the playback restart; browser
+warning/error logs were empty. The README capture and the native extrema/diff
+were inspected for figure, joint-line and label legibility. Existing folds
+remain disclosed. Five earlier validation-packet failures (bootstrap, Chromium
+capture and a private fractional-CSS assertion) are recorded separately in
+`verification.json`; they are not passes. No full suite was repeated for this
+docs/assets change. GitHub branch animation and CI remain HQ's landing checks.
