@@ -259,6 +259,7 @@ No other repository in the org (core, parts, play, adapters, parts-examples, tra
 | `rig-pose compare` | promised | S (the R3 sheet offers it) |
 | `rig-pose convert` | courtesy | — |
 | `rig-pose cloth` (rig-c/pose#34) | courtesy | — |
+| `rig-pose extract`, `rig-pose-extract-map/1`, `rig-pose-extract/1` (#472), including documented record fields and refusal codes | courtesy | — |
 | `rig-pose --version`, `--help` | promised | S, X |
 | `rig-pose-sequence/1` (the pose) | promised | S, R, D |
 | `rig-pose-sequence/1.1` (the pose with the pelvis track, `pelvisTilt` and `pelvisSource`, rig-c/pose#288) | courtesy | — |
@@ -374,6 +375,12 @@ Every flag `parseFlags` reads in `cli.ts`, once. `test/promise.test.ts` holds th
 | `cloth` | `--alpha-min` | courtesy | — | (rig-c/pose#34) |
 | `cloth` | `--windows` | courtesy | — | (rig-c/pose#34) |
 | `cloth` | `--out` | courtesy | — | (rig-c/pose#34) |
+| `extract` | `--model` | courtesy | — | (#472) |
+| `extract` | `--map` | courtesy | — | (#472) |
+| `extract` | `--animation` | courtesy | — | (#472) |
+| `extract` | `--fps` | courtesy | — | (#472) |
+| `extract` | `--out` | courtesy | — | (#472) |
+| `extract` | `--loop` | courtesy | — | (#472) |
 
 ### The report's top-level keys
 

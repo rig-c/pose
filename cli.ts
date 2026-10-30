@@ -22,10 +22,12 @@ import { runCompare, type CompareArgs } from './src/runcompare.ts';
 import { PELVIS_MODES, runPelvis, type PelvisMode } from './src/pelvis.ts';
 import { PROVENANCE_FILE } from './src/provenance.ts';
 import { runRetarget, type RetargetArgs } from './src/run.ts';
+import { runExtract } from './src/runextract.ts';
 
 const HELP = `rig-pose ${pkg.version} — motion from a pose sequence onto a rig-c rig
 
 Usage:
+  rig-pose extract --model <skeleton.model.json> --map <extract-map.json> --animation <name|all> --fps <rate> --out <pose.json|dir> [--loop]
   rig-pose pelvis --pose <pose.json> --out <pose.pelvis.json> (--frames <dir> [--mode silhouette|waistband|below-cover] | --pelvis-keys <keys.json>) [--person <id>]
   rig-pose clean --pose <pose.json> --out <pose.clean.json> [--loop] [--legs 5] [--rest 7] [--hold off] [--depth walk|run] [--coco] [--person <id>]
   rig-pose retarget --rig <rig> --map <map.json> --sequence <pose.json> --out <motion.json> [--animation dance] [flags]
@@ -33,6 +35,14 @@ Usage:
   rig-pose compare --reference <pose.json> --render <pose.json> --map <map.json> [flags]
   rig-pose cloth (--rig <rig> --map <map.json> --skirt-slots <s1,s2,...> [--animation dance] [--fps 24] | --frames <dir> --pose <pose.json> [--person <id>] [--alpha-min 16]) [--windows <t0-t1,...>] --out <cloth.json>
   rig-pose --version | --help
+
+extract (compiled source landmarks; clean the output before retarget)
+  --model <file>       compiled skeleton.model.json; raw Spine is refused with the rigc ingest/build remedy
+  --map <file>         rig-pose-extract-map/1: sidedness and explicit joint/bone/origin-or-tip rows
+  --animation <name|all>  one source animation, or all in source order (numbered files under --out)
+  --fps <rate>         required positive frame rate; nonloop ends on the first sample at/after duration
+  --out <file|dir>     pose sequence and <file>.extract.json provenance; a directory for all
+  --loop               one fixed-rate cycle, endpoint excluded; source duration must agree with N/fps
 
 pelvis (before clean; rig-c/pose#288)
   --pose <file>         rig-pose-sequence/1 as a scan wrote it, before clean (a cleaned one is refused,
@@ -787,6 +797,12 @@ export function main(argv: string[]): number {
       runCompare(compareArgs(rest), (l) => process.stdout.write(`${l}\n`));
       return 0;
     }
+    if (cmd === 'extract') {
+      const f = parseFlags(rest, ['model', 'map', 'animation', 'fps', 'out'], ['loop']);
+      need(f, 'fps');
+      runExtract({ model: need(f, 'model'), map: need(f, 'map'), animation: need(f, 'animation'), fps: num(f, 'fps', 0, n => Number.isFinite(n) && n > 0, 'a positive finite frame rate'), loop: f.has('loop'), out: need(f, 'out') }, l => process.stdout.write(`${l}\n`));
+      return 0;
+    }
     if (cmd === 'clean') {
       runClean(rest, (l) => process.stdout.write(`${l}\n`));
       return 0;
@@ -847,7 +863,7 @@ export function main(argv: string[]): number {
       runCloth({ kind: 'frames', frames: f.get('frames')!, pose, person: f.get('person'), alphaMin, windows, out }, (l) => process.stdout.write(`${l}\n`));
       return 0;
     }
-    process.stderr.write(`rig-pose: unknown command "${cmd}" — the commands are: pelvis, clean, retarget, convert, compare, cloth\n`);
+    process.stderr.write(`rig-pose: unknown command "${cmd}" — the commands are: pelvis, clean, retarget, convert, compare, cloth, extract\n`);
     return 2;
   } catch (e) {
     if (e instanceof Usage) {

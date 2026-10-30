@@ -880,3 +880,72 @@ What 1.0 leaves out ([#217](https://github.com/rig-c/pose/issues/217)), in two l
 ## Licence
 
 MIT, see `LICENSE`.
+
+
+## Extract from a compiled rig
+
+```sh
+rig-pose extract --model build/skeleton.model.json --map extract-map.json --animation walk --fps 30 --out walk.pose.json [--loop]
+```
+
+The input is a compiled `skeleton.model.json` (`rigc-compiled/1`, `/2` or `/3`), never a raw Spine export or a rig specification. The named `@rig-c/core/core` reader and poser apply the animation, active constraints, inheritance and physics. No Spine runtime is linked by extraction. The fresh runtime view uses the default skin only, with no skin set; inactive mapped bones are refused.
+
+Convert a raw Spine **4.3** export first, using the published CLI:
+
+```sh
+rigc ingest source.json --out specs --art none
+rigc build --rig specs/rig.json --motion specs/motion.json --atlas-in source.atlas --out build --profile spine
+```
+
+Keep the source atlas and its authentic page PNGs together: the build requires the page files and validates their compressed image streams even when no image pixels are rendered. Review `specs/findings.json`; do not accept unsupported or lossy motion conversion silently. Header bookkeeping/version findings are distinct from motion loss. Other Spine generations require conversion outside this command; a compiled format version is not a Spine generation, and its Spine digest is not a version string.
+
+The extraction map is separate from a retarget map:
+
+```json
+{
+  "spec": "rig-pose-extract-map/1",
+  "sidedness": { "right": "subject right, near limb in this source", "left": "subject left, far limb in this source" },
+  "joints": [
+    { "joint": "r_shoulder", "bone": "upper_r", "point": "origin" },
+    { "joint": "r_elbow", "bone": "upper_r", "point": "tip" },
+    { "joint": "r_wrist", "bone": "lower_r", "point": "tip" }
+  ]
+}
+```
+
+All three root fields and all three row fields are required; unknown fields are refused. `joints` is a nonempty array. Each body-18 joint may occur once; multiple joints may name the same bone. `point` must explicitly be `origin` or `tip`. Tip uses the core's posed x axis times the declared bone length, including scale and constraints; a child origin is not assumed to be its parent's tip. No offsets, virtual midpoints or guessed anatomy are accepted. Sidedness strings declare the subject's sides for this particular source; they are preserved verbatim and never inferred from screen position. Face joints without landmarks stay missing.
+
+The output carries all 18 joints: mapped joints are `observed` without a fabricated detector confidence; others are `missing` without positions. It is ordinary `rig-pose-sequence/1`, read by `clean`. One world unit is one picture pixel. Its measured envelope over all sampled mapped points defines `left=floor(minX)`, `top=ceil(maxY)`, positive integer width/height, and `[worldX-left, top-worldY]`. The existing sequence writer rounds coordinates to 0.01 px.
+
+`--fps` is required. Without `--loop`, samples are uniformly at `i/fps` through the first sample at or after the source duration. Core holds its exact endpoint pose when that last sample overshoots. The output clock remains fixed-rate and the record exposes the clamped animation times; no near-duplicate sub-microsecond endpoint is added. This includes a zero-duration animation as one frame. With `--loop`, samples cover one cycle with the endpoint excluded. `duration*fps` must be a positive integer within one float32 duration rounding uncertainty; both the exact core duration and nominal `N/fps` period are recorded. This does not force endpoint positions to meet or infer that a root-motion clip is in place. Apply `clean --loop` only when that declaration is appropriate for the source.
+
+Physics resets once at the animation's t=0 pose, then advances sequentially using core render's `physicsClockStep(dt)=dt*(1+2^-30)`. Track/animation time stays on the unshifted steps; no warm-up or equilibrium is invented. A looping track wraps animation time and retains physics history. Replaying a single extracted cycle from a fresh reset may have a physics seam; endpoints are never welded. The record exposes exact posed times as well as output frame labels.
+
+`--animation all` writes `0000.pose.json`, `0001.pose.json`, etc. in source order under `--out`, so arbitrary animation names never become paths. Every sequence gets `<file>.extract.json` (`rig-pose-extract/1`): `sourceSHA256` hashes the exact model bytes, `spineSHA256` is the build's declared Spine-file digest, `modelSpec`, `coreVersion`, `animation`, `mapSHA256`, the full `map`, `fps`, `sourceDuration`, `period`, `loop`, `endpoint`, `trackTimes`, `animationTimes`, `physics`, `envelope`, `boundary`, `depth`, and `sequenceSHA256`. The record's draw order is the observed slot order on each sample, not numerical limb depth; `boneZ` is explicitly unavailable. No depth is invented or inserted into the sequence. All animations pose and all destinations are checked before writing. Existing destinations are compared with the model/map real paths and device/inode identities, so symlink and hardlink aliases are refused, including record sidecars. Existing outputs may not alias each other either.
+
+| Refusal | Meaning and remedy |
+| --- | --- |
+| `EXTRACT_INPUT` | Input path cannot be read; provide a readable model/map file. |
+| `EXTRACT_MODEL` | Raw, unsupported or malformed compiled input; use the CLI conversion above and provide its gated model. The core reader's exact reason is included. |
+| `EXTRACT_MAP` | Invalid JSON/map/row shape or empty joints; supply the object and rows above. |
+| `EXTRACT_MAP_SPEC` | Wrong map spec; use `rig-pose-extract-map/1`. |
+| `EXTRACT_MAP_KEYS` | Unknown map field; use only documented fields. |
+| `EXTRACT_SIDEDNESS` | Missing or empty right/left declarations; state this source's subject sides. |
+| `EXTRACT_MAP_JOINT` | Unknown body-18 joint; correct the named joint. |
+| `EXTRACT_MAP_DUPLICATE` | A joint is mapped twice; retain one explicit row. |
+| `EXTRACT_MAP_BONE` | Empty/absent bone name; correct it against the listed source bones. |
+| `EXTRACT_MAP_POINT` | Missing/unknown point; state `origin` or `tip`. |
+| `EXTRACT_ANIMATION` | Missing animation or no animations; choose a listed name. |
+| `EXTRACT_RATE` | Rate/frame count is invalid; choose a positive finite rate with a safe integer frame count. Invalid CLI numeric syntax is an invocation error (exit 2). |
+| `EXTRACT_LOOP_RATE` | Source duration and fixed loop rate cannot define an integral cycle within float32 rounding; choose a compatible rate or omit `--loop`. |
+| `EXTRACT_INACTIVE` | Mapped bone is inactive/absent in a sample; use an active source landmark. |
+| `EXTRACT_POSE` | Core refuses posing or a mapped coordinate is nonfinite; resolve the named source construct. No runtime fallback is used. |
+| `ARG_PATH` | Output aliases an input, is not a writable file, or its directory cannot be made; choose distinct writable destinations. |
+
+An exact extraction is not a promise of generic same-rig retarget identity: origin-only landmarks cannot identify terminal rotations, and target constraints, scale and shear can exceed retarget's kinematic domain. For an identity control, cover each carried direction explicitly, preserve the original source-angle oracle, use an asymmetric kinematic fixture and minimally clean it (`--legs 1 --rest 1 --hold off`). Spikes are still checked. Keep unsupported target chains out of a separate retarget map rather than manufacturing source joints.
+
+
+The extraction record's `boundary` is a **sampled last-to-first gap**, recorded for every mapped joint with its bone and origin/tip declaration. `from` and `to` name frame indices, output label times, core track times and animation times. Each joint gives world and picture `dx`, `dy`, `distance`; world units are core world units and picture units are pixels (one world unit per pixel, with opposite y signs). `summary` gives the largest distance and its joint. Figures use the unrounded sampled coordinates, before the pose writer's 0.01 px rounding. This gap spans the final sample to frame 0; it is not an exact physical seam measurement or a steady-state physics claim. Nonzero gaps are retained and samples are never welded.
+
+
+For corpus transfer, target-map coverage is explicit. The public `rig-c/examples` rigboy example uses trunk and legs only: its near leg is declared subject `r_` and far leg subject `l_`. Arms remain unmapped; the toy is not a forearm. A separate wave target map omits the head chain when the source has no eye landmarks; the original wave map stays unchanged. A gate-green transfer does not claim that an unmapped body part was transferred.
