@@ -48,6 +48,14 @@ The map names **chains**: each limb as bones that descend from one another, pare
 
 The order is **clean → retarget**, with `pelvis` before `clean` when the drawing carries a pelvis tilt the detector lost, and `compare` after a render. Every command refuses by name and writes nothing when it refuses; `rig-pose --help` lists every flag. Exit codes are `0` written (for `compare`: compared), `1` refused, `2` bad invocation.
 
+### `rig-pose extract`
+
+```sh
+rig-pose extract --model build/skeleton.model.json --map extract-map.json --animation walk --fps 30 --out walk.pose.json
+```
+
+Read observed body-18 landmarks from an authored animation through core's own poser. Each map row explicitly names a bone origin or tip; unmapped joints stay missing. The separate record keeps hashes, sidedness, time, physics and coordinate framing. See [extraction maps and refusals](docs/REFERENCE.md#extract-from-a-compiled-rig).
+
 ### `rig-pose clean`
 
 ```sh
