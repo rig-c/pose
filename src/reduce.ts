@@ -92,7 +92,7 @@ export interface Reduced {
 // rig-c's evaluation
 // ---------------------------------------------------------------------------
 
-/** rig-c's `BEZIER_SIXTH` (node_modules/@rig-c/core/src/core/animation.ts). */
+/** rig-c's `BEZIER_SIXTH` (`src/core/animation.ts`). */
 const BEZIER_SIXTH = 0.16666667;
 /** Pieces of the poser's polyline per Bézier segment — rig-c's `BEZIER_PIECES`. */
 export const REDUCE_PIECES = 10;

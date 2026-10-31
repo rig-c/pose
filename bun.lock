@@ -5,7 +5,7 @@
     "": {
       "name": "@rig-c/pose",
       "dependencies": {
-        "@rig-c/core": "^2.60.0",
+        "@rig-c/core": "^3.0.0",
       },
       "devDependencies": {
         "@esotericsoftware/spine-core": "4.3.13",
@@ -51,7 +51,7 @@
 
     "@keyv/serialize": ["@keyv/serialize@1.1.1", "", {}, "sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA=="],
 
-    "@rig-c/core": ["@rig-c/core@2.61.0", "", { "bin": { "rigc": "bin/rigc.cjs" } }, "sha512-oJ5ptaOEOI/IPjXCrKxi9T0M0g/PLT0uG2E3lg5UNOif+9QJ6ovq1IjG+Rs3e81rNISsE+ULSwWQ0sHyLo2kpQ=="],
+    "@rig-c/core": ["@rig-c/core@3.0.0", "", { "bin": { "rigc": "bin/rigc.cjs" } }, "sha512-51b3x6IxMU44Ur3Db1qYrWrwrPjSD4zTBflR7KeKJ+rDDvSrlFq+DR/7A45M0lEn1pvbqvobGQWM4YGXlopGjQ=="],
 
     "@types/bun": ["@types/bun@1.4.3", "", { "dependencies": { "bun-types": "1.4.3" } }, "sha512-N67Pqy8JXbAY/j0tNraS3V5mubGvc6rrrNDmDCtZLlFzccbUJPDb0tvgUBC5q4m8ybkP93Jcn1QB+RYQ6PvBhw=="],
 
