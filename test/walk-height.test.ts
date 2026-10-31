@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { compileModel } from '@rig-c/core/compile';
 import { readModel, type CompiledDocument } from '@rig-c/core/core';
-import { modelDocument } from '@rig-c/core/src/model.ts';
+import { modelDocument } from '@rig-c/core/model';
 import { walkCycle, walkDoc } from '../examples/walk/make-walk.ts';
 import { clean } from '../src/clean.ts';
 import { readMap } from '../src/map.ts';
