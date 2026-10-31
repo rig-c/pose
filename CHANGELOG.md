@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.6.1](https://github.com/rig-c/pose/compare/v1.6.0...v1.6.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* **core:** move to @rig-c/core ^3.0.0 ([#485](https://github.com/rig-c/pose/issues/485)) ([eeaa764](https://github.com/rig-c/pose/commit/eeaa764382292f074dd1c9aca626a9623acd62b4)), closes [#484](https://github.com/rig-c/pose/issues/484)
+* **demo:** animate the README hero with the accepted v3 dance take ([#482](https://github.com/rig-c/pose/issues/482)) ([6e7f4de](https://github.com/rig-c/pose/commit/6e7f4de51cc93cd80bfdfcdf875073f413cd05a2)), closes [#481](https://github.com/rig-c/pose/issues/481)
+
 ## [1.6.0](https://github.com/rig-c/pose/compare/v1.5.4...v1.6.0) (2026-10-30)
 
 
