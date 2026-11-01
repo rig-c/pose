@@ -41,7 +41,8 @@ rig-pose pelvis --pose raw.scan.json --frames frames/ --out pelvis.scan.json [--
 rig-pose pelvis --pose raw.scan.json --pelvis-keys pelvis.keys.json --out pelvis.scan.json
 
 # 1. Clean detector shake (writes <out>.figure-scale.json beside <out>; --coco converts COCO-17 first)
-rig-pose clean --pose raw.scan.json --out clean.pose.json [--loop] [--depth walk|run] [--coco]
+# --pose is pelvis.scan.json if a pelvis step ran (raw.scan.json would drop the measured track), else raw.scan.json
+rig-pose clean --pose pelvis.scan.json --out clean.pose.json [--loop] [--depth walk|run] [--coco]
 
 # 2. Retarget onto the rig and gate through rigc
 rig-pose retarget --rig out/rig --map map.json --sequence clean.pose.json --out motion.json --animation dance [--build build-dir] [--report report.json]
