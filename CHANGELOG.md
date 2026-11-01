@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.3](https://github.com/rig-c/pose/compare/v1.6.2...v1.6.3) (2026-11-01)
+
+
+### Bug Fixes
+
+* **readme:** show the npm badges ([#491](https://github.com/rig-c/pose/issues/491)) ([9d7b02d](https://github.com/rig-c/pose/commit/9d7b02d37d227872cd21570447e477cbe16fa50d)), closes [#490](https://github.com/rig-c/pose/issues/490)
+
 ## [1.6.2](https://github.com/rig-c/pose/compare/v1.6.1...v1.6.2) (2026-11-01)
 
 
