@@ -37,7 +37,8 @@
   "files": [
     "bin/rig-pose.cjs",
     "cli.ts",
-    "src"
+    "src",
+    "skills"
   ],
   "publishConfig": {
     "access": "public"
