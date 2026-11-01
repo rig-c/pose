@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.2](https://github.com/rig-c/pose/compare/v1.6.1...v1.6.2) (2026-11-01)
+
+
+### Bug Fixes
+
+* show the shared banner ([#488](https://github.com/rig-c/pose/issues/488)) ([7d1d4f1](https://github.com/rig-c/pose/commit/7d1d4f13da47ea52db98c91fea708eace01aa8a8)), closes [#487](https://github.com/rig-c/pose/issues/487)
+
 ## [1.6.1](https://github.com/rig-c/pose/compare/v1.6.0...v1.6.1) (2026-10-31)
 
 
