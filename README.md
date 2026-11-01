@@ -2,6 +2,12 @@
   <img src="https://raw.githubusercontent.com/rig-c/pose/main/assets/banner.svg" alt="@rig-c/pose — Cleans and retargets a body-18 pose sequence onto a rig-c skeleton" width="100%" />
 </p>
 
+<p align="center">
+  <a href="https://www.npmjs.com/package/@rig-c/pose"><img src="https://img.shields.io/npm/v/@rig-c/pose.svg?style=flat-square&color=FF6B4A" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/@rig-c/pose"><img src="https://img.shields.io/npm/dm/@rig-c/pose.svg?style=flat-square&color=EC4899" alt="npm downloads" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-38BDF8.svg?style=flat-square" alt="license" /></a>
+</p>
+
 # @rig-c/pose
 
 Puts motion from a pose onto a rig. The motion is joint positions over time: from a video, a dataset, or points placed by hand. The rig is one [rig-c](https://github.com/rig-c/core) built. A body-18 pose sequence becomes bone keys in rig-c's motion format, and the keys are checked before anything is written.
