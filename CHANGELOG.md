@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.0](https://github.com/rig-c/pose/compare/v1.6.3...v1.7.0) (2026-11-01)
+
+
+### Features
+
+* ship the rig-pose agent skill ([#495](https://github.com/rig-c/pose/issues/495)) ([5c56f4a](https://github.com/rig-c/pose/commit/5c56f4af0bb5bdeb10721a20f6d0c3079b836af6))
+
 ## [1.6.3](https://github.com/rig-c/pose/compare/v1.6.2...v1.6.3) (2026-11-01)
 
 
