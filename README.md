@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/rig-c/pose/main/assets/banner.svg" alt="@rig-c/pose — Cleans and retargets a body-18 pose sequence onto a rig-c skeleton" width="100%" />
+</p>
+
 # @rig-c/pose
 
 Puts motion from a pose onto a rig. The motion is joint positions over time: from a video, a dataset, or points placed by hand. The rig is one [rig-c](https://github.com/rig-c/core) built. A body-18 pose sequence becomes bone keys in rig-c's motion format, and the keys are checked before anything is written.
