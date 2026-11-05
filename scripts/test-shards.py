@@ -62,6 +62,16 @@ def make_plan(root, output):
     return load(output)
 
 
+def observed_file(line):
+    # Bun wraps file headers in GitHub log groups when GITHUB_ACTIONS is set.
+    # This is presentation syntax, not part of the file identity. Preserve the
+    # path and its order otherwise; do not basename, sort or deduplicate it.
+    clean = re.sub(r'\x1b\[[0-9;]*m', '', line).strip().removeprefix('::group::')
+    if clean.endswith(':') and TEST.search(clean[:-1]):
+        return clean[:-1].removeprefix('./')
+    return None
+
+
 def run_shard(root, shard_id, output, head):
     output.mkdir(parents=True, exist_ok=True)
     if any((output / f).exists() for f in ['plan.json', 'result.json', 'timings.json', 'junit.xml']):
@@ -85,9 +95,9 @@ def run_shard(root, shard_id, output, head):
             for line in process.stdout:
                 log.write(line)
                 print(line, end='', flush=True)
-                clean = re.sub(r'\x1b\[[0-9;]*m', '', line).strip()
-                if clean.endswith(':') and TEST.search(clean[:-1]):
-                    observed.append(clean[:-1].removeprefix('./'))
+                file = observed_file(line)
+                if file is not None:
+                    observed.append(file)
             exit_code = process.wait()
         else:
             # Passing no paths would run the whole suite. An empty shard runs no Bun command.
@@ -144,8 +154,12 @@ def merge(root, plan_path, artifacts, output, head, needs=None):
         if result['exit'] != 0:
             refuse('SHARD_FAILED', f'shard {result["id"]}: exit {result["exit"]}')
         observed = load(directory / 'observed.json')
+        if collections.Counter(observed) != collections.Counter(expected['files']):
+            missing = list((collections.Counter(expected['files']) - collections.Counter(observed)).elements())
+            extra = list((collections.Counter(observed) - collections.Counter(expected['files'])).elements())
+            refuse('OBSERVED_FILES', f'shard {result["id"]}: missing {missing}, extra {extra}; observed {observed}')
         if observed != expected['files']:
-            refuse('OBSERVED_FILES', f'shard {result["id"]}: observed order/multiset differs')
+            refuse('OBSERVED_ORDER', f'shard {result["id"]}: expected {expected["files"]}, observed {observed}')
         timings = load(directory / 'timings.json')
         coverage(expected['files'], list(timings['files']))
         for f, ms in timings['files'].items():
@@ -205,7 +219,8 @@ def controls(scratch):
     head = 'control-head'
 
     def execute(label, args, expected=0, code=None):
-        p = subprocess.run(args, capture_output=True, text=True)
+        # Exercise Bun's actual GitHub grouping on local runs as well as CI.
+        p = subprocess.run(args, capture_output=True, text=True, env=dict(os.environ, CI='true', GITHUB_ACTIONS='true'))
         (scratch / (label + '.log')).write_text(p.stdout + p.stderr)
         report.append({'control': label, 'command': args, 'exit': p.returncode})
         if p.returncode != expected or (code and code not in p.stdout + p.stderr):
@@ -245,6 +260,22 @@ def controls(scratch):
         elif label == 'missing': (target / 'junit.xml').unlink()
         save(target / 'result.json', r)
         execute(label, merge_args(planted), 1, code)
+    # A grouped header must retain exact identity/order. Completeness and
+    # genuine independent reordering are separate refusal classes.
+    multiple = next(p for p in artifacts.iterdir() if len(load(p / 'observed.json')) > 1)
+    if '::group::' not in (multiple / 'console.log').read_text():
+        refuse('CONTROL_FAILED', 'Bun GitHub header grouping was not exercised')
+    for label in ['observed-omitted', 'observed-duplicate', 'observed-unknown', 'observed-reordered']:
+        planted = scratch / label
+        shutil.copytree(artifacts, planted)
+        target = planted / multiple.name / 'observed.json'
+        observed = load(target)
+        if label == 'observed-omitted': observed.pop()
+        elif label == 'observed-duplicate': observed.append(observed[0])
+        elif label == 'observed-unknown': observed[0] = 'test/not-discovered.test.ts'
+        else: observed.reverse()
+        save(target, observed)
+        execute(label, merge_args(planted), 1, 'OBSERVED_ORDER' if label == 'observed-reordered' else 'OBSERVED_FILES')
     execute('cancelled-prerequisite', merge_args() + ['--needs', '{"checks":{"result":"success"},"test-shards":{"result":"cancelled"}}'], 1, 'PREREQUISITE_FAILED')
     # A new file absent from the timing baseline must run, not be ignored or
     # rejected for failing an obsolete count.

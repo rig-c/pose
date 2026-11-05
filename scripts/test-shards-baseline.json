@@ -264,7 +264,7 @@
     "test/scope.test.ts": "9666adb87a00629207ff8b8ca8289e0930b631f3fabe6c39c6a179309f717abd",
     "test/shoulderlift-cli.test.ts": "0a044272d0beeb72c63932ab5cfe305e726bd97282879e432a0724fe2fca2863",
     "test/shoulderlift.test.ts": "0d8af9191c9f654b57fa3745ffe43bd503be44a8c883c95cd90290de3667bb35",
-    "test/smoke.test.ts": "8b1f304a802e3624de5bd49155e22dd5d0ce57943fb5023243e6e6392a47f85b",
+    "test/smoke.test.ts": "d80cda5fdd8d3517d82994ec53d628e1eda364e8959ece72ba37adf95e7493a2",
     "test/stance.test.ts": "f60811f3a6eebfc9c462891c1b697f8a27f251bfe06c602b502050cd2b3f6640",
     "test/surface.test.ts": "7ab7142584d682ad5ac7c91175e67cbf8ee62e1e418f95599e7942f4fa15d38d",
     "test/surface.ts": "7872ab0e0ddd18ca093446dc10e60ee6ac2b6fc545c2e379073d6895d3814985",
