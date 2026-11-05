@@ -1,0 +1,584 @@
+{
+  "sourceCommit": "c8cca54f175250541ea3e11b82b066174169f00f",
+  "sourceSha256": "f98c2de7b7ffd8eb81525a3f177db3c8261c4e46e31c9ec9766d97dccafc3a03",
+  "imports": [
+    "import { afterEach, describe, expect, test } from 'bun:test';",
+    "import { spawnSync } from 'node:child_process';",
+    "import { createHash } from 'node:crypto';",
+    "import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';",
+    "import { tmpdir } from 'node:os';",
+    "import { join } from 'node:path';",
+    "import { poseRawAnimation, poseRawSetup, readModel, type CompiledDocument, type RawBone } from '@rig-c/core/core';",
+    "import { Plate } from '@rig-c/core/plate';",
+    "import { capShortSteps, holdAcross, holdShort, isAcross, mergeRuns, shortLine, spreadFlips } from '../src/retarget.ts';",
+    "import { clampArt } from '../src/switch.ts';",
+    "import { clean } from '../src/clean.ts';",
+    "import { loopTrack, type RigcTrack } from '../src/idle.ts';",
+    "import { readPoseSequence, writePoseSequence } from '../src/pose.ts';",
+    "import { scaleSupport, type Feet, type LegScale } from '../src/legs.ts';",
+    "import { readMap, type Chain } from '../src/map.ts';",
+    "import { overFloor, projectSeams, readSeamPairs } from '../src/seams.ts';",
+    "import { writeReport, type RenderDomain, type ReportInputs } from '../src/report.ts';",
+    "import { walkCycle, walkDoc } from '../examples/walk/make-walk.ts';",
+    "import { firstFrames, keysOnFrameTimes, type MotionDoc } from './discrete.ts';"
+  ],
+  "reexports": [
+    "export { afterEach, describe, expect, test } from 'bun:test';",
+    "export { spawnSync } from 'node:child_process';",
+    "export { createHash } from 'node:crypto';",
+    "export { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';",
+    "export { tmpdir } from 'node:os';",
+    "export { join } from 'node:path';",
+    "export { poseRawAnimation, poseRawSetup, readModel, type CompiledDocument, type RawBone } from '@rig-c/core/core';",
+    "export { Plate } from '@rig-c/core/plate';",
+    "export { capShortSteps, holdAcross, holdShort, isAcross, mergeRuns, shortLine, spreadFlips } from '../src/retarget.ts';",
+    "export { clampArt } from '../src/switch.ts';",
+    "export { clean } from '../src/clean.ts';",
+    "export { loopTrack, type RigcTrack } from '../src/idle.ts';",
+    "export { readPoseSequence, writePoseSequence } from '../src/pose.ts';",
+    "export { scaleSupport, type Feet, type LegScale } from '../src/legs.ts';",
+    "export { readMap, type Chain } from '../src/map.ts';",
+    "export { overFloor, projectSeams, readSeamPairs } from '../src/seams.ts';",
+    "export { writeReport, type RenderDomain, type ReportInputs } from '../src/report.ts';",
+    "export { walkCycle, walkDoc } from '../examples/walk/make-walk.ts';",
+    "export { firstFrames, keysOnFrameTimes, type MotionDoc } from './discrete.ts';"
+  ],
+  "hook": "afterEach(() => {\n  for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true });\n});",
+  "declarations": [
+    {
+      "sha256": "95f79da3b33ee64da43b48da84eccbb5b57c5a1021caced5ebdffa8ddd869e84"
+    },
+    {
+      "sha256": "714cbc99360ebfd52775891e43a544da7ada0226936221ee180e534d884d343b"
+    },
+    {
+      "sha256": "317d279d96e18635bd6c1f8ef6e910163ae75070a75b41d00b86d550d9c7301d"
+    },
+    {
+      "sha256": "2bbbdddd6a84cdeed4fd5b2981d2e4acf4ffa003d51c37e6e778af998da49e94"
+    },
+    {
+      "sha256": "5ee5e29d1b0633aee31c4a9603d233ea5e008a1f57bfea8d8b976f1f9d1ce057"
+    },
+    {
+      "sha256": "903b7b5625da5ea8cd568c1ee0a26a4ed0648b5bc306c180618c0a1cb0905ba3"
+    },
+    {
+      "sha256": "31de287f8cef9c38cc987c8df6c85bdf2e21d1dc7dea4dd46f1d87f7ac5b43cf"
+    },
+    {
+      "sha256": "e7396ac53d0b9308f009f3e4c057337d694daa5ba7ce9edb7bc1a1068dc95a01"
+    },
+    {
+      "sha256": "38cacf70893169ed314712d833f3c23b6f142589c279bc9e2f673f3b13d7b1b9"
+    },
+    {
+      "sha256": "09631c663e528bb62e166ed624101d6793e9ef6692ca28abbabe4c471593dd0c"
+    },
+    {
+      "sha256": "ceb1cd05249bb147a5851851373b8fa20b8c9e52d486954da45c45707c692e63"
+    },
+    {
+      "sha256": "6ab198240a3036c72df12cd474d8d53fa6303ff382c5841fa4889908f6d9b594"
+    },
+    {
+      "sha256": "f847f9950db441a0f7aa67b459f3c1a36dfc7a39e4e35567f7273761fd59bdf6"
+    },
+    {
+      "sha256": "4bb7951d15afed5d5add3b070df4fd607992f73151711c438583739ff5d63f67"
+    },
+    {
+      "sha256": "b32aa1f8c0a58c84ed2be05f1eebc11562164308b73544ac9532a7bf73366a78"
+    },
+    {
+      "sha256": "f06712b34efdb5304de438758a9115870b19b7cc70a04fc007211440e0372c71"
+    },
+    {
+      "sha256": "fd4aae4f28a5bdaca62ab943be1db2d7441b812b56424005328772bee94d3b1e"
+    },
+    {
+      "sha256": "bbff621edd608042fb008d0ec2c96bf602b3069b6f52d8e26aff732f04936712"
+    },
+    {
+      "sha256": "dab25053dabab214e3ee68e57f96a8840e21a2499f00cf103d1d94780c08f16b"
+    },
+    {
+      "sha256": "c6929a5789d7d78d4245f28b5891bb6301e74b09bb92335b0c48f72a134b4d82"
+    },
+    {
+      "sha256": "5f1a5b9d6818f2983ae3285eaf8322b72f8284ede95cf395b56844cec9c32cb2"
+    },
+    {
+      "sha256": "d8ab7355ec00a6665f9847aad57908fe76137593d4abc5c8f43017dcc60712d6"
+    },
+    {
+      "sha256": "cd90f5a45201359bf786ef280b548e9f73be5b0a7c4399b615a7281ff48df7d9"
+    },
+    {
+      "sha256": "11e67d01ea3f5dabf700de62ec56a1c3ddf263098ba7745b6851da38ee5ec316"
+    },
+    {
+      "sha256": "061b4c1e1a89afac6527d6b8ca742c834c471b02ce2de29d168b22d6057e53f5"
+    },
+    {
+      "sha256": "51bea98bb48491342662ad3d7fd10ec6e62c82f4b210c93b67b94a233f561e0d"
+    },
+    {
+      "sha256": "654a370ef117f72930ea32dd93878663729fd8e88a8f738ae76b71ef73045801"
+    },
+    {
+      "sha256": "8bb9689261baf64f27d08715732c4b0eb8d6875240ba499a6ccd2a728680e594"
+    },
+    {
+      "sha256": "279423a5ead8efd7d0c328c0fdbbaf92c263e8f42a733dbb85ed70986869fb24"
+    },
+    {
+      "sha256": "c83317d771d8eb92c92782e173462cbc29130d52dfa8ee9cf94f6c6ef81f5455"
+    },
+    {
+      "sha256": "cc75b40e019ce1dfca9c53e92fc8656afe40654357b43c6aa1fec7fab5ad0fee"
+    },
+    {
+      "sha256": "281fea78ab79128fcc74c6646bdae1da2b0016da3d2891a9121e391bf721148e"
+    },
+    {
+      "sha256": "7926f46ec96dde9425c08be1e5e58a234788a2a92181fe19eafd9397d2ca2068"
+    },
+    {
+      "sha256": "1d7455d5350ac7d72b55e9b363baebd53aef4cb81eca5b5c0bf38fc797637dd1"
+    },
+    {
+      "sha256": "c237be2b76a6044351c532500200956a2ed28a1c6a35f9ff6b1545cc8b3c7be6"
+    },
+    {
+      "sha256": "05a83aef622b3757270fadd2132522f59f964b2d8f7e29f35aa8a44c635520a1"
+    },
+    {
+      "sha256": "c10a2f9733f571d5f40eac7ab550b6ea23ad513d24c8c2067e0b0e4e28fec1d1"
+    },
+    {
+      "sha256": "a5b37421da539ef8fea4e8b37cc336e5b79ba767d8a6c9fac2bbc1b4f97f1b7f"
+    },
+    {
+      "sha256": "6cdceb00c0707d568ffb49318774f72490f1f9deea99f815d42b00cd0fb93022"
+    },
+    {
+      "sha256": "8fd3e91e88ada338352784984326b46e42d7f3ea0b2fdda3a4bb6f7cfed861fb"
+    },
+    {
+      "sha256": "9d24e85c7e80106ec3082fcdf284357fa50da73c45d5d088727699c1704b488d"
+    },
+    {
+      "sha256": "99952d6f6c4b2a965cf5b00f8fe8eaee5e5b0ae31b8129047848d7854442490a"
+    },
+    {
+      "sha256": "ee3514bb292a619bd69533abf7aa2618877245e69e62b88fa927947d6707552c"
+    },
+    {
+      "sha256": "de6ee37ccf399a28f329ea231f81785ebce87cffd0d2376b31ab8d96bdcca72a"
+    },
+    {
+      "sha256": "44272e8252ba4e390b70fca64e4d0635ba75b033781e4232eaa44d425a774f79"
+    },
+    {
+      "sha256": "188083b65e0edc0215446f2f6cab2352221332a6371d8b51d46605e5ff658f91"
+    },
+    {
+      "sha256": "9542082578cf2ffe2486c9b95f6bffaeb6f976739e502423dfbf3dd69668213c"
+    },
+    {
+      "sha256": "8ade1889a17217d03f6e88b4a02d2c6680e0e9131db1d18c0210c00971873521"
+    },
+    {
+      "sha256": "ab00e62b24ddaaa7eddc0a17144906a33646d2ed7413cd60abcd66308f1cbba5"
+    },
+    {
+      "sha256": "614de1c3f58f84b9b5e05ae022719450962db4748ef4222d2eb691f09e723112"
+    },
+    {
+      "sha256": "2c0903a033d406a7d03f33be44443c584220308ad1562d3db01bb263d2bbbd7b"
+    },
+    {
+      "sha256": "efb006181d7fef5bd5f28cdf46eb40bfd3a6340a64ef0e54f578f9952667d7d3"
+    },
+    {
+      "sha256": "9175dffc1e6ae5734941a7838f32a9ee65097b3b8726ab2345f310723afc4011"
+    },
+    {
+      "sha256": "1542be078119439591a3353e9f7855c6a2ab13ea7bd7b617fb68b4ce398691ca"
+    },
+    {
+      "sha256": "8d7073bdbb6d1d412a0bf11c2084ea99346565ac02a40c33c0fe4b5b8e864a48"
+    },
+    {
+      "sha256": "096f8500d6da4046e213f13c78142d5ecf3ad59aa62209995004e3014cdaea2e"
+    },
+    {
+      "sha256": "646033c205273d70fcfaae054c4f8ddaa841445fdb88ccc647ba46a31a8e8a03"
+    },
+    {
+      "sha256": "66900bba2a447ab73fd29d503ac736b491e62237fdc456bfab441136b0f18d6c"
+    },
+    {
+      "sha256": "6c94b23497bcdab2f30846a7232477e585de67585c55198343d54ef7e1c67a57"
+    },
+    {
+      "sha256": "3e1783f8b9e99472ffc138dfe6602324aaa462ffba04083bd11adbdbf9bb733e"
+    },
+    {
+      "sha256": "92c22b676d5f522bb3f17c935362b103c0d6e261d5b50b9685975afb85855f54"
+    },
+    {
+      "sha256": "28c50b47c3b5708b7628a10b885426e4f94342246c0a1f371538cc452e4106df"
+    },
+    {
+      "sha256": "a3bb0b4ba8845591694ab3282414322414e16be3fb2be24a3340e77f9c9420ed"
+    }
+  ],
+  "blocks": [
+    {
+      "file": "test/retarget.test.ts",
+      "name": "legacy report projection retains wrong old values and nested signed diagnostics",
+      "sha256": "39b9533a141f6c04e87fbc3ac0f4e1bc53516e75ad3626a0e931fdf6c5235e79"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "the synthetic pose with known angles (the card's test)",
+      "sha256": "452bce05c6c3f58db02658c44221d9d2b4eb4ec26a24a6bafc123213514640a8"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "mutants make the card's test red",
+      "sha256": "999bc2d0212d936183dde633148c9b7d197ae9e09801eb508acb0be256ecbf0d"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "a hinge bent the wrong way",
+      "sha256": "6f30e44f423fbe738c4a620b13469f8a61ac84f5356cd9d2f49d535bd2a8bc40"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "holds",
+      "sha256": "cfdf5a1c061c39651b8593b42d2b279218672a53be901f5fa26e267d11d752fe"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "the flip guard (#15): a segment that turns more than --flip degrees in one frame is spread",
+      "sha256": "e7b1c2019aada9401bf7b9d833bae779493c030cd4ff91e71de877f24f91edf5"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "the short hold (#22): a segment under --short of its median picture length has its angle interpolated",
+      "sha256": "70b8b768a2af7b8d8c7acb5a3855d773d387a0eaef6211162df89bd6a15163c2"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "readers",
+      "sha256": "ee067c1c203e841cca12f8c4beaeaa5e41da7f909a27f1a41849aa43996bedf6"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "the gate",
+      "sha256": "38567b45410a013fafe151eb03741f8619b5b47d09ebcf460eefb718ebcbd91d"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "the landing check",
+      "sha256": "85714b3a80e9358ea56f833ad834bc6dd0ea3a6ab2ba84cbcac0aef7306f6eb9"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "folds",
+      "sha256": "f726efb384e62a22b88de519d62eb58d7e3544bc4f0d0552f41ec8373622eb92"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "COCO-17",
+      "sha256": "ffdd573d94b25ad301ead3610dac13dbbb92abd12e52195f569b6da66836a17d"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "the command line",
+      "sha256": "7518cdf2616cf19b6002a94b628f7735f81f40f1822d582961bec7f2df6e9277"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "an aim between two points (\"eye_r>eye_l\") turns the head by its eye line",
+      "sha256": "dfbb9b8f2d62126c0f1cb43ed9668dcbcd0052325416f7055b5a5977af170341"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "--build keeps a build rigc can draw where it was copied",
+      "sha256": "644f3dfb00847789c66e4c5f2dbb4d942c17e71c250817552ebe4ba5e64106f1"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "a rig point may be the midpoint of two (\"a+b\")",
+      "sha256": "6da4c01e41c37b5f147c46cef6c35188d6479e697f7cf4af1a06f3afd7f1422a"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "the pelvis tilts and the trunk reaches from the posed hip for the shoulders",
+      "sha256": "3be3f7ff8b22be8b90954657c0a9bdcb6953cf211dea45f21cfb6c711e04b10a"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "JITTER: each keyed bone against its map pair (#236)",
+      "sha256": "d8f5c15bc7c49c7e0dce09a4ec319a6894275c251f9a3bb8a25b5412a85416e1"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "--build writes the same bytes in any folder, and no path out of it",
+      "sha256": "7fd183ed4ff93981e747ca71d2ef9b7da90e40b3c00b54f981f7292e4309d73b"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "examples/wave runs as the README says",
+      "sha256": "4f2f2e0986ac6aec020bb91f7143eb1057713fbe2a7dca62c88080a98b9a4bf7"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "--short leaves a line across the body alone (the hip line, the eye line)",
+      "sha256": "8451a242ee0d7a5a24f01d11224833958178e9f5e6ef3485f1e0609dc6262710"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "the kept skeleton.json names an images directory that holds the parts",
+      "sha256": "88da043208728e2307a1abe83e2352736b1c7c45d4e7a93c391edd4c5aa85ae3"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "alternates (#6): sets of attachments switched beside the bone keys",
+      "sha256": "36c7a030d8436bc44f6ea461b5a6ec0a508c94be7a9a3cd91400c9d8ac4eb504"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "#43: the older pose name, --images, the rigc version, and why a window did not switch",
+      "sha256": "c98c713f2379a519fec744536783518be6042a122cdbdb1d85f9bd3c83f829b2"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "#47: --leg-scale and --plant-feet",
+      "sha256": "cf0cbe7135e69fb8339c4051950193fbf70ee52a311cbb494694fa200b2220db"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "#43 item 2: the idle tracks a retarget drops, --carry-idle, --merge",
+      "sha256": "fae2219e4d71d609eb919b1a18c27acaff3f503145d9bbe5d5b2473a4756ecb7"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "--reduce: few keys with curves within a stated tolerance (rig-c/pose#32)",
+      "sha256": "ab4739b2f6a4009b61f7f3ca3595e492188964c27150c9d69c55e51bb2004ee8"
+    },
+    {
+      "file": "test/retarget.test.ts",
+      "name": "#63: the camera a scan read, carried by the sequence",
+      "sha256": "807aed5649862b06c54f7079cab4869dc8eee2f5d27446e11211100a89c579e9"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "--raised-by-head (#62): a raised arm's wrist placed against the head, in eye distances",
+      "sha256": "e4eba8d61400da1c017454af9c413023a4ba5f2435997a3f824a737e66fa8609"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "\"place\": \"by-hip\" (#93): a hand that meets the body placed by its offset from the hip, in hip widths",
+      "sha256": "d45f83b02e4a55732c94a8932edb7a748acc22886a2b6a62a1c10fa41cfe796c"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#110: clampArt eases at set edges, and capShortSteps caps foreshortened steps",
+      "sha256": "e2a5f4c45570ad86c64942fb761f6bc574eb5627a08df4c5c795f6515332bbc9"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#107: --leg-scale clamp floor does not lift the hip, and POSTURE reads the bounce per support span",
+      "sha256": "2b1c3a275e5d0840819aeab58d042e1d6138b8eef7f459b5c44cca35f7907979"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#111: the head chain nods from the eyes' vertical travel against the neck",
+      "sha256": "c20682dc8161919c1a1b60ed2d07ea06941e9a76d802d5c935888f5618f8df9f"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#133: a supporting leg that asks under --leg-scale's floor is scaled to its own range so its ankle stays on #85's floor",
+      "sha256": "a59d43640aaf0484a65a1bda335d6be40fcec82b1908df7be5f8c46e0997e106"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#137: under --stance and --leg-scale, a straight stance leg whose shin was shortened below STANCE_BOUNDS[0] restores its shin before stretching to the floor",
+      "sha256": "dcc1fee48e4582377b6cb08efa6c98150a5781eb1342c9f7c2161a6d0d9c41e6"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "leg-scale (#148): one straight length per segment for both legs, so consecutive landings on opposite feet place the hip at the same height",
+      "sha256": "e25a056bb65ab9b7881ff18d57cbe492324589d6df9f2e62852c7914b697cde2"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "leg-scale (#153): respect noScale and noScaleOrReflection inheritance when solving a leg segment under a scaled parent",
+      "sha256": "b03d59fab063afc2c39af131ceee2cf384e035b5b4731a232b658cf258089241"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "face direction (rig-c/pose#138)",
+      "sha256": "8292dbae45d916ba59e9d4d45cbc4ca1252aa9cbe116aedd827290dabc14a00d"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "figure growth over the dance (#159): rolling leg-scale straight length and bounded head-nod translate keep neck and legs within ±3% across camera zoom drift",
+      "sha256": "8f8008587c1cb8e9441470c512f5414b28d3edab3f7f2d693700eeb6451f3bbc"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "face knee (#164): 1:1 mapping inside FACE_KNEE * limit so a single outlier does not crush the rest of the clip",
+      "sha256": "e5a026cbba593196e70888c15201784ecba406976f206e6cc86f08756749ec81"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "continuous figure scale (#163) and --camera sidecar track (#161)",
+      "sha256": "a330d22b85ddff288a30a703312cb38cf22cbb0f1e36eae3f6135b083bc834a9"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "trunk smoothing under --reduce (#116): knot and handle smoothing keeps trunk local jitter <= 1.0 deg/f^2 under --leg-scale while leaving limbs within 0.05 and non-leg-scale runs byte-identical",
+      "sha256": "cd6234febb5e7a57995942f6199ad0d737b79f0f81b4f7e425af8c10b7255710"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "tools/pelvis.ts: --camera sidecar and residual zoom warning (#170)",
+      "sha256": "096d4fd0004c47ef371dba88e76935f63101eaea5078790a33eb14e13e05ce5b"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "posture-invariant figure scale and trunk scaley foreshortening (#172)",
+      "sha256": "c5eecd42f1719258b4692bead1cb720a99bb743f7c87ded5a231c4ed3a6d47c7"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#173: body yaw reading from camera-normalised shoulder and hip width",
+      "sha256": "9f1225f952b82e920f010ed38cf43e1615e4a4b3c1b3704ec6cb8a417db038c5"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#334: the face and body yaw sets' attachment keys sit half a frame before the frame they show on",
+      "sha256": "05dedfbc2f727b70e9a399f5c1337e2ced43c8202ac3a5fc181548d19863ad9b"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#179 and #181: wrist-to-head distance gate for --raised-by-head and detrended running median baseline for head nod",
+      "sha256": "82c75a7eabf72bc88cc5b72faf7adfef1d72eeb2c44c1fc9e4950d1713e22b76"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#188: symmetric gesture set normalisation and declared support-arm anchoring",
+      "sha256": "b28e8c6ab53059f26290ae29a20b3c5a3c7ae932ef4ef2de2d5d94c705513d14"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#189: read yaw from the ear chord when the eye span is foreshortened and the ear chord disagrees with the nose",
+      "sha256": "c24658d7afa15c6e1175730a680f2024a5b3753b5b2eaef72e24560f47cedf3d"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#190 / #205: beat nod: clamped head.translate.y drives pitch_dial and head.rotate in phase when the neck-length clamp acts",
+      "sha256": "be452eadff3d511479ad161609983cd80f1521d8878014a2a35de123eb44b67e"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#191: head-anchored end-effector two-link IK inside art turn range",
+      "sha256": "c684a09da181c4f2a087ea219169d3b9129a118d4c2666dbdd48c9f8668a8388"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#206: gesture-set bridges interpolate in joint space, apply set.support only from loShow, and include extended holds in covered",
+      "sha256": "3fe42c07dc115bf641017fd3c2ab373b84782a1e4b3e996475da31d93c1a88cd"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#207: symmetric gesture set solves the diamond in the chest-local frame so torso lean never collapses an arm into the ±20° clamp",
+      "sha256": "d062dc4975b225e8767acf1980ace95da192adfdc9bf757cedecb0cb96d26254"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#218: adjacent gesture-set bridges interpolate across the full gap in joint space, inner-reach wrist steps preserve upper-arm clamp sign, and short stance spans before flight arch-blend hip y",
+      "sha256": "f2b577bfd38393f8fda61777db1caf39387b81dee64584c593fb4e63e3ec13e3"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#225: per-leg setup-weighted straight length and clamped asked values in report",
+      "sha256": "9376431e4ec09de556124da3e39b784459cadb91a854c401997bae4c9bd520dc"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "crouch-invariant per-frame figure scale across support spans (#226)",
+      "sha256": "f0e5a7a2e8eb266c40ccbc1ee7cf266f3a3283ff2d3c6f389ee27d14e3732425"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "continuous figure scale across inter-span airborne gaps (#231)",
+      "sha256": "d4075c1eccaf5cbed1468a60e0a2b32d091477408818cbd87478ef8b9453d4dc"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#237: --stance and --leg-scale name their unit, and LEG-SCALE and STANCE say what the clamp did to the free ankle",
+      "sha256": "b74a7434264d4bc50428ba4877ff85537e22096523a365a56d0d0ad73882d904"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#242: \"in-place\" is the sequence's property — its supports and its nod are read in place with or without --plant-feet",
+      "sha256": "34abb64efa8466994606676bbc644eebe03eafed3d07e13bbd4d12b66b5c0ab3"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#286: a set with a \"phase\" switches on the support hand-over — exactly the frames of its side's support spans",
+      "sha256": "81388ad8402d85f3e420573933bf335e44b092ea27d429eefb00da5c166ff15a"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#241: the head nod — a NOD line, a map switch, and a loop's nod read wrapped",
+      "sha256": "9feeacb52c5b0b184052ed24f1db30294f3e9621d90d555adedb6fe04dd96c53"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#216: the seam reading over the declared neighbour pairs, a reading and never a gate",
+      "sha256": "04683dbce5eae1d38e3c8cbcdc9dabdcdc00610e0f42feeb711af6e708520557"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#216: the one-cell floor, @rig-c/parts' rule (rig-c/parts#503), by hand",
+      "sha256": "fe7a80f95303022662c5f6a49912c0719667591f4cbdc0e819cd085fff159a1c"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#251: --reduce-keep-planted keeps the supporting leg chain dense on its support frames",
+      "sha256": "25eb51a25aa6f50592a783012378ef38d18e1a70af25a04bf12e28b6a3a4eac4"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#285: an in-place run under --plant-feet --leg-scale — the planted heights repeat with the cycle, and a hand-over stays within the blend",
+      "sha256": "daf88f7afc10ae6260884e5f3b57da331d32d41af3abd7d1aaa134fc985b06b9"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#279: the runs --switch-min suppressed are reported, per set, with their frames and lengths",
+      "sha256": "c3462a09a1616a0753a2c81d832be1fc21bdfe3a0b4754e1c848e528eae457ed"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "#283: a per-chain --reduce holds the legs against slide while the trunk is smoothed",
+      "sha256": "d1db8c3ec0558cf931bebc9c1ee69e920f02020f236f7cac909bad26713adeb5"
+    },
+    {
+      "file": "test/retarget-later.test.ts",
+      "name": "face and body dial sliders (rig-c/pose#454)",
+      "sha256": "93d0497b6d6b07badccc9c130443f3a28019320bd2e3501a0f360a71e21c59de"
+    }
+  ],
+  "fixtureImports": {
+    "test/retarget.test.ts": "import {\n  afterEach,\n  describe,\n  expect,\n  test,\n  spawnSync,\n  createHash,\n  cpSync,\n  existsSync,\n  mkdirSync,\n  mkdtempSync,\n  readFileSync,\n  rmSync,\n  writeFileSync,\n  tmpdir,\n  join,\n  poseRawAnimation,\n  poseRawSetup,\n  holdShort,\n  isAcross,\n  mergeRuns,\n  spreadFlips,\n  clean,\n  loopTrack,\n  type RigcTrack,\n  readPoseSequence,\n  writePoseSequence,\n  keysOnFrameTimes,\n  type MotionDoc,\n  ROOT,\n  CLI,\n  RIGC,\n  MUTANTS,\n  DEG,\n  RAD,\n  ANGLE_TOL,\n  ORIGIN_TOL,\n  SLOW,\n  type Pt,\n  wrap,\n  legacyReportRows,\n  made,\n  tempDir,\n  type BoneSpec,\n  type RigOpts,\n  writeRig,\n  type ChainSpec,\n  baseChains,\n  baseMap,\n  type Motion,\n  BASE,\n  POSE_TRUNK,\n  SCALE,\n  BONE_ANGLE,\n  angleOf,\n  dir,\n  add,\n  positions,\n  type JointsDoc,\n  poseDoc,\n  cleanedDoc,\n  type Ran,\n  cli,\n  type Case,\n  setup,\n  retarget,\n  fails,\n  linesOf,\n  stanceRuns,\n  documentedReport,\n  loadBuild,\n  byName,\n  worldAngle,\n  misses,\n  motionOf,\n  cardTest,\n  MUTATIONS,\n  cocoDoc,\n  type ReadSeq,\n  SMOOTH,\n  REDUCE_MUTANT,\n  worstErrors,\n  keysOf,\n} from './retarget-fixture.ts';",
+    "test/retarget-later.test.ts": "import {\n  afterEach,\n  describe,\n  expect,\n  test,\n  spawnSync,\n  createHash,\n  cpSync,\n  existsSync,\n  mkdirSync,\n  mkdtempSync,\n  readFileSync,\n  rmSync,\n  writeFileSync,\n  join,\n  poseRawAnimation,\n  type RawBone,\n  Plate,\n  capShortSteps,\n  holdAcross,\n  holdShort,\n  shortLine,\n  clampArt,\n  clean,\n  readPoseSequence,\n  writePoseSequence,\n  scaleSupport,\n  type Feet,\n  type LegScale,\n  readMap,\n  type Chain,\n  overFloor,\n  projectSeams,\n  readSeamPairs,\n  writeReport,\n  type RenderDomain,\n  type ReportInputs,\n  walkCycle,\n  walkDoc,\n  firstFrames,\n  keysOnFrameTimes,\n  type MotionDoc,\n  ROOT,\n  CLI,\n  MUTANTS,\n  DEG,\n  RAD,\n  ANGLE_TOL,\n  ORIGIN_TOL,\n  SLOW,\n  type Pt,\n  wrap,\n  made,\n  tempDir,\n  type BoneSpec,\n  type RigOpts,\n  type ChainSpec,\n  baseChains,\n  baseMap,\n  type Motion,\n  BASE,\n  SCALE,\n  dir,\n  add,\n  positions,\n  type JointsDoc,\n  poseDoc,\n  cleanedDoc,\n  type Ran,\n  cli,\n  type Case,\n  setup,\n  retarget,\n  fails,\n  linesOf,\n  documentedReport,\n  loadBuild,\n  byName,\n  worldAngle,\n  motionOf,\n} from './retarget-fixture.ts';"
+  }
+}
