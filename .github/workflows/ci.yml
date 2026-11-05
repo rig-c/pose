@@ -18,9 +18,40 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  # Keep the original commands once, off the measured shard + merge path.
+  checks:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run lint
+      - name: Preserve whole tests, fixture declarations, and cleanup
+        run: python3 scripts/test-shards.py preserve
+      - name: The real merger refuses omitted, duplicate, and unknown files
+        run: python3 scripts/test-shards.py controls --scratch "$RUNNER_TEMP/shard-controls"
+      - name: Plan from this tree independently of shard results
+        run: bun scripts/test-shards.ts plan . "$RUNNER_TEMP/test-plan.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: test-plan
+          path: ${{ runner.temp }}/test-plan.json
+          if-no-files-found: error
+
+  test-shards:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,13 +62,54 @@ jobs:
         with:
           node-version: 22
       - run: bun install --frozen-lockfile
-      - run: bun run typecheck
-      - run: bun run lint
-      - run: bun run test
+      - name: One serial Bun process for the assigned files
         env:
+          TEST_SHARD: ${{ matrix.shard }}
+          TEST_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
           GATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           GATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GATE_PR_BODY: ${{ github.event.pull_request.body }}
+        run: python3 scripts/test-shards.py run --id "$TEST_SHARD" --out "$RUNNER_TEMP/test-results" --head "$TEST_HEAD"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-shard-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/test-results/*.json
+            ${{ runner.temp }}/test-results/*.xml
+            ${{ runner.temp }}/test-results/*.log
+          if-no-files-found: error
+
+  # This exact job name is required by branch protection. Never infer success
+  # from a skipped matrix or missing artifact; the merger checks both.
+  test:
+    if: always()
+    needs: [checks, test-shards]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: test-plan
+          path: ${{ runner.temp }}/test-plan
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: test-shard-*
+          path: ${{ runner.temp }}/test-shards
+      - name: Every prerequisite succeeded, every file ran once, identities match
+        env:
+          TEST_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          TEST_NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 scripts/test-shards.py merge --plan "$RUNNER_TEMP/test-plan/test-plan.json" --artifacts "$RUNNER_TEMP/test-shards" --out "$RUNNER_TEMP/test-merged" --head "$TEST_HEAD" --needs "$TEST_NEEDS"
+          cat "$RUNNER_TEMP/test-merged/before-after.md" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-merged
+          path: ${{ runner.temp }}/test-merged
+          if-no-files-found: warn
 
   # rig-c/pose#377 (1.0 gate ⑤ of #217): every issue the known-limits list in
   # docs/REFERENCE.md names is open and labelled `parked`. It reads the network, so it is a

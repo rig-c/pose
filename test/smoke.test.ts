@@ -15,7 +15,7 @@ test('the smoke pins the wave to the hash test/retarget.test.ts holds', () => {
   const smoke = /^WAVE_SHA256=([0-9a-f]{64})$/m.exec(read('scripts/smoke_install.sh'));
   expect(smoke).not.toBeNull();
   // The public example's motion with no flags, as the retarget suite pins it.
-  const pinned = /\[\[\], '([0-9a-f]{64})'\]/.exec(read('test/retarget.test.ts'));
+  const pinned = /\[\[\], '([0-9a-f]{64})'\]/.exec(read('test/retarget-later.test.ts'));
   expect(pinned).not.toBeNull();
   expect(smoke![1]).toBe(pinned![1]!);
 });
