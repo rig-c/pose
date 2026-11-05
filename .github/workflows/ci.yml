@@ -27,8 +27,6 @@ jobs:
         with:
           fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -36,7 +34,7 @@ jobs:
       - run: bun run typecheck
       - run: bun run lint
       - name: Preserve whole tests, fixture declarations, and cleanup
-        run: bun scripts/test-shards.ts preserve .
+        run: python3 scripts/test-shards.py preserve
       - name: The real merger refuses omitted, duplicate, and unknown files
         run: python3 scripts/test-shards.py controls --scratch "$RUNNER_TEMP/shard-controls"
       - name: Plan from this tree independently of shard results
@@ -59,8 +57,6 @@ jobs:
         with:
           fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.4
       # The bin shim is a Node script and the CLI test runs it through node.
       - uses: actions/setup-node@v4
         with:

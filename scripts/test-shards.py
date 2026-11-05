@@ -119,8 +119,18 @@ def identity(case):
 
 
 def baseline_matches(root, universe):
+    # The transformed retarget files must participate too: originalInputs
+    # deliberately retains the unrelated pre-migration input hashes.
     return set(universe) == set(BASELINE['files']) and all(
-        (root / f).is_file() and digest(root / f) == sha for f, sha in BASELINE['originalInputs'].items())
+        (root / f).is_file() and digest(root / f) == sha
+        for group in ['originalInputs', 'sourceBoundInputs'] for f, sha in BASELINE[group].items())
+
+
+def preserve(root):
+    if not baseline_matches(root, discover(root)):
+        print('PRESERVATION_REFERENCE_ONLY: migration inputs changed; raw freeze no longer applies')
+        return 0
+    return subprocess.run(['bun', str(HERE / 'test-shards.ts'), 'inspect', str(root)]).returncode
 
 
 def merge(root, plan_path, artifacts, output, head, needs=None):
@@ -292,6 +302,56 @@ def controls(scratch):
     real_root = Path.cwd()
     real_plan_path = scratch / 'real-plan.json'
     real_plan = make_plan(real_root, real_plan_path)
+    # Exercise the production planner on the actual source tree plus two new
+    # files. Copy inputs and script dependencies; do not replace test weights,
+    # metadata or source with a miniature scheduling fixture.
+    planning_root = scratch / 'planning-tree'
+    for file in real_plan['inputs']:
+        target = planning_root / file
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(real_root / file, target)
+    shutil.copytree(HERE, planning_root / 'scripts', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    shutil.copytree(real_root / 'tools', planning_root / 'tools', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    shutil.copytree(real_root / 'bin', planning_root / 'bin')
+    additions = ['test/new-shard-control-a.test.ts', 'test/new-shard-control-b.test.ts']
+    for file in additions:
+        if (planning_root / file).exists():
+            refuse('CONTROL_FAILED', 'new-file planning control collides with existing source')
+        (planning_root / file).write_text('import {test} from "bun:test"; test("new planning control",()=>{});\n')
+    future_plan_path = scratch / 'two-new-files-plan.json'
+    execute('two-new-files-plan', ['bun', str(HERE / 'test-shards.ts'), 'plan', str(planning_root), str(future_plan_path)])
+    future_plan = load(future_plan_path)
+    if not set(additions).issubset(future_plan['unmeasured']):
+        refuse('CONTROL_FAILED', 'new paths must be discovered as unmeasured')
+    holders = [s['id'] for f in ['test/retarget.test.ts', 'test/retarget-later.test.ts']
+               for s in future_plan['shards'] if f in s['files']]
+    if len(holders) != 2 or len(set(holders)) != 2:
+        refuse('CONTROL_FAILED', f'two new files co-located the retarget files: shards {holders}')
+    save(scratch / 'two-new-files-evidence.json', {'retargetShardIds': holders,
+         'schedulingPolicy': future_plan['unmeasuredSchedulingPolicy'], 'shards': future_plan['shards']})
+    if baseline_matches(real_root, real_plan['files']):
+        # The same real-source copy tests expiry without changing the accepted
+        # metadata. A retarget-only change must expire both migration checks.
+        expiry_root = scratch / 'expiry-tree'
+        shutil.copytree(planning_root, expiry_root)
+        for file in additions:
+            (expiry_root / file).unlink()
+        execute('preservation-frozen-inputs', [sys.executable, script, 'preserve', '--root', str(expiry_root)], 0, 'PRESERVED')
+        for label, file in [('changed-unrelated-input', 'src/problems.ts'), ('changed-retarget-input', 'test/retarget.test.ts')]:
+            path = expiry_root / file
+            original_source = path.read_text()
+            modified = original_source + '\n' if label == 'changed-unrelated-input' else original_source.replace('legacy report projection', 'future report projection', 1)
+            if modified == original_source:
+                refuse('CONTROL_FAILED', 'expiry plant changed no source byte')
+            try:
+                path.write_text(modified)
+                if baseline_matches(expiry_root, discover(expiry_root)):
+                    refuse('CONTROL_FAILED', 'identity/preservation predicate did not expire')
+                execute(label, [sys.executable, script, 'preserve', '--root', str(expiry_root)], 0, 'PRESERVATION_REFERENCE_ONLY')
+                if label == 'changed-retarget-input':
+                    execute('expired-raw-inspector-still-refuses', ['bun', str(HERE / 'test-shards.ts'), 'inspect', str(expiry_root)], 1, 'BLOCK_BYTES_NAMES')
+            finally:
+                path.write_text(original_source)
     if baseline_matches(real_root, real_plan['files']):
         snapshot = json.loads((HERE / 'test-shards-preservation.json').read_text())
         tail_names = {b['name'] for b in snapshot['blocks'] if b['file'] == 'test/retarget-later.test.ts'}
@@ -329,45 +389,49 @@ def controls(scratch):
             execute(label, merge_args(planted, real_root, real_plan_path), 1, code)
     else:
         print('CONTROL baseline-reference-only: source changed; old count/identity plants do not apply')
-    # Body/name/omission/duplication/declaration plants pass through the exact
-    # source-preservation gate used in checks, against copies outside the repo.
-    real_root = Path.cwd()
-    structure = json.loads((HERE / 'test-shards-preservation.json').read_text())
-    original = (real_root / 'test/retarget.test.ts').read_text()
-    start = original.index("test('" + structure['blocks'][0]['name'])
-    end = original.index('\n});', start) + len('\n});')
-    block = original[start:end]
-    assert hashlib.sha256(block.encode()).hexdigest() == structure['blocks'][0]['sha256']
-    for label in ['body-byte', 'renamed', 'omitted-block', 'duplicated-block', 'declaration-byte']:
-        copy = scratch / ('preserve-' + label)
-        (copy / 'test').mkdir(parents=True)
-        for f in ['retarget.test.ts', 'retarget-later.test.ts', 'retarget-fixture.ts']:
-            shutil.copyfile(real_root / 'test' / f, copy / 'test' / f)
-        modified = original
-        if label == 'body-byte': modified = original[:start] + block.replace('const rows =', 'const rows  =', 1) + original[end:]
-        elif label == 'renamed': modified = original[:start] + block.replace('legacy report projection', 'renamed report projection', 1) + original[end:]
-        elif label == 'omitted-block': modified = original[:start] + original[end:]
-        elif label == 'duplicated-block': modified += '\n' + block + '\n'
-        elif label == 'declaration-byte':
-            fixture = copy / 'test/retarget-fixture.ts'
-            fixture.write_text(fixture.read_text().replace('export const ROOT =', 'export const ROOT  =', 1))
-        (copy / 'test/retarget.test.ts').write_text(modified)
-        execute(label, ['bun', str(HERE / 'test-shards.ts'), 'preserve', str(copy)], 1, 'DECLARATION_BYTES' if label == 'declaration-byte' else 'BLOCK_BYTES_NAMES')
-    # This single probe imports the real fixture: any accidental test
-    # registration changes the observed count. Its temp ledger is drained once.
-    probe = scratch / 'fixture-equivalence.test.ts'
-    fixture_path = json.dumps(str(real_root / 'test/retarget-fixture.ts'))
-    probe.write_text('import {test,expect} from "bun:test"; import {join} from "node:path"; import {rmSync} from "node:fs"; '
-                     + 'import {ROOT,CLI,RIGC,MUTANTS,made,tempDir} from ' + fixture_path + ';\n'
-                     + 'test("same-directory paths and shared temp ledger",()=>{'
-                     + 'expect(ROOT).toBe(process.cwd()); expect(CLI).toBe(join(ROOT,"cli.ts"));'
-                     + 'expect(RIGC).toBe(join(ROOT,"node_modules","@rig-c","core","bin","rigc.cjs"));'
-                     + 'expect(MUTANTS).toBe(join(ROOT,"node_modules",".cache","rig-pose-mutants"));'
-                     + 'expect(made).toHaveLength(0); const d=tempDir(); expect(made).toEqual([d]);'
-                     + 'for(const p of made.splice(0))rmSync(p,{recursive:true,force:true}); expect(made).toHaveLength(0);});\n')
-    execute('fixture-equivalence', ['bun', 'test', str(probe)])
-    if '1 pass' not in (scratch / 'fixture-equivalence.log').read_text():
-        refuse('FIXTURE_REGISTRATION', 'expected the probe to be the only registered test')
+    if baseline_matches(real_root, real_plan['files']):
+        execute('preservation-applied', [sys.executable, script, 'preserve', '--root', str(real_root)], 0, 'PRESERVED')
+        # Body/name/omission/duplication/declaration plants pass through the exact
+        # source-preservation gate used in checks, against copies outside the repo.
+        real_root = Path.cwd()
+        structure = json.loads((HERE / 'test-shards-preservation.json').read_text())
+        original = (real_root / 'test/retarget.test.ts').read_text()
+        start = original.index("test('" + structure['blocks'][0]['name'])
+        end = original.index('\n});', start) + len('\n});')
+        block = original[start:end]
+        assert hashlib.sha256(block.encode()).hexdigest() == structure['blocks'][0]['sha256']
+        for label in ['body-byte', 'renamed', 'omitted-block', 'duplicated-block', 'declaration-byte']:
+            copy = scratch / ('preserve-' + label)
+            (copy / 'test').mkdir(parents=True)
+            for f in ['retarget.test.ts', 'retarget-later.test.ts', 'retarget-fixture.ts']:
+                shutil.copyfile(real_root / 'test' / f, copy / 'test' / f)
+            modified = original
+            if label == 'body-byte': modified = original[:start] + block.replace('const rows =', 'const rows  =', 1) + original[end:]
+            elif label == 'renamed': modified = original[:start] + block.replace('legacy report projection', 'renamed report projection', 1) + original[end:]
+            elif label == 'omitted-block': modified = original[:start] + original[end:]
+            elif label == 'duplicated-block': modified += '\n' + block + '\n'
+            elif label == 'declaration-byte':
+                fixture = copy / 'test/retarget-fixture.ts'
+                fixture.write_text(fixture.read_text().replace('export const ROOT =', 'export const ROOT  =', 1))
+            (copy / 'test/retarget.test.ts').write_text(modified)
+            execute(label, ['bun', str(HERE / 'test-shards.ts'), 'inspect', str(copy)], 1, 'DECLARATION_BYTES' if label == 'declaration-byte' else 'BLOCK_BYTES_NAMES')
+        # This single probe imports the real fixture: any accidental test
+        # registration changes the observed count. Its temp ledger is drained once.
+        probe = scratch / 'fixture-equivalence.test.ts'
+        fixture_path = json.dumps(str(real_root / 'test/retarget-fixture.ts'))
+        probe.write_text('import {test,expect} from "bun:test"; import {join} from "node:path"; import {rmSync} from "node:fs"; '
+                         + 'import {ROOT,CLI,RIGC,MUTANTS,made,tempDir} from ' + fixture_path + ';\n'
+                         + 'test("same-directory paths and shared temp ledger",()=>{'
+                         + 'expect(ROOT).toBe(process.cwd()); expect(CLI).toBe(join(ROOT,"cli.ts"));'
+                         + 'expect(RIGC).toBe(join(ROOT,"node_modules","@rig-c","core","bin","rigc.cjs"));'
+                         + 'expect(MUTANTS).toBe(join(ROOT,"node_modules",".cache","rig-pose-mutants"));'
+                         + 'expect(made).toHaveLength(0); const d=tempDir(); expect(made).toEqual([d]);'
+                         + 'for(const p of made.splice(0))rmSync(p,{recursive:true,force:true}); expect(made).toHaveLength(0);});\n')
+        execute('fixture-equivalence', ['bun', 'test', str(probe)])
+        if '1 pass' not in (scratch / 'fixture-equivalence.log').read_text():
+            refuse('FIXTURE_REGISTRATION', 'expected the probe to be the only registered test')
+    else:
+        print('CONTROL preservation-reference-only: migration inputs changed; raw plants do not apply')
     save(scratch / 'controls.json', report)
 
 
@@ -384,6 +448,8 @@ def main():
             q.add_argument('--plan', type=Path, required=True)
             q.add_argument('--artifacts', type=Path, required=True)
             q.add_argument('--needs')
+    q = sub.add_parser('preserve')
+    q.add_argument('--root', type=Path, default=Path.cwd())
     q = sub.add_parser('controls')
     q.add_argument('--scratch', type=Path, required=True)
     a = p.parse_args()
@@ -391,6 +457,7 @@ def main():
     if a.command == 'merge':
         merge(a.root.resolve(), a.plan, a.artifacts, a.out, a.head, json.loads(a.needs) if a.needs else None)
         return 0
+    if a.command == 'preserve': return preserve(a.root.resolve())
     if a.command == 'controls': controls(a.scratch.resolve())
     return 0
 

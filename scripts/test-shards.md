@@ -13,7 +13,8 @@ Groups are placed longest-weight-first in the least-loaded of three shards,
 with path and shard-number tie breaks. Each shard passes explicit `./test/...`
 paths to **one serial Bun process**, preserving the recorded baseline-relative
 order. A new path absent from the timing record still runs: its scheduling
-penalty is the largest recorded weight, visibly reported as unmeasured. This is
+penalty is the median of the measured native baseline file weights, visibly
+reported as unmeasured with its scheduling policy and weight. This is
 a scheduling policy, not a measured duration. No mutable Actions timing cache
 participates in assignment.
 
@@ -31,8 +32,8 @@ The former retarget file's 68 whole blocks were split at `--raised-by-head (#62)
 Shared declarations moved once into non-test `retarget-fixture.ts`, still under
 `test/`, so `import.meta.dir`, ROOT, CLI, RIGC and MUTANTS retain their meanings.
 The fixture registers no hooks. Each test file retains the identical original
-`afterEach` drain of the imported `made` ledger. Test bodies and names are frozen
-by whole-block SHA-256; declarations may differ only by the added `export`.
+`afterEach` drain of the imported `made` ledger. For matching migration inputs, test bodies and names are checked by whole-block
+SHA-256; declarations may differ only by the added `export`.
 
 The two derived retarget scheduling weights are 150.360798 and 149.631838 s:
 each measured testcase-time sum plus the entire original file's 7.536636 s
@@ -43,8 +44,8 @@ a longest 249.400 s before setup/merge overhead. Actual CI must decide the bar.
 ## Gates and artifacts
 
 `checks` keeps `bun run typecheck` and `bun run lint` once, unchanged. It also
-checks preservation, runs planted controls through the production merger and
-preservation CLI, and independently creates the source-bound plan. The required
+runs the source-bound preservation wrapper, planted controls through the production
+merger/raw inspector, and independently creates the source-bound plan. The required
 aggregate job is still named **test**. It always runs, explicitly requires both
 `checks` and the entire matrix to have succeeded, and uses only Python stdlib:
 it does not install dependencies or rerun tests. Other workflow jobs are unchanged.
@@ -61,8 +62,24 @@ JUnit identities as a multiset, normalizing only `retarget-later` back to its
 original file. Equal counts with different names fail. Baseline counts are data,
 not an evergreen constant: added files or other changed source inputs make the
 old identities reference-only; all current files and all JUnit cases are still
-counted. Intentional later changes to the frozen retarget blocks/declarations
-require updating their preservation record, like updating a snapshot.
+counted. Both migration gates and their migration-only plants use the same Python
+`baseline_matches` predicate. It requires the same discovered test paths, all
+`originalInputs`, and `sourceBoundInputs`: the three **transformed** retarget source
+hashes. Thus a retarget-only edit expires the gates, just like an unrelated input
+change; ordinary future tests do not require rewriting this migration snapshot.
+
+`sourceBoundInputs` selects when the migration applies; it does not replace the
+accepted **pre-extraction** block/declaration freeze in the preservation record.
+For matching inputs, `python3 scripts/test-shards.py preserve` calls the raw
+`test-shards.ts inspect` command and its byte/name/order requirements remain exact.
+For changed inputs it reports `PRESERVATION_REFERENCE_ONLY` without inspecting.
+Raw inspector plants run only inside the matching-input guard, so they can change
+bytes deliberately without making their own negative test expire. Controls show
+matching frozen inputs are inspected, unrelated and retarget-only changes stand
+down, and the unchanged raw inspector still refuses the changed retarget bytes.
+The planner control copies actual source inputs plus two new files and confirms
+both retarget files remain on different shards; no weights or input metadata are
+replaced. Bun setup uses the same default as the other workflow jobs.
 
 The merged artifact contains the complete before/after per-file table and exact
 count. The original retarget before row describes the unsplit file; the sibling
@@ -72,5 +89,5 @@ as such and never published as after measurements.
 Acceptance uses **longest complete shard job plus complete aggregate job** from
 Actions, against 735.69 s and the 300 s target. Command/script durations in the
 artifact exclude Actions setup/upload and cannot replace that measurement.
-Two consecutive green runs on the exact PR head remain required. If the complete
+Report the exact head and complete-job timings for acceptance. If the complete
 job measure exceeds 300 s, stop for HQ; do not silently recut or retry a flake.

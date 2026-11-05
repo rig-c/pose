@@ -5000,5 +5000,10 @@
     "test/depthscale.test.ts": [
       "f8168235849bbb420e905005d8c53998aa76f6cabb38140f9a3105989d421de9"
     ]
+  },
+  "sourceBoundInputs": {
+    "test/retarget.test.ts": "1c97450fff835d135790efd642293181d3a859e6f8c81cb5fc21f730d009a564",
+    "test/retarget-later.test.ts": "7e1fe620c31a55e3c89620d53939cf4294b997479aabf1a00f1ca2ee4e983642",
+    "test/retarget-fixture.ts": "d80a029b6dd0743456fdbc371e38bc5b4801a6dc925ac92e44383ca0fe5aea5b"
   }
 }

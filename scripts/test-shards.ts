@@ -15,6 +15,7 @@ const canonical = (p: string) => p === 'test/retarget-later.test.ts' ? 'test/ret
 
 interface Baseline {
   files: Record<string, number>;
+  beforeMs: Record<string, number>;
   order: string[];
   generatedImports: Record<string, string[]>;
 }
@@ -96,7 +97,10 @@ function plan(): void {
     const seen=new Set<string>();const visit=(p:string)=>{if(seen.has(p))return;seen.add(p);if(parents.has(p))parents.set(find(p),find(file));for(const next of nodes.get(p)??[])visit(next);};visit(file);
   }
   const groups=new Map<string,string[]>();for(const f of files){const g=find(f);groups.set(g,[...(groups.get(g)??[]),f]);}
-  const fallback=Math.max(1,...Object.values(baseline.files));
+  const measured=Object.values(baseline.beforeMs).sort((a,b)=>a-b);
+  if(!measured.length)fail('NO_MEASURED_WEIGHTS','baseline has no native file timings');
+  const middle=Math.floor(measured.length/2);
+  const fallback=measured.length%2 ? measured[middle]! : (measured[middle-1]!+measured[middle]!)/2;
   const weight=(g:string[])=>g.reduce((n,f)=>n+(baseline.files[f]??fallback),0);
   const compare=(a:string,b:string)=>a<b?-1:a>b?1:0;
   const components=[...groups.values()].map(g=>g.sort());
@@ -106,14 +110,14 @@ function plan(): void {
   const order=new Map(baseline.order.map((f,i)=>[f,i]));
   for(const shard of shards)shard.files.sort((a,b)=>(order.get(a)??Infinity)-(order.get(b)??Infinity)||compare(a,b));
   const inputs=Object.fromEntries([...walk('test'),...walk('src'),...walk('examples'),'cli.ts','package.json','bun.lock'].sort().map(f=>[f,sha(readFileSync(join(ROOT,f)))]));
-  const body={files,components,shards,inputs,unmeasured:files.filter(f=>!(f in baseline.files))};
+  const body={files,components,shards,inputs,unmeasured:files.filter(f=>!(f in baseline.files)),unmeasuredSchedulingPolicy:{name:'median of measured native baseline file weights',weightMs:fallback}};
   const digest=sha(JSON.stringify(body));
   const output={...body,digest};
   if(process.argv[4])writeFileSync(process.argv[4],JSON.stringify(output,null,2)+'\n');else console.log(JSON.stringify(output));
 }
 
 try {
-  if(process.argv[2]==='preserve')preserve();
+  if(process.argv[2]==='inspect')preserve();
   else if(process.argv[2]==='plan')plan();
-  else fail('COMMAND','use preserve or plan');
+  else fail('COMMAND','use inspect (raw migration inspector) or plan');
 } catch(error) {console.error(error instanceof Error?error.message:String(error));process.exit(1);}
