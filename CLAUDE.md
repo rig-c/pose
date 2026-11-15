@@ -143,10 +143,9 @@ into named failures.
   domain. No private project, corpus or consumer's art enters this tree, an
   issue or the npm package.
 - English only, in every tracked file.
-- Conventional Commits with a scope, English subject and body. `feat` bumps the
-  minor, `fix`/`perf`/`check` the patch; the hidden types (`docs`, `chore`,
-  `test`, …) do not release, and CI's `ships` job refuses a landing that
-  changes a packed file under one (RELEASING.md).
+- Conventional Commits with a scope, English subject and body. Commit types
+  inform the manual version choice; only a deliberate version tag cuts a release
+  (RELEASING.md).
 
 ## Verification — run these before you call a unit finished
 
@@ -167,13 +166,11 @@ a session rotated, so it is here.
   bars, what is out of scope. A message that changes an order is copied to the
   issue.
 - **A feature PR is opened and reported, and merged only after HQ's sign.** A
-  `release: vX.Y.Z` PR from release-please merges and cuts only after HQ's
-  explicit "LGTM #NNN" naming the PR and its exact head commit, quoted in the
-  cut report; the sub-commander approves the release PR's awaiting CI run on
-  its current head only. A release PR is never armed: release-please rewrites
-  its head on every push to main, so it is merged manually with
-  `--match-head-commit` matching the exact head approved by HQ. AI review is
-  HQ's: it runs at HQ's request, at most once per PR.
+  `release: vX.Y.Z` PR updates the version and changelog and merges only after
+  HQ's explicit "LGTM #NNN" naming its exact head, quoted in the cut report.
+  Merge manually with `--match-head-commit`; the release tower then pushes
+  `vX.Y.Z` at the merged commit. The tag runs `release.yml` and publishes.
+  AI review is HQ's: at its request, at most once per PR.
 - 🔒 **Never push to an armed PR** — one with auto-merge armed. Disable
   auto-merge first, push, and report the new head; only HQ re-arms a feature
   PR. A merge of main into the branch counts as a push. An armed PR merges
