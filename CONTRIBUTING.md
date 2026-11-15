@@ -36,7 +36,7 @@ bun scripts/scope_issues.ts --closed-control 46
 
 - **Issue first.** Open an issue before making a change. A defect report names what you gave `rig-pose` (the command and smallest reproducible input), what it printed verbatim including the problem code, and what you expected instead. A wrong output that passed green is a defect.
 - **One issue per pull request.** Keep each pull request scoped to a single issue.
-- **Conventional Commits.** Write commit messages, code, and documentation in English using [Conventional Commits](https://www.conventionalcommits.org/) with a scope (`feat(retarget):`, `fix(clean):`, `check(verify):`, `docs(readme):`). `feat` bumps the minor version and `fix`, `perf`, and `check` bump the patch; CI's `ships` job refuses changes to packed files under hidden commit types.
+- **Conventional Commits.** Write commit messages, code, and documentation in English using [Conventional Commits](https://www.conventionalcommits.org/) with a scope (`feat(retarget):`, `fix(clean):`, `check(verify):`, `docs(readme):`). Commit types inform the version chosen in a manual release PR; the release tower pushes the version tag only after that PR is signed and merged (RELEASING.md).
 
 ## Where further rules live
 

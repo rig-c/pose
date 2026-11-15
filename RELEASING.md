@@ -1,117 +1,61 @@
 # Releasing
 
-The machinery is @rig-c/parts' (its `RELEASING.md` is the long version, with
-the measurements behind each step); this file says what is the same and what
-differs here.
-
 ## The loop
 
-Every push to `main` runs [`release.yml`](.github/workflows/release.yml), which
-hands the new commits to release-please:
-
-- **Nothing releasable since the last tag** → nothing happens. `docs`, `test`,
-  `ci`, `build`, `chore`, `refactor` and `style` are hidden and do not open a
-  release on their own; `release-please-config.json` writes the whole
-  `changelog-sections` list out, with `check` → *Instrument* visible.
-- **Something releasable** → it opens or updates a pull request titled
-  `release: vX.Y.Z` that bumps `package.json`, `CHANGELOG.md` and
-  `.release-please-manifest.json`. `feat` bumps the minor; `fix`, `perf` and
-  `check` the patch; a breaking marker bumps the minor while the package is
-  pre-1.0. `Release-As: X.Y.Z` in a commit footer forces a version.
-- **That pull request is merged** (squash, so the subject stays
-  `release: vX.Y.Z`) → release-please tags `vX.Y.Z`, cuts the GitHub release,
-  and the same run publishes and confirms.
-
-⚠️ A shipped file can change under a hidden type: the package is the `files`
-allowlist plus `package.json`, `README.md` and `LICENSE`. CI's `ships` job
-refuses that landing; the remedy is a visible type or a `Release-As:` footer in
-a commit message on the branch.
+Releases are cut manually. A release PR updates `package.json` and `CHANGELOG.md`;
+merging it does not publish. After HQ signs the PR and its exact head, merge with
+`--match-head-commit`. The release tower pushes `vX.Y.Z` at that merged commit.
+[`release.yml`](.github/workflows/release.yml) publishes both package names with
+npm 12.2.2, OIDC and `--provenance`. No stored npm token is used.
 
 ## Cutting a release
 
-1. Land the work on `main` with conventional-commit subjects.
-2. Read the `release: vX.Y.Z` pull request's diff — the version and the
-   changelog are the review.
-3. Approve its `ci` run (a run started by `GITHUB_TOKEN` lands in
-   `action_required`): **Approve and run** in the Actions tab, or
-   `gh api -X POST repos/rig-c/pose/actions/runs/<id>/approve`.
-4. Merge it. That is the cut.
-5. Watch the second `release` run: tag, release, publish, then
-   `scripts/confirm_registry.sh`, which installs the published version into an
-   empty directory, runs `rig-pose --version`, then retargets the public wave
-   from the install and holds its motion to the pinned bytes
-   (`scripts/smoke_install.sh`, rig-c/pose#260), then installs `rig-pose` at the
-   same version into a separate empty directory and checks its package name,
-   version, `rig-pose --version` and `rig-pose --help`
-   (`scripts/smoke_alias.sh`; exit 3 = either registry package did not
-   serve it in time; re-run the confirmation alone, which publishes nothing,
-   with `gh workflow run release.yml -f version=X.Y.Z`).
+1. Land the work on `main`, then prepare a release PR with the selected version
+   and changelog. Commit types inform the choice; they do not trigger a cut.
+2. Wait for PR CI and HQ's explicit sign naming the PR and exact head.
+3. Merge the signed release PR manually with `--match-head-commit`.
+4. The release tower pushes `vX.Y.Z` at the merged commit on `main`.
+5. Watch the tag's release run and `scripts/confirm_registry.sh`: both registry
+   names must install in empty directories, and the scoped install retargets the
+   public wave to its pinned bytes. Keep the editor round-trip evidence required
+   by the command-post protocol.
 
-Before any of that, every pull request's `install` job packs the branch, runs
-the same smoke on the tarball alone and beside the canonical core, and plants three failures beside it
-(`scripts/smoke_mutants.sh`): a duplicate legacy core must go red at the installed graph check; a `src` module left out of the tarball must go
-red at `--version`, and the gate's launcher resolved by a name the install does
-not have must go red at the retarget — a failure `--version` alone passes.
+PR CI's `ships` job runs the publishing lifecycle and packs both names
+on Node 22 and npm 12.2.2, without a token or publish. The installed-tarball
+smoke and its planted failures remain separate gates.
 
 ### When the tag is cut but the publish did not land
 
-a release-please failure after the tag leaves a version unpublished; the next cut carries it, or the tag is republished by dispatch.
-
-It happens when the run that merged the release pull request gets as far as
-the tag and the GitHub release and then stops before the publish lands (on
-another package of the toolchain, `npm publish --provenance` once failed on a
-transient signing-service error). Re-running that run cannot recover:
-release-please no longer reports `release_created` for a tag it has already
-cut, so every step after it is skipped and the registry keeps serving the
-previous version. A publish by hand would lose provenance, and the trusted
-publisher names `release.yml`.
-
-Dispatch when the GitHub release `vX.Y.Z` exists and
-`npm view @rig-c/pose@X.Y.Z version` serves nothing:
+For an existing unpublished tag, recover from the tag's own workflow:
 
 ```sh
 gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z
 ```
 
-`--ref vX.Y.Z` puts the run itself on the tag. npm's provenance reads the run's
-`GITHUB_REF` and `GITHUB_SHA`, which the later checkout of the tag does not
-change, so without it the published package would claim the default branch's
-head as its source. `--ref` also runs the tag's own `release.yml`, so only a tag
-whose `release.yml` carries the `tag` dispatch input can be recovered this way:
-v0.40.0 and later. A tag up to v0.39.0 is carried by the next cut instead.
+The tag must contain this workflow. A GitHub release object is not required.
+The run's ref and SHA must match the tag, because npm provenance records those
+values, not the later checkout. Publishing checks out the validated full SHA.
+No recovery cuts or moves a tag. The resolver refuses these states by name:
 
-The `release` job then skips release-please (a dispatch never cuts a tag or a
-release) and its *Resolve the tag to publish* step checks the tag; every step
-after it is the push path's own (checkout of the tag, the gate in
-`prepublishOnly`, `npm publish --provenance`, the registry confirmation), run
-under the same condition, from the same file. Then confirm the cut as after any
-release. The resolve step refuses, each as one `::error::` line naming its
-rule:
-
-| refusal | when |
+| Refusal | When |
 | --- | --- |
-| `RELEASE_DISPATCH_INPUT` | the dispatch gave both `tag` and `version`, or neither |
-| `RELEASE_TAG_FORM` | the tag is not `vX.Y.Z` (or `vX.Y.Z-<prerelease>`) |
-| `RELEASE_TAG_UNRELEASED` | the tag has no GitHub release: only a tag release-please cut is published |
-| `RELEASE_REF_NOT_TAG` | the run is not on the tag: its `GITHUB_REF` is not `refs/tags/<tag>` (dispatched without `--ref`), or its `GITHUB_SHA` is not the tag's commit |
-| `RELEASE_ALREADY_PUBLISHED` | the registry already serves that version of `@rig-c/pose` |
-| `RELEASE_TAG_BELOW_LATEST` | the version is below the registry's `latest` for `@rig-c/pose` (a prerelease is below its release) |
+| `RELEASE_DISPATCH_INPUT` | both inputs or neither were given |
+| `RELEASE_TAG_FORM` | tag is not strict `vX.Y.Z` |
+| `RELEASE_TAG_UNRESOLVED` | tag cannot resolve to a full commit SHA |
+| `RELEASE_REF_NOT_TAG` | run ref is not the selected tag |
+| `PROVENANCE_SHA_MISMATCH` | run SHA or fetched tag differs from the resolved commit |
+| `RELEASE_TAG_NOT_ON_MAIN` | commit is not reachable from `origin/main` |
+| `RELEASE_TAG_VERSION_MISMATCH` | tagged package name/version does not match |
+| `RELEASE_ALREADY_PUBLISHED` | scoped version is already served |
+| `RELEASE_TAG_BELOW_LATEST` | version is below registry latest |
 
-**Two inputs, one per dispatch.** `tag` publishes a cut tag; `version` re-runs
-a confirmation. Both are optional, because GitHub refuses a dispatch that omits
-a required input; an omitted string input reads as empty. The `confirm` job
-runs only on a dispatch with `version` and no `tag`; any other dispatch runs the
-`release` job, where the resolve step publishes a `tag` alone and refuses the
-rest.
-
-**Below latest.** `npm publish` refuses to put `latest` on a version lower than
-the highest one published unless a `--tag` is given, and the publish step
-passes `--tag` only for a prerelease. So once a later version is out, the
-dispatch refuses the older tag by name before anything is checked out or
-published; it is never attempted silently. Such a version goes out, if at all,
-under a dist-tag, with a `--tag` variant of this dispatch, which is a follow-up
-and not in this workflow. The comparison is semver order computed in `node`,
-not `sort -V`, which sorts `1.0.0-rc.1` after `1.0.0`.
+To repeat confirmation alone, use `gh workflow run release.yml -f version=X.Y.Z`.
+Exactly one optional input is accepted: `tag` publishes, `version` confirms only.
+A confirmation has no OIDC write permission. If the scoped publish succeeded
+but the alias did not, tag recovery refuses the already-served scoped version;
+resolve that partial publication before confirming. Below-latest publication
+requires a separately reviewed dist-tag flow; this workflow never rolls latest
+back silently.
 
 ## The first publish, and trusted publishing (owner)
 
@@ -144,8 +88,7 @@ typo surfaces only as a refused publish.
 The scoped package remains `@rig-c/pose`. After its existing gated OIDC publish,
 the **Publish the alias rig-pose** step packs the same checkout with
 `scripts/alias_tarball.ts`, then publishes the tarball with
-`npm publish "$alias_tgz" --provenance --access public` (and the same `rc`
-dist-tag for a prerelease). Only `package.json`'s `name` line changes; the
+`npm publish "$alias_tgz" --provenance --access public`. Only `package.json`'s `name` line changes; the
 version, executable, dependencies, file list and every other byte stay equal.
 Packing never renames the checkout. Publishing a tarball does not run the
 checkout's `prepublishOnly` again: the scoped publish already gated those files.
@@ -214,10 +157,6 @@ first alias publish has no workflow provenance; later OIDC publishes do.
 The first alias publish was made by hand at 1.5.1, and later releases publish
 the alias through trusted publishing (1.5.2 and 1.5.3 carry provenance), so
 `rig-pose` is a supported install name.
-
-**One-time GitHub setting (owner):** Settings → Actions → General → Workflow
-permissions → tick *Allow GitHub Actions to create and approve pull requests*,
-or release-please cannot open the release pull request.
 
 ## What 1.x promises
 

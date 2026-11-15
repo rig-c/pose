@@ -136,15 +136,15 @@ test('pack refuses an unsupported alias and unreadable input by name', () => {
   expect(cli('compare', primary, bad).status).toBe(2);
 });
 
-test('release publishes the alias after the unchanged scoped step, with OIDC and matching rc tag', () => {
+test('release publishes the alias after the unchanged scoped step, with OIDC for the stable release', () => {
   const text = readFileSync(join(ROOT, '.github/workflows/release.yml'), 'utf8');
-  const wf = Bun.YAML.parse(text) as { jobs: { release: { permissions: Record<string, string>; steps: { name?: string; run?: string; if?: string }[] } } };
-  const steps = wf.jobs.release.steps;
+  const wf = Bun.YAML.parse(text) as { jobs: { publish: { permissions: Record<string, string>; steps: { name?: string; run?: string; if?: string }[] } } };
+  const steps = wf.jobs.publish.steps;
   const scoped = steps.findIndex((step) => step.name === 'Publish to npm');
   const at = steps.findIndex((step) => step.name === 'Publish the alias rig-pose');
   expect(at).toBeGreaterThan(scoped);
   expect(at).toBeLessThan(steps.findIndex((step) => step.name === 'Confirm the published package installs and runs'));
-  expect(wf.jobs.release.permissions['id-token']).toBe('write');
+  expect(wf.jobs.publish.permissions['id-token']).toBe('write');
   expect(steps[at].if).toBe(steps[scoped].if);
   const bin = join(work, 'mock-bin');
   mkdirSync(bin);
@@ -158,7 +158,7 @@ test('release publishes the alias after the unchanged scoped step, with OIDC and
     writeFileSync(path, `#!/bin/bash\nset -euo pipefail\n${body}\n`);
     chmodSync(path, 0o755);
   }
-  for (const version of ['1.2.3', '1.2.3-rc.1']) {
+  for (const version of ['1.2.3']) {
     for (const packExit of ['0', '2']) {
       const trace = join(work, 'publish.trace');
       writeFileSync(trace, '');
@@ -169,7 +169,7 @@ test('release publishes the alias after the unchanged scoped step, with OIDC and
       const calls = readFileSync(trace, 'utf8');
       expect(result.status, result.out).toBe(packExit === '0' ? 0 : 2);
       expect(calls).toContain('bun scripts/alias_tarball.ts pack --name rig-pose --out ');
-      if (packExit === '0') expect(calls).toContain(`npm publish ${tgz} --provenance --access public${version.includes('-') ? ' --tag rc' : ''}\n`);
+      if (packExit === '0') expect(calls).toContain(`npm publish ${tgz} --provenance --access public\n`);
       else expect(calls).not.toContain('npm publish');
     }
   }
