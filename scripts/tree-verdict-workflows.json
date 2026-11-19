@@ -1,0 +1,82 @@
+{
+  "schema": "workflow-verdict-lint/1",
+  "defaultBranch": "main",
+  "coverageDeclarations": [
+    "scripts/tree-verdict.json"
+  ],
+  "workflows": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "heavyJobs": [
+        "checks",
+        "test-shards",
+        "test",
+        "install",
+        "ships"
+      ],
+      "guard": {
+        "job": "tree-verdict",
+        "step": "reuse",
+        "uses": "rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f",
+        "sourceWorkflow": ".github/workflows/ci.yml",
+        "declaration": "scripts/tree-verdict.json"
+      },
+      "publishes": []
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "heavyJobs": [],
+      "publicationReaders": [
+        {
+          "job": "publish",
+          "step": "publication-reader",
+          "verdictStep": "reuse",
+          "declaration": "scripts/tree-verdict.json"
+        }
+      ],
+      "publishes": [
+        {
+          "job": "publish",
+          "verdictStep": "reuse",
+          "declaration": "scripts/tree-verdict.json",
+          "actionUses": "rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f",
+          "evidenceEnv": "TREE_VERDICT_PATH",
+          "step": {
+            "name": "Publish to npm"
+          },
+          "lifecycle": "prepublishOnly",
+          "readerCommand": "node scripts/tree-verdict-prepublish.cjs",
+          "invocations": [
+            {
+              "ordinal": 0,
+              "kind": "folder"
+            }
+          ]
+        },
+        {
+          "job": "publish",
+          "verdictStep": "reuse",
+          "declaration": "scripts/tree-verdict.json",
+          "actionUses": "rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f",
+          "evidenceEnv": "TREE_VERDICT_PATH",
+          "step": {
+            "name": "Publish the alias rig-pose"
+          },
+          "invocations": [
+            {
+              "ordinal": 0,
+              "kind": "tarball",
+              "producer": {
+                "step": {
+                  "name": "Publish the alias rig-pose"
+                },
+                "variable": "alias_tgz",
+                "command": "bun scripts/alias_tarball.ts pack --name rig-pose --out \"$RUNNER_TEMP/pose-alias\""
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -47,7 +47,7 @@
     "test": "bun test ./test",
     "typecheck": "bunx tsc --noEmit",
     "lint": "bunx eslint .",
-    "prepublishOnly": "bun run typecheck && bun run lint && bun run test"
+    "prepublishOnly": "node scripts/tree-verdict-prepublish.cjs"
   },
   "dependencies": {
     "@rig-c/core": "^3.0.0"

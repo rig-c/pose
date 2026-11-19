@@ -1,0 +1,40 @@
+{
+  "schema": "tree-verdict-lifecycle/2",
+  "workflow": ".github/workflows/ci.yml",
+  "gate": "pose-full/1",
+  "chain": "bun run typecheck && bun run lint && bun run test",
+  "commands": [
+    "bun run typecheck",
+    "bun run lint",
+    "bun run test"
+  ],
+  "covers": {
+    "bun run typecheck": [
+      "ships"
+    ],
+    "bun run lint": [
+      "ships"
+    ],
+    "bun run test": [
+      "ships"
+    ]
+  },
+  "jobs": {
+    "ships": {
+      "path": [
+        "ships"
+      ],
+      "role": "plain",
+      "legs": [
+        {
+          "matrix": {},
+          "apiName": "ships fresh"
+        }
+      ]
+    }
+  },
+  "producer": {
+    "job": "tree-verdict-receipt"
+  },
+  "checkoutPolicy": "event-sha"
+}

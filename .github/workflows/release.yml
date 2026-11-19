@@ -94,6 +94,8 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      actions: read
+      pull-requests: read
       id-token: write # OIDC for npm trusted publishing; no environment
     steps:
       - uses: actions/checkout@v4
@@ -115,15 +117,36 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # Nothing to build — the package ships TypeScript sources and bun runs
-      # them. prepublishOnly runs typecheck, lint and the tests against the
-      # tagged tree, so a broken gate fails the publish rather than shipping.
+      - name: Read the tested-tree verdict
+        id: reuse
+        uses: rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f
+        with:
+          declaration: scripts/tree-verdict.json
+          purpose: publish
+
+      # Tarballs do not invoke prepublishOnly. Gate the checkout before either
+      # publication; a missing or invalid proof runs the entire original chain.
+      - name: Gate every publication through the lifecycle reader
+        id: publication-reader
+        env:
+          TREE_VERDICT_TOOLS: ${{ steps.reuse.outputs.tooling-path }}
+          TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node "$TREE_VERDICT_TOOLS/lifecycle.mjs" --declaration scripts/tree-verdict.json --verdict-path "$TREE_VERDICT_PATH"
+
+      # Folder publication invokes the same reader again through prepublishOnly.
       - name: Publish to npm
+        env:
+          TREE_VERDICT_TOOLS: ${{ steps.reuse.outputs.tooling-path }}
+          TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           npm publish --provenance --access public
 
       - name: Publish the alias rig-pose
+        env:
+          TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
         run: |
           set -euo pipefail
           alias_tgz="$(bun scripts/alias_tarball.ts pack --name rig-pose --out "$RUNNER_TEMP/pose-alias")"
