@@ -274,7 +274,7 @@ test('PR CI exercises the source lifecycle and both release pack paths on publis
   expect(commands).toContain('bun install --frozen-lockfile');
   const original = ['bun run typecheck', 'bun run lint', 'bun run test'];
   const suiteInvocation = /\bbun\s+run\s+(?:typecheck|lint|test)\b/g;
-  expect(commands.match(suiteInvocation)).toEqual(original);
+  expect(Array.from(commands.match(suiteInvocation) ?? [])).toEqual(original);
   expect(steps.filter((step) => /\bbun\s+run\s+(?:typecheck|lint|test)\b/.test(step.run ?? '')).map((step) => step.run)).toEqual(original);
   const manifest = JSON.parse(readFileSync(join(import.meta.dir, '..', 'package.json'), 'utf8')) as { scripts: Record<string, string> };
   expect(manifest.scripts.prepublishOnly).toBe('node scripts/tree-verdict-prepublish.cjs');
