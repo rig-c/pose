@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Three serial shards and a dependency-free JUnit/coverage merger.
+"""Four serial shards and a dependency-free JUnit/coverage merger.
 
 The TypeScript companion parses source without importing tests. The merger uses
 only stdlib and the source-bound plan independently produced by the checks job.
@@ -443,7 +443,7 @@ def main():
         q.add_argument('--root', type=Path, default=Path.cwd())
         q.add_argument('--out', type=Path, required=True)
         q.add_argument('--head', required=True)
-        if name == 'run': q.add_argument('--id', type=int, choices=[1, 2, 3], required=True)
+        if name == 'run': q.add_argument('--id', type=int, choices=[1, 2, 3, 4], required=True)
         else:
             q.add_argument('--plan', type=Path, required=True)
             q.add_argument('--artifacts', type=Path, required=True)

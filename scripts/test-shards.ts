@@ -105,7 +105,7 @@ function plan(): void {
   const compare=(a:string,b:string)=>a<b?-1:a>b?1:0;
   const components=[...groups.values()].map(g=>g.sort());
   components.sort((a,b)=>weight(b)-weight(a)||compare(a[0]!,b[0]!));
-  const shards=Array.from({length:3},(_,i)=>({id:i+1,files:[] as string[],weightMs:0}));
+  const shards=Array.from({length:4},(_,i)=>({id:i+1,files:[] as string[],weightMs:0}));
   for(const g of components){const target=[...shards].sort((a,b)=>a.weightMs-b.weightMs||a.id-b.id)[0]!;target.files.push(...g);target.weightMs+=weight(g);}
   const order=new Map(baseline.order.map((f,i)=>[f,i]));
   for(const shard of shards)shard.files.sort((a,b)=>(order.get(a)??Infinity)-(order.get(b)??Infinity)||compare(a,b));
