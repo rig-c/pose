@@ -13,10 +13,36 @@ on:
 
 permissions:
   contents: read
+  actions: read
+  pull-requests: read
 
 jobs:
+  tree-verdict:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      reused: ${{ steps.reuse.outputs.reused }}
+      run-id: ${{ steps.reuse.outputs.run-id }}
+      head-sha: ${{ steps.reuse.outputs.head-sha }}
+      tested-sha: ${{ steps.reuse.outputs.tested-sha }}
+      pr: ${{ steps.reuse.outputs.pr }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - id: reuse
+        uses: rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f
+        with:
+          declaration: scripts/tree-verdict.json
+      - name: Check workflow coverage and publication wiring
+        env:
+          TREE_VERDICT_TOOLS: ${{ steps.reuse.outputs.tooling-path }}
+        run: |
+          bun "$TREE_VERDICT_TOOLS/../../../scripts/lint_workflows.ts" scripts/tree-verdict-workflows.json .
+
   # Keep the original commands once, off the measured shard + merge path.
   checks:
+    needs: tree-verdict
+    if: needs.tree-verdict.outputs.reused != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -28,6 +54,12 @@ jobs:
         with:
           node-version: 22
       - run: bun install --frozen-lockfile
+      - id: verdict-tools
+        uses: rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f
+      - name: Check consumer verdict wiring and planted fallbacks
+        env:
+          TREE_VERDICT_TOOLS: ${{ steps.verdict-tools.outputs.tooling-path }}
+        run: bun test scripts/tree-verdict.test.mjs
       - run: bun run typecheck
       - run: bun run lint
       - name: Preserve whole tests, fixture declarations, and cleanup
@@ -43,6 +75,8 @@ jobs:
           if-no-files-found: error
 
   test-shards:
+    needs: tree-verdict
+    if: needs.tree-verdict.outputs.reused != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -77,11 +111,12 @@ jobs:
             ${{ runner.temp }}/test-results/*.log
           if-no-files-found: error
 
-  # This exact job name is required by branch protection. Never infer success
-  # from a skipped matrix or missing artifact; the merger checks both.
+  # The required test-status job reports this semantic merge. Never infer
+  # success from a skipped matrix or missing artifact; the merger checks both.
   test:
-    if: always()
-    needs: [checks, test-shards]
+    name: test merge
+    if: ${{ always() && needs.tree-verdict.outputs.reused != 'true' }}
+    needs: [tree-verdict, checks, test-shards]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -97,7 +132,7 @@ jobs:
       - name: Every prerequisite succeeded, every file ran once, identities match
         env:
           TEST_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-          TEST_NEEDS: ${{ toJSON(needs) }}
+          TEST_NEEDS: '{"checks":{"result":"${{ needs.checks.result }}"},"test-shards":{"result":"${{ needs.test-shards.result }}"}}'
         run: |
           python3 scripts/test-shards.py merge --plan "$RUNNER_TEMP/test-plan/test-plan.json" --artifacts "$RUNNER_TEMP/test-shards" --out "$RUNNER_TEMP/test-merged" --head "$TEST_HEAD" --needs "$TEST_NEEDS"
           cat "$RUNNER_TEMP/test-merged/before-after.md" >> "$GITHUB_STEP_SUMMARY"
@@ -134,6 +169,8 @@ jobs:
   # step named (scripts/smoke_mutants.sh). The registry confirmation after a
   # publish runs the same smoke (scripts/confirm_registry.sh).
   install:
+    needs: tree-verdict
+    if: needs.tree-verdict.outputs.reused != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -151,6 +188,9 @@ jobs:
 
   # Keep the branch-protection check name; exercise both release packages on the exact publishing npm, without credentials.
   ships:
+    name: ships fresh
+    needs: tree-verdict
+    if: needs.tree-verdict.outputs.reused != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -163,11 +203,91 @@ jobs:
       - run: npm install -g npm@12.2.2
       - run: npm --version
       - run: bun install --frozen-lockfile
-      # npm publish from the source runs this hook; no build is needed for TypeScript.
-      - run: bun run prepublishOnly
+      # Expose the unchanged lifecycle chain to the shared coverage compiler.
+      # The Python shard runner is independently checked by the existing merger.
+      - run: bun run typecheck
+      - run: bun run lint
+      - run: bun run test
       - name: Pack both publication names without publishing
         run: |
           set -euo pipefail
           npm pack --dry-run --json
           alias_tgz="$(bun scripts/alias_tarball.ts pack --name rig-pose --out "$RUNNER_TEMP/pose-alias")"
           npm pack "$alias_tgz" --dry-run --json
+
+  # The ships job already ran the entire publication chain serially. Its plain
+  # coverage requires no reinterpretation or modification of the shard protocol.
+  tree-verdict-receipt:
+    needs: [checks, test-shards, test, scope, install, ships]
+    if: ${{ success() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - id: tools
+        uses: rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f
+      - id: receipt
+        env:
+          TREE_VERDICT_TOOLS: ${{ steps.tools.outputs.tooling-path }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bun "$TREE_VERDICT_TOOLS/producer.mjs" --declaration scripts/tree-verdict.json --out "$RUNNER_TEMP/receipt.json"
+      - uses: actions/upload-artifact@v4
+        if: ${{ steps.receipt.outputs.receipt-created == 'true' }}
+        with:
+          name: tree-verdict-receipt
+          path: ${{ runner.temp }}/receipt.json
+          if-no-files-found: error
+          overwrite: true
+
+  # Preserve the branch-protection name for both fresh work and proved reuse.
+  test-status:
+    name: test
+    needs: [tree-verdict, checks, test-shards, test]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Report the verdict
+        env:
+          LOOKUP_RESULT: ${{ needs.tree-verdict.result }}
+          REUSED: ${{ needs.tree-verdict.outputs.reused }}
+          SOURCE_RUN: ${{ needs.tree-verdict.outputs.run-id }}
+          SOURCE_HEAD: ${{ needs.tree-verdict.outputs.head-sha }}
+          SOURCE_TESTED: ${{ needs.tree-verdict.outputs.tested-sha }}
+          SOURCE_PR: ${{ needs.tree-verdict.outputs.pr }}
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -eu
+          test "$LOOKUP_RESULT" = success
+          if [ "$REUSED" = true ]; then
+            echo "Reused PR $SOURCE_PR head $SOURCE_HEAD tested $SOURCE_TESTED run $SOURCE_RUN"
+          else
+            python3 -c 'import json, os; rows=json.loads(os.environ["RESULTS"]); assert all(row["result"] == "success" for row in rows.values()), rows'
+          fi
+
+  # Preserve the branch-protection name for both fresh work and proved reuse.
+  ships-status:
+    name: ships
+    needs: [tree-verdict, ships]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Report the verdict
+        env:
+          LOOKUP_RESULT: ${{ needs.tree-verdict.result }}
+          REUSED: ${{ needs.tree-verdict.outputs.reused }}
+          SOURCE_RUN: ${{ needs.tree-verdict.outputs.run-id }}
+          SOURCE_HEAD: ${{ needs.tree-verdict.outputs.head-sha }}
+          SOURCE_TESTED: ${{ needs.tree-verdict.outputs.tested-sha }}
+          SOURCE_PR: ${{ needs.tree-verdict.outputs.pr }}
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -eu
+          test "$LOOKUP_RESULT" = success
+          if [ "$REUSED" = true ]; then
+            echo "Reused PR $SOURCE_PR head $SOURCE_HEAD tested $SOURCE_TESTED run $SOURCE_RUN"
+          else
+            python3 -c 'import json, os; rows=json.loads(os.environ["RESULTS"]); assert all(row["result"] == "success" for row in rows.values()), rows'
+          fi

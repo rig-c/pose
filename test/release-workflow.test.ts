@@ -13,9 +13,10 @@ interface Step {
   if?: string;
   'continue-on-error'?: boolean | string;
   with?: Record<string, string | number>;
+  env?: Record<string, string>;
 }
 interface Workflow {
-  jobs: Record<string, { steps: Step[] }>;
+  jobs: Record<string, { steps: Step[]; strategy?: unknown; if?: string }>;
 }
 
 const text = readFileSync(join(import.meta.dir, '..', '.github', 'workflows', 'release.yml'), 'utf8');
@@ -241,9 +242,19 @@ test('tag-only publication keeps trusted-publisher identity and confirmation iso
   for (const [name, job] of Object.entries(wf.jobs)) {
     expect(job['runs-on']).toBe('ubuntu-latest');
     expect(job.environment).toBeUndefined();
-    if (name === 'publish') expect(job.permissions['id-token']).toBe('write');
-    else expect(job.permissions['id-token']).toBeUndefined();
-    expect(job.permissions['pull-requests']).toBeUndefined();
+    expect(job.permissions.contents).toBe('read');
+    if (name === 'publish') {
+      expect(job.permissions).toEqual({
+        contents: 'read', actions: 'read', 'pull-requests': 'read', 'id-token': 'write',
+      });
+    } else {
+      expect(job.permissions.actions).toBeUndefined();
+      expect(job.permissions['pull-requests']).toBeUndefined();
+      expect(job.permissions['id-token']).toBeUndefined();
+    }
+    for (const [permission, access] of Object.entries(job.permissions)) {
+      if (access === 'write') expect([name, permission]).toEqual(['publish', 'id-token']);
+    }
     expect(job.permissions.issues).toBeUndefined();
   }
   expect(wf.jobs.publish.if).toBe("${{ needs.release.outputs.publish == 'true' }}");
@@ -261,7 +272,28 @@ test('PR CI exercises the source lifecycle and both release pack paths on publis
   const commands = steps.map((s) => s.run ?? '').join('\n');
   expect(commands).toContain('npm install -g npm@12.2.2');
   expect(commands).toContain('bun install --frozen-lockfile');
-  expect(commands).toContain('bun run prepublishOnly');
+  const original = ['bun run typecheck', 'bun run lint', 'bun run test'];
+  const suiteInvocation = /\bbun\s+run\s+(?:typecheck|lint|test)\b/g;
+  expect(Array.from(commands.match(suiteInvocation) ?? [])).toEqual(original);
+  expect(steps.filter((step) => /\bbun\s+run\s+(?:typecheck|lint|test)\b/.test(step.run ?? '')).map((step) => step.run)).toEqual(original);
+  const manifest = JSON.parse(readFileSync(join(import.meta.dir, '..', 'package.json'), 'utf8')) as { scripts: Record<string, string> };
+  expect(manifest.scripts.prepublishOnly).toBe('node scripts/tree-verdict-prepublish.cjs');
+  const declaration = JSON.parse(readFileSync(join(import.meta.dir, '..', 'scripts/tree-verdict.json'), 'utf8')) as { chain: string; commands: string[] };
+  expect(declaration.chain).toBe('bun run typecheck && bun run lint && bun run test');
+  expect(declaration.commands).toEqual(original);
+
+  // The consumer controls belong to the unsharded PR checks, not a test shard.
+  expect(wf.jobs.checks.strategy).toBeUndefined();
+  expect(wf.jobs.checks.if).toBe("needs.tree-verdict.outputs.reused != 'true'");
+  const controls = wf.jobs.checks.steps.filter((step) => step.run === 'bun test scripts/tree-verdict.test.mjs');
+  expect(controls).toHaveLength(1);
+  expect(controls[0].if).toBeUndefined();
+  expect(controls[0]['continue-on-error']).toBeUndefined();
+  expect(controls[0].env?.TREE_VERDICT_TOOLS).toBe('${{ steps.verdict-tools.outputs.tooling-path }}');
+  const toolingAt = wf.jobs.checks.steps.findIndex((step) => step.id === 'verdict-tools');
+  expect(toolingAt).toBeGreaterThanOrEqual(0);
+  expect(wf.jobs.checks.steps[toolingAt].uses).toBe('rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f');
+  expect(toolingAt).toBeLessThan(wf.jobs.checks.steps.indexOf(controls[0]));
   expect(commands).toContain('npm pack --dry-run --json');
   expect(commands).toContain('bun scripts/alias_tarball.ts pack --name rig-pose');
   expect(commands).toContain('npm pack "$alias_tgz" --dry-run --json');
