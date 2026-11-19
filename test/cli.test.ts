@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import pkg from '../package.json' with { type: 'json' };
+import verdict from '../scripts/tree-verdict.json' with { type: 'json' };
 
 const bin = join(import.meta.dir, '..', 'bin', 'rig-pose.cjs');
 const run = (...args: string[]) => spawnSync('node', [bin, ...args], { encoding: 'utf8' });
@@ -49,7 +50,8 @@ describe('the gates read this tree only, not a worktree nested in it', () => {
 
   test('`bun run test` and prepublishOnly run the tests under ./test only', () => {
     expect(pkg.scripts.test).toBe('bun test ./test');
-    expect(pkg.scripts.prepublishOnly).toContain('bun run test');
-    expect(pkg.scripts.prepublishOnly).not.toMatch(/bun test(?! \.\/test)/);
+    expect(pkg.scripts.prepublishOnly).toBe('node scripts/tree-verdict-prepublish.cjs');
+    expect(verdict.chain).toContain('bun run test');
+    expect(verdict.chain).not.toMatch(/bun test(?! \.\/test)/);
   });
 });
