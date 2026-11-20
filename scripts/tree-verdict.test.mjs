@@ -206,18 +206,19 @@ test('release gates both existing publications with the same pinned publish proo
   expect(reader.if).toBeUndefined(); expect(reader['continue-on-error']).toBeUndefined();
   expect(reader.run).toBe('node "$TREE_VERDICT_TOOLS/lifecycle.mjs" --declaration scripts/tree-verdict.json --verdict-path "$TREE_VERDICT_PATH"');
   const publications = steps.filter(s => /\bnpm publish\b/.test(s.run ?? ''));
-  expect(publications).toHaveLength(2);
+  expect(publications).toHaveLength(3);
   for (const step of publications) {
     expect(steps.indexOf(reader)).toBeLessThan(steps.indexOf(step));
     expect(step.env.TREE_VERDICT_PATH).toBe('${{ steps.reuse.outputs.verdict-path }}');
   }
   expect(publications[0].run).toContain('npm publish --provenance --access public');
   expect(publications[1].run).toContain('bun scripts/alias_tarball.ts pack --name rig-pose --out "$RUNNER_TEMP/pose-alias"');
+  expect(publications[2].run).toContain('npm publish "$canonical_tgz" --dry-run --access public');
   expect(release.jobs.publish.permissions['id-token']).toBe('write');
   expect(release.jobs.publish.environment).toBeUndefined();
   expect(release.jobs.publish['runs-on']).toBe('ubuntu-latest');
   expect(steps.find(s => s.name === 'Use an npm that speaks OIDC').run).toContain('npm@12.2.2');
-  expect(steps.find(s => s.uses?.startsWith('actions/setup-node@')).with['registry-url']).toBe('https://registry.npmjs.org');
+  expect(steps.find(s => s.uses?.startsWith('actions/setup-node@')).with['registry-url']).toBe("${{ needs.release.outputs.dry_run != 'true' && 'https://registry.npmjs.org' || '' }}");
 });
 
 // The verified reader's live-checkout seam is fixture-only. It avoids ANY Git

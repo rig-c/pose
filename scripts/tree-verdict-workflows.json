@@ -75,6 +75,29 @@
               }
             }
           ]
+        },
+        {
+          "job": "publish",
+          "verdictStep": "reuse",
+          "declaration": "scripts/tree-verdict.json",
+          "actionUses": "rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f",
+          "evidenceEnv": "TREE_VERDICT_PATH",
+          "step": {
+            "name": "Dry-run publish to npm"
+          },
+          "invocations": [
+            {
+              "ordinal": 0,
+              "kind": "tarball",
+              "producer": {
+                "step": {
+                  "name": "Dry-run publish to npm"
+                },
+                "variable": "canonical_tgz",
+                "command": "npm pack . --ignore-scripts --pack-destination ."
+              }
+            }
+          ]
         }
       ]
     }

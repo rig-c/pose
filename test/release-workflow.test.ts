@@ -38,6 +38,7 @@ interface Scenario {
   tag?: string;
   inputTag?: string;
   inputVersion?: string;
+  dryRun?: boolean;
   sha?: string;
   resolved?: string;
   kind?: string;
@@ -75,6 +76,15 @@ const scenarios: Scenario[] = [
   { name: 'fetched tag mismatch', local: earlier, rule: mismatch },
   { name: 'off-main tag', ancestor: '1', rule: 'RELEASE_TAG_NOT_ON_MAIN' },
   { name: 'package version mismatch', packageVersion: '1.2.4', rule: 'RELEASE_TAG_VERSION_MISMATCH' },
+  { name: 'dry_run tag dispatch on main skips real publish even when version is served', event: 'workflow_dispatch', dryRun: true, ref: 'refs/heads/main', sha: earlier, served: '1.2.3' },
+  { name: 'dry_run tag dispatch on tag ref skips real publish', event: 'workflow_dispatch', dryRun: true, ref: 'refs/tags/v1.2.3', served: '1.2.3' },
+  { name: 'dry_run main SHA dispatch skips real publish', event: 'workflow_dispatch', dryRun: true, ref: 'refs/heads/main', inputTag: commit, served: '1.2.3' },
+  { name: 'dry_run PR branch dispatch targeting main SHA skips real publish', event: 'workflow_dispatch', dryRun: true, ref: 'refs/heads/jinni/504-release-dry-run', sha: earlier, inputTag: commit, served: '1.2.3' },
+  { name: 'dry_run default main SHA dispatch skips real publish', event: 'workflow_dispatch', dryRun: true, ref: 'refs/heads/main', inputTag: '', served: '1.2.3' },
+  { name: 'dry_run refuses version input', event: 'workflow_dispatch', dryRun: true, ref: 'refs/heads/main', inputVersion: '1.2.3', rule: 'RELEASE_DISPATCH_INPUT', apiReads: 0 },
+  { name: 'dry_run refuses non-vX.Y.Z non-SHA tag', event: 'workflow_dispatch', dryRun: true, ref: 'refs/heads/main', inputTag: 'v1.2.3-rc.1', rule: 'RELEASE_TAG_FORM', apiReads: 0 },
+  { name: 'dry_run refuses mismatched tag ref', event: 'workflow_dispatch', dryRun: true, ref: 'refs/tags/v0.0.1', rule: 'RELEASE_REF_NOT_TAG', apiReads: 0 },
+  { name: 'dry_run refuses off-main SHA', event: 'workflow_dispatch', dryRun: true, ref: 'refs/heads/main', inputTag: commit, ancestor: '1', rule: 'RELEASE_TAG_NOT_ON_MAIN' },
 ];
 
 // No inherited credentials or service executables: unrecognised calls fail closed.
@@ -83,6 +93,7 @@ const mocks: Record<string, string> = {
 if [ "$1" = api ]; then
   case "$*" in
     "api repos/$REPO/commits/refs%2Ftags%2F$MOCK_TAG --jq .sha") printf '%s\\n' "$MOCK_COMMIT";;
+    "api repos/$REPO/commits/$MOCK_COMMIT --jq .sha") printf '%s\\n' "$MOCK_COMMIT";;
     "api repos/$REPO/commits/tags%2F$MOCK_TAG --jq .sha")
       if [ "$MOCK_KIND" = tag ]; then echo 'HTTP 422: No commit found for short tag ref' >&2; exit 1; fi
       printf '%s\\n' "$MOCK_COMMIT";;
@@ -108,12 +119,17 @@ esac
 `,
   npm: `printf 'npm %s\\n' "$*" >> "$MOCK_TRACE"
 if [ "$1" = publish ]; then exit 0; fi
+if [ "$1" = pack ]; then mkdir -p "$5"; printf 'mock-tarball' > "$5/rig-c-pose-1.2.3.tgz"; echo rig-c-pose-1.2.3.tgz; exit 0; fi
 [ "$1" = view ] && [ "$3" = version ] || exit 92
 case "$2" in
   @rig-c/pose@*) [ -n "$MOCK_SERVED" ] || exit 1; printf '%s\\n' "$MOCK_SERVED";;
   @rig-c/pose) printf '%s\\n' "$MOCK_LATEST";;
   *) exit 96;;
 esac
+`,
+  bun: `printf 'bun %s\\n' "$*" >> "$MOCK_TRACE"
+mkdir -p "$6"
+printf '%s/rig-pose-1.2.3.tgz\\n' "$6"
 `,
 };
 
@@ -123,13 +139,24 @@ function check(wf: Workflow, scenario: Scenario): void {
   const target = steps[targetAt];
   const publishSteps = wf.jobs.publish.steps;
   const checkoutAt = publishSteps.findIndex((step) => step.uses?.startsWith('actions/checkout@'));
+  const relayAt = publishSteps.findIndex((step) => step.id === 'target');
   const publishing = publishSteps.filter((step) => /\bnpm publish\b/.test(step.run ?? ''));
+  const offlineStep = publishSteps.find((step) => step.name === 'Configure isolated offline npm for rehearsal');
+  const summaryStep = publishSteps.find((step) => step.name === 'Write dry-run summary');
+  const confirmStep = publishSteps.find((step) => step.name === 'Confirm the published package installs and runs');
   expect(targetAt).toBeGreaterThanOrEqual(0);
+  expect(relayAt).toBeGreaterThan(checkoutAt);
   expect(publishSteps[checkoutAt].with?.ref).toBe(pinned);
   expect(target['continue-on-error']).toBeUndefined();
-  expect(publishing).toHaveLength(2);
-  expect(publishSteps.indexOf(publishing[0])).toBeGreaterThan(checkoutAt);
+  expect(publishing).toHaveLength(3);
+  expect(publishSteps.indexOf(publishing[0])).toBeGreaterThan(relayAt);
   expect(target.run).toBeString();
+  expect(offlineStep?.run).toContain('npm config set offline true --location=user');
+  expect(offlineStep?.env?.HOME).toBe('${{ runner.temp }}/pose-npm-dry-run');
+  expect(publishing[2].env?.HOME).toBe(offlineStep?.env?.HOME);
+  expect(publishSteps.indexOf(offlineStep!)).toBeLessThan(publishSteps.indexOf(publishing[2]));
+  expect(summaryStep?.run).toBeString();
+  expect(confirmStep?.run).toBeString();
 
   const dir = mkdtempSync(join(tmpdir(), 'pose-release-'));
   try {
@@ -141,11 +168,18 @@ function check(wf: Workflow, scenario: Scenario): void {
       chmodSync(path, 0o755);
     }
     symlinkSync('/usr/bin/grep', join(bin, 'grep'));
+    symlinkSync('/bin/mkdir', join(bin, 'mkdir'));
     symlinkSync(process.execPath, join(bin, 'node'));
+    mkdirSync(join(dir, 'scripts'));
+    writeFileSync(join(dir, 'scripts/tree-verdict.json'), readFileSync(join(import.meta.dir, '..', 'scripts/tree-verdict.json'), 'utf8'));
     const trace = join(dir, 'calls.txt');
     const outputFile = join(dir, 'outputs.txt');
+    const publishOutputFile = join(dir, 'publish-outputs.txt');
+    const summaryFile = join(dir, 'summary.md');
     writeFileSync(trace, '');
     writeFileSync(outputFile, '');
+    writeFileSync(publishOutputFile, '');
+    writeFileSync(summaryFile, '');
     const tag = scenario.tag ?? 'v1.2.3';
     const event = scenario.event ?? 'push';
     const sha = scenario.sha ?? commit;
@@ -161,11 +195,12 @@ function check(wf: Workflow, scenario: Scenario): void {
       EVENT: event, MOCK_TAG: tag, MOCK_LOCAL: scenario.local ?? commit,
       MOCK_ANCESTOR: scenario.ancestor ?? '0', MOCK_PACKAGE_VERSION: scenario.packageVersion ?? tag.slice(1),
       INPUT_TAG: scenario.inputTag ?? tag, INPUT_VERSION: scenario.inputVersion ?? '',
+      INPUT_DRY_RUN: scenario.dryRun ? 'true' : '', RUNNER_TEMP: dir,
       REPO: 'mock/pose', GITHUB_SHA: sha, GITHUB_REF: scenario.ref ?? `refs/tags/${tag}`,
-      GITHUB_OUTPUT: outputFile,
+      GITHUB_OUTPUT: outputFile, GITHUB_STEP_SUMMARY: summaryFile,
     };
-    const run = (body: string) => spawnSync('/bin/bash', ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', body], {
-      cwd: dir, encoding: 'utf8', timeout: 10000, env,
+    const run = (body: string, extraEnv: Record<string, string> = {}) => spawnSync('/bin/bash', ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', body], {
+      cwd: dir, encoding: 'utf8', timeout: 10000, env: { ...env, ...extraEnv },
     });
     const resolved = run(target.run ?? '');
     expect(resolved.error).toBeUndefined();
@@ -181,14 +216,61 @@ function check(wf: Workflow, scenario: Scenario): void {
         expect(output).toContain('the tag remains cut');
         expect(output).toContain(`gh workflow run release.yml --ref ${tag} -f tag=${tag}`);
       }
+    } else if (scenario.dryRun) {
+      expect(outputs).toEqual({ publish: 'true', dry_run: 'true', tag, sha: commit });
     } else {
       expect(outputs).toEqual({ publish: 'true', tag, sha: commit });
     }
-    // Follow the workflow's condition, executing its real publish body against npm's mock.
+    // Follow the workflow's condition, executing its publish job steps against npm's mock.
     if (resolved.status === 0 && outputs.publish === 'true') {
-      const published = run(publishing[0].run ?? '');
-      expect(published.error).toBeUndefined();
-      expect(published.status, `${published.stdout}${published.stderr}`).toBe(0);
+      const relayed = run(publishSteps[relayAt].run ?? '', {
+        DRY_RUN: outputs.dry_run ?? '', GITHUB_OUTPUT: publishOutputFile,
+      });
+      expect(relayed.error).toBeUndefined();
+      expect(relayed.status).toBe(0);
+      const publishOutputs = Object.fromEntries(
+        readFileSync(publishOutputFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => line.split('=')),
+      );
+      const stepRuns = (step: Step | undefined): boolean => {
+        if (!step) return false;
+        if (step.if === undefined) return true;
+        if (step.if === "${{ steps.target.outputs.dry_run != 'true' }}") return publishOutputs.dry_run !== 'true';
+        if (step.if === "${{ steps.target.outputs.dry_run == 'true' }}") return publishOutputs.dry_run === 'true';
+        throw new Error(`unsupported publish step condition: ${step.if}`);
+      };
+      if (scenario.dryRun) {
+        expect(stepRuns(confirmStep)).toBe(false);
+        expect(stepRuns(offlineStep)).toBe(true);
+        expect(stepRuns(summaryStep)).toBe(true);
+        for (const step of publishing.filter(stepRuns)) {
+          const published = run(step.run ?? '');
+          expect(published.error).toBeUndefined();
+          expect(published.status, `${published.stdout}${published.stderr}`).toBe(0);
+        }
+        const summarized = run(summaryStep?.run ?? '', {
+          TAG_NAME: outputs.tag, TARGET_SHA: outputs.sha, TREE_VERDICT_PATH: '',
+        });
+        expect(summarized.status, `${summarized.stdout}${summarized.stderr}`).toBe(0);
+        const summary = readFileSync(summaryFile, 'utf8');
+        expect(summary).toContain('Release dry run (`dry_run=true`)');
+        expect(summary).toContain('TREE_VERDICT_LIFECYCLE_FALLBACK: gate=pose-full/1');
+        expect(summary).toMatch(/sha512-[A-Za-z0-9+/=]+/);
+        const proofFile = join(dir, 'verified.json');
+        writeFileSync(proofFile, JSON.stringify({ schema: 'tree-verdict-verified/2', run_id: 800, tested_sha: commit }));
+        const reusedSummary = run(summaryStep?.run ?? '', {
+          TAG_NAME: outputs.tag, TARGET_SHA: outputs.sha, TREE_VERDICT_PATH: proofFile,
+        });
+        expect(reusedSummary.status, `${reusedSummary.stdout}${reusedSummary.stderr}`).toBe(0);
+        expect(readFileSync(summaryFile, 'utf8')).toContain(`TREE_VERDICT_LIFECYCLE_REUSED: run=800 testedSHA=${commit} gate=pose-full/1`);
+      } else {
+        expect(publishing.filter(stepRuns)).toEqual([publishing[0], publishing[1]]);
+        expect(stepRuns(confirmStep)).toBe(true);
+        expect(stepRuns(offlineStep)).toBe(false);
+        expect(stepRuns(summaryStep)).toBe(false);
+        const published = run(publishing[0].run ?? '');
+        expect(published.error).toBeUndefined();
+        expect(published.status, `${published.stdout}${published.stderr}`).toBe(0);
+      }
     }
     const calls = readFileSync(trace, 'utf8').trim().split('\n').filter(Boolean);
     const api = calls.filter((line) => line.startsWith('gh api '));
@@ -199,7 +281,7 @@ function check(wf: Workflow, scenario: Scenario): void {
     }
     const publishes = calls.filter((line) => line.startsWith('npm publish '));
     expect(publishes).toEqual(scenario.rule === undefined
-      ? ['npm publish --provenance --access public'] : []);
+      ? [scenario.dryRun ? 'npm publish rig-c-pose-1.2.3.tgz --dry-run --access public' : 'npm publish --provenance --access public'] : []);
     expect(readFileSync(cut, 'utf8')).toBe(cutBytes);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -210,6 +292,7 @@ describe('release push provenance (#354)', () => {
   for (const scenario of scenarios) test(scenario.name, () => check(workflow(), scenario), 15000);
 
   // Mutants are parsed copies only; the checked-in workflow is never modified.
+  const dryRunScenario = scenarios.find((s) => s.dryRun && s.rule === undefined)!;
   const plants = [
     { name: 'comparison reversed', from: '"$GITHUB_SHA" != "$tag_sha"', to: '"$GITHUB_SHA" = "$tag_sha"', scenario: scenarios[0] },
     { name: 'lookup failure ignored', from: 'if ! tag_sha=', to: 'if tag_sha=', scenario: scenarios[4] },
@@ -219,25 +302,44 @@ describe('release push provenance (#354)', () => {
     { name: 'publish emitted before refusal', from: 'if [ "$GITHUB_SHA" != "$tag_sha" ]; then', to: 'echo "publish=true" >> "$GITHUB_OUTPUT"; if [ "$GITHUB_SHA" != "$tag_sha" ]; then', scenario: scenarios[2] },
     { name: 'checkout resolves mutable tag again', from: pinned, to: '${{ steps.target.outputs.tag }}', scenario: scenarios[0] },
     { name: 'recovery loses tag ref', from: 'release.yml --ref $release_tag -f tag=$release_tag', to: 'release.yml -f tag=$release_tag', scenario: scenarios[2] },
+    {
+      name: 'canonical publish lacks dry_run guard',
+      from: "      - name: Publish to npm\n        if: ${{ steps.target.outputs.dry_run != 'true' }}",
+      to: '      - name: Publish to npm',
+      scenario: dryRunScenario,
+    },
+    {
+      name: 'alias publish lacks dry_run guard',
+      from: "      - name: Publish the alias rig-pose\n        if: ${{ steps.target.outputs.dry_run != 'true' }}",
+      to: '      - name: Publish the alias rig-pose',
+      scenario: dryRunScenario,
+    },
+    {
+      name: 'confirm step lacks dry_run guard',
+      from: "      - name: Confirm the published package installs and runs\n        if: ${{ steps.target.outputs.dry_run != 'true' }}",
+      to: '      - name: Confirm the published package installs and runs',
+      scenario: dryRunScenario,
+    },
   ];
   for (const plant of plants) {
     test(`catches mutant: ${plant.name}`, () => {
       expect(text.split(plant.from)).toHaveLength(2);
       const changed = Bun.YAML.parse(text.replace(plant.from, plant.to)) as Workflow;
       expect(() => check(changed, plant.scenario)).toThrow();
-    });
+    }, 15000);
   }
 });
 
 test('tag-only publication keeps trusted-publisher identity and confirmation isolation', () => {
   const wf = Bun.YAML.parse(text) as {
-    on: { push: { tags: string[]; branches?: string[] }; workflow_dispatch: { inputs: Record<string, { required: boolean }> } };
+    on: { push: { tags: string[]; branches?: string[] }; workflow_dispatch: { inputs: Record<string, { required: boolean; type?: string; default?: unknown }> } };
     permissions: Record<string, string>;
     jobs: Record<string, { permissions: Record<string, string>; environment?: string; if?: string; 'runs-on': string }>;
   };
   expect(wf.on.push).toEqual({ tags: ['v*'] });
   expect(wf.on.workflow_dispatch.inputs.tag.required).toBe(false);
   expect(wf.on.workflow_dispatch.inputs.version.required).toBe(false);
+  expect(wf.on.workflow_dispatch.inputs.dry_run).toMatchObject({ required: false, default: false, type: 'boolean' });
   expect(wf.permissions).toEqual({});
   for (const [name, job] of Object.entries(wf.jobs)) {
     expect(job['runs-on']).toBe('ubuntu-latest');
@@ -258,7 +360,7 @@ test('tag-only publication keeps trusted-publisher identity and confirmation iso
     expect(job.permissions.issues).toBeUndefined();
   }
   expect(wf.jobs.publish.if).toBe("${{ needs.release.outputs.publish == 'true' }}");
-  expect(wf.jobs.confirm.if).toBe("${{ github.event_name == 'workflow_dispatch' && inputs.version != '' && inputs.tag == '' }}");
+  expect(wf.jobs.confirm.if).toBe("${{ github.event_name == 'workflow_dispatch' && !inputs.dry_run && inputs.version != '' && inputs.tag == '' }}");
   expect(text).toContain('npm install -g npm@12.2.2');
 });
 

@@ -9,13 +9,18 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: An existing vX.Y.Z tag to publish (leave version empty)
+        description: An existing vX.Y.Z tag to publish, or a main SHA when dry_run is true (leave version empty)
         required: false
         type: string
       version:
         description: A published version to confirm only (leave tag empty)
         required: false
         type: string
+      dry_run:
+        description: Exercise the release path up to npm publish --dry-run without publishing
+        required: false
+        default: false
+        type: boolean
 
 permissions: {}
 
@@ -25,13 +30,14 @@ concurrency:
 
 jobs:
   release:
-    if: ${{ github.event_name == 'push' || inputs.tag != '' || inputs.version == '' }}
+    if: ${{ github.event_name == 'push' || inputs.dry_run || inputs.tag != '' || inputs.version == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
     outputs:
       publish: ${{ steps.target.outputs.publish }}
+      dry_run: ${{ steps.target.outputs.dry_run }}
       tag: ${{ steps.target.outputs.tag }}
       sha: ${{ steps.target.outputs.sha }}
     steps:
@@ -49,35 +55,63 @@ jobs:
           EVENT: ${{ github.event_name }}
           INPUT_TAG: ${{ inputs.tag }}
           INPUT_VERSION: ${{ inputs.version }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          dry_run=false
           if [ "$EVENT" = push ]; then
             case "$GITHUB_REF" in
               refs/tags/*) release_tag="${GITHUB_REF#refs/tags/}" ;;
               *) echo "::error::RELEASE_REF_NOT_TAG: $GITHUB_REF is not a tag ref"; exit 1 ;;
             esac
           elif [ "$EVENT" = workflow_dispatch ]; then
-            if [ -z "$INPUT_TAG" ] || [ -n "$INPUT_VERSION" ]; then echo "::error::RELEASE_DISPATCH_INPUT: give exactly one of tag (publish) or version (confirm only)"; exit 1; fi
-            release_tag="$INPUT_TAG"
+            if [ "${INPUT_DRY_RUN:-false}" = true ]; then
+              if [ -n "$INPUT_VERSION" ]; then echo "::error::RELEASE_DISPATCH_INPUT: dry_run takes tag (a vX.Y.Z tag or a main SHA), not version"; exit 1; fi
+              dry_run=true
+              release_tag="${INPUT_TAG:-$GITHUB_SHA}"
+            else
+              if [ -z "$INPUT_TAG" ] || [ -n "$INPUT_VERSION" ]; then echo "::error::RELEASE_DISPATCH_INPUT: give exactly one of tag (publish) or version (confirm only)"; exit 1; fi
+              release_tag="$INPUT_TAG"
+            fi
           else
             echo "::error::RELEASE_REF_NOT_TAG: unsupported event $EVENT"; exit 1
           fi
-          if [[ ! "$release_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then echo "::error::RELEASE_TAG_FORM: $release_tag is not vX.Y.Z"; exit 1; fi
-          if [ "$GITHUB_REF" != "refs/tags/$release_tag" ]; then echo "::error::RELEASE_REF_NOT_TAG: $GITHUB_REF is not refs/tags/$release_tag; dispatch with --ref $release_tag"; exit 1; fi
+          target_kind=tag
+          if [ "$dry_run" = true ] && [[ "$release_tag" =~ ^[0-9a-f][0-9a-f]{6,39}$ ]]; then
+            target_kind=sha
+          elif [[ ! "$release_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::RELEASE_TAG_FORM: $release_tag is not vX.Y.Z"; exit 1
+          fi
+          if [ "$dry_run" != true ] && [ "$GITHUB_REF" != "refs/tags/$release_tag" ]; then echo "::error::RELEASE_REF_NOT_TAG: $GITHUB_REF is not refs/tags/$release_tag; dispatch with --ref $release_tag"; exit 1; fi
+          if [ "$dry_run" = true ] && [[ ! "$GITHUB_REF" =~ ^refs/heads/ ]] && [ "$GITHUB_REF" != "refs/tags/$release_tag" ]; then echo "::error::RELEASE_REF_NOT_TAG: $GITHUB_REF must be a branch ref or refs/tags/$release_tag"; exit 1; fi
           # The commits API peels lightweight and annotated tags alike.
-          if ! tag_sha="$(gh api "repos/$REPO/commits/refs%2Ftags%2F$release_tag" --jq .sha)"; then echo "::error::RELEASE_TAG_UNRESOLVED: cannot resolve $release_tag to a commit"; exit 1; fi
+          api_ref="commits/refs%2Ftags%2F$release_tag"
+          local_ref="refs/tags/$release_tag^{commit}"
+          if [ "$target_kind" = sha ]; then
+            api_ref="commits/$release_tag"
+            local_ref="$release_tag^{commit}"
+          fi
+          if ! tag_sha="$(gh api "repos/$REPO/$api_ref" --jq .sha)"; then echo "::error::RELEASE_TAG_UNRESOLVED: cannot resolve $release_tag to a commit"; exit 1; fi
           if [[ ! "$tag_sha" =~ ^[0-9a-f]{40}$ ]]; then echo "::error::RELEASE_TAG_UNRESOLVED: $release_tag did not resolve to a full commit SHA"; exit 1; fi
-          if [ "$GITHUB_SHA" != "$tag_sha" ]; then echo "::error::PROVENANCE_SHA_MISMATCH: the run's GITHUB_SHA $GITHUB_SHA is not $release_tag's commit $tag_sha; the tag remains cut; recover with gh workflow run release.yml --ref $release_tag -f tag=$release_tag"; exit 1; fi
-          if ! local_sha="$(git rev-parse --verify --quiet "refs/tags/$release_tag^{commit}")"; then echo "::error::RELEASE_TAG_UNRESOLVED: fetched tag $release_tag is missing"; exit 1; fi
+          if [ "$GITHUB_SHA" != "$tag_sha" ]; then
+            if [ "$dry_run" != true ] || [ "$GITHUB_REF" = "refs/tags/$release_tag" ]; then echo "::error::PROVENANCE_SHA_MISMATCH: the run's GITHUB_SHA $GITHUB_SHA is not $release_tag's commit $tag_sha; the tag remains cut; recover with gh workflow run release.yml --ref $release_tag -f tag=$release_tag"; exit 1; fi
+          fi
+          if ! local_sha="$(git rev-parse --verify --quiet "$local_ref")"; then echo "::error::RELEASE_TAG_UNRESOLVED: fetched tag $release_tag is missing"; exit 1; fi
           if [ "$local_sha" != "$tag_sha" ]; then echo "::error::PROVENANCE_SHA_MISMATCH: fetched tag $release_tag ($local_sha) differs from $tag_sha"; exit 1; fi
           if ! git merge-base --is-ancestor "$tag_sha" refs/remotes/origin/main; then echo "::error::RELEASE_TAG_NOT_ON_MAIN: $release_tag ($tag_sha) is not reachable from origin/main"; exit 1; fi
-          version="${release_tag#v}"
           if ! pkg_json="$(git show "$tag_sha:package.json")"; then echo "::error::RELEASE_TAG_VERSION_MISMATCH: cannot read package.json at $tag_sha"; exit 1; fi
           if ! pkg_id="$(PKG_JSON="$pkg_json" node -e 'const p=JSON.parse(process.env.PKG_JSON); process.stdout.write(`${p.name}@${p.version}`)' 2>/dev/null)"; then echo "::error::RELEASE_TAG_VERSION_MISMATCH: invalid package.json at $tag_sha"; exit 1; fi
-          if [ "$pkg_id" != "@rig-c/pose@$version" ]; then echo "::error::RELEASE_TAG_VERSION_MISMATCH: $release_tag has $pkg_id, expected @rig-c/pose@$version"; exit 1; fi
-          if served="$(npm view "@rig-c/pose@$version" version 2>/dev/null)" && [ "$served" = "$version" ]; then echo "::error::RELEASE_ALREADY_PUBLISHED: the registry already serves @rig-c/pose@$version"; exit 1; fi
+          if [ "$target_kind" = sha ]; then
+            version="${pkg_id#@rig-c/pose@}"
+            if [ "$pkg_id" != "@rig-c/pose@$version" ] || [[ ! "v$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then echo "::error::RELEASE_TAG_VERSION_MISMATCH: $release_tag has $pkg_id, expected @rig-c/pose@X.Y.Z"; exit 1; fi
+            release_tag="v$version"
+          else
+            version="${release_tag#v}"
+            if [ "$pkg_id" != "@rig-c/pose@$version" ]; then echo "::error::RELEASE_TAG_VERSION_MISMATCH: $release_tag has $pkg_id, expected @rig-c/pose@$version"; exit 1; fi
+          fi
+          if [ "$dry_run" != true ] && served="$(npm view "@rig-c/pose@$version" version 2>/dev/null)" && [ "$served" = "$version" ]; then echo "::error::RELEASE_ALREADY_PUBLISHED: the registry already serves @rig-c/pose@$version"; exit 1; fi
           # Semver order with a prerelease below its release, in node rather than `sort -V`, which sorts 1.0.0-rc.1 after 1.0.0.
           if latest="$(npm view "@rig-c/pose" version 2>/dev/null)" && [ -n "$latest" ] && [ "$(VERSION="$version" LATEST="$latest" node -e '
             const parse = (v) => { const [core, pre] = v.split("-", 2); return { core: core.split(".").map(Number), pre: pre === undefined ? null : pre.split(".") }; };
@@ -86,6 +120,7 @@ jobs:
             process.stdout.write(cmp(process.env.VERSION, process.env.LATEST) < 0 ? "below" : "not-below");
           ')" = below ]; then echo "::error::RELEASE_TAG_BELOW_LATEST: $release_tag is below the registry's latest @rig-c/pose@$latest; republish under a dist-tag with a \`--tag\` variant of this dispatch (a follow-up), not under latest; npm refuses that implicitly"; exit 1; fi
           echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$release_tag" >> "$GITHUB_OUTPUT"; echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
+          if [ "$dry_run" = true ]; then echo "dry_run=true" >> "$GITHUB_OUTPUT"; fi
 
   publish:
     needs: release
@@ -106,7 +141,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
+          registry-url: ${{ needs.release.outputs.dry_run != 'true' && 'https://registry.npmjs.org' || '' }}
 
       # Node 22 ships npm 10; the OIDC exchange landed in npm 11.5.1.
       - name: Use an npm that speaks OIDC
@@ -116,6 +151,22 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Relay release target
+        id: target
+        env:
+          DRY_RUN: ${{ needs.release.outputs.dry_run }}
+        run: echo "dry_run=${DRY_RUN:-false}" >> "$GITHUB_OUTPUT"
+
+      # npm checks the published version even in a dry run. Use a fresh, offline
+      # npm home for the rehearsal so it can target a version already served.
+      - name: Configure isolated offline npm for rehearsal
+        if: ${{ steps.target.outputs.dry_run == 'true' }}
+        env:
+          HOME: ${{ runner.temp }}/pose-npm-dry-run
+        run: |
+          mkdir -p "$HOME"
+          npm config set offline true --location=user
 
       - name: Read the tested-tree verdict
         id: reuse
@@ -136,6 +187,7 @@ jobs:
 
       # Folder publication invokes the same reader again through prepublishOnly.
       - name: Publish to npm
+        if: ${{ steps.target.outputs.dry_run != 'true' }}
         env:
           TREE_VERDICT_TOOLS: ${{ steps.reuse.outputs.tooling-path }}
           TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
@@ -145,6 +197,7 @@ jobs:
           npm publish --provenance --access public
 
       - name: Publish the alias rig-pose
+        if: ${{ steps.target.outputs.dry_run != 'true' }}
         env:
           TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
         run: |
@@ -152,14 +205,63 @@ jobs:
           alias_tgz="$(bun scripts/alias_tarball.ts pack --name rig-pose --out "$RUNNER_TEMP/pose-alias")"
           npm publish "$alias_tgz" --provenance --access public
 
+      # The checkout gate above already ran. A tarball input keeps npm's
+      # dry-run configuration out of the source package lifecycle.
+      - name: Dry-run publish to npm
+        if: ${{ steps.target.outputs.dry_run == 'true' }}
+        env:
+          HOME: ${{ runner.temp }}/pose-npm-dry-run
+          CI: 'false' # npm skips trusted-publishing token exchange during rehearsal
+          TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
+        run: |
+          set -euo pipefail
+          bun scripts/alias_tarball.ts pack --name rig-pose --out "$RUNNER_TEMP/pose-alias"
+          canonical_tgz="$(npm pack . --ignore-scripts --pack-destination .)"
+          npm publish "$canonical_tgz" --dry-run --access public
+
+      - name: Write dry-run summary
+        if: ${{ steps.target.outputs.dry_run == 'true' }}
+        env:
+          TAG_NAME: ${{ needs.release.outputs.tag }}
+          TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
+        run: |
+          set -euo pipefail
+          target_sha="$(git rev-parse HEAD)"
+          TARGET_SHA="$target_sha" node -e '
+            const fs = require("node:fs"), crypto = require("node:crypto");
+            const decl = JSON.parse(fs.readFileSync("scripts/tree-verdict.json", "utf8"));
+            const verdictPath = process.env.TREE_VERDICT_PATH || "";
+            let verdict = `TREE_VERDICT_LIFECYCLE_FALLBACK: gate=${decl.gate}; executing entire declared chain`;
+            if (verdictPath && fs.existsSync(verdictPath)) {
+              const proof = JSON.parse(fs.readFileSync(verdictPath, "utf8"));
+              if (proof.schema === "tree-verdict-verified/2") {
+                verdict = `TREE_VERDICT_LIFECYCLE_REUSED: run=${proof.run_id} testedSHA=${proof.tested_sha} gate=${decl.gate}; skipped entire chain`;
+              }
+            }
+            const { version } = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const tgz = `rig-c-pose-${version}.tgz`;
+            const bytes = fs.readFileSync(tgz);
+            const integrity = `sha512-${crypto.createHash("sha512").update(bytes).digest("base64")}`;
+            const lines = [
+              "### Release dry run (`dry_run=true`)",
+              `- Target: \`${process.env.TAG_NAME}\` (\`${process.env.TARGET_SHA}\`)`,
+              `- Verdict: \`${verdict}\``,
+              `- Tarball: \`${tgz}\` (\`${integrity}\`)`,
+              "",
+            ].join("\n");
+            process.stdout.write(lines);
+            if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines);
+          '
+
       - name: Confirm the published package installs and runs
+        if: ${{ steps.target.outputs.dry_run != 'true' }}
         env:
           TAG_NAME: ${{ needs.release.outputs.tag }}
         run: bash scripts/confirm_registry.sh "${TAG_NAME#v}" 15
 
   # Confirmation publishes nothing and has no OIDC write permission.
   confirm:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.version != '' && inputs.tag == '' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.dry_run && inputs.version != '' && inputs.tag == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
