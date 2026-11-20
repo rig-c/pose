@@ -119,7 +119,7 @@ esac
 `,
   npm: `printf 'npm %s\\n' "$*" >> "$MOCK_TRACE"
 if [ "$1" = publish ]; then exit 0; fi
-if [ "$1" = pack ]; then mkdir -p "$5"; printf 'mock-tarball' > "$5/rig-c-pose-1.2.3.tgz"; exit 0; fi
+if [ "$1" = pack ]; then mkdir -p "$5"; printf 'mock-tarball' > "$5/rig-c-pose-1.2.3.tgz"; echo rig-c-pose-1.2.3.tgz; exit 0; fi
 [ "$1" = view ] && [ "$3" = version ] || exit 92
 case "$2" in
   @rig-c/pose@*) [ -n "$MOCK_SERVED" ] || exit 1; printf '%s\\n' "$MOCK_SERVED";;
@@ -141,6 +141,7 @@ function check(wf: Workflow, scenario: Scenario): void {
   const checkoutAt = publishSteps.findIndex((step) => step.uses?.startsWith('actions/checkout@'));
   const relayAt = publishSteps.findIndex((step) => step.id === 'target');
   const publishing = publishSteps.filter((step) => /\bnpm publish\b/.test(step.run ?? ''));
+  const offlineStep = publishSteps.find((step) => step.name === 'Configure isolated offline npm for rehearsal');
   const summaryStep = publishSteps.find((step) => step.name === 'Write dry-run summary');
   const confirmStep = publishSteps.find((step) => step.name === 'Confirm the published package installs and runs');
   expect(targetAt).toBeGreaterThanOrEqual(0);
@@ -150,6 +151,10 @@ function check(wf: Workflow, scenario: Scenario): void {
   expect(publishing).toHaveLength(3);
   expect(publishSteps.indexOf(publishing[0])).toBeGreaterThan(relayAt);
   expect(target.run).toBeString();
+  expect(offlineStep?.run).toContain('npm config set offline true --location=user');
+  expect(offlineStep?.env?.HOME).toBe('${{ runner.temp }}/pose-npm-dry-run');
+  expect(publishing[2].env?.HOME).toBe(offlineStep?.env?.HOME);
+  expect(publishSteps.indexOf(offlineStep!)).toBeLessThan(publishSteps.indexOf(publishing[2]));
   expect(summaryStep?.run).toBeString();
   expect(confirmStep?.run).toBeString();
 
@@ -235,6 +240,7 @@ function check(wf: Workflow, scenario: Scenario): void {
       };
       if (scenario.dryRun) {
         expect(stepRuns(confirmStep)).toBe(false);
+        expect(stepRuns(offlineStep)).toBe(true);
         expect(stepRuns(summaryStep)).toBe(true);
         for (const step of publishing.filter(stepRuns)) {
           const published = run(step.run ?? '');
@@ -259,6 +265,7 @@ function check(wf: Workflow, scenario: Scenario): void {
       } else {
         expect(publishing.filter(stepRuns)).toEqual([publishing[0], publishing[1]]);
         expect(stepRuns(confirmStep)).toBe(true);
+        expect(stepRuns(offlineStep)).toBe(false);
         expect(stepRuns(summaryStep)).toBe(false);
         const published = run(publishing[0].run ?? '');
         expect(published.error).toBeUndefined();
@@ -274,7 +281,7 @@ function check(wf: Workflow, scenario: Scenario): void {
     }
     const publishes = calls.filter((line) => line.startsWith('npm publish '));
     expect(publishes).toEqual(scenario.rule === undefined
-      ? [scenario.dryRun ? 'npm publish --dry-run --access public' : 'npm publish --provenance --access public'] : []);
+      ? [scenario.dryRun ? 'npm publish rig-c-pose-1.2.3.tgz --dry-run --access public' : 'npm publish --provenance --access public'] : []);
     expect(readFileSync(cut, 'utf8')).toBe(cutBytes);
   } finally {
     rmSync(dir, { recursive: true, force: true });

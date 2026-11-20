@@ -85,12 +85,17 @@
           "step": {
             "name": "Dry-run publish to npm"
           },
-          "lifecycle": "prepublishOnly",
-          "readerCommand": "node scripts/tree-verdict-prepublish.cjs",
           "invocations": [
             {
               "ordinal": 0,
-              "kind": "folder"
+              "kind": "tarball",
+              "producer": {
+                "step": {
+                  "name": "Dry-run publish to npm"
+                },
+                "variable": "canonical_tgz",
+                "command": "npm pack . --ignore-scripts --pack-destination ."
+              }
             }
           ]
         }

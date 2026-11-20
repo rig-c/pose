@@ -213,12 +213,12 @@ test('release gates both existing publications with the same pinned publish proo
   }
   expect(publications[0].run).toContain('npm publish --provenance --access public');
   expect(publications[1].run).toContain('bun scripts/alias_tarball.ts pack --name rig-pose --out "$RUNNER_TEMP/pose-alias"');
-  expect(publications[2].run).toContain('npm publish --dry-run --access public');
+  expect(publications[2].run).toContain('npm publish "$canonical_tgz" --dry-run --access public');
   expect(release.jobs.publish.permissions['id-token']).toBe('write');
   expect(release.jobs.publish.environment).toBeUndefined();
   expect(release.jobs.publish['runs-on']).toBe('ubuntu-latest');
   expect(steps.find(s => s.name === 'Use an npm that speaks OIDC').run).toContain('npm@12.2.2');
-  expect(steps.find(s => s.uses?.startsWith('actions/setup-node@')).with['registry-url']).toBe('https://registry.npmjs.org');
+  expect(steps.find(s => s.uses?.startsWith('actions/setup-node@')).with['registry-url']).toBe("${{ needs.release.outputs.dry_run != 'true' && 'https://registry.npmjs.org' || '' }}");
 });
 
 // The verified reader's live-checkout seam is fixture-only. It avoids ANY Git

@@ -141,7 +141,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
+          registry-url: ${{ needs.release.outputs.dry_run != 'true' && 'https://registry.npmjs.org' || '' }}
 
       # Node 22 ships npm 10; the OIDC exchange landed in npm 11.5.1.
       - name: Use an npm that speaks OIDC
@@ -157,6 +157,16 @@ jobs:
         env:
           DRY_RUN: ${{ needs.release.outputs.dry_run }}
         run: echo "dry_run=${DRY_RUN:-false}" >> "$GITHUB_OUTPUT"
+
+      # npm checks the published version even in a dry run. Use a fresh, offline
+      # npm home for the rehearsal so it can target a version already served.
+      - name: Configure isolated offline npm for rehearsal
+        if: ${{ steps.target.outputs.dry_run == 'true' }}
+        env:
+          HOME: ${{ runner.temp }}/pose-npm-dry-run
+        run: |
+          mkdir -p "$HOME"
+          npm config set offline true --location=user
 
       - name: Read the tested-tree verdict
         id: reuse
@@ -195,17 +205,19 @@ jobs:
           alias_tgz="$(bun scripts/alias_tarball.ts pack --name rig-pose --out "$RUNNER_TEMP/pose-alias")"
           npm publish "$alias_tgz" --provenance --access public
 
+      # The checkout gate above already ran. A tarball input keeps npm's
+      # dry-run configuration out of the source package lifecycle.
       - name: Dry-run publish to npm
         if: ${{ steps.target.outputs.dry_run == 'true' }}
         env:
-          TREE_VERDICT_TOOLS: ${{ steps.reuse.outputs.tooling-path }}
+          HOME: ${{ runner.temp }}/pose-npm-dry-run
+          CI: 'false' # npm skips trusted-publishing token exchange during rehearsal
           TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
-          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           bun scripts/alias_tarball.ts pack --name rig-pose --out "$RUNNER_TEMP/pose-alias"
-          npm pack . --ignore-scripts --pack-destination "$RUNNER_TEMP/pose-alias"
-          npm publish --dry-run --access public
+          canonical_tgz="$(npm pack . --ignore-scripts --pack-destination .)"
+          npm publish "$canonical_tgz" --dry-run --access public
 
       - name: Write dry-run summary
         if: ${{ steps.target.outputs.dry_run == 'true' }}
@@ -216,7 +228,7 @@ jobs:
           set -euo pipefail
           target_sha="$(git rev-parse HEAD)"
           TARGET_SHA="$target_sha" node -e '
-            const fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
+            const fs = require("node:fs"), crypto = require("node:crypto");
             const decl = JSON.parse(fs.readFileSync("scripts/tree-verdict.json", "utf8"));
             const verdictPath = process.env.TREE_VERDICT_PATH || "";
             let verdict = `TREE_VERDICT_LIFECYCLE_FALLBACK: gate=${decl.gate}; executing entire declared chain`;
@@ -226,10 +238,9 @@ jobs:
                 verdict = `TREE_VERDICT_LIFECYCLE_REUSED: run=${proof.run_id} testedSHA=${proof.tested_sha} gate=${decl.gate}; skipped entire chain`;
               }
             }
-            const dir = path.join(process.env.RUNNER_TEMP, "pose-alias");
-            const tgz = fs.readdirSync(dir).find((f) => f.startsWith("rig-c-pose-") && f.endsWith(".tgz"));
-            if (!tgz) throw new Error(`missing canonical tarball in ${dir}`);
-            const bytes = fs.readFileSync(path.join(dir, tgz));
+            const { version } = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const tgz = `rig-c-pose-${version}.tgz`;
+            const bytes = fs.readFileSync(tgz);
             const integrity = `sha512-${crypto.createHash("sha512").update(bytes).digest("base64")}`;
             const lines = [
               "### Release dry run (`dry_run=true`)",
