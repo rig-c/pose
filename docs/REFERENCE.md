@@ -32,13 +32,13 @@
 
 Puts motion from a pose onto a rig. The motion is joint positions over time: from a video, a dataset, or points placed by hand. The rig is one [rig-c](https://github.com/rig-c/core) built. A body-18 pose sequence becomes bone keys in rig-c's motion format, and the keys are checked before anything is written.
 
-**1.x keeps its promises.** The surfaces marked **promised** in [What 1.x promises](../RELEASING.md#what-1x-promises) are kept through 1.x. Surfaces marked **courtesy**, including default figures, can change in minor releases, with changes disclosed in the CHANGELOG.
+**1.x keeps its promises.** The surfaces marked **promised** in [What 1.x promises](https://github.com/rig-c/pose/blob/main/RELEASING.md#what-1x-promises) are kept through 1.x. Surfaces marked **courtesy**, including default figures, can change in minor releases, with changes disclosed in the CHANGELOG.
 
 Part of the rig-c toolchain: [core](https://github.com/rig-c/core) compiles and gates a rig, [parts](https://github.com/rig-c/parts) builds one from a painting, [play](https://github.com/rig-c/play) plays it, and pose moves it.
 
 <!-- demo -->
 
-The [visible accepted take](demos/visible-retarget/README.md) places a committed public source skeleton beside its unchanged accepted rig at 600 px. Its pinned recipe, timing, commands and stage-labelled raw lines distinguish historical pre-hand LAND from the accepted v3 gate and current FOLD reading. It is a 13-second non-looping take; shins 269/391 is shown as a known fold, and no new all-rig seam or detector-based fidelity result is implied.
+The [visible accepted take](https://github.com/rig-c/pose/blob/main/docs/demos/visible-retarget/README.md) places a committed public source skeleton beside its unchanged accepted rig at 600 px. Its pinned recipe, timing, commands and stage-labelled raw lines distinguish historical pre-hand LAND from the accepted v3 gate and current FOLD reading. It is a 13-second non-looping take; shins 269/391 is shown as a known fold, and no new all-rig seam or detector-based fidelity result is implied.
 
 ## Try it
 
@@ -407,7 +407,7 @@ Re-checked on a @rig-c/parts fixture rig with the short hold, the flip guard and
 
 ### Calibrated shoulder elevation: `--shoulder-lift`
 
-`rig-pose retarget ... --shoulder-lift shoulder-lift.json` opts into the supplied reading in [#408](https://github.com/rig-c/pose/issues/408). The bar and formula were [declared before measurement](https://github.com/rig-c/pose/issues/408#issuecomment-6386090474). With no flag, no additional input is consumed and the legacy motion/report/build record stay unchanged. The separate closed `rig-pose-shoulder-lift/1` file does not extend the strict pose, frame, joint, cleaned or map formats. The new flag, configuration and diagnostics are courtesy surfaces under [the 1.x contract](../RELEASING.md#what-1x-promises).
+`rig-pose retarget ... --shoulder-lift shoulder-lift.json` opts into the supplied reading in [#408](https://github.com/rig-c/pose/issues/408). The bar and formula were [declared before measurement](https://github.com/rig-c/pose/issues/408#issuecomment-6386090474). With no flag, no additional input is consumed and the legacy motion/report/build record stay unchanged. The separate closed `rig-pose-shoulder-lift/1` file does not extend the strict pose, frame, joint, cleaned or map formats. The new flag, configuration and diagnostics are courtesy surfaces under [the 1.x contract](https://github.com/rig-c/pose/blob/main/RELEASING.md#what-1x-promises).
 
 All fields below are required. Object fields not listed are refused. Input paths resolve relative to the configuration file. SHA-256 values bind exact consumed file bytes; they are never inferred from a name, output motion or accepted final.
 
@@ -483,7 +483,7 @@ A supported shoe is the unique unmapped leaf child located within the existing 0
 
 The foot grows in X about its ankle and downward in Y from it. **The sole follows the growing shoe**: no translation or art-only compensation keeps the old sole on the floor. When the shoe is visible, its measured lowest boundary is checked against `ankleY + q·(neutralSoleY−ankleY)`, not against the old floor. `--plant-feet` and `--stance` continue to hold anatomical ankles; a larger shoe may extend below that floor. Foot scale keys remain dense after the existing `--reduce` pass, so reduction retains its original behavior for the leg and body. Existing idle/fragment conflict handling and the final gate still apply.
 
-`DEPTH-SCALE` and the optional `depthScale` report field give each side's `bone`, selected `joint`, signed `depth` extrema, factor `scale` min/median/max, declared `limits`, `status` (`scaled`, `zero-span`, `unread`) and individual zero-based `clampedFrames`/`unreadFrames`. `signSource` is `ankle-picture-y` for a walk and `derived` for a run; `tie` is the walk's pixel band (null when its unit is unread, or for a run), and `tiedFrames` lists individual zero-based frames inside it. `options.depthScale` records the supplied range only when present. These new surfaces are courtesy under the [1.x contract](../RELEASING.md#what-1x-promises). Without the flag, no extra source is consumed and existing motion bytes are preserved.
+`DEPTH-SCALE` and the optional `depthScale` report field give each side's `bone`, selected `joint`, signed `depth` extrema, factor `scale` min/median/max, declared `limits`, `status` (`scaled`, `zero-span`, `unread`) and individual zero-based `clampedFrames`/`unreadFrames`. `signSource` is `ankle-picture-y` for a walk and `derived` for a run; `tie` is the walk's pixel band (null when its unit is unread, or for a run), and `tiedFrames` lists individual zero-based frames inside it. `options.depthScale` records the supplied range only when present. These new surfaces are courtesy under the [1.x contract](https://github.com/rig-c/pose/blob/main/RELEASING.md#what-1x-promises). Without the flag, no extra source is consumed and existing motion bytes are preserved.
 
 **Measured example: `--depth-scale 1,1.48`, not a default.** Eight supplied 700 × 700 line-art drawings were measured. Longitudinal ankle-to-toe length was rejected as pitch-confounded: the leading foot read longer on only 2/8. Four depth-clear double-support drawings were then read independently at the shin's mid-length, perpendicular to knee–ankle, and across the widest visible shoe. Near/far labels used the leading unhatched limb and lower planted sole, independently of measured width. Manual contour endpoints have about ±2 px uncertainty. The source and annotated landmarks are privately held; this is anonymous measurement evidence, not a claim that the reference art is publicly accessible.
 
