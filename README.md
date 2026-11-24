@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/rig-c/pose/main/assets/banner.svg" alt="@rig-c/pose — Cleans and retargets a body-18 pose sequence onto a rig-c skeleton" width="100%" />
+  <img src="assets/banner.svg" alt="@rig-c/pose — Cleans and retargets a body-18 pose sequence onto a rig-c skeleton" width="100%" />
 </p>
 
 <p align="center">
@@ -22,7 +22,7 @@ Part of the rig-c toolchain: [core](https://github.com/rig-c/core) compiles and 
 
 ## Try it
 
-[`examples/wave`](https://github.com/rig-c/pose/tree/main/examples/wave) is in the repository, not the npm package: clone the repository, or copy its four files. It runs with nothing else: a bones-only stick rig (no art), a 3-second wave made from joint angles (`make-pose.ts` writes it), and the map that joins them.
+[`examples/wave`](examples/wave) is in the repository, not the npm package: clone the repository, or copy its four files. It runs with nothing else: a bones-only stick rig (no art), a 3-second wave made from joint angles (`make-pose.ts` writes it), and the map that joins them.
 
 ```sh
 rig-pose retarget --rig examples/wave/rig --map examples/wave/map.json --sequence examples/wave/pose.json --out wave.motion.json --build wave-build
@@ -46,7 +46,7 @@ The exams use the mannequin. Expecting film-smooth intense motion from a designe
 - **Pelvis below the cover** ([#342](https://github.com/rig-c/pose/issues/342)): a garment hides the tilt. The reader had to move below the cover, to the hem and the thigh roots, and a thigh drawn in front of the garment reads as its hem.
 - **Draw order** ([#358](https://github.com/rig-c/pose/issues/358), closed without a change): on the run reference the crossing back foot is a near-end-on shin drawn at full length, not a shin drawn in the wrong order. No draw-order rule fixes a missing drawing.
 
-The record of every lever tried on the way to this table, with its measurement, is [docs/JOURNEY-gait.md](https://github.com/rig-c/pose/blob/main/docs/JOURNEY-gait.md).
+The record of every lever tried on the way to this table, with its measurement, is [docs/JOURNEY-gait.md](docs/JOURNEY-gait.md).
 
 ## What the rig needs
 
