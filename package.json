@@ -38,6 +38,7 @@
     "bin/rig-pose.cjs",
     "cli.ts",
     "src",
+    "docs/REFERENCE.md",
     "skills"
   ],
   "publishConfig": {
