@@ -162,7 +162,7 @@ The fixtures used for these measurements, including the turned synthetic run, we
 
 The public producer file is `test/fixtures/parts-layout/`.
 
-**Outcome: kept.** A real defect. Known limit: on a single-torso rig only one forearm can be placed until rig-c/parts#657 lands.
+**Outcome: kept.** A real defect. Known limit: on a single-torso rig only one forearm can be placed.
 
 ## 12. `bind`
 
@@ -194,7 +194,7 @@ README's [Choosing the approach](https://github.com/rig-c/pose#choosing-the-appr
 | [#369](https://github.com/rig-c/pose/issues/369): on a frontal run, `--plant-feet` planted the lifted foot (a side effect of #280's speed reading) | [PR #371](https://github.com/rig-c/pose/pull/371) |
 | rig-c/parts#646 | parts side: legs contiguous |
 | rig-c/parts#647 | parts side: the limb layout (layout.json) |
-| rig-c/parts#657 | parts side, open |
+| rig-c/parts#657 | parts side: several placements share one target slot |
 
 ## Known limit
 
