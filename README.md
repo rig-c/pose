@@ -12,7 +12,7 @@
 
 Puts motion from a pose onto a rig. The motion is joint positions over time: from a video, a dataset, or points placed by hand. The rig is one [rig-c](https://github.com/rig-c/core) built. A body-18 pose sequence becomes bone keys in rig-c's motion format, and the keys are checked before anything is written.
 
-Part of the rig-c toolchain: [core](https://github.com/rig-c/core) compiles and gates a rig, [parts](https://github.com/rig-c/parts) builds one from a painting, [play](https://github.com/rig-c/play) plays it, and pose moves it. The rules behind every command, flag, file format and message on this page are in [docs/REFERENCE.md](docs/REFERENCE.md); **1.x keeps its promises**, and [What 1.x promises](RELEASING.md#what-1x-promises) says which surfaces are promised and which are courtesy.
+Part of the rig-c toolchain: [core](https://github.com/rig-c/core) compiles and gates a rig, [parts](https://github.com/rig-c/parts) builds one from a painting, [play](https://github.com/rig-c/play) plays it, and pose moves it; the [getting-started guide](https://github.com/rig-c/getting-started#the-whole-thing-in-one-glance) shows what each package takes and gives. The rules behind every command, flag, file format and message on this page are in [docs/REFERENCE.md](docs/REFERENCE.md); **1.x keeps its promises**, and [What 1.x promises](RELEASING.md#what-1x-promises) says which surfaces are promised and which are courtesy.
 
 <!-- demo -->
 
